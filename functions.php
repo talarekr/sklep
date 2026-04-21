@@ -57,7 +57,7 @@ add_action('woocommerce_after_shop_loop_item_title', function () {
 }, 15);
 
 add_action('woocommerce_single_product_summary', function () {
-    echo '<p class="gp-delivery-note gp-delivery-note--single">Darmowa dostawa: 23–24 kwi jeśli zapłacisz do 14:00</p>';
+    echo '<p class="gp-delivery-note gp-delivery-note--single product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note gp-delivery-note--single product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
 }, 26);
 
 /**
@@ -103,4 +103,60 @@ function gp_clone_demo_popular_products(): array
             'delivery' => 'Dostawa: 22 kwi jeśli zapłacisz do 14:00',
         ],
     ];
+}
+
+/**
+ * Formats product name for minimalist product cards:
+ * - vehicle brand/model prefix in uppercase
+ * - part name section in sentence case (no full caps lock)
+ */
+function gp_format_product_display_name(string $name): string
+{
+    $name = trim(preg_replace('/\s+/u', ' ', $name) ?? $name);
+    if ($name == '') {
+        return '';
+    }
+
+    $tokens = preg_split('/\s+/u', $name) ?: [];
+    if ($tokens === []) {
+        return $name;
+    }
+
+    $part_keywords = [
+        'silnik', 'zestaw', 'komplet', 'ślizg', 'dyferencjał', 'skrzynia', 'maglownica', 'lampa',
+        'zderzaka', 'zderzak', 'wtryskiwaczy', 'wtryskowy', 'wtryskowa', 'fotel', 'fotele', 'listwa',
+        'pompa', 'chłodnica', 'alternator', 'sprężarka', 'turbina', 'wahacz', 'amortyzator', 'błotnik',
+    ];
+
+    $split_at = null;
+    foreach ($tokens as $index => $token) {
+        $normalized = mb_strtolower(preg_replace('/[^\p{L}\p{N}\-]/u', '', $token) ?? $token);
+        if (in_array($normalized, $part_keywords, true)) {
+            $split_at = $index;
+            break;
+        }
+    }
+
+    if ($split_at === null) {
+        foreach ($tokens as $index => $token) {
+            if (preg_match('/^(19|20)\d{2}$/', $token) === 1) {
+                $split_at = $index + 1;
+                break;
+            }
+        }
+    }
+
+    if ($split_at === null || $split_at <= 0 || $split_at >= count($tokens)) {
+        $normalized = mb_strtolower($name);
+        return mb_strtoupper(mb_substr($normalized, 0, 1)) . mb_substr($normalized, 1);
+    }
+
+    $vehicle_prefix = implode(' ', array_slice($tokens, 0, $split_at));
+    $part_suffix = implode(' ', array_slice($tokens, $split_at));
+
+    $vehicle_prefix = mb_strtoupper($vehicle_prefix);
+    $part_suffix = mb_strtolower($part_suffix);
+    $part_suffix = mb_strtoupper(mb_substr($part_suffix, 0, 1)) . mb_substr($part_suffix, 1);
+
+    return trim($vehicle_prefix . ' ' . $part_suffix);
 }

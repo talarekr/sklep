@@ -13,20 +13,10 @@
 .woocommerce ul.products li.product {
   width: auto !important;
   margin: 0 !important;
-  border: 1px solid #e7e9ee;
-  border-radius: 10px;
-  padding: 12px;
+  border: 1px solid #d8d8d8;
+  padding: 14px;
   background: #fff;
   box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
-}
-
-.woocommerce ul.products li.product a img {
-  width: 100%;
-  height: 172px;
-  object-fit: contain;
-  object-position: center;
-  margin: 0 0 8px !important;
-  background: #fff;
 }
 
 .woocommerce ul.products li.product .product-meta,
@@ -43,15 +33,11 @@
   font-weight: 500;
   line-height: 1.4;
   color: #111;
-  min-height: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  min-height: 45px;
 }
 
 .woocommerce ul.products li.product .price {
-  margin: 0 0 10px;
+  margin: 0 0 14px;
   color: #000;
   font-size: 28px;
   font-weight: 700;
@@ -85,7 +71,7 @@
 }
 
 .woocommerce ul.products li.product .gp-delivery-note {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: #2e7d32;
