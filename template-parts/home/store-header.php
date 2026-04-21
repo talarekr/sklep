@@ -33,7 +33,7 @@
                     <a href="#"><?php echo esc_html($shortcut); ?></a>
                 <?php endforeach; ?>
             </nav>
-            <div class="gp-phone">504 266 984</div>
+            <div class="gp-phone">+48 510 215 506</div>
             <?php get_search_form(); ?>
         </div>
     </div>

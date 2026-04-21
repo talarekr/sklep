@@ -29,7 +29,7 @@
             <div>
                 <h3>Kontakt</h3>
                 <ul>
-                    <li>tel. 504 266 984</li>
+                    <li>tel. +48 510 215 506</li>
                     <li>biuro@globalparts.local</li>
                 </ul>
             </div>
