@@ -4,7 +4,6 @@
  * @var array  $history
  * @var string $oauth_url
  * @var string $callback_uri
- * @var string $option_key
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
