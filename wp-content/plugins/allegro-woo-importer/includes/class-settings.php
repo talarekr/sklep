@@ -49,8 +49,12 @@ class Settings
         ]);
     }
 
-    public function sanitize_settings(array $input): array
+    public function sanitize_settings($input = null): array
     {
+        if (!is_array($input)) {
+            $input = [];
+        }
+
         $current = Plugin::get_settings();
 
         $clean = [

@@ -9,6 +9,10 @@
 if (!defined('ABSPATH')) {
     exit;
 }
+
+if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
+    $option_key = \AWI\Plugin::OPTION_KEY;
+}
 ?>
 <div class="wrap">
     <h1><?php esc_html_e('Allegro Woo Importer', 'allegro-woo-importer'); ?></h1>
