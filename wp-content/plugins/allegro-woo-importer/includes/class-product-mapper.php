@@ -301,41 +301,19 @@ class ProductMapper
                 continue;
             }
 
-            $tmp_file = download_url($url);
-            if (is_wp_error($tmp_file)) {
-                $this->logger->error('Image download failed.', [
-                    'offer_id' => $offer_id,
-                    'product_id' => $product_id,
-                    'url' => $url,
-                    'error_code' => $tmp_file->get_error_code(),
-                    'error_message' => $tmp_file->get_error_message(),
-                    'error_data' => $tmp_file->get_error_data(),
-                ]);
-                continue;
-            }
-
-            $file = [
-                'name' => $this->build_sideload_filename($url, (string) $tmp_file),
-                'tmp_name' => $tmp_file,
-                'error' => 0,
-                'size' => (int) @filesize($tmp_file),
-            ];
-
-            $attachment_id = media_handle_sideload($file, $product_id);
+            $attachment_id = media_sideload_image($url, $product_id, null, 'id');
             if (is_wp_error($attachment_id)) {
-                @unlink($tmp_file);
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
                     'product_id' => $product_id,
                     'url' => $url,
-                    'file_name' => $file['name'],
                     'error_code' => $attachment_id->get_error_code(),
                     'error_message' => $attachment_id->get_error_message(),
                     'error_data' => $attachment_id->get_error_data(),
                 ]);
                 continue;
             }
-            $this->logger->info('Sideload/reuse result attachment ID.', [
+            $this->logger->info('Image sideload succeeded.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
                 'url' => $url,
