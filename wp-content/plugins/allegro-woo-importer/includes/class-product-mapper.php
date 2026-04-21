@@ -12,6 +12,7 @@ if (!defined('ABSPATH')) {
 class ProductMapper
 {
     private Logger $logger;
+    private array $image_import_context = [];
 
     public function __construct(Logger $logger)
     {
@@ -291,8 +292,15 @@ class ProductMapper
 
         $gallery_ids = [];
 
-        foreach ($image_urls as $url) {
-            $this->logger->info('Image URL found.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url]);
+        foreach ($image_urls as $index => $url) {
+            $image_no = (int) $index + 1;
+            $this->logger->info('Image import started.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
+                'url' => $url,
+            ]);
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
                 $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
@@ -306,6 +314,8 @@ class ProductMapper
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
                     'product_id' => $product_id,
+                    'image_index' => $image_no,
+                    'images_total' => count($image_urls),
                     'url' => $url,
                     'error_code' => $attachment_id->get_error_code(),
                     'error_message' => $attachment_id->get_error_message(),
@@ -316,6 +326,8 @@ class ProductMapper
             $this->logger->info('Image sideload succeeded.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
                 'url' => $url,
                 'attachment_id' => (int) $attachment_id,
                 'source' => 'sideload',
@@ -326,6 +338,8 @@ class ProductMapper
             $this->logger->info('Attachment created for image URL.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
                 'url' => $url,
                 'attachment_id' => (int) $attachment_id,
             ]);
