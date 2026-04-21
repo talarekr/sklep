@@ -151,14 +151,7 @@ function gp_get_product_part_number($product): string
 
     $part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
     if ($part_number === '') {
-        if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log('[gp_get_product_part_number] product_id=' . $product_id . ' part_number=Brak (empty meta)');
-        }
         return 'Brak';
-    }
-
-    if (defined('WP_DEBUG') && WP_DEBUG) {
-        error_log('[gp_get_product_part_number] product_id=' . $product_id . ' part_number=' . $part_number);
     }
 
     return $part_number;

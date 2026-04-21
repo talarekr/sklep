@@ -25,87 +25,81 @@ class Importer
     public function import_offers(): array
     {
         $settings = Plugin::get_settings();
-        $checkpoint = $this->get_checkpoint();
-        $offset = max(0, (int) ($checkpoint['offset'] ?? 0));
-        $page_no = max(1, (int) ($checkpoint['page_no'] ?? 1));
-        $page_token = sanitize_text_field((string) ($checkpoint['page_token'] ?? ''));
-        $limit = self::BATCH_LIMIT;
+
+        $offset = 0;
+        $limit = 100;
+        $page_no = 1;
+        $page_token = '';
         $processed = 0;
         $created = 0;
         $updated = 0;
         $errors = 0;
         $fetched_from_api = 0;
-        $total_count_from_api = $this->extract_total_count($checkpoint, null);
-        $runtime_deadline = time() + 20;
+        $seen_offer_ids = [];
+        $total_count_from_api = null;
 
-        $this->logger->info('Starting import batch from checkpoint.', [
-            'offset' => $offset,
-            'page_no' => $page_no,
-            'page_token' => $page_token,
-            'batch_limit' => $limit,
-            'checkpoint_total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
-        ]);
+        do {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(30);
+            }
 
-        if (function_exists('set_time_limit')) {
-            @set_time_limit(30);
-        }
-
-        $page = $this->client->get_offers((string) $settings['offer_status'], $offset, $limit, $page_token);
-        if (is_wp_error($page)) {
-            $errors++;
-            $this->logger->error('Failed to fetch offers page.', [
-                'page_no' => $page_no,
-                'offset' => $offset,
-                'page_token' => $page_token,
-                'error' => $page->get_error_message(),
-            ]);
-        } else {
-            $offers = $page['offers'] ?? [];
-            if (!empty($offers) && is_array($offers)) {
-                $batch_size = count($offers);
-                $fetched_from_api = $batch_size;
-                $total_count_from_api = $this->extract_total_count($page, $total_count_from_api);
-
-                $this->logger->info('Fetched offers batch from Allegro API.', [
+            $page = $this->client->get_offers((string) $settings['offer_status'], $offset, $limit, $page_token);
+            if (is_wp_error($page)) {
+                $errors++;
+                $this->logger->error('Failed to fetch offers page.', [
                     'page_no' => $page_no,
                     'offset' => $offset,
                     'page_token' => $page_token,
-                    'batch_size' => $batch_size,
-                    'reported_total_count' => $total_count_from_api,
+                    'error' => $page->get_error_message(),
                 ]);
+                break;
+            }
 
-                foreach ($offers as $offer_basic) {
-                    if (time() >= $runtime_deadline) {
-                        $this->logger->warning('Batch runtime deadline reached; saving checkpoint early.', [
-                            'offset' => $offset,
-                            'page_no' => $page_no,
-                        ]);
-                        break;
-                    }
+            $offers = $page['offers'] ?? [];
+            if (empty($offers) || !is_array($offers)) {
+                $this->logger->info('Offers page returned no results.', [
+                    'page_no' => $page_no,
+                    'offset' => $offset,
+                    'page_token' => $page_token,
+                    'total_fetched_from_api' => $fetched_from_api,
+                ]);
+                break;
+            }
 
-                    $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
-                    if ($offer_id === '') {
-                        continue;
-                    }
+            $batch_size = count($offers);
+            $fetched_from_api += $batch_size;
+            $total_count_from_api = $this->extract_total_count($page, $total_count_from_api);
 
-                    $details = $this->client->get_offer_details($offer_id);
-                    if (is_wp_error($details)) {
-                        $errors++;
-                        $this->logger->error('Failed to fetch offer details.', ['offer_id' => $offer_id, 'error' => $details->get_error_message()]);
-                        continue;
-                    }
+            $this->logger->info('Fetched offers batch from Allegro API.', [
+                'page_no' => $page_no,
+                'offset' => $offset,
+                'page_token' => $page_token,
+                'batch_size' => $batch_size,
+                'total_fetched_from_api' => $fetched_from_api,
+                'reported_total_count' => $total_count_from_api,
+            ]);
 
-                    $result = $this->mapper->upsert_product($details, $settings);
-                    $processed++;
+            foreach ($offers as $offer_basic) {
+                $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
+                if ($offer_id === '') {
+                    continue;
+                }
 
-                    if (($result['result'] ?? '') === 'created') {
-                        $created++;
-                    } elseif (($result['result'] ?? '') === 'updated') {
-                        $updated++;
-                    } elseif (($result['result'] ?? '') === 'error') {
-                        $errors++;
-                        $this->logger->error('Product upsert failed.', ['offer_id' => $offer_id, 'error' => $result['error'] ?? 'unknown']);
-                    }
+                if (isset($seen_offer_ids[$offer_id])) {
+                    $this->logger->warning('Skipping duplicate offer id from paginated API response.', [
+                        'offer_id' => $offer_id,
+                        'page_no' => $page_no,
+                        'offset' => $offset,
+                    ]);
+                    continue;
+                }
+                $seen_offer_ids[$offer_id] = true;
+
+                $details = $this->client->get_offer_details($offer_id);
+                if (is_wp_error($details)) {
+                    $errors++;
+                    $this->logger->error('Failed to fetch offer details.', ['offer_id' => $offer_id, 'error' => $details->get_error_message()]);
+                    continue;
                 }
 
                 $next_page_token = $this->extract_next_page_token($page);
@@ -137,7 +131,16 @@ class Importer
                     'page_token' => $page_token,
                 ]);
             }
-        }
+
+            $next_page_token = $this->extract_next_page_token($page);
+            if ($next_page_token !== '') {
+                $page_token = $next_page_token;
+            }
+
+            $offset += $batch_size;
+            $page_no++;
+            $has_more = $this->has_more_pages($batch_size, $limit, $offset, $total_count_from_api, $next_page_token);
+        } while ($has_more);
 
         $summary = [
             'date' => gmdate('Y-m-d H:i:s'),
@@ -162,23 +165,6 @@ class Importer
         $this->logger->info('Import finished.', $summary);
 
         return $summary;
-    }
-
-    private function get_checkpoint(): array
-    {
-        $checkpoint = get_option(self::CHECKPOINT_OPTION_KEY, []);
-        return is_array($checkpoint) ? $checkpoint : [];
-    }
-
-    private function save_checkpoint(array $checkpoint): void
-    {
-        update_option(self::CHECKPOINT_OPTION_KEY, $checkpoint, false);
-        $this->logger->info('Import checkpoint saved.', $checkpoint);
-    }
-
-    private function reset_checkpoint(): void
-    {
-        delete_option(self::CHECKPOINT_OPTION_KEY);
     }
 
     private function extract_total_count(array $page, ?int $current): ?int

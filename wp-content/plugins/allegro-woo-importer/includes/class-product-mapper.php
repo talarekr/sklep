@@ -98,23 +98,16 @@ class ProductMapper
         ]);
         $product->save();
 
-        $part_number_data = $this->extract_part_number_data($offer);
-        $existing_part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
-        $part_number = $part_number_data['value'];
-        if ($part_number === '' || $part_number === 'Brak') {
-            $part_number = ($existing_part_number !== '' && $existing_part_number !== 'Brak') ? $existing_part_number : 'Brak';
-        }
+        $part_number = $this->extract_part_number($offer);
         update_post_meta($product_id, '_part_number', $part_number);
-
         if ($part_number !== 'Brak') {
-            $this->logger->info('Part number mapped and saved.', [
+            $this->logger->info('Part number extracted from Allegro parameter and saved.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
                 'part_number' => $part_number,
-                'source' => $part_number_data['source'],
             ]);
         } else {
-            $this->logger->info('Part number missing - fallback saved.', [
+            $this->logger->info('Part number parameter missing in Allegro offer, fallback saved.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
                 'fallback' => 'Brak',
@@ -201,44 +194,37 @@ class ProductMapper
         return '';
     }
 
-    private function extract_part_number_data(array $offer): array
+    private function extract_part_number(array $offer): string
     {
-        $parameter_names = [];
         foreach (($offer['parameters'] ?? []) as $parameter) {
-            $parameter_names[] = sanitize_text_field((string) ($parameter['name'] ?? ''));
             $name = $this->normalize_parameter_name((string) ($parameter['name'] ?? ''));
             if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
                 continue;
             }
 
-            $sources = [
-                'values' => $parameter['values'] ?? [],
-                'valuesLabels' => $parameter['valuesLabels'] ?? [],
-                'value' => $parameter['value'] ?? null,
-                'valueLabel' => $parameter['valueLabel'] ?? null,
-            ];
+            $candidates = [];
+            foreach ((array) ($parameter['values'] ?? []) as $value) {
+                $candidates[] = sanitize_text_field((string) $value);
+            }
+            foreach ((array) ($parameter['valuesLabels'] ?? []) as $value) {
+                $candidates[] = sanitize_text_field((string) $value);
+            }
 
-            foreach ($sources as $source => $raw) {
-                $values = $this->flatten_parameter_values($raw);
-                foreach ($values as $candidate) {
-                    if (trim($candidate) !== '') {
-                        return [
-                            'value' => $candidate,
-                            'source' => $source,
-                        ];
-                    }
+            if (isset($parameter['value'])) {
+                $candidates[] = sanitize_text_field((string) $parameter['value']);
+            }
+            if (isset($parameter['valueLabel'])) {
+                $candidates[] = sanitize_text_field((string) $parameter['valueLabel']);
+            }
+
+            foreach ($candidates as $candidate) {
+                if (trim($candidate) !== '') {
+                    return $candidate;
                 }
             }
         }
 
-        $this->logger->info('Part number parameter not found in Allegro parameters.', [
-            'available_parameters' => $parameter_names,
-        ]);
-
-        return [
-            'value' => 'Brak',
-            'source' => 'fallback',
-        ];
+        return 'Brak';
     }
 
     private function normalize_parameter_name(string $name): string
@@ -251,32 +237,6 @@ class ProductMapper
         );
 
         return preg_replace('/\s+/u', ' ', $name) ?? $name;
-    }
-
-    private function flatten_parameter_values($raw): array
-    {
-        if ($raw === null) {
-            return [];
-        }
-
-        $items = is_array($raw) ? $raw : [$raw];
-        $values = [];
-        foreach ($items as $item) {
-            if (is_scalar($item)) {
-                $values[] = sanitize_text_field((string) $item);
-                continue;
-            }
-
-            if (is_array($item)) {
-                foreach (['value', 'label', 'name'] as $key) {
-                    if (!empty($item[$key]) && is_scalar($item[$key])) {
-                        $values[] = sanitize_text_field((string) $item[$key]);
-                    }
-                }
-            }
-        }
-
-        return array_values(array_filter($values, static fn(string $value): bool => trim($value) !== ''));
     }
 
     private function map_product_status(string $publication_status, array $settings): string
