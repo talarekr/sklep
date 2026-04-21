@@ -300,6 +300,12 @@ class ProductMapper
                 ]);
                 continue;
             }
+            $this->logger->info('media_handle_sideload succeeded.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'url' => $url,
+                'attachment_id' => (int) $attachment_id,
+            ]);
 
             update_post_meta($attachment_id, '_awi_source_url', $url);
             $gallery_ids[] = (int) $attachment_id;
