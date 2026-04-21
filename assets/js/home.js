@@ -7,4 +7,13 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   });
+
+  document.querySelectorAll('[data-close-bar]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const bar = button.closest('[data-closable-bar]');
+      if (bar) {
+        bar.style.display = 'none';
+      }
+    });
+  });
 });

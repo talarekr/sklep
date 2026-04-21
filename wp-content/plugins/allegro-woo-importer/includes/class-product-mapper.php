@@ -11,6 +11,10 @@ if (!defined('ABSPATH')) {
 
 class ProductMapper
 {
+    private const MAX_IMAGE_FILE_SIZE_BYTES = 12582912; // 12 MB
+    private const MAX_IMAGE_TOTAL_PIXELS = 24000000; // 24 MP
+    private const IMPORT_ALLOWED_SUBSIZES = ['thumbnail'];
+
     private Logger $logger;
     private array $image_import_context = [];
 
@@ -301,6 +305,14 @@ class ProductMapper
                 'images_total' => count($image_urls),
                 'url' => $url,
             ]);
+            $this->persist_last_image_checkpoint([
+                'stage' => 'before_attachment_lookup',
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
+                'url' => $url,
+            ]);
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
                 $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
@@ -395,13 +407,45 @@ class ProductMapper
             return new \WP_Error('image_download_failed', __('Nie udało się pobrać obrazka.', 'allegro-woo-importer'));
         }
 
+        $skip_reason = $this->get_heavy_image_skip_reason($tmp_file);
+        if ($skip_reason !== null) {
+            $this->logger->warning('Skipping heavy image before sideload metadata generation.', [
+                'product_id' => $product_id,
+                'url' => $image_url,
+                'skip_reason' => $skip_reason,
+            ]);
+            if (file_exists($tmp_file)) {
+                @unlink($tmp_file);
+            }
+
+            return new \WP_Error('image_skipped_heavy', $skip_reason);
+        }
+
         $filename = $this->build_sideload_filename_from_url_and_headers($image_url, $tmp_file);
         $file_array = [
             'name' => $filename,
             'tmp_name' => $tmp_file,
         ];
 
-        $attachment_id = media_handle_sideload($file_array, $product_id);
+        $this->persist_last_image_checkpoint([
+            'stage' => 'before_media_handle_sideload',
+            'product_id' => $product_id,
+            'url' => $image_url,
+            'filename' => $filename,
+            'tmp_file' => $tmp_file,
+            'file_size_bytes' => (int) @filesize($tmp_file),
+        ]);
+
+        $this->begin_image_import_runtime_limits([
+            'product_id' => $product_id,
+            'url' => $image_url,
+            'filename' => $filename,
+        ]);
+        try {
+            $attachment_id = media_handle_sideload($file_array, $product_id);
+        } finally {
+            $this->end_image_import_runtime_limits();
+        }
 
         if (is_wp_error($attachment_id)) {
             if (file_exists($tmp_file)) {
@@ -566,5 +610,116 @@ class ProductMapper
         }
 
         return $missing;
+    }
+
+    private function get_heavy_image_skip_reason(string $tmp_file): ?string
+    {
+        $file_size = @filesize($tmp_file);
+        if (is_int($file_size) && $file_size > self::MAX_IMAGE_FILE_SIZE_BYTES) {
+            return sprintf(
+                'Plik obrazu pominięty: %d B > %d B limitu.',
+                $file_size,
+                self::MAX_IMAGE_FILE_SIZE_BYTES
+            );
+        }
+
+        $image_size = @getimagesize($tmp_file);
+        if (!is_array($image_size)) {
+            return 'Plik obrazu pominięty: nie udało się odczytać wymiarów.';
+        }
+
+        $width = isset($image_size[0]) ? (int) $image_size[0] : 0;
+        $height = isset($image_size[1]) ? (int) $image_size[1] : 0;
+        if ($width <= 0 || $height <= 0) {
+            return 'Plik obrazu pominięty: nieprawidłowe wymiary.';
+        }
+
+        $total_pixels = $width * $height;
+        if ($total_pixels > self::MAX_IMAGE_TOTAL_PIXELS) {
+            return sprintf(
+                'Plik obrazu pominięty: %d px > %d px limitu.',
+                $total_pixels,
+                self::MAX_IMAGE_TOTAL_PIXELS
+            );
+        }
+
+        return null;
+    }
+
+    private function begin_image_import_runtime_limits(array $context): void
+    {
+        $this->image_import_context = [
+            'active' => true,
+            'context' => $context,
+        ];
+
+        add_filter('intermediate_image_sizes_advanced', [$this, 'filter_intermediate_image_sizes_advanced'], 9999, 2);
+        add_filter('fallback_intermediate_image_sizes', [$this, 'filter_fallback_intermediate_image_sizes'], 9999, 2);
+        add_filter('big_image_size_threshold', [$this, 'disable_big_image_size_threshold_for_import'], 9999, 4);
+        add_filter('wp_image_editors', [$this, 'prefer_gd_image_editor_for_import'], 9999, 1);
+    }
+
+    private function end_image_import_runtime_limits(): void
+    {
+        remove_filter('intermediate_image_sizes_advanced', [$this, 'filter_intermediate_image_sizes_advanced'], 9999);
+        remove_filter('fallback_intermediate_image_sizes', [$this, 'filter_fallback_intermediate_image_sizes'], 9999);
+        remove_filter('big_image_size_threshold', [$this, 'disable_big_image_size_threshold_for_import'], 9999);
+        remove_filter('wp_image_editors', [$this, 'prefer_gd_image_editor_for_import'], 9999);
+        $this->image_import_context = [];
+    }
+
+    public function filter_intermediate_image_sizes_advanced(array $sizes): array
+    {
+        if (!$this->is_image_import_context_active()) {
+            return $sizes;
+        }
+
+        return array_intersect_key($sizes, array_flip(self::IMPORT_ALLOWED_SUBSIZES));
+    }
+
+    public function filter_fallback_intermediate_image_sizes(array $fallback_sizes): array
+    {
+        if (!$this->is_image_import_context_active()) {
+            return $fallback_sizes;
+        }
+
+        return self::IMPORT_ALLOWED_SUBSIZES;
+    }
+
+    public function disable_big_image_size_threshold_for_import($threshold)
+    {
+        if (!$this->is_image_import_context_active()) {
+            return $threshold;
+        }
+
+        return false;
+    }
+
+    public function prefer_gd_image_editor_for_import(array $editors): array
+    {
+        if (!$this->is_image_import_context_active()) {
+            return $editors;
+        }
+
+        if (!in_array('WP_Image_Editor_GD', $editors, true)) {
+            return $editors;
+        }
+
+        $filtered = array_values(array_filter($editors, static fn($editor): bool => $editor !== 'WP_Image_Editor_GD'));
+        array_unshift($filtered, 'WP_Image_Editor_GD');
+
+        return $filtered;
+    }
+
+    private function is_image_import_context_active(): bool
+    {
+        return !empty($this->image_import_context['active']);
+    }
+
+    private function persist_last_image_checkpoint(array $checkpoint): void
+    {
+        $checkpoint['logged_at'] = gmdate('Y-m-d H:i:s');
+        update_option('awi_last_image_import_checkpoint', wp_json_encode($checkpoint), false);
+        $this->logger->info('Image import checkpoint.', $checkpoint);
     }
 }
