@@ -301,7 +301,7 @@ class ProductMapper
                 continue;
             }
 
-            $attachment_id = media_sideload_image($url, $product_id, null, 'id');
+            $attachment_id = $this->sideload_image_attachment($url, $product_id);
             if (is_wp_error($attachment_id)) {
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
@@ -367,7 +367,39 @@ class ProductMapper
         ]);
     }
 
-    private function build_sideload_filename(string $url, string $tmp_file): string
+    /**
+     * @return int|\WP_Error
+     */
+    private function sideload_image_attachment(string $image_url, int $product_id)
+    {
+        $tmp_file = download_url($image_url, 30);
+        if (is_wp_error($tmp_file)) {
+            return $tmp_file;
+        }
+
+        if (!is_string($tmp_file) || $tmp_file === '') {
+            return new \WP_Error('image_download_failed', __('Nie udało się pobrać obrazka.', 'allegro-woo-importer'));
+        }
+
+        $filename = $this->build_sideload_filename_from_url_and_headers($image_url, $tmp_file);
+        $file_array = [
+            'name' => $filename,
+            'tmp_name' => $tmp_file,
+        ];
+
+        $attachment_id = media_handle_sideload($file_array, $product_id);
+
+        if (is_wp_error($attachment_id)) {
+            if (file_exists($tmp_file)) {
+                @unlink($tmp_file);
+            }
+            return $attachment_id;
+        }
+
+        return (int) $attachment_id;
+    }
+
+    private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file): string
     {
         $path = (string) parse_url($url, PHP_URL_PATH);
         $base = sanitize_file_name((string) basename($path));
@@ -384,10 +416,62 @@ class ProductMapper
 
         $extension = strtolower((string) pathinfo($base, PATHINFO_EXTENSION));
         if ($extension === '') {
+            $mime = $this->detect_mime_from_headers($url);
+            if ($mime !== '') {
+                $extension = $this->map_mime_to_extension($mime);
+            }
+        }
+
+        if ($extension === '') {
             $extension = $this->detect_file_extension($tmp_file);
         }
 
+        if ($extension === '') {
+            $extension = 'jpg';
+        }
+
         return sanitize_file_name($name_without_ext . '.' . $extension);
+    }
+
+    private function detect_mime_from_headers(string $url): string
+    {
+        $response = wp_safe_remote_head($url, ['timeout' => 10, 'redirection' => 5]);
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) >= 400) {
+            $response = wp_safe_remote_get($url, [
+                'timeout' => 10,
+                'redirection' => 5,
+                'headers' => ['Range' => 'bytes=0-0'],
+            ]);
+        }
+
+        if (is_wp_error($response)) {
+            return '';
+        }
+
+        $content_type = (string) wp_remote_retrieve_header($response, 'content-type');
+        if ($content_type === '') {
+            return '';
+        }
+
+        $parts = explode(';', $content_type);
+        return strtolower(trim((string) ($parts[0] ?? '')));
+    }
+
+    private function map_mime_to_extension(string $mime): string
+    {
+        $mime_to_extension = [
+            'image/jpeg' => 'jpg',
+            'image/jpg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'image/bmp' => 'bmp',
+            'image/tiff' => 'tif',
+            'image/avif' => 'avif',
+            'image/heic' => 'heic',
+        ];
+
+        return $mime_to_extension[strtolower($mime)] ?? '';
     }
 
     private function detect_file_extension(string $tmp_file): string
@@ -412,19 +496,8 @@ class ProductMapper
             }
         }
 
-        $mime_to_extension = [
-            'image/jpeg' => 'jpg',
-            'image/jpg' => 'jpg',
-            'image/png' => 'png',
-            'image/gif' => 'gif',
-            'image/webp' => 'webp',
-            'image/bmp' => 'bmp',
-            'image/tiff' => 'tif',
-            'image/avif' => 'avif',
-            'image/heic' => 'heic',
-        ];
-
-        return $mime_to_extension[strtolower($mime)] ?? 'jpg';
+        $extension = $this->map_mime_to_extension($mime);
+        return $extension !== '' ? $extension : 'jpg';
     }
 
     private function find_existing_attachment_by_source(string $url): int
