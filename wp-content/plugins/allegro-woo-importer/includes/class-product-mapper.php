@@ -309,7 +309,7 @@ class ProductMapper
                 continue;
             }
 
-            $attachment_id = $this->sideload_image_attachment($url, $product_id, $offer_id, $image_no, count($image_urls));
+            $attachment_id = $this->sideload_image_attachment($url, $product_id);
             if (is_wp_error($attachment_id)) {
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
@@ -384,15 +384,8 @@ class ProductMapper
     /**
      * @return int|\WP_Error
      */
-    private function sideload_image_attachment(string $image_url, int $product_id, string $offer_id, int $image_index, int $images_total)
+    private function sideload_image_attachment(string $image_url, int $product_id)
     {
-        $this->logger->info('Downloading image file started.', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'image_index' => $image_index,
-            'images_total' => $images_total,
-            'url' => $image_url,
-        ]);
         $tmp_file = download_url($image_url, 30);
         if (is_wp_error($tmp_file)) {
             return $tmp_file;
@@ -402,71 +395,13 @@ class ProductMapper
             return new \WP_Error('image_download_failed', __('Nie udało się pobrać obrazka.', 'allegro-woo-importer'));
         }
 
-        $file_size = @filesize($tmp_file);
-        $max_file_size = (int) apply_filters('awi_max_import_image_bytes', 15 * 1024 * 1024);
-        if ($file_size !== false && $file_size > $max_file_size) {
-            @unlink($tmp_file);
-            return new \WP_Error(
-                'image_too_large',
-                __('Obrazek pominięty: plik jest zbyt duży dla bezpiecznego importu.', 'allegro-woo-importer'),
-                ['file_size' => (int) $file_size, 'max_file_size' => $max_file_size]
-            );
-        }
-
-        $this->logger->info('Downloading image file succeeded.', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'image_index' => $image_index,
-            'images_total' => $images_total,
-            'url' => $image_url,
-            'tmp_file' => $tmp_file,
-            'file_size' => $file_size !== false ? (int) $file_size : null,
-            'max_allowed_file_size' => $max_file_size,
-        ]);
-
-        $image_info = @getimagesize($tmp_file);
-        if (is_array($image_info) && !empty($image_info[0]) && !empty($image_info[1])) {
-            $pixels = (int) $image_info[0] * (int) $image_info[1];
-            $max_pixels = (int) apply_filters('awi_max_import_image_pixels', 24000000);
-            if ($pixels > $max_pixels) {
-                @unlink($tmp_file);
-                return new \WP_Error(
-                    'image_too_large_dimensions',
-                    __('Obrazek pominięty: zbyt duża rozdzielczość.', 'allegro-woo-importer'),
-                    ['width' => (int) $image_info[0], 'height' => (int) $image_info[1], 'pixels' => $pixels, 'max_pixels' => $max_pixels]
-                );
-            }
-        }
-
         $filename = $this->build_sideload_filename_from_url_and_headers($image_url, $tmp_file);
         $file_array = [
             'name' => $filename,
             'tmp_name' => $tmp_file,
         ];
 
-        $this->logger->info('media_handle_sideload started.', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'image_index' => $image_index,
-            'images_total' => $images_total,
-            'url' => $image_url,
-            'filename' => $filename,
-        ]);
-
-        $this->image_import_context = [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'image_index' => $image_index,
-            'images_total' => $images_total,
-            'url' => $image_url,
-        ];
-        $this->enable_lightweight_image_processing_for_import();
-        try {
-            $attachment_id = media_handle_sideload($file_array, $product_id);
-        } finally {
-            $this->disable_lightweight_image_processing_for_import();
-            $this->image_import_context = [];
-        }
+        $attachment_id = media_handle_sideload($file_array, $product_id);
 
         if (is_wp_error($attachment_id)) {
             if (file_exists($tmp_file)) {
@@ -475,72 +410,7 @@ class ProductMapper
             return $attachment_id;
         }
 
-        $this->logger->info('media_handle_sideload succeeded.', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'image_index' => $image_index,
-            'images_total' => $images_total,
-            'url' => $image_url,
-            'attachment_id' => (int) $attachment_id,
-        ]);
-
         return (int) $attachment_id;
-    }
-
-    private function enable_lightweight_image_processing_for_import(): void
-    {
-        add_filter('intermediate_image_sizes_advanced', [$this, 'limit_intermediate_image_sizes_for_import'], 999, 3);
-        add_filter('wp_generate_attachment_metadata', [$this, 'log_generated_attachment_metadata_for_import'], 999, 2);
-    }
-
-    private function disable_lightweight_image_processing_for_import(): void
-    {
-        remove_filter('intermediate_image_sizes_advanced', [$this, 'limit_intermediate_image_sizes_for_import'], 999);
-        remove_filter('wp_generate_attachment_metadata', [$this, 'log_generated_attachment_metadata_for_import'], 999);
-    }
-
-    public function limit_intermediate_image_sizes_for_import(array $sizes, array $image_meta, int $attachment_id): array
-    {
-        if (empty($this->image_import_context)) {
-            return $sizes;
-        }
-
-        $this->logger->info('Attachment metadata generation started.', [
-            'offer_id' => $this->image_import_context['offer_id'] ?? '',
-            'product_id' => $this->image_import_context['product_id'] ?? 0,
-            'image_index' => $this->image_import_context['image_index'] ?? 0,
-            'images_total' => $this->image_import_context['images_total'] ?? 0,
-            'url' => $this->image_import_context['url'] ?? '',
-            'attachment_id' => $attachment_id,
-            'requested_subsizes' => array_keys($sizes),
-        ]);
-
-        $allowed = apply_filters('awi_allowed_intermediate_image_sizes', ['woocommerce_thumbnail', 'thumbnail']);
-        $allowed = array_filter(array_map('strval', is_array($allowed) ? $allowed : []));
-        if (empty($allowed)) {
-            return [];
-        }
-
-        return array_intersect_key($sizes, array_flip($allowed));
-    }
-
-    public function log_generated_attachment_metadata_for_import($metadata, int $attachment_id)
-    {
-        if (empty($this->image_import_context)) {
-            return $metadata;
-        }
-
-        $this->logger->info('Attachment metadata generation finished.', [
-            'offer_id' => $this->image_import_context['offer_id'] ?? '',
-            'product_id' => $this->image_import_context['product_id'] ?? 0,
-            'image_index' => $this->image_import_context['image_index'] ?? 0,
-            'images_total' => $this->image_import_context['images_total'] ?? 0,
-            'url' => $this->image_import_context['url'] ?? '',
-            'attachment_id' => $attachment_id,
-            'generated_subsizes' => is_array($metadata) && isset($metadata['sizes']) && is_array($metadata['sizes']) ? array_keys($metadata['sizes']) : [],
-        ]);
-
-        return $metadata;
     }
 
     private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file): string
