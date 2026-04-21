@@ -17,13 +17,14 @@ class AllegroAuth
 
     public function hooks(): void
     {
-        add_action('admin_init', [$this, 'handle_oauth_callback']);
+        add_action('init', [$this, 'handle_oauth_callback']);
     }
 
     public function get_authorization_url(): string
     {
         $settings = Plugin::get_settings();
         $base = $this->get_auth_base_url($settings['environment']);
+        $redirect_uri = $this->get_effective_redirect_uri();
 
         $state = wp_generate_password(20, false, false);
         set_transient('awi_oauth_state_' . get_current_user_id(), $state, 10 * MINUTE_IN_SECONDS);
@@ -31,7 +32,7 @@ class AllegroAuth
         $query = [
             'response_type' => 'code',
             'client_id' => $settings['client_id'],
-            'redirect_uri' => $settings['redirect_uri'],
+            'redirect_uri' => $redirect_uri,
             'state' => $state,
         ];
 
@@ -40,53 +41,75 @@ class AllegroAuth
 
     public function handle_oauth_callback(): void
     {
-        if (!is_admin() || !current_user_can('manage_woocommerce')) {
+        if (!$this->is_oauth_callback_request()) {
             return;
         }
 
-        if (!isset($_GET['page']) || $_GET['page'] !== 'awi-settings') {
-            return;
-        }
+        $this->logger->info('OAuth callback started.');
 
-        if (!isset($_GET['awi_oauth'])) {
+        if (!is_user_logged_in() || !current_user_can('manage_woocommerce')) {
+            $this->logger->error('OAuth callback rejected due to missing permissions.');
             return;
         }
 
         $settings = Plugin::get_settings();
         $state_key = 'awi_oauth_state_' . get_current_user_id();
         $saved_state = get_transient($state_key);
-
         $state = isset($_GET['state']) ? sanitize_text_field(wp_unslash($_GET['state'])) : '';
-        if (empty($saved_state) || $saved_state !== $state) {
-            $this->logger->error('OAuth callback rejected due to invalid state.');
-            add_settings_error('awi_messages', 'awi_oauth_state', __('Błędny stan OAuth (state).', 'allegro-woo-importer'), 'error');
-            return;
-        }
 
+        if (empty($saved_state) || $saved_state !== $state) {
+            $this->logger->error('OAuth callback rejected due to invalid state.', ['state_present' => $state !== '', 'saved_state_present' => !empty($saved_state)]);
+            $this->store_admin_notice('error', __('Błędny lub wygasły stan OAuth (state). Spróbuj połączyć konto ponownie.', 'allegro-woo-importer'));
+            $this->redirect_to_settings();
+        }
         delete_transient($state_key);
 
         $code = isset($_GET['code']) ? sanitize_text_field(wp_unslash($_GET['code'])) : '';
+        $this->logger->info('OAuth callback code presence checked.', ['code_present' => $code !== '']);
+
         if (empty($code)) {
             $error = isset($_GET['error']) ? sanitize_text_field(wp_unslash($_GET['error'])) : 'unknown_error';
-            $this->logger->error('OAuth callback without code.', ['error' => $error]);
-            add_settings_error('awi_messages', 'awi_oauth_code', sprintf(__('Autoryzacja Allegro nieudana: %s', 'allegro-woo-importer'), $error), 'error');
-            return;
+            $error_description = isset($_GET['error_description']) ? sanitize_text_field(wp_unslash($_GET['error_description'])) : '';
+            $this->logger->error('OAuth callback without code.', ['error' => $error, 'error_description' => $error_description]);
+
+            $message = sprintf(__('Autoryzacja Allegro nieudana: %s', 'allegro-woo-importer'), $error);
+            if ($error_description !== '') {
+                $message .= ' (' . $error_description . ')';
+            }
+            $this->store_admin_notice('error', $message);
+            $this->redirect_to_settings();
         }
 
         $token_response = $this->request_token([
             'grant_type' => 'authorization_code',
             'code' => $code,
-            'redirect_uri' => $settings['redirect_uri'],
+            'redirect_uri' => $this->get_effective_redirect_uri(),
         ]);
 
         if (is_wp_error($token_response)) {
-            $this->logger->error('OAuth token exchange failed.', ['error' => $token_response->get_error_message()]);
-            add_settings_error('awi_messages', 'awi_oauth_exchange', __('Nie udało się pobrać tokena Allegro.', 'allegro-woo-importer'), 'error');
-            return;
+            $this->logger->error('OAuth token exchange failed.', ['error' => $token_response->get_error_message(), 'details' => $token_response->get_error_data()]);
+            $this->store_admin_notice('error', __('Nie udało się pobrać tokena Allegro.', 'allegro-woo-importer'));
+            $this->redirect_to_settings();
         }
 
         $this->persist_token_response($token_response);
-        add_settings_error('awi_messages', 'awi_oauth_ok', __('Połączono z Allegro poprawnie.', 'allegro-woo-importer'), 'updated');
+        $this->logger->info('OAuth token exchange succeeded.');
+        $this->store_admin_notice('success', __('Połączono z Allegro poprawnie.', 'allegro-woo-importer'));
+        $this->redirect_to_settings();
+    }
+
+    public function get_connection_callback_uri(): string
+    {
+        return $this->get_effective_redirect_uri();
+    }
+
+    private function is_oauth_callback_request(): bool
+    {
+        if (!isset($_GET['awi_oauth'])) {
+            return false;
+        }
+
+        return true;
     }
 
     public function get_valid_access_token()
@@ -109,7 +132,7 @@ class AllegroAuth
         $refresh_response = $this->request_token([
             'grant_type' => 'refresh_token',
             'refresh_token' => $settings['refresh_token'],
-            'redirect_uri' => $settings['redirect_uri'],
+            'redirect_uri' => $this->get_effective_redirect_uri(),
         ]);
 
         if (is_wp_error($refresh_response)) {
@@ -148,6 +171,7 @@ class AllegroAuth
         $data = json_decode($raw, true);
 
         if ($status < 200 || $status > 299 || !is_array($data)) {
+            $this->logger->error('Allegro token endpoint returned invalid response.', ['status' => $status, 'body' => $raw]);
             return new \WP_Error('awi_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
         }
 
@@ -174,5 +198,28 @@ class AllegroAuth
     private function get_auth_base_url(string $environment): string
     {
         return $environment === 'sandbox' ? 'https://allegro.pl.allegrosandbox.pl' : 'https://allegro.pl';
+    }
+
+    private function get_effective_redirect_uri(): string
+    {
+        return add_query_arg('awi_oauth', '1', home_url('/'));
+    }
+
+    private function redirect_to_settings(): void
+    {
+        wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+        exit;
+    }
+
+    private function store_admin_notice(string $type, string $message): void
+    {
+        set_transient(
+            'awi_admin_notice_' . get_current_user_id(),
+            [
+                'type' => $type,
+                'message' => $message,
+            ],
+            5 * MINUTE_IN_SECONDS
+        );
     }
 }
