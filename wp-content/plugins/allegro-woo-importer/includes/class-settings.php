@@ -127,7 +127,6 @@ class Settings
 
         $oauth_url = $this->auth->get_authorization_url();
         $callback_uri = $this->auth->get_connection_callback_uri();
-        $option_key = Plugin::OPTION_KEY;
 
         $log_tail = $this->logger->read_tail(80);
 
