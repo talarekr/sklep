@@ -258,12 +258,7 @@ class ProductMapper
 
         $gallery_ids = [];
 
-        foreach ($images as $image) {
-            $url = esc_url_raw((string) ($image['url'] ?? ''));
-            if (empty($url)) {
-                continue;
-            }
-
+        foreach ($image_urls as $url) {
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
                 $gallery_ids[] = $existing_attachment_id;
@@ -275,6 +270,8 @@ class ProductMapper
                 $this->logger->error('Image download failed.', ['url' => $url, 'error' => $tmp->get_error_message()]);
                 continue;
             }
+
+            $this->logger->info('Image downloaded to temporary file.', ['url' => $url, 'tmp' => $tmp]);
 
             $file = [
                 'name' => wp_basename(parse_url($url, PHP_URL_PATH) ?: 'allegro-image.jpg'),
