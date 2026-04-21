@@ -16,6 +16,7 @@
   border: 1px solid #d8d8d8;
   padding: 14px;
   background: #fff;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
 }
 
 .woocommerce ul.products li.product .product-meta,
