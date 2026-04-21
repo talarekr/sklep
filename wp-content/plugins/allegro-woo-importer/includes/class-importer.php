@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 class Importer
 {
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
+    private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const BATCH_LIMIT = 40;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 20;
 
@@ -48,6 +49,11 @@ class Importer
             'resume_offer_index' => $resume_offer_index,
             'batch_limit' => self::BATCH_LIMIT,
         ]);
+
+        if ($this->is_cycle_start($offset, $page_no, $resume_offer_index)) {
+            $this->reset_active_seen_offer_ids();
+            $this->logger->info('Reset active offers set for a new sync cycle.');
+        }
 
         $page = $this->client->get_offers((string) $settings['offer_status'], $offset, self::BATCH_LIMIT, $page_token);
         if (is_wp_error($page)) {
@@ -99,6 +105,7 @@ class Importer
             if ($offer_id === '') {
                 continue;
             }
+            $this->remember_active_offer_id($offer_id);
 
             $details = $this->client->get_offer_details($offer_id);
             if (is_wp_error($details)) {
@@ -172,11 +179,14 @@ class Importer
                 'batch_size' => $batch_size,
             ]);
         } else {
+            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status']);
             $this->reset_checkpoint();
+            $this->reset_active_seen_offer_ids();
             $this->logger->info('Reached end of offers, checkpoint reset for next sync cycle.', [
                 'last_offset' => $next_offset,
                 'processed_in_run' => $processed,
                 'reported_total_count' => $total_count_from_api,
+                'deactivated_missing_active_offers' => $deactivated_count,
             ]);
         }
 
@@ -305,5 +315,111 @@ class Importer
         }
 
         return $batch_size === $limit;
+    }
+
+    private function is_cycle_start(int $offset, int $page_no, int $resume_offer_index): bool
+    {
+        return $offset === 0 && $page_no === 1 && $resume_offer_index === 0;
+    }
+
+    private function reset_active_seen_offer_ids(): void
+    {
+        delete_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY);
+    }
+
+    private function load_active_seen_offer_ids(): array
+    {
+        $value = get_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY, []);
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $clean = [];
+        foreach ($value as $offer_id) {
+            $offer_id = sanitize_text_field((string) $offer_id);
+            if ($offer_id !== '') {
+                $clean[$offer_id] = true;
+            }
+        }
+
+        return $clean;
+    }
+
+    private function remember_active_offer_id(string $offer_id): void
+    {
+        $offer_id = sanitize_text_field($offer_id);
+        if ($offer_id === '') {
+            return;
+        }
+
+        $seen = $this->load_active_seen_offer_ids();
+        if (isset($seen[$offer_id])) {
+            return;
+        }
+
+        $seen[$offer_id] = true;
+        update_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY, array_keys($seen), false);
+    }
+
+    private function sync_missing_active_offers_to_hidden(string $inactive_status): int
+    {
+        $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
+        $seen_offer_ids = array_keys($this->load_active_seen_offer_ids());
+        $processed = 0;
+        $page = 1;
+
+        do {
+            $query = new \WP_Query([
+                'post_type' => 'product',
+                'post_status' => 'any',
+                'fields' => 'ids',
+                'posts_per_page' => 100,
+                'paged' => $page,
+                'meta_query' => [
+                    [
+                        'key' => '_allegro_offer_id',
+                        'compare' => 'EXISTS',
+                    ],
+                ],
+            ]);
+
+            $product_ids = array_map('intval', (array) $query->posts);
+            foreach ($product_ids as $product_id) {
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                if ($offer_id === '' || in_array($offer_id, $seen_offer_ids, true)) {
+                    continue;
+                }
+
+                $product = wc_get_product($product_id);
+                if (!$product instanceof \WC_Product) {
+                    continue;
+                }
+
+                $status_before = (string) $product->get_status();
+                $stock_before = $product->get_stock_quantity();
+                $stock_status_before = (string) $product->get_stock_status();
+
+                $product->set_manage_stock(true);
+                $product->set_stock_quantity(0);
+                $product->set_stock_status('outofstock');
+                $product->set_status($inactive_status);
+                $product->save();
+
+                $processed++;
+                $this->logger->info('Product hidden because offer is not active / missing in active offers sync.', [
+                    'product_id' => $product_id,
+                    'offer_id' => $offer_id,
+                    'status_before' => $status_before,
+                    'status_after' => $inactive_status,
+                    'stock_before' => $stock_before,
+                    'stock_status_before' => $stock_status_before,
+                ]);
+            }
+
+            $page++;
+            wp_reset_postdata();
+        } while ($page <= (int) $query->max_num_pages);
+
+        return $processed;
     }
 }

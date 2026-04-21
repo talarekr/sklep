@@ -47,12 +47,14 @@ class ProductMapper
         if (!$product instanceof WC_Product) {
             return ['result' => 'error', 'error' => 'invalid_product_instance'];
         }
+        $previous_status = $existing_id ? (string) $product->get_status() : '';
 
         $title = sanitize_text_field((string) ($offer['name'] ?? __('Oferta Allegro', 'allegro-woo-importer')));
         $description = $this->map_description($offer);
         $price = $this->extract_price($offer);
         $currency = sanitize_text_field((string) ($offer['sellingMode']['price']['currency'] ?? 'PLN'));
         $publication_status = strtoupper((string) ($offer['publication']['status'] ?? 'INACTIVE'));
+        $stock_available = isset($offer['stock']['available']) ? (int) $offer['stock']['available'] : null;
         $missing_fields = $this->collect_missing_fields($offer, $title, $description, $price);
         if (!empty($missing_fields)) {
             $this->logger->warning('Offer mapping used fallback values.', ['offer_id' => $offer_id, 'missing_fields' => $missing_fields]);
@@ -72,13 +74,13 @@ class ProductMapper
         }
 
         $product->set_catalog_visibility('visible');
-        $product->set_status($this->map_product_status($publication_status, $settings));
+        $target_status = $this->map_product_status($publication_status, $stock_available, $settings);
+        $product->set_status($target_status);
 
-        if (isset($offer['stock']['available'])) {
-            $stock_qty = (int) $offer['stock']['available'];
+        if ($stock_available !== null) {
             $product->set_manage_stock(true);
-            $product->set_stock_quantity($stock_qty);
-            $product->set_stock_status($stock_qty > 0 ? 'instock' : 'outofstock');
+            $product->set_stock_quantity($stock_available);
+            $product->set_stock_status($stock_available > 0 ? 'instock' : 'outofstock');
         }
 
         $product_id = $product->save();
@@ -132,6 +134,40 @@ class ProductMapper
             'product_id' => $product_id,
             'operation' => $existing_id ? 'updated' : 'created',
         ]);
+
+        if ($stock_available === 0 && $target_status !== 'publish') {
+            $this->logger->info('Product hidden because Allegro stock is zero.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+            ]);
+        }
+
+        if ($publication_status !== 'ACTIVE' && $target_status !== 'publish') {
+            $this->logger->info('Product hidden because Allegro offer is not active.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'publication_status' => $publication_status,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+            ]);
+        }
+
+        if (
+            $previous_status !== 'publish'
+            && $target_status === 'publish'
+            && $publication_status === 'ACTIVE'
+            && ($stock_available === null || $stock_available > 0)
+        ) {
+            $this->logger->info('Product restored to storefront after Allegro availability returned.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+                'stock_available' => $stock_available,
+            ]);
+        }
 
         return ['result' => $existing_id ? 'updated' : 'created', 'product_id' => $product_id];
     }
@@ -340,7 +376,7 @@ class ProductMapper
 
     private function map_product_status(string $publication_status, array $settings): string
     {
-        if ($publication_status === 'ACTIVE') {
+        if ($publication_status === 'ACTIVE' && ($stock_available === null || $stock_available > 0)) {
             return 'publish';
         }
 
