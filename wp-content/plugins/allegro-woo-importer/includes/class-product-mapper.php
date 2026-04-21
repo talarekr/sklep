@@ -374,7 +374,7 @@ class ProductMapper
         return $sources;
     }
 
-    private function map_product_status(string $publication_status, ?int $stock_available, array $settings): string
+    private function map_product_status(string $publication_status, array $settings): string
     {
         if ($publication_status === 'ACTIVE' && ($stock_available === null || $stock_available > 0)) {
             return 'publish';
