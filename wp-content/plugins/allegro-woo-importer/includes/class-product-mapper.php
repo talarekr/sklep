@@ -234,11 +234,8 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id): void
     {
-        $images = $offer['images'] ?? [];
-        if (!is_array($images) || empty($images)) {
-            $this->logger->warning('Offer has no images to sync.', ['offer_id' => $offer_id, 'product_id' => $product->get_id()]);
-            return;
-        }
+        $images_raw = $offer['images'] ?? [];
+        $images = is_array($images_raw) ? $images_raw : [];
 
         $product_id = $product->get_id();
         if ($product_id <= 0) {
@@ -297,41 +294,19 @@ class ProductMapper
                 continue;
             }
 
-            $tmp = $this->download_image_to_temp($url);
-            if (is_wp_error($tmp)) {
-                $this->logger->error('Image download failed.', [
-                    'offer_id' => $offer_id,
-                    'product_id' => $product_id,
-                    'url' => $url,
-                    'error_code' => $tmp->get_error_code(),
-                    'error_message' => $tmp->get_error_message(),
-                    'error_data' => $tmp->get_error_data(),
-                ]);
-                continue;
-            }
-
-            $this->logger->info('Image downloaded to temporary file.', ['url' => $url, 'tmp' => $tmp]);
-
-            $file = [
-                'name' => $this->build_image_filename_from_url($url),
-                'tmp_name' => $tmp,
-            ];
-
-            $attachment_id = media_handle_sideload($file, $product_id);
+            $attachment_id = media_sideload_image($url, $product_id, null, 'id');
             if (is_wp_error($attachment_id)) {
-                @unlink($tmp);
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
                     'product_id' => $product_id,
                     'url' => $url,
-                    'file' => $file,
                     'error_code' => $attachment_id->get_error_code(),
                     'error_message' => $attachment_id->get_error_message(),
                     'error_data' => $attachment_id->get_error_data(),
                 ]);
                 continue;
             }
-            $this->logger->info('media_handle_sideload succeeded.', [
+            $this->logger->info('Image sideload succeeded.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
                 'url' => $url,
