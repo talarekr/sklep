@@ -135,13 +135,6 @@ a:hover { text-decoration: underline; }
   position: relative;
 }
 .gp-main-actions__icon { font-size: 26px; line-height: 1; }
-.gp-main-actions__phone {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 16px;
-  font-weight: 700;
-}
 .gp-notice-dot { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--gp-primary); color: #fff; font-size: 11px; }
 
 .gp-main-header__nav-row {
@@ -206,6 +199,9 @@ a:hover { text-decoration: underline; }
   .gp-main-header__nav-row { grid-template-columns: 1fr; }
   .gp-main-actions { justify-content: flex-start; }
   .gp-main-search input::placeholder { font-size: 15px; }
+  .gp-hero__content { grid-template-columns: 1fr; padding: 34px 12px; gap: 24px; }
+  .gp-hero-promo h2 { font-size: 52px; }
+  .gp-hero-brands { grid-template-columns: repeat(3, minmax(90px, 1fr)); }
   .gp-phone { justify-self: start; }
   .gp-search { grid-column: 1 / -1; }
   .gp-category-columns, .gp-products, .gp-banner-grid { grid-template-columns: repeat(2, 1fr); }
@@ -220,6 +216,9 @@ a:hover { text-decoration: underline; }
   .gp-phone { font-size: 16px; }
   .gp-hero { min-height: 0; }
   .gp-hero-promo h2 { font-size: 36px; }
+  .gp-hero-search__form { grid-template-columns: 1fr; }
+  .gp-hero-search__form button { font-size: 18px; }
+  .gp-hero-brands { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
   .gp-category-columns, .gp-products, .gp-banner-grid { grid-template-columns: 1fr; }
 }
 .gp-hero {
@@ -230,14 +229,67 @@ a:hover { text-decoration: underline; }
 }
 .gp-hero__content {
   min-height: 460px;
-  display: flex;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 50px;
   align-items: center;
+}
+.gp-hero-search {
+  background: #e8ebf1;
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 10px 24px rgba(8, 20, 56, 0.22);
+}
+.gp-search-tabs {
+  display: inline-flex;
+  padding: 6px;
+  border-radius: 12px;
+  background: #d5d9e2;
+  margin-bottom: 16px;
+  width: 100%;
+}
+.gp-search-tabs button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
+  padding: 12px 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.gp-search-tabs .is-active {
+  background: #fff;
+  color: var(--gp-navy);
+}
+.gp-hero-search__form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.gp-hero-search__form input {
+  border: 1px solid #bcc4d4;
+  min-height: 50px;
+  border-radius: 10px;
+  padding: 0 16px;
+  font-size: 18px;
+}
+.gp-hero-search__form button {
+  border: 0;
+  border-radius: 10px;
+  background: var(--gp-navy);
+  color: #fff;
+  min-height: 50px;
+  padding: 0 22px;
+  font-size: 28px;
+  font-weight: 700;
+  cursor: pointer;
 }
 .gp-hero-promo {
   color: #fff;
   text-align: center;
-  width: 100%;
+}
+.gp-hero-promo__lead {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 700;
 }
 .gp-hero-promo h2 {
   margin: 0;
@@ -247,13 +299,44 @@ a:hover { text-decoration: underline; }
   letter-spacing: .01em;
 }
 .gp-hero-promo h2 span { color: #ff2c2c; }
+.gp-hero-promo__meta { margin: 14px 0 22px; font-size: 17px; opacity: .95; }
+.gp-hero-promo__actions { display: flex; justify-content: flex-end; }
+.gp-btn--primary {
+  background: #e7f0ff;
+  color: #0e2a63;
+  border: 0;
+  border-radius: 10px;
+  font-size: 16px;
+  padding: 12px 20px;
+}
+.gp-hero-brands {
+  margin-top: 34px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(80px, 1fr));
+  gap: 16px;
+}
+.gp-hero-brands span {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 50px;
+  border: 1px solid rgba(255,255,255,.55);
+  border-radius: 999px;
+  background: rgba(255,255,255,.15);
+  font-weight: 700;
+  font-size: 18px;
+}
 
 @media (max-width: 1199px) {
-  .gp-hero__content { padding: 34px 12px; }
+  .gp-hero__content { grid-template-columns: 1fr; padding: 34px 12px; gap: 24px; }
   .gp-hero-promo h2 { font-size: 52px; }
+  .gp-hero-brands { grid-template-columns: repeat(3, minmax(90px, 1fr)); }
 }
 
 @media (max-width: 767px) {
   .gp-hero { min-height: 0; }
   .gp-hero-promo h2 { font-size: 36px; }
+  .gp-hero-search__form { grid-template-columns: 1fr; }
+  .gp-hero-search__form button { font-size: 18px; }
+  .gp-hero-brands { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
 }

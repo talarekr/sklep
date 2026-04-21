@@ -52,10 +52,6 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
                     <span><?php esc_html_e('Koszyk', 'gp-clone'); ?></span>
                     <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
                 </a>
-                <a class="gp-main-actions__phone" href="tel:+48504266984">
-                    <span aria-hidden="true">&#128222;</span>
-                    <span>504 266 984</span>
-                </a>
             </div>
         </div>
 
@@ -71,7 +67,7 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
             </nav>
             <div class="gp-phone">
                 <span aria-hidden="true">&#128222;</span>
-                <a href="tel:+48504266984">504 266 984</a>
+                <a href="tel:+48510215506">+48 510 215 506</a>
             </div>
         </div>
     </div>
@@ -79,8 +75,30 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
 
 <section class="gp-hero">
     <div class="gp-container gp-hero__content">
+        <aside class="gp-hero-search">
+            <div class="gp-search-tabs" data-search-switch>
+                <button type="button" class="is-active" data-mode="part"><?php esc_html_e('Numer części', 'gp-clone'); ?></button>
+                <button type="button" data-mode="model"><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></button>
+            </div>
+            <form class="gp-hero-search__form" action="<?php echo esc_url(home_url('/')); ?>" method="get">
+                <label class="screen-reader-text" for="gp-hero-search-input"><?php esc_html_e('Szukaj części', 'gp-clone'); ?></label>
+                <input id="gp-hero-search-input" type="search" name="s" placeholder="Wprowadź numer części">
+                <button type="submit"><?php esc_html_e('Szukaj', 'gp-clone'); ?></button>
+            </form>
+        </aside>
+
         <div class="gp-hero-promo">
-            <h2>Kupuj u nas nawet <span>10%</span> taniej</h2>
+            <p class="gp-hero-promo__lead">Kupuj u nas na stronie</p>
+            <h2>Kupuj u nas nawet <span>5%</span> taniej*</h2>
+            <p class="gp-hero-promo__meta">* Bez pośredników — dodatkowy rabat na wybrane części.</p>
+            <div class="gp-hero-promo__actions">
+                <a href="#" class="gp-btn gp-btn--primary"><?php esc_html_e('Kup teraz', 'gp-clone'); ?></a>
+            </div>
+            <div class="gp-hero-brands" aria-label="<?php esc_attr_e('Popularne marki', 'gp-clone'); ?>">
+                <?php foreach (['Audi', 'Mercedes', 'BMW', 'VW', 'MINI', 'Porsche'] as $brand) : ?>
+                    <span><?php echo esc_html($brand); ?></span>
+                <?php endforeach; ?>
+            </div>
         </div>
     </div>
 </section>
