@@ -83,6 +83,12 @@ class ProductMapper
         $this->assign_category($product_id, $offer);
         $this->map_attributes($product, $offer);
         $this->sync_product_images($product, $offer, $offer_id);
+        $this->logger->info('Saving product after image sync.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'image_id_before_save' => (int) $product->get_image_id(),
+            'gallery_ids_before_save' => array_map('intval', $product->get_gallery_image_ids()),
+        ]);
         $product->save();
 
         update_post_meta($product_id, '_allegro_offer_id', $offer_id);
@@ -290,6 +296,7 @@ class ProductMapper
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
                 $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
+                $this->logger->info('Sideload/reuse result attachment ID.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => (int) $existing_attachment_id, 'source' => 'reuse']);
                 $gallery_ids[] = $existing_attachment_id;
                 continue;
             }
@@ -311,6 +318,7 @@ class ProductMapper
                 'product_id' => $product_id,
                 'url' => $url,
                 'attachment_id' => (int) $attachment_id,
+                'source' => 'sideload',
             ]);
 
             update_post_meta($attachment_id, '_awi_source_url', $url);
@@ -335,6 +343,21 @@ class ProductMapper
 
         $product->set_image_id($featured_id);
         $product->set_gallery_image_ids($gallery_only);
+        update_post_meta($product_id, '_thumbnail_id', $featured_id);
+        update_post_meta($product_id, '_product_image_gallery', implode(',', $gallery_only));
+
+        $this->logger->info('Final product image ID.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'final_image_id' => (int) $product->get_image_id(),
+            'thumbnail_meta' => (int) get_post_meta($product_id, '_thumbnail_id', true),
+        ]);
+        $this->logger->info('Final product gallery image IDs.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'final_gallery_image_ids' => array_map('intval', $product->get_gallery_image_ids()),
+            'gallery_meta' => sanitize_text_field((string) get_post_meta($product_id, '_product_image_gallery', true)),
+        ]);
 
         $this->logger->info('Product image sync completed.', [
             'offer_id' => $offer_id,
@@ -342,6 +365,66 @@ class ProductMapper
             'featured_attachment_id' => $featured_id,
             'gallery_count' => count($gallery_only),
         ]);
+    }
+
+    private function build_sideload_filename(string $url, string $tmp_file): string
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $base = sanitize_file_name((string) basename($path));
+        $base = trim($base);
+
+        if ($base === '' || $base === '.' || $base === '..') {
+            $base = 'allegro-image';
+        }
+
+        $name_without_ext = pathinfo($base, PATHINFO_FILENAME);
+        if ($name_without_ext === '') {
+            $name_without_ext = 'allegro-image';
+        }
+
+        $extension = strtolower((string) pathinfo($base, PATHINFO_EXTENSION));
+        if ($extension === '') {
+            $extension = $this->detect_file_extension($tmp_file);
+        }
+
+        return sanitize_file_name($name_without_ext . '.' . $extension);
+    }
+
+    private function detect_file_extension(string $tmp_file): string
+    {
+        $mime = '';
+
+        if (function_exists('wp_get_image_mime')) {
+            $mime = (string) wp_get_image_mime($tmp_file);
+        }
+
+        if ($mime === '' && function_exists('mime_content_type')) {
+            $detected = mime_content_type($tmp_file);
+            if (is_string($detected)) {
+                $mime = $detected;
+            }
+        }
+
+        if ($mime === '' && function_exists('getimagesize')) {
+            $image_info = @getimagesize($tmp_file);
+            if (is_array($image_info) && !empty($image_info['mime']) && is_string($image_info['mime'])) {
+                $mime = $image_info['mime'];
+            }
+        }
+
+        $mime_to_extension = [
+            'image/jpeg' => 'jpg',
+            'image/jpg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'image/bmp' => 'bmp',
+            'image/tiff' => 'tif',
+            'image/avif' => 'avif',
+            'image/heic' => 'heic',
+        ];
+
+        return $mime_to_extension[strtolower($mime)] ?? 'jpg';
     }
 
     private function find_existing_attachment_by_source(string $url): int
