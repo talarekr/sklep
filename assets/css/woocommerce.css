@@ -7,7 +7,8 @@
 .woocommerce ul.products {
   display: grid !important;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
+  align-items: stretch;
 }
 
 .woocommerce ul.products li.product {
