@@ -21,20 +21,20 @@ if (!defined('ABSPATH')) {
         <table class="form-table" role="presentation">
             <tr>
                 <th scope="row"><label for="awi-client-id">Client ID</label></th>
-                <td><input id="awi-client-id" class="regular-text" name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[client_id]" value="<?php echo esc_attr($settings['client_id']); ?>" /></td>
+                <td><input id="awi-client-id" class="regular-text" name="<?php echo esc_attr($option_key); ?>[client_id]" value="<?php echo esc_attr($settings['client_id']); ?>" /></td>
             </tr>
             <tr>
                 <th scope="row"><label for="awi-client-secret">Client Secret</label></th>
-                <td><input id="awi-client-secret" class="regular-text" name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[client_secret]" value="<?php echo esc_attr($settings['client_secret']); ?>" /></td>
+                <td><input id="awi-client-secret" class="regular-text" name="<?php echo esc_attr($option_key); ?>[client_secret]" value="<?php echo esc_attr($settings['client_secret']); ?>" /></td>
             </tr>
             <tr>
                 <th scope="row"><label for="awi-redirect-uri">Redirect URI</label></th>
-                <td><input id="awi-redirect-uri" class="regular-text" name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[redirect_uri]" value="<?php echo esc_attr($settings['redirect_uri']); ?>" /></td>
+                <td><input id="awi-redirect-uri" class="regular-text" name="<?php echo esc_attr($option_key); ?>[redirect_uri]" value="<?php echo esc_attr($settings['redirect_uri']); ?>" /></td>
             </tr>
             <tr>
                 <th scope="row"><?php esc_html_e('Środowisko', 'allegro-woo-importer'); ?></th>
                 <td>
-                    <select name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[environment]">
+                    <select name="<?php echo esc_attr($option_key); ?>[environment]">
                         <option value="production" <?php selected($settings['environment'], 'production'); ?>>Production</option>
                         <option value="sandbox" <?php selected($settings['environment'], 'sandbox'); ?>>Sandbox</option>
                     </select>
@@ -43,7 +43,7 @@ if (!defined('ABSPATH')) {
             <tr>
                 <th scope="row"><?php esc_html_e('Tryb synchronizacji', 'allegro-woo-importer'); ?></th>
                 <td>
-                    <select name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[sync_mode]">
+                    <select name="<?php echo esc_attr($option_key); ?>[sync_mode]">
                         <option value="create_only" <?php selected($settings['sync_mode'], 'create_only'); ?>><?php esc_html_e('Tylko twórz nowe', 'allegro-woo-importer'); ?></option>
                         <option value="update_only" <?php selected($settings['sync_mode'], 'update_only'); ?>><?php esc_html_e('Tylko aktualizuj istniejące', 'allegro-woo-importer'); ?></option>
                         <option value="create_update" <?php selected($settings['sync_mode'], 'create_update'); ?>><?php esc_html_e('Twórz i aktualizuj', 'allegro-woo-importer'); ?></option>
@@ -53,7 +53,7 @@ if (!defined('ABSPATH')) {
             <tr>
                 <th scope="row"><?php esc_html_e('Status produktu dla nieaktywnej oferty', 'allegro-woo-importer'); ?></th>
                 <td>
-                    <select name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[inactive_product_status]">
+                    <select name="<?php echo esc_attr($option_key); ?>[inactive_product_status]">
                         <option value="draft" <?php selected($settings['inactive_product_status'], 'draft'); ?>>Draft</option>
                         <option value="private" <?php selected($settings['inactive_product_status'], 'private'); ?>>Private</option>
                     </select>
@@ -61,12 +61,12 @@ if (!defined('ABSPATH')) {
             </tr>
             <tr>
                 <th scope="row"><?php esc_html_e('Filtr statusu ofert', 'allegro-woo-importer'); ?></th>
-                <td><input class="regular-text" name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[offer_status]" value="<?php echo esc_attr($settings['offer_status']); ?>" /></td>
+                <td><input class="regular-text" name="<?php echo esc_attr($option_key); ?>[offer_status]" value="<?php echo esc_attr($settings['offer_status']); ?>" /></td>
             </tr>
             <tr>
                 <th scope="row"><?php esc_html_e('Auto-sync (WP-Cron)', 'allegro-woo-importer'); ?></th>
                 <td>
-                    <select name="<?php echo esc_attr(Plugin::OPTION_KEY); ?>[cron_interval]">
+                    <select name="<?php echo esc_attr($option_key); ?>[cron_interval]">
                         <option value="manual" <?php selected($settings['cron_interval'], 'manual'); ?>><?php esc_html_e('Tylko ręcznie', 'allegro-woo-importer'); ?></option>
                         <option value="awi_15_minutes" <?php selected($settings['cron_interval'], 'awi_15_minutes'); ?>><?php esc_html_e('Co 15 minut', 'allegro-woo-importer'); ?></option>
                         <option value="hourly" <?php selected($settings['cron_interval'], 'hourly'); ?>><?php esc_html_e('Co godzinę', 'allegro-woo-importer'); ?></option>
