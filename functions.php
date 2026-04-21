@@ -138,6 +138,8 @@ function gp_product_tab_seller(): void
 
 function gp_get_product_part_number($product): string
 {
+    static $logged_product_ids = [];
+
     $product_id = 0;
     if ($product instanceof WC_Product) {
         $product_id = $product->get_id();
@@ -150,11 +152,20 @@ function gp_get_product_part_number($product): string
     }
 
     $part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
-    if ($part_number === '') {
-        return 'Brak';
+    $resolved_part_number = $part_number === '' ? 'Brak' : $part_number;
+
+    if (!isset($logged_product_ids[$product_id]) && class_exists('AWI\Logger')) {
+        $logged_product_ids[$product_id] = true;
+        $logger = new AWI\Logger();
+        $logger->info('Frontend part number read from product meta.', [
+            'product_id' => $product_id,
+            'meta_key' => '_part_number',
+            'raw_meta_value' => $part_number,
+            'resolved_value' => $resolved_part_number,
+        ]);
     }
 
-    return $part_number;
+    return $resolved_part_number;
 }
 
 /**
