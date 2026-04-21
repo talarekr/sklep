@@ -23,6 +23,12 @@ add_action('after_setup_theme', function () {
 });
 
 add_action('wp_enqueue_scripts', function () {
+    wp_enqueue_style(
+        'gp-clone-inter-font',
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
+        [],
+        null
+    );
     wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.2.0');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.2.0', true);
 
@@ -47,11 +53,11 @@ add_filter('woocommerce_add_to_cart_fragments', function ($fragments) {
 });
 
 add_action('woocommerce_after_shop_loop_item_title', function () {
-    echo '<p class="gp-delivery-note">Dostawa: 22 kwi jeśli zapłacisz do 14:00</p>';
+    echo '<p class="gp-delivery-note product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
 }, 15);
 
 add_action('woocommerce_single_product_summary', function () {
-    echo '<p class="gp-delivery-note gp-delivery-note--single">Darmowa dostawa: 22–23 kwi jeśli zapłacisz do 14:00</p>';
+    echo '<p class="gp-delivery-note gp-delivery-note--single">Darmowa dostawa: 23–24 kwi jeśli zapłacisz do 14:00</p>';
 }, 26);
 
 /**
