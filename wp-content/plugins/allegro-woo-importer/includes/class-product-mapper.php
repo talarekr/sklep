@@ -261,32 +261,54 @@ class ProductMapper
         foreach ($image_urls as $url) {
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
+                $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
                 $gallery_ids[] = $existing_attachment_id;
                 continue;
             }
 
-            $tmp = download_url($url, 30);
+            $tmp = $this->download_image_to_temp($url);
             if (is_wp_error($tmp)) {
-                $this->logger->error('Image download failed.', ['url' => $url, 'error' => $tmp->get_error_message()]);
+                $this->logger->error('Image download failed.', [
+                    'offer_id' => $offer_id,
+                    'product_id' => $product_id,
+                    'url' => $url,
+                    'error_code' => $tmp->get_error_code(),
+                    'error_message' => $tmp->get_error_message(),
+                    'error_data' => $tmp->get_error_data(),
+                ]);
                 continue;
             }
 
             $this->logger->info('Image downloaded to temporary file.', ['url' => $url, 'tmp' => $tmp]);
 
             $file = [
-                'name' => wp_basename(parse_url($url, PHP_URL_PATH) ?: 'allegro-image.jpg'),
+                'name' => $this->build_image_filename_from_url($url),
                 'tmp_name' => $tmp,
             ];
 
             $attachment_id = media_handle_sideload($file, $product_id);
             if (is_wp_error($attachment_id)) {
                 @unlink($tmp);
-                $this->logger->error('Image sideload failed.', ['url' => $url, 'error' => $attachment_id->get_error_message()]);
+                $this->logger->error('Image sideload failed.', [
+                    'offer_id' => $offer_id,
+                    'product_id' => $product_id,
+                    'url' => $url,
+                    'file' => $file,
+                    'error_code' => $attachment_id->get_error_code(),
+                    'error_message' => $attachment_id->get_error_message(),
+                    'error_data' => $attachment_id->get_error_data(),
+                ]);
                 continue;
             }
 
             update_post_meta($attachment_id, '_awi_source_url', $url);
             $gallery_ids[] = (int) $attachment_id;
+            $this->logger->info('Attachment created for image URL.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'url' => $url,
+                'attachment_id' => (int) $attachment_id,
+            ]);
         }
 
         $gallery_ids = array_values(array_unique(array_map('intval', $gallery_ids)));
