@@ -10,7 +10,7 @@
             <?php
             $products = wc_get_products([
                 'status' => 'publish',
-                'limit' => 4,
+                'limit' => 30,
                 'orderby' => 'date',
                 'order' => 'DESC',
             ]);
