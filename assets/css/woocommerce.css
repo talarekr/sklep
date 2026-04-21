@@ -7,20 +7,74 @@
 .woocommerce ul.products {
   display: grid !important;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
+  align-items: stretch;
 }
 
 .woocommerce ul.products li.product {
   width: auto !important;
   margin: 0 !important;
-  border: 1px solid #d8d8d8;
-  padding: 12px;
+  border: 1px solid #e7e9ee;
+  border-radius: 12px;
+  padding: 11px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(16, 24, 40, 0.04), 0 6px 18px rgba(16, 24, 40, 0.05);
+  display: flex;
+  flex-direction: column;
+}
+
+.woocommerce ul.products li.product a img {
+  width: 100%;
+  height: 156px;
+  object-fit: contain;
+  object-position: center;
+  margin: 0 0 7px !important;
   background: #fff;
 }
 
+.woocommerce ul.products li.product .product-meta,
+.woocommerce ul.products li.product .sku {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #70757f;
+}
+
 .woocommerce ul.products li.product .woocommerce-loop-product__title {
-  font-size: 14px;
-  min-height: 56px;
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.38;
+  color: #111;
+  min-height: 41px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.woocommerce ul.products li.product .price {
+  margin: 0 0 8px;
+  color: #000;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.woocommerce ul.products li.product .price .amount {
+  color: #000;
+  font-weight: 700;
+}
+
+.woocommerce ul.products li.product .price del {
+  color: #868b95;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.woocommerce ul.products li.product .price ins {
+  text-decoration: none;
 }
 
 .woocommerce div.product {
@@ -39,19 +93,36 @@
   font-weight: 700;
 }
 
-.woocommerce .woocommerce-breadcrumb,
-.woocommerce .gp-delivery-note {
+.woocommerce .woocommerce-breadcrumb {
   font-size: 13px;
   color: #444;
 }
 
-.gp-delivery-note {
-  margin: 6px 0 0;
+.woocommerce ul.products li.product .gp-delivery-note {
+  margin: auto 0 0;
+  padding-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+.woocommerce ul.products li.product .gp-delivery-note.product-shipping-sub {
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #7d8087;
 }
 
 .gp-delivery-note--single {
   margin-top: 10px;
   font-size: 14px;
+}
+
+.gp-delivery-note--single.product-shipping-sub {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #777;
 }
 
 .gp-woo-layout {
