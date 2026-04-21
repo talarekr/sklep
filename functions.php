@@ -60,6 +60,110 @@ add_action('woocommerce_single_product_summary', function () {
     echo '<p class="gp-delivery-note gp-delivery-note--single product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note gp-delivery-note--single product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
 }, 26);
 
+add_filter('woocommerce_get_breadcrumb', function (array $crumbs): array {
+    if (!is_product()) {
+        return $crumbs;
+    }
+
+    return array_values(array_filter($crumbs, static function ($crumb): bool {
+        $label = isset($crumb[0]) ? (string) $crumb[0] : '';
+        return stripos($label, 'Allegro ') !== 0;
+    }));
+}, 20);
+
+add_filter('woocommerce_product_tabs', function (array $tabs): array {
+    if (isset($tabs['description'])) {
+        $tabs['description']['title'] = __('Opis', 'gp-clone');
+        $tabs['description']['priority'] = 10;
+    }
+
+    $tabs['compatibility'] = [
+        'title' => __('Kompatybilność pojazdu', 'gp-clone'),
+        'priority' => 20,
+        'callback' => 'gp_product_tab_compatibility',
+    ];
+    $tabs['warranty'] = [
+        'title' => __('Gwarancja', 'gp-clone'),
+        'priority' => 30,
+        'callback' => 'gp_product_tab_warranty',
+    ];
+    $tabs['seller'] = [
+        'title' => __('O sprzedającym', 'gp-clone'),
+        'priority' => 40,
+        'callback' => 'gp_product_tab_seller',
+    ];
+
+    return $tabs;
+});
+
+function gp_product_tab_compatibility(): void
+{
+    global $product;
+    if (!$product instanceof WC_Product) {
+        return;
+    }
+
+    $raw = get_post_meta($product->get_id(), '_allegro_parameters', true);
+    $params = json_decode((string) $raw, true);
+    $matched = [];
+    if (is_array($params)) {
+        foreach ($params as $param) {
+            $name = mb_strtolower((string) ($param['name'] ?? ''));
+            if (str_contains($name, 'model') || str_contains($name, 'pojazd') || str_contains($name, 'marka')) {
+                $values = array_filter(array_map('sanitize_text_field', (array) ($param['values'] ?? [])));
+                if ($values !== []) {
+                    $matched[] = '<li><strong>' . esc_html((string) ($param['name'] ?? 'Parametr')) . ':</strong> ' . esc_html(implode(', ', $values)) . '</li>';
+                }
+            }
+        }
+    }
+
+    if ($matched === []) {
+        echo '<p>' . esc_html__('Brak pełnych danych kompatybilności dla tego produktu. Skontaktuj się z nami i podaj VIN/OEM, aby potwierdzić dopasowanie.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    echo '<ul>' . wp_kses_post(implode('', $matched)) . '</ul>';
+}
+
+function gp_product_tab_warranty(): void
+{
+    echo '<p>' . esc_html__('Produkt objęty jest gwarancją rozruchową. Szczegóły okresu i warunków gwarancji przekazujemy w opisie oferty oraz przy potwierdzeniu zamówienia.', 'gp-clone') . '</p>';
+}
+
+function gp_product_tab_seller(): void
+{
+    echo '<p>' . esc_html__('Global Parts / GP Swiss - wyspecjalizowany sklep z częściami samochodowymi. Oferujemy wsparcie w doborze części po numerze OEM i szybki kontakt z działem sprzedaży.', 'gp-clone') . '</p>';
+}
+
+function gp_get_product_part_number($product): string
+{
+    $product_id = 0;
+    if ($product instanceof WC_Product) {
+        $product_id = $product->get_id();
+    } elseif (is_numeric($product)) {
+        $product_id = (int) $product;
+    }
+
+    if ($product_id <= 0) {
+        return 'Brak';
+    }
+
+    $part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
+    if ($part_number === '') {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('[gp_get_product_part_number] product_id=' . $product_id . ' part_number=Brak (empty meta)');
+        }
+        return 'Brak';
+    }
+
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('[gp_get_product_part_number] product_id=' . $product_id . ' part_number=' . $part_number);
+    }
+
+    return $part_number;
+}
+
 /**
  * Demo products fallback for homepage section.
  */

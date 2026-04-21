@@ -37,7 +37,7 @@ final class Plugin
         $this->logger = new Logger();
         $this->auth = new AllegroAuth($this->logger);
         $this->client = new AllegroClient($this->auth, $this->logger);
-        $this->mapper = new ProductMapper($this->logger);
+        $this->mapper = new ProductMapper($this->client, $this->logger);
         $this->importer = new Importer($this->client, $this->mapper, $this->logger);
         $this->cron = new Cron($this->importer, $this->logger);
         $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron);
