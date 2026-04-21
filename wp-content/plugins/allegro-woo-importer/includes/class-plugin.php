@@ -1,0 +1,136 @@
+<?php
+
+namespace AWI;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+final class Plugin
+{
+    public const OPTION_KEY = 'awi_settings';
+    public const HISTORY_OPTION_KEY = 'awi_import_history';
+    public const CRON_HOOK = 'awi_run_scheduled_import';
+
+    private static ?self $instance = null;
+    private Logger $logger;
+    private Settings $settings;
+    private AllegroAuth $auth;
+    private AllegroClient $client;
+    private ProductMapper $mapper;
+    private Importer $importer;
+    private Cron $cron;
+
+    public static function instance(): self
+    {
+        if (self::$instance === null) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
+    }
+
+    private function __construct()
+    {
+        $this->load_dependencies();
+
+        $this->logger = new Logger();
+        $this->auth = new AllegroAuth($this->logger);
+        $this->client = new AllegroClient($this->auth, $this->logger);
+        $this->mapper = new ProductMapper($this->logger);
+        $this->importer = new Importer($this->client, $this->mapper, $this->logger);
+        $this->cron = new Cron($this->importer, $this->logger);
+        $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron);
+
+        add_action('plugins_loaded', [$this, 'bootstrap']);
+
+        register_activation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_activation']);
+        register_deactivation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_deactivation']);
+    }
+
+    private function load_dependencies(): void
+    {
+        require_once AWI_PLUGIN_DIR . 'includes/class-logger.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-allegro-auth.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-allegro-client.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-product-mapper.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-importer.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-cron.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-settings.php';
+    }
+
+    public function bootstrap(): void
+    {
+        if (!class_exists('WooCommerce')) {
+            $this->logger->warning('WooCommerce is not active. Importer initialization skipped.');
+            add_action('admin_notices', [$this, 'woocommerce_missing_notice']);
+            return;
+        }
+
+        $this->settings->hooks();
+        $this->cron->hooks();
+        $this->auth->hooks();
+    }
+
+    public function woocommerce_missing_notice(): void
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        echo '<div class="notice notice-error"><p>' . esc_html__('Allegro Woo Importer wymaga aktywnej wtyczki WooCommerce.', 'allegro-woo-importer') . '</p></div>';
+    }
+
+    public static function get_settings(): array
+    {
+        $defaults = [
+            'client_id' => '',
+            'client_secret' => '',
+            'redirect_uri' => '',
+            'environment' => 'production',
+            'sync_mode' => 'create_update',
+            'inactive_product_status' => 'draft',
+            'cron_interval' => 'manual',
+            'offer_status' => 'ACTIVE',
+            'access_token' => '',
+            'refresh_token' => '',
+            'token_expires_at' => '',
+            'token_scope' => '',
+            'token_type' => '',
+            'connected_at' => '',
+            'last_sync_at' => '',
+            'last_sync_created' => 0,
+            'last_sync_updated' => 0,
+            'last_sync_errors' => 0,
+            'last_sync_offers' => 0,
+        ];
+
+        $settings = get_option(self::OPTION_KEY, []);
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        return wp_parse_args($settings, $defaults);
+    }
+
+    public static function update_settings(array $new_settings): bool
+    {
+        $current = self::get_settings();
+        $merged = array_merge($current, $new_settings);
+
+        return update_option(self::OPTION_KEY, $merged, false);
+    }
+
+    public static function add_history(array $entry): void
+    {
+        $history = get_option(self::HISTORY_OPTION_KEY, []);
+        if (!is_array($history)) {
+            $history = [];
+        }
+
+        array_unshift($history, $entry);
+        $history = array_slice($history, 0, 30);
+
+        update_option(self::HISTORY_OPTION_KEY, $history, false);
+    }
+}
