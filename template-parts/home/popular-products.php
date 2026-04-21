@@ -39,8 +39,8 @@
                                 <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
                                 <span class="<?php echo $product->is_on_sale() ? 'gp-product__current gp-product__current--sale' : 'gp-product__current'; ?>"><?php echo wp_kses_post(wc_price($product->get_price())); ?></span>
                             </p>
-                            <div class="gp-product__delivery">Darmowa dostawa: 23–24 kwi</div>
-                            <div class="gp-product__delivery-note">Jeśli zapłacisz do 14:00</div>
+                            <div class="gp-product__delivery product-shipping">Darmowa dostawa: 23–24 kwi</div>
+                            <div class="gp-product__delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</div>
                         </article>
                     <?php endforeach; ?>
                 </div>
@@ -63,8 +63,8 @@
                                 <?php if (!empty($product['old_price'])) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html($product['old_price']); ?></span><?php endif; ?>
                                 <span class="gp-product__current<?php echo !empty($product['old_price']) ? ' gp-product__current--sale' : ''; ?>"><?php echo esc_html($product['price']); ?></span>
                             </p>
-                            <div class="gp-product__delivery">Darmowa dostawa: 23–24 kwi</div>
-                            <div class="gp-product__delivery-note">Jeśli zapłacisz do 14:00</div>
+                            <div class="gp-product__delivery product-shipping">Darmowa dostawa: 23–24 kwi</div>
+                            <div class="gp-product__delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</div>
                         </article>
                     <?php endforeach; ?>
                 </div>

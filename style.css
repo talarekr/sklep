@@ -20,7 +20,7 @@ Text Domain: gp-clone
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Inter', sans-serif;
   color: var(--gp-text);
   background: #fff;
   font-size: 14px;
@@ -192,10 +192,12 @@ a:hover { text-decoration: underline; }
 .gp-product__price { margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .gp-product__promo-label { width: 100%; font-size: 14px; color: #565a62; margin-bottom: 2px; }
 .gp-product__old { text-decoration: line-through; color: #777; font-size: 16px; }
-.gp-product__current { font-size: 38px; font-weight: 700; color: #111; }
+.gp-product__current { font-size: 28px; font-weight: 700; color: #000; }
 .gp-product__current--sale { color: #c81f35; }
-.gp-product__delivery { margin-top: auto; color: #218838; font-size: 16px; font-weight: 700; }
-.gp-product__delivery-note { color: #30343a; font-size: 13px; }
+.gp-product__delivery,
+.product-shipping { margin-top: auto; color: #2e7d32; font-size: 14px; font-weight: 600; }
+.gp-product__delivery-note,
+.product-shipping-sub { color: #777; font-size: 13px; font-weight: 400; margin-top: 2px; }
 
 .gp-seo-content { padding: 20px 0 60px; }
 .gp-seo-content h2 { font-size: 24px; margin: 0 0 10px; }
@@ -229,7 +231,8 @@ a:hover { text-decoration: underline; }
   .gp-product__sku { font-size: 16px; }
   .gp-product__current { font-size: 30px; }
   .gp-product__old { font-size: 24px; }
-  .gp-product__promo-label, .gp-product__delivery, .gp-product__delivery-note { font-size: 18px; }
+  .gp-product__promo-label, .gp-product__delivery { font-size: 14px; }
+  .gp-product__delivery-note { font-size: 13px; }
   .gp-product__badge { font-size: 18px; top: 120px; }
 }
 .gp-hero {
