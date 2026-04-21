@@ -42,7 +42,7 @@ final class Plugin
         $this->cron = new Cron($this->importer, $this->logger);
         $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron);
 
-        add_action('plugins_loaded', [$this, 'bootstrap']);
+        add_action('plugins_loaded', [$this, 'bootstrap'], 20);
 
         register_activation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_activation']);
         register_deactivation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_deactivation']);
