@@ -98,6 +98,22 @@ class ProductMapper
         ]);
         $product->save();
 
+        $part_number = $this->extract_part_number($offer);
+        update_post_meta($product_id, '_part_number', $part_number);
+        if ($part_number !== 'Brak') {
+            $this->logger->info('Part number extracted from Allegro parameter and saved.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'part_number' => $part_number,
+            ]);
+        } else {
+            $this->logger->info('Part number parameter missing in Allegro offer, fallback saved.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'fallback' => 'Brak',
+            ]);
+        }
+
         update_post_meta($product_id, '_allegro_offer_id', $offer_id);
         update_post_meta($product_id, '_allegro_offer_url', esc_url_raw($this->extract_offer_url($offer)));
         update_post_meta($product_id, '_allegro_category_id', sanitize_text_field((string) ($offer['category']['id'] ?? '')));
@@ -176,6 +192,51 @@ class ProductMapper
         }
 
         return '';
+    }
+
+    private function extract_part_number(array $offer): string
+    {
+        foreach (($offer['parameters'] ?? []) as $parameter) {
+            $name = $this->normalize_parameter_name((string) ($parameter['name'] ?? ''));
+            if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
+                continue;
+            }
+
+            $candidates = [];
+            foreach ((array) ($parameter['values'] ?? []) as $value) {
+                $candidates[] = sanitize_text_field((string) $value);
+            }
+            foreach ((array) ($parameter['valuesLabels'] ?? []) as $value) {
+                $candidates[] = sanitize_text_field((string) $value);
+            }
+
+            if (isset($parameter['value'])) {
+                $candidates[] = sanitize_text_field((string) $parameter['value']);
+            }
+            if (isset($parameter['valueLabel'])) {
+                $candidates[] = sanitize_text_field((string) $parameter['valueLabel']);
+            }
+
+            foreach ($candidates as $candidate) {
+                if (trim($candidate) !== '') {
+                    return $candidate;
+                }
+            }
+        }
+
+        return 'Brak';
+    }
+
+    private function normalize_parameter_name(string $name): string
+    {
+        $name = mb_strtolower(trim(sanitize_text_field($name)));
+        $name = str_replace(
+            ['ą', 'ć', 'ę', 'ł', 'ń', 'ó', 'ś', 'ż', 'ź'],
+            ['a', 'c', 'e', 'l', 'n', 'o', 's', 'z', 'z'],
+            $name
+        );
+
+        return preg_replace('/\s+/u', ' ', $name) ?? $name;
     }
 
     private function map_product_status(string $publication_status, array $settings): string

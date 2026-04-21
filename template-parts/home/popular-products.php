@@ -188,7 +188,7 @@ $icon = static function (string $type): string {
                                     </span>
                                 <?php endif; ?>
                                 <?php echo $product->get_image('woocommerce_thumbnail'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-                                <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
+                                <div class="gp-product__sku">Numer części: <strong><?php echo esc_html(function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak'); ?></strong></div>
                                 <h3 class="gp-product__name"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
                                 <p class="gp-product__price">
                                     <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
