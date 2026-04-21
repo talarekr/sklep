@@ -46,6 +46,10 @@ class ProductMapper
         $price = $this->extract_price($offer);
         $currency = sanitize_text_field((string) ($offer['sellingMode']['price']['currency'] ?? 'PLN'));
         $publication_status = strtoupper((string) ($offer['publication']['status'] ?? 'INACTIVE'));
+        $missing_fields = $this->collect_missing_fields($offer, $title, $description, $price);
+        if (!empty($missing_fields)) {
+            $this->logger->warning('Offer mapping used fallback values.', ['offer_id' => $offer_id, 'missing_fields' => $missing_fields]);
+        }
 
         $product->set_name($title);
         $product->set_description($description);
@@ -138,7 +142,7 @@ class ProductMapper
 
     private function extract_price(array $offer): ?float
     {
-        $amount = $offer['sellingMode']['price']['amount'] ?? null;
+        $amount = $offer['sellingMode']['price']['amount'] ?? ($offer['sellingMode']['startingPrice']['amount'] ?? null);
         if ($amount === null || $amount === '') {
             return null;
         }
@@ -297,5 +301,40 @@ class ProductMapper
         ]);
 
         return !empty($query->posts[0]) ? (int) $query->posts[0] : 0;
+    }
+
+    private function collect_missing_fields(array $offer, string $title, string $description, ?float $price): array
+    {
+        $missing = [];
+
+        if ($title === '' || $title === __('Oferta Allegro', 'allegro-woo-importer')) {
+            $missing[] = 'name';
+        }
+
+        if ($description === '') {
+            $missing[] = 'description';
+        }
+
+        if ($price === null) {
+            $missing[] = 'sellingMode.price.amount';
+        }
+
+        if (empty($offer['images']) || !is_array($offer['images'])) {
+            $missing[] = 'images';
+        }
+
+        if (empty($offer['publication']['status'])) {
+            $missing[] = 'publication.status';
+        }
+
+        if (!isset($offer['stock']['available'])) {
+            $missing[] = 'stock.available';
+        }
+
+        if (empty($offer['external']['id'])) {
+            $missing[] = 'external.id';
+        }
+
+        return $missing;
     }
 }

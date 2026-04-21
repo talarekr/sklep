@@ -37,7 +37,10 @@ class AllegroClient
 
     public function get_offer_details(string $offer_id)
     {
-        return $this->request('GET', '/sale/offers/' . rawurlencode($offer_id));
+        $path = '/sale/product-offers/' . rawurlencode($offer_id);
+        $this->logger->info('Fetching Allegro offer details.', ['offer_id' => $offer_id, 'endpoint' => $path]);
+
+        return $this->request('GET', $path);
     }
 
     public function get_offer_url(array $offer): string
