@@ -252,6 +252,36 @@ class ProductMapper
             'images_found' => count($images),
         ]);
 
+        $image_urls = [];
+        foreach ($images as $image) {
+            $url = '';
+            if (is_array($image)) {
+                $url = (string) ($image['url'] ?? '');
+            } elseif (is_string($image)) {
+                $url = $image;
+            }
+
+            $url = trim($url);
+            if ($url === '') {
+                continue;
+            }
+
+            $image_urls[] = $url;
+        }
+
+        $image_urls = array_values(array_unique($image_urls));
+
+        $this->logger->info('Normalized image URLs count.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'normalized_image_urls_count' => count($image_urls),
+        ]);
+
+        if (empty($image_urls)) {
+            $this->logger->warning('No valid image URLs found after normalization.', ['offer_id' => $offer_id, 'product_id' => $product_id]);
+            return;
+        }
+
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/file.php';
         require_once ABSPATH . 'wp-admin/includes/image.php';
@@ -259,6 +289,7 @@ class ProductMapper
         $gallery_ids = [];
 
         foreach ($image_urls as $url) {
+            $this->logger->info('Image URL found.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url]);
             $existing_attachment_id = $this->find_existing_attachment_by_source($url);
             if ($existing_attachment_id > 0) {
                 $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
