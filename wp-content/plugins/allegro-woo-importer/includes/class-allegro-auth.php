@@ -8,6 +8,8 @@ if (!defined('ABSPATH')) {
 
 class AllegroAuth
 {
+    private const TOKEN_REFRESH_LEEWAY_SECONDS = 300;
+
     private Logger $logger;
 
     public function __construct(Logger $logger)
@@ -121,18 +123,21 @@ class AllegroAuth
     public function get_valid_access_token()
     {
         $settings = Plugin::get_settings();
+        $access_token = (string) ($settings['access_token'] ?? '');
 
-        if (empty($settings['access_token'])) {
+        if ($access_token === '') {
             return new \WP_Error('awi_missing_token', __('Brak access tokena Allegro.', 'allegro-woo-importer'));
         }
 
-        $expires_at = !empty($settings['token_expires_at']) ? strtotime((string) $settings['token_expires_at']) : 0;
-        if ($expires_at > (time() + 60)) {
-            return $settings['access_token'];
+        $expires_at = $this->extract_token_expiration_timestamp($settings);
+        if (!$this->should_refresh_access_token($expires_at)) {
+            $this->logger->info('OAuth using existing token.', ['expires_at' => $this->extract_token_expiration_display_value($settings)]);
+            return $access_token;
         }
 
         if (empty($settings['refresh_token'])) {
-            return new \WP_Error('awi_missing_refresh_token', __('Brak refresh tokena Allegro.', 'allegro-woo-importer'));
+            $this->logger->error('OAuth refresh failed.', ['reason' => 'missing_refresh_token']);
+            return $access_token;
         }
 
         $refresh_response = $this->request_token([
@@ -142,14 +147,21 @@ class AllegroAuth
         ]);
 
         if (is_wp_error($refresh_response)) {
-            $this->logger->error('Token refresh failed.', ['error' => $refresh_response->get_error_message()]);
-            return $refresh_response;
+            $this->logger->error('OAuth refresh failed.', ['error' => $refresh_response->get_error_message()]);
+            return $access_token;
         }
 
         $this->persist_token_response($refresh_response);
+        $this->logger->info('OAuth token refreshed successfully.');
 
         $new_settings = Plugin::get_settings();
-        return $new_settings['access_token'] ?: new \WP_Error('awi_missing_token_after_refresh', __('Nie udało się zapisać odświeżonego tokena.', 'allegro-woo-importer'));
+        $new_access_token = (string) ($new_settings['access_token'] ?? '');
+        if ($new_access_token === '') {
+            $this->logger->error('OAuth refresh failed.', ['reason' => 'missing_token_after_refresh']);
+            return $access_token;
+        }
+
+        return $new_access_token;
     }
 
     private function request_token(array $body)
@@ -194,11 +206,39 @@ class AllegroAuth
             'refresh_token' => sanitize_text_field($token_data['refresh_token'] ?? ''),
             'token_type' => sanitize_text_field($token_data['token_type'] ?? ''),
             'token_scope' => sanitize_text_field($token_data['scope'] ?? ''),
+            'expires_at' => $expires_at,
             'token_expires_at' => $expires_at,
             'connected_at' => gmdate('Y-m-d H:i:s'),
         ]);
 
         $this->logger->info('OAuth token persisted.', ['expires_at' => $expires_at]);
+    }
+
+    private function extract_token_expiration_timestamp(array $settings): int
+    {
+        $raw = (string) ($settings['expires_at'] ?? $settings['token_expires_at'] ?? '');
+        if ($raw === '') {
+            return 0;
+        }
+
+        $timestamp = strtotime($raw);
+
+        return $timestamp === false ? 0 : (int) $timestamp;
+    }
+
+    private function extract_token_expiration_display_value(array $settings): string
+    {
+        $value = (string) ($settings['expires_at'] ?? $settings['token_expires_at'] ?? '');
+        return $value !== '' ? $value : 'unknown';
+    }
+
+    private function should_refresh_access_token(int $expires_at): bool
+    {
+        if ($expires_at <= 0) {
+            return true;
+        }
+
+        return $expires_at <= (time() + self::TOKEN_REFRESH_LEEWAY_SECONDS);
     }
 
     private function get_auth_base_url(string $environment): string
