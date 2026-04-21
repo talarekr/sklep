@@ -75,6 +75,14 @@ class Settings
 
         check_admin_referer('awi_manual_import');
 
+        $token = $this->auth->get_valid_access_token();
+        if (is_wp_error($token)) {
+            $this->logger->error('Manual import blocked: missing valid Allegro token.', ['error' => $token->get_error_message()]);
+            $this->store_admin_notice('error', __('Najpierw połącz wtyczkę z Allegro (brak ważnego access tokena).', 'allegro-woo-importer'));
+            wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+            exit;
+        }
+
         $summary = $this->importer->import_offers();
 
         $redirect = add_query_arg([
@@ -94,6 +102,8 @@ class Settings
         if (!current_user_can('manage_woocommerce')) {
             return;
         }
+
+        $this->consume_admin_notice();
 
         if (isset($_GET['awi_import_done'])) {
             add_settings_error(
@@ -115,13 +125,43 @@ class Settings
             $history = [];
         }
 
-        $oauth_url = add_query_arg([
-            'page' => 'awi-settings',
-            'awi_oauth' => '1',
-        ], $this->auth->get_authorization_url());
+        $oauth_url = $this->auth->get_authorization_url();
+        $callback_uri = $this->auth->get_connection_callback_uri();
+        $option_key = Plugin::OPTION_KEY;
 
         $log_tail = $this->logger->read_tail(80);
 
         include AWI_PLUGIN_DIR . 'templates/admin-page.php';
+    }
+
+    private function consume_admin_notice(): void
+    {
+        $key = 'awi_admin_notice_' . get_current_user_id();
+        $notice = get_transient($key);
+        if (!is_array($notice)) {
+            return;
+        }
+
+        delete_transient($key);
+
+        $type = (($notice['type'] ?? '') === 'success') ? 'updated' : 'error';
+        $message = isset($notice['message']) ? (string) $notice['message'] : '';
+        if ($message === '') {
+            return;
+        }
+
+        add_settings_error('awi_messages', 'awi_runtime_notice', $message, $type);
+    }
+
+    private function store_admin_notice(string $type, string $message): void
+    {
+        set_transient(
+            'awi_admin_notice_' . get_current_user_id(),
+            [
+                'type' => $type,
+                'message' => $message,
+            ],
+            5 * MINUTE_IN_SECONDS
+        );
     }
 }
