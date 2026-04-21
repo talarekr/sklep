@@ -74,7 +74,7 @@ class ProductMapper
         }
 
         $product->set_catalog_visibility('visible');
-        $target_status = $this->map_product_status($publication_status, $settings, $stock_available);
+        $target_status = $this->map_product_status($publication_status, $stock_available, $settings);
         $product->set_status($target_status);
 
         if ($stock_available !== null) {
@@ -374,7 +374,7 @@ class ProductMapper
         return $sources;
     }
 
-    private function map_product_status(string $publication_status, array $settings, ?int $stock_available = null): string
+    private function map_product_status(string $publication_status, array $settings): string
     {
         if ($publication_status === 'ACTIVE' && ($stock_available === null || $stock_available > 0)) {
             return 'publish';
