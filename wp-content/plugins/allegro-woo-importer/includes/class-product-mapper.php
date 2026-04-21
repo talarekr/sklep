@@ -201,83 +201,57 @@ class ProductMapper
 
     private function extract_part_number(array $offer): array
     {
-        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
-        $parameter_sources = [
-            'offer.parameters' => is_array($offer['parameters'] ?? null) ? $offer['parameters'] : [],
-        ];
-
-        if (!empty($offer['productSet']) && is_array($offer['productSet'])) {
-            foreach ($offer['productSet'] as $index => $product_set_item) {
-                $product_parameters = $product_set_item['product']['parameters'] ?? [];
-                if (is_array($product_parameters)) {
-                    $parameter_sources[sprintf('productSet[%d].product.parameters', (int) $index)] = $product_parameters;
-                }
-            }
-        }
-
-        $source_debug = [];
-        foreach ($parameter_sources as $source_path => $parameters) {
-            $source_debug[] = [
-                'path' => $source_path,
-                'count' => count($parameters),
-                'preview' => array_slice($parameters, 0, 8),
-            ];
-        }
-
+        $parameters = $offer['parameters'] ?? [];
         $this->logger->info('Inspecting Allegro parameters for part number mapping.', [
-            'offer_id' => $offer_id,
-            'parameter_sources' => $source_debug,
+            'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
+            'parameters_count' => is_array($parameters) ? count($parameters) : 0,
+            'parameters_preview' => is_array($parameters) ? array_slice($parameters, 0, 8) : [],
         ]);
 
-        foreach ($parameter_sources as $source_path => $parameters) {
-            foreach ((array) $parameters as $parameter) {
-                $raw_name = sanitize_text_field((string) ($parameter['name'] ?? ''));
-                $name = $this->normalize_parameter_name($raw_name);
-                if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
-                    continue;
-                }
+        foreach ((array) $parameters as $parameter) {
+            $raw_name = sanitize_text_field((string) ($parameter['name'] ?? ''));
+            $name = $this->normalize_parameter_name($raw_name);
+            if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
+                continue;
+            }
 
-                $this->logger->info('Found Allegro part number parameter by name match.', [
-                    'offer_id' => $offer_id,
-                    'source_path' => $source_path,
-                    'raw_name' => $raw_name,
-                    'normalized_name' => $name,
-                ]);
+            $this->logger->info('Found Allegro part number parameter by name match.', [
+                'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
+                'raw_name' => $raw_name,
+                'normalized_name' => $name,
+            ]);
 
-                $source_map = [
-                    'values' => (array) ($parameter['values'] ?? []),
-                    'valuesLabels' => (array) ($parameter['valuesLabels'] ?? []),
-                    'value' => isset($parameter['value']) ? [(string) $parameter['value']] : [],
-                    'valueLabel' => isset($parameter['valueLabel']) ? [(string) $parameter['valueLabel']] : [],
-                ];
+            $source_map = [
+                'values' => (array) ($parameter['values'] ?? []),
+                'valuesLabels' => (array) ($parameter['valuesLabels'] ?? []),
+                'value' => isset($parameter['value']) ? [(string) $parameter['value']] : [],
+                'valueLabel' => isset($parameter['valueLabel']) ? [(string) $parameter['valueLabel']] : [],
+            ];
 
-                foreach ($source_map as $source_field => $candidates) {
-                    foreach ($candidates as $candidate) {
-                        $normalized = sanitize_text_field((string) $candidate);
-                        if (trim($normalized) === '') {
-                            continue;
-                        }
-
-                        $location = $source_path . '.' . $source_field;
-                        $this->logger->info('Part number extracted from Allegro payload.', [
-                            'offer_id' => $offer_id,
-                            'payload_location' => $location,
-                            'value' => $normalized,
-                        ]);
-
-                        return [
-                            'found' => true,
-                            'value' => $normalized,
-                            'source' => $location,
-                        ];
+            foreach ($source_map as $source => $candidates) {
+                foreach ($candidates as $candidate) {
+                    $normalized = sanitize_text_field((string) $candidate);
+                    if (trim($normalized) === '') {
+                        continue;
                     }
+
+                    $this->logger->info('Part number extracted from Allegro parameter source.', [
+                        'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
+                        'source' => $source,
+                        'value' => $normalized,
+                    ]);
+
+                    return [
+                        'found' => true,
+                        'value' => $normalized,
+                        'source' => $source,
+                    ];
                 }
             }
         }
 
-        $this->logger->warning('Part number parameter not found in Allegro payload.', [
-            'offer_id' => $offer_id,
-            'checked_sources' => array_keys($parameter_sources),
+        $this->logger->warning('Part number parameter not found in Allegro offer parameters.', [
+            'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
         ]);
 
         return [
