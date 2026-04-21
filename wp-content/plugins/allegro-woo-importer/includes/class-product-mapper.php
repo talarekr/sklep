@@ -15,11 +15,13 @@ class ProductMapper
     private const MAX_IMAGE_TOTAL_PIXELS = 24000000; // 24 MP
     private const IMPORT_ALLOWED_SUBSIZES = ['thumbnail'];
 
+    private AllegroClient $client;
     private Logger $logger;
     private array $image_import_context = [];
 
-    public function __construct(Logger $logger)
+    public function __construct(AllegroClient $client, Logger $logger)
     {
+        $this->client = $client;
         $this->logger = $logger;
     }
 
@@ -193,16 +195,134 @@ class ProductMapper
             return;
         }
 
-        $term_name = 'Allegro ' . $allegro_category_id;
-        $term = term_exists($term_name, 'product_cat');
-        if (!$term) {
-            $term = wp_insert_term($term_name, 'product_cat');
+        $allegro_category_name = sanitize_text_field((string) ($offer['category']['name'] ?? ''));
+        $category_path = $this->extract_allegro_category_path($offer, $allegro_category_id, $allegro_category_name);
+        if ($category_path === []) {
+            return;
         }
 
-        if (!is_wp_error($term)) {
-            $term_id = is_array($term) ? (int) $term['term_id'] : (int) $term;
-            wp_set_post_terms($product_id, [$term_id], 'product_cat', false);
+        $parent_term_id = 0;
+        $leaf_term_id = 0;
+
+        foreach ($category_path as $node) {
+            $node_id = sanitize_text_field((string) ($node['id'] ?? ''));
+            $node_name = sanitize_text_field((string) ($node['name'] ?? ''));
+            if ($node_id === '' || $node_name === '') {
+                continue;
+            }
+
+            $term_id = $this->find_or_create_category_term($node_id, $node_name, $parent_term_id);
+            if ($term_id <= 0) {
+                continue;
+            }
+
+            $parent_term_id = $term_id;
+            $leaf_term_id = $term_id;
         }
+
+        if ($leaf_term_id > 0) {
+            wp_set_post_terms($product_id, [$leaf_term_id], 'product_cat', false);
+        }
+    }
+
+    private function extract_allegro_category_path(array $offer, string $category_id, string $fallback_name): array
+    {
+        $raw_path = $offer['category']['path'] ?? null;
+        if (is_array($raw_path) && $raw_path !== []) {
+            $mapped = [];
+            foreach ($raw_path as $item) {
+                $id = sanitize_text_field((string) ($item['id'] ?? ''));
+                $name = sanitize_text_field((string) ($item['name'] ?? ''));
+                if ($id !== '' && $name !== '') {
+                    $mapped[] = ['id' => $id, 'name' => $name];
+                }
+            }
+
+            if ($mapped !== []) {
+                return $mapped;
+            }
+        }
+
+        $path = $this->client->get_category_path($category_id);
+        if (is_wp_error($path)) {
+            $this->logger->warning('Failed to fetch Allegro category path; using fallback category node.', [
+                'category_id' => $category_id,
+                'error' => $path->get_error_message(),
+            ]);
+
+            $name = $fallback_name !== '' ? $fallback_name : $category_id;
+            return [['id' => $category_id, 'name' => $name]];
+        }
+
+        if (is_array($path) && $path !== []) {
+            return $path;
+        }
+
+        $name = $fallback_name !== '' ? $fallback_name : $category_id;
+        return [['id' => $category_id, 'name' => $name]];
+    }
+
+    private function find_or_create_category_term(string $allegro_category_id, string $name, int $parent_term_id): int
+    {
+        $existing = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => false,
+            'number' => 1,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_category_id',
+                    'value' => $allegro_category_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        if (is_array($existing) && !empty($existing[0]) && $existing[0] instanceof \WP_Term) {
+            $term = $existing[0];
+            $updates = [];
+            if ((int) $term->parent !== $parent_term_id) {
+                $updates['parent'] = $parent_term_id;
+            }
+            if ($term->name !== $name) {
+                $updates['name'] = $name;
+            }
+            if ($updates !== []) {
+                wp_update_term($term->term_id, 'product_cat', $updates);
+            }
+
+            update_term_meta($term->term_id, '_allegro_category_id', $allegro_category_id);
+            return (int) $term->term_id;
+        }
+
+        $term = term_exists($name, 'product_cat', $parent_term_id);
+        if ($term) {
+            $term_id = is_array($term) ? (int) $term['term_id'] : (int) $term;
+            if ($term_id > 0) {
+                update_term_meta($term_id, '_allegro_category_id', $allegro_category_id);
+                return $term_id;
+            }
+        }
+
+        $created = wp_insert_term($name, 'product_cat', [
+            'parent' => $parent_term_id,
+        ]);
+
+        if (is_wp_error($created)) {
+            $this->logger->error('Failed to create WooCommerce category for Allegro category.', [
+                'allegro_category_id' => $allegro_category_id,
+                'name' => $name,
+                'parent_term_id' => $parent_term_id,
+                'error' => $created->get_error_message(),
+            ]);
+            return 0;
+        }
+
+        $term_id = (int) ($created['term_id'] ?? 0);
+        if ($term_id > 0) {
+            update_term_meta($term_id, '_allegro_category_id', $allegro_category_id);
+        }
+
+        return $term_id;
     }
 
     private function map_attributes(WC_Product $product, array $offer): void

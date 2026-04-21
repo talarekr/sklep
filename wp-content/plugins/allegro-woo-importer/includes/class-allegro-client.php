@@ -12,6 +12,10 @@ class AllegroClient
 
     private AllegroAuth $auth;
     private Logger $logger;
+    /** @var array<string, array<string, mixed>> */
+    private array $category_cache = [];
+    /** @var array<string, array<int, array{id: string, name: string}>> */
+    private array $category_path_cache = [];
 
     public function __construct(AllegroAuth $auth, Logger $logger)
     {
@@ -19,7 +23,7 @@ class AllegroClient
         $this->logger = $logger;
     }
 
-    public function get_offers(string $status = 'ACTIVE', int $offset = 0, int $limit = 100)
+    public function get_offers(string $status = 'ACTIVE', int $offset = 0, int $limit = 100, string $page_token = '')
     {
         $query = [
             'offset' => max(0, $offset),
@@ -28,6 +32,10 @@ class AllegroClient
 
         if (!empty($status)) {
             $query['publication.status'] = $status;
+        }
+
+        if ($page_token !== '') {
+            $query['page.id'] = sanitize_text_field($page_token);
         }
 
         return $this->request('GET', '/sale/offers', [
@@ -50,6 +58,67 @@ class AllegroClient
         }
 
         return '';
+    }
+
+    public function get_category_details(string $category_id)
+    {
+        $category_id = sanitize_text_field($category_id);
+        if ($category_id === '') {
+            return new \WP_Error('awi_missing_category_id', __('Brak category_id Allegro.', 'allegro-woo-importer'));
+        }
+
+        if (isset($this->category_cache[$category_id])) {
+            return $this->category_cache[$category_id];
+        }
+
+        $details = $this->request('GET', '/sale/categories/' . rawurlencode($category_id));
+        if (is_wp_error($details)) {
+            return $details;
+        }
+
+        $this->category_cache[$category_id] = $details;
+
+        return $details;
+    }
+
+    public function get_category_path(string $category_id)
+    {
+        $category_id = sanitize_text_field($category_id);
+        if ($category_id === '') {
+            return [];
+        }
+
+        if (isset($this->category_path_cache[$category_id])) {
+            return $this->category_path_cache[$category_id];
+        }
+
+        $path = [];
+        $cursor = $category_id;
+        $guard = 0;
+
+        while ($cursor !== '' && $guard < 20) {
+            $guard++;
+            $details = $this->get_category_details($cursor);
+            if (is_wp_error($details)) {
+                return $details;
+            }
+
+            $name = sanitize_text_field((string) ($details['name'] ?? ''));
+            $id = sanitize_text_field((string) ($details['id'] ?? $cursor));
+            if ($id !== '' && $name !== '') {
+                array_unshift($path, ['id' => $id, 'name' => $name]);
+            }
+
+            $parent_id = sanitize_text_field((string) ($details['parent']['id'] ?? ''));
+            if ($parent_id === '' || $parent_id === $cursor) {
+                break;
+            }
+            $cursor = $parent_id;
+        }
+
+        $this->category_path_cache[$category_id] = $path;
+
+        return $path;
     }
 
     private function request(string $method, string $path, array $args = [])
