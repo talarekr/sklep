@@ -67,7 +67,7 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
             </nav>
             <div class="gp-phone">
                 <span aria-hidden="true">&#128222;</span>
-                <a href="tel:+48504266984">504 266 984</a>
+                <a href="tel:+48510215506">+48 510 215 506</a>
             </div>
         </div>
     </div>
