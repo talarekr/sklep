@@ -16,4 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
+
+  document.querySelectorAll('.gp-product__fav').forEach((button) => {
+    button.addEventListener('click', () => {
+      button.classList.toggle('is-active');
+      button.innerHTML = button.classList.contains('is-active') ? '&#9829;' : '&#9825;';
+    });
+  });
 });
