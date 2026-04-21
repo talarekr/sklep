@@ -47,12 +47,14 @@ class ProductMapper
         if (!$product instanceof WC_Product) {
             return ['result' => 'error', 'error' => 'invalid_product_instance'];
         }
+        $previous_status = $existing_id ? (string) $product->get_status() : '';
 
         $title = sanitize_text_field((string) ($offer['name'] ?? __('Oferta Allegro', 'allegro-woo-importer')));
         $description = $this->map_description($offer);
         $price = $this->extract_price($offer);
         $currency = sanitize_text_field((string) ($offer['sellingMode']['price']['currency'] ?? 'PLN'));
         $publication_status = strtoupper((string) ($offer['publication']['status'] ?? 'INACTIVE'));
+        $stock_available = isset($offer['stock']['available']) ? (int) $offer['stock']['available'] : null;
         $missing_fields = $this->collect_missing_fields($offer, $title, $description, $price);
         if (!empty($missing_fields)) {
             $this->logger->warning('Offer mapping used fallback values.', ['offer_id' => $offer_id, 'missing_fields' => $missing_fields]);
@@ -72,13 +74,13 @@ class ProductMapper
         }
 
         $product->set_catalog_visibility('visible');
-        $product->set_status($this->map_product_status($publication_status, $settings));
+        $target_status = $this->map_product_status($publication_status, $stock_available, $settings);
+        $product->set_status($target_status);
 
-        if (isset($offer['stock']['available'])) {
-            $stock_qty = (int) $offer['stock']['available'];
+        if ($stock_available !== null) {
             $product->set_manage_stock(true);
-            $product->set_stock_quantity($stock_qty);
-            $product->set_stock_status($stock_qty > 0 ? 'instock' : 'outofstock');
+            $product->set_stock_quantity($stock_available);
+            $product->set_stock_status($stock_available > 0 ? 'instock' : 'outofstock');
         }
 
         $product_id = $product->save();
@@ -132,6 +134,40 @@ class ProductMapper
             'product_id' => $product_id,
             'operation' => $existing_id ? 'updated' : 'created',
         ]);
+
+        if ($stock_available === 0 && $target_status !== 'publish') {
+            $this->logger->info('Product hidden because Allegro stock is zero.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+            ]);
+        }
+
+        if ($publication_status !== 'ACTIVE' && $target_status !== 'publish') {
+            $this->logger->info('Product hidden because Allegro offer is not active.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'publication_status' => $publication_status,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+            ]);
+        }
+
+        if (
+            $previous_status !== 'publish'
+            && $target_status === 'publish'
+            && $publication_status === 'ACTIVE'
+            && ($stock_available === null || $stock_available > 0)
+        ) {
+            $this->logger->info('Product restored to storefront after Allegro availability returned.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'status_before' => $previous_status,
+                'status_after' => $target_status,
+                'stock_available' => $stock_available,
+            ]);
+        }
 
         return ['result' => $existing_id ? 'updated' : 'created', 'product_id' => $product_id];
     }
@@ -201,57 +237,82 @@ class ProductMapper
 
     private function extract_part_number(array $offer): array
     {
-        $parameters = $offer['parameters'] ?? [];
+        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
+        $parameter_sources = $this->collect_part_number_parameter_sources($offer);
+
+        $total_parameters = 0;
+        $sources_preview = [];
+        foreach ($parameter_sources as $source) {
+            $parameters_in_source = is_array($source['parameters'] ?? null) ? count((array) $source['parameters']) : 0;
+            $total_parameters += $parameters_in_source;
+            $sources_preview[] = [
+                'path' => (string) ($source['path'] ?? ''),
+                'count' => $parameters_in_source,
+                'preview' => is_array($source['parameters'] ?? null) ? array_slice((array) $source['parameters'], 0, 4) : [],
+            ];
+        }
+
         $this->logger->info('Inspecting Allegro parameters for part number mapping.', [
-            'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
-            'parameters_count' => is_array($parameters) ? count($parameters) : 0,
-            'parameters_preview' => is_array($parameters) ? array_slice($parameters, 0, 8) : [],
+            'offer_id' => $offer_id,
+            'parameters_count' => $total_parameters,
+            'parameters_sources_preview' => $sources_preview,
         ]);
 
-        foreach ((array) $parameters as $parameter) {
-            $raw_name = sanitize_text_field((string) ($parameter['name'] ?? ''));
-            $name = $this->normalize_parameter_name($raw_name);
-            if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
-                continue;
-            }
+        foreach ($parameter_sources as $source) {
+            $source_path = sanitize_text_field((string) ($source['path'] ?? 'unknown'));
+            $parameters = is_array($source['parameters'] ?? null) ? (array) $source['parameters'] : [];
 
-            $this->logger->info('Found Allegro part number parameter by name match.', [
-                'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
-                'raw_name' => $raw_name,
-                'normalized_name' => $name,
-            ]);
+            foreach ($parameters as $parameter) {
+                $raw_name = sanitize_text_field((string) ($parameter['name'] ?? ''));
+                $name = $this->normalize_parameter_name($raw_name);
+                if (!in_array($name, ['numer katalogowy części', 'numer katalogowy czesci'], true)) {
+                    continue;
+                }
 
-            $source_map = [
-                'values' => (array) ($parameter['values'] ?? []),
-                'valuesLabels' => (array) ($parameter['valuesLabels'] ?? []),
-                'value' => isset($parameter['value']) ? [(string) $parameter['value']] : [],
-                'valueLabel' => isset($parameter['valueLabel']) ? [(string) $parameter['valueLabel']] : [],
-            ];
+                $this->logger->info('Found Allegro part number parameter by name match.', [
+                    'offer_id' => $offer_id,
+                    'raw_name' => $raw_name,
+                    'normalized_name' => $name,
+                    'source_path' => $source_path,
+                ]);
 
-            foreach ($source_map as $source => $candidates) {
-                foreach ($candidates as $candidate) {
-                    $normalized = sanitize_text_field((string) $candidate);
-                    if (trim($normalized) === '') {
-                        continue;
+                $source_map = [
+                    'values' => (array) ($parameter['values'] ?? []),
+                    'valuesLabels' => (array) ($parameter['valuesLabels'] ?? []),
+                    'value' => isset($parameter['value']) ? [(string) $parameter['value']] : [],
+                    'valueLabel' => isset($parameter['valueLabel']) ? [(string) $parameter['valueLabel']] : [],
+                ];
+
+                foreach ($source_map as $source_value_key => $candidates) {
+                    foreach ($candidates as $candidate) {
+                        $normalized = sanitize_text_field((string) $candidate);
+                        if (trim($normalized) === '') {
+                            continue;
+                        }
+
+                        $matched_source = $source_path . '.' . $source_value_key;
+                        $this->logger->info('Part number extracted from Allegro parameter source.', [
+                            'offer_id' => $offer_id,
+                            'source' => $matched_source,
+                            'value' => $normalized,
+                        ]);
+
+                        return [
+                            'found' => true,
+                            'value' => $normalized,
+                            'source' => $matched_source,
+                        ];
                     }
-
-                    $this->logger->info('Part number extracted from Allegro parameter source.', [
-                        'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
-                        'source' => $source,
-                        'value' => $normalized,
-                    ]);
-
-                    return [
-                        'found' => true,
-                        'value' => $normalized,
-                        'source' => $source,
-                    ];
                 }
             }
         }
 
         $this->logger->warning('Part number parameter not found in Allegro offer parameters.', [
-            'offer_id' => sanitize_text_field((string) ($offer['id'] ?? '')),
+            'offer_id' => $offer_id,
+            'checked_sources' => array_map(
+                static fn (array $source): string => (string) ($source['path'] ?? ''),
+                $parameter_sources
+            ),
         ]);
 
         return [
@@ -273,9 +334,49 @@ class ProductMapper
         return preg_replace('/\s+/u', ' ', $name) ?? $name;
     }
 
-    private function map_product_status(string $publication_status, array $settings): string
+    private function collect_part_number_parameter_sources(array $offer): array
     {
-        if ($publication_status === 'ACTIVE') {
+        $sources = [];
+        if (is_array($offer['parameters'] ?? null)) {
+            $sources[] = [
+                'path' => 'parameters',
+                'parameters' => (array) $offer['parameters'],
+            ];
+        }
+
+        $product_set = $offer['productSet'] ?? [];
+        if (!is_array($product_set)) {
+            return $sources;
+        }
+
+        foreach ($product_set as $index => $product_set_item) {
+            if (!is_array($product_set_item)) {
+                continue;
+            }
+
+            $product_parameters = $product_set_item['product']['parameters'] ?? null;
+            if (is_array($product_parameters)) {
+                $sources[] = [
+                    'path' => sprintf('productSet[%d].product.parameters', (int) $index),
+                    'parameters' => $product_parameters,
+                ];
+            }
+
+            $item_parameters = $product_set_item['parameters'] ?? null;
+            if (is_array($item_parameters)) {
+                $sources[] = [
+                    'path' => sprintf('productSet[%d].parameters', (int) $index),
+                    'parameters' => $item_parameters,
+                ];
+            }
+        }
+
+        return $sources;
+    }
+
+    private function map_product_status(string $publication_status, ?int $stock_available, array $settings): string
+    {
+        if ($publication_status === 'ACTIVE' && ($stock_available === null || $stock_available > 0)) {
             return 'publish';
         }
 
