@@ -32,56 +32,77 @@ $category_tiles = [
     ['label' => 'Akcesoria', 'terms' => ['akcesoria', 'accessories'], 'icon' => 'accessory'],
 ];
 
-$brand_names = ['BMW', 'Audi', 'Volkswagen', 'Skoda'];
+$brand_logos = [
+    ['name' => 'BMW', 'file' => 'assets/images/brands/bmw.svg'],
+    ['name' => 'Audi', 'file' => 'assets/images/brands/audi.svg'],
+    ['name' => 'Volkswagen', 'file' => 'assets/images/brands/volkswagen.svg'],
+    ['name' => 'Skoda', 'file' => 'assets/images/brands/skoda.svg'],
+];
 
-$get_product_categories = static function (array $candidate_slugs): array {
+$normalize_term = static function (string $value): string {
+    $normalized = sanitize_title($value);
+    return str_replace('-', '', $normalized);
+};
+
+$resolve_terms_for_section = static function (array $candidate_terms) use ($normalize_term): array {
     if (!taxonomy_exists('product_cat')) {
         return [];
     }
 
-    $categories = [];
-    foreach ($candidate_slugs as $slug) {
-        $term = get_term_by('slug', sanitize_title($slug), 'product_cat');
-        if ($term instanceof WP_Term && !isset($categories[$term->term_id])) {
-            $categories[$term->term_id] = $term;
+    $all_terms = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => false,
+    ]);
+
+    if (is_wp_error($all_terms) || empty($all_terms)) {
+        return [];
+    }
+
+    $exact = [];
+    $partial = [];
+    $needles = array_map(
+        static fn(string $term): string => $normalize_term($term),
+        $candidate_terms
+    );
+
+    foreach ($all_terms as $term) {
+        if (!$term instanceof WP_Term) {
+            continue;
+        }
+
+        $haystack = $normalize_term($term->slug . ' ' . $term->name);
+
+        foreach ($needles as $needle) {
+            if ($needle === '') {
+                continue;
+            }
+
+            if ($haystack === $needle) {
+                $exact[$term->term_id] = $term;
+                break;
+            }
+
+            if (str_contains($haystack, $needle) || str_contains($needle, $haystack)) {
+                $partial[$term->term_id] = $term;
+                break;
+            }
         }
     }
 
-    if ($categories !== []) {
-        return array_values($categories);
-    }
-
-    foreach ($candidate_slugs as $label) {
-        $term = get_term_by('name', $label, 'product_cat');
-        if ($term instanceof WP_Term && !isset($categories[$term->term_id])) {
-            $categories[$term->term_id] = $term;
-        }
-    }
-
-    return array_values($categories);
+    return array_values($exact + $partial);
 };
 
-$get_products_for_section = static function (array $candidate_terms): array {
+$get_product_categories = static function (array $candidate_slugs) use ($resolve_terms_for_section): array {
+    return $resolve_terms_for_section($candidate_slugs);
+};
+
+$get_products_for_section = static function (array $candidate_terms) use ($resolve_terms_for_section): array {
     if (!class_exists('WooCommerce')) {
         return [];
     }
 
-    $term_slugs = [];
-    foreach ($candidate_terms as $slug) {
-        $term = get_term_by('slug', sanitize_title($slug), 'product_cat');
-        if ($term instanceof WP_Term) {
-            $term_slugs[] = $term->slug;
-        }
-    }
-
-    if ($term_slugs === []) {
-        foreach ($candidate_terms as $name) {
-            $term = get_term_by('name', $name, 'product_cat');
-            if ($term instanceof WP_Term) {
-                $term_slugs[] = $term->slug;
-            }
-        }
-    }
+    $terms = $resolve_terms_for_section($candidate_terms);
+    $term_ids = array_map(static fn(WP_Term $term): int => (int) $term->term_id, $terms);
 
     $args = [
         'status' => 'publish',
@@ -90,12 +111,19 @@ $get_products_for_section = static function (array $candidate_terms): array {
         'order' => 'DESC',
     ];
 
-    if ($term_slugs !== []) {
-        $args['category'] = array_map('strval', array_unique($term_slugs));
+    if ($term_ids !== []) {
+        $args['tax_query'] = [
+            [
+                'taxonomy' => 'product_cat',
+                'field' => 'term_id',
+                'terms' => array_unique($term_ids),
+                'operator' => 'IN',
+            ],
+        ];
         return wc_get_products($args);
     }
 
-    return [];
+    return wc_get_products($args);
 };
 
 $get_tile_url = static function (array $candidate_terms) use ($get_product_categories, $shop_url): string {
@@ -160,7 +188,7 @@ $icon = static function (string $type): string {
                                     </span>
                                 <?php endif; ?>
                                 <?php echo $product->get_image('woocommerce_thumbnail'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-                                <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
+                                <div class="gp-product__sku">Numer części: <strong><?php echo esc_html(function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak'); ?></strong></div>
                                 <h3 class="gp-product__name"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
                                 <p class="gp-product__price">
                                     <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
@@ -199,8 +227,10 @@ $icon = static function (string $type): string {
         <div class="gp-container">
             <h2 class="gp-section-title"><?php esc_html_e('Nasze marki', 'gp-clone'); ?></h2>
             <div class="gp-brand-logos" role="list" aria-label="<?php esc_attr_e('Marki sklepu', 'gp-clone'); ?>">
-                <?php foreach ($brand_names as $brand) : ?>
-                    <span class="gp-brand-logo" role="listitem"><?php echo esc_html($brand); ?></span>
+                <?php foreach ($brand_logos as $brand) : ?>
+                    <span class="gp-brand-logo" role="listitem">
+                        <img src="<?php echo esc_url(get_template_directory_uri() . '/' . $brand['file']); ?>" alt="<?php echo esc_attr($brand['name']); ?>" loading="lazy" />
+                    </span>
                 <?php endforeach; ?>
             </div>
         </div>

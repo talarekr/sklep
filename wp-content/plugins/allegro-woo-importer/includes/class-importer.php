@@ -25,29 +25,72 @@ class Importer
 
         $offset = 0;
         $limit = 100;
+        $page_no = 1;
+        $page_token = '';
         $processed = 0;
         $created = 0;
         $updated = 0;
         $errors = 0;
+        $fetched_from_api = 0;
+        $seen_offer_ids = [];
+        $total_count_from_api = null;
 
         do {
-            $page = $this->client->get_offers((string) $settings['offer_status'], $offset, $limit);
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(30);
+            }
+
+            $page = $this->client->get_offers((string) $settings['offer_status'], $offset, $limit, $page_token);
             if (is_wp_error($page)) {
                 $errors++;
-                $this->logger->error('Failed to fetch offers page.', ['offset' => $offset, 'error' => $page->get_error_message()]);
+                $this->logger->error('Failed to fetch offers page.', [
+                    'page_no' => $page_no,
+                    'offset' => $offset,
+                    'page_token' => $page_token,
+                    'error' => $page->get_error_message(),
+                ]);
                 break;
             }
 
             $offers = $page['offers'] ?? [];
             if (empty($offers) || !is_array($offers)) {
+                $this->logger->info('Offers page returned no results.', [
+                    'page_no' => $page_no,
+                    'offset' => $offset,
+                    'page_token' => $page_token,
+                    'total_fetched_from_api' => $fetched_from_api,
+                ]);
                 break;
             }
+
+            $batch_size = count($offers);
+            $fetched_from_api += $batch_size;
+            $total_count_from_api = $this->extract_total_count($page, $total_count_from_api);
+
+            $this->logger->info('Fetched offers batch from Allegro API.', [
+                'page_no' => $page_no,
+                'offset' => $offset,
+                'page_token' => $page_token,
+                'batch_size' => $batch_size,
+                'total_fetched_from_api' => $fetched_from_api,
+                'reported_total_count' => $total_count_from_api,
+            ]);
 
             foreach ($offers as $offer_basic) {
                 $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
                 if ($offer_id === '') {
                     continue;
                 }
+
+                if (isset($seen_offer_ids[$offer_id])) {
+                    $this->logger->warning('Skipping duplicate offer id from paginated API response.', [
+                        'offer_id' => $offer_id,
+                        'page_no' => $page_no,
+                        'offset' => $offset,
+                    ]);
+                    continue;
+                }
+                $seen_offer_ids[$offer_id] = true;
 
                 $details = $this->client->get_offer_details($offer_id);
                 if (is_wp_error($details)) {
@@ -69,9 +112,14 @@ class Importer
                 }
             }
 
-            $offset += $limit;
-            $total_count = isset($page['count']) ? (int) $page['count'] : ($offset + count($offers));
-            $has_more = $offset < $total_count && count($offers) === $limit;
+            $next_page_token = $this->extract_next_page_token($page);
+            if ($next_page_token !== '') {
+                $page_token = $next_page_token;
+            }
+
+            $offset += $batch_size;
+            $page_no++;
+            $has_more = $this->has_more_pages($batch_size, $limit, $offset, $total_count_from_api, $next_page_token);
         } while ($has_more);
 
         $summary = [
@@ -80,6 +128,8 @@ class Importer
             'created' => $created,
             'updated' => $updated,
             'errors' => $errors,
+            'fetched_from_api' => $fetched_from_api,
+            'reported_total_count' => $total_count_from_api,
         ];
 
         Plugin::update_settings([
@@ -95,5 +145,61 @@ class Importer
         $this->logger->info('Import finished.', $summary);
 
         return $summary;
+    }
+
+    private function extract_total_count(array $page, ?int $current): ?int
+    {
+        $candidates = [
+            $page['totalCount'] ?? null,
+            $page['total_count'] ?? null,
+            $page['count']['total'] ?? null,
+            $page['pagination']['totalCount'] ?? null,
+            $page['searchMeta']['totalCount'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_numeric($candidate)) {
+                return max(0, (int) $candidate);
+            }
+        }
+
+        return $current;
+    }
+
+    private function extract_next_page_token(array $page): string
+    {
+        $candidates = [
+            $page['nextPageToken'] ?? null,
+            $page['next_page_token'] ?? null,
+            $page['page']['next'] ?? null,
+            $page['pagination']['next'] ?? null,
+            $page['links']['next'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
+            }
+        }
+
+        return '';
+    }
+
+    private function has_more_pages(
+        int $batch_size,
+        int $limit,
+        int $offset,
+        ?int $total_count_from_api,
+        string $next_page_token
+    ): bool {
+        if ($next_page_token !== '') {
+            return true;
+        }
+
+        if ($total_count_from_api !== null) {
+            return $offset < $total_count_from_api;
+        }
+
+        return $batch_size === $limit;
     }
 }
