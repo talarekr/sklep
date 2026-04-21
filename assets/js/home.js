@@ -23,4 +23,62 @@ document.addEventListener('DOMContentLoaded', () => {
       button.innerHTML = button.classList.contains('is-active') ? '&#9829;' : '&#9825;';
     });
   });
+
+  const getVisibleCount = () => {
+    if (window.matchMedia('(max-width: 767px)').matches) return 1;
+    if (window.matchMedia('(max-width: 1199px)').matches) return 2;
+    return 4;
+  };
+
+  document.querySelectorAll('[data-gp-carousel]').forEach((carousel) => {
+    const track = carousel.querySelector('[data-gp-carousel-track]');
+    const slides = Array.from(carousel.querySelectorAll('.gp-carousel__slide'));
+    const dotsWrap = carousel.querySelector('[data-gp-carousel-dots]');
+    const prev = carousel.querySelector('[data-gp-prev]');
+    const next = carousel.querySelector('[data-gp-next]');
+
+    if (!track || slides.length === 0 || !dotsWrap || !prev || !next) return;
+
+    let page = 0;
+    let pages = 1;
+
+    const renderDots = () => {
+      dotsWrap.innerHTML = '';
+      for (let i = 0; i < pages; i += 1) {
+        const dot = document.createElement('button');
+        dot.type = 'button';
+        dot.className = `gp-carousel__dot${i === page ? ' is-active' : ''}`;
+        dot.setAttribute('aria-label', `Idź do strony ${i + 1}`);
+        dot.addEventListener('click', () => {
+          page = i;
+          update();
+        });
+        dotsWrap.appendChild(dot);
+      }
+    };
+
+    const update = () => {
+      const visible = getVisibleCount();
+      pages = Math.max(1, Math.ceil(slides.length / visible));
+      if (page > pages - 1) page = pages - 1;
+
+      track.style.transform = `translateX(-${page * 100}%)`;
+      prev.disabled = page === 0;
+      next.disabled = page >= pages - 1;
+      renderDots();
+    };
+
+    prev.addEventListener('click', () => {
+      page = Math.max(0, page - 1);
+      update();
+    });
+
+    next.addEventListener('click', () => {
+      page = Math.min(pages - 1, page + 1);
+      update();
+    });
+
+    window.addEventListener('resize', update);
+    update();
+  });
 });
