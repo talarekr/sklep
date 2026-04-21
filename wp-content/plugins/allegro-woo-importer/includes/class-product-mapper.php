@@ -82,9 +82,8 @@ class ProductMapper
 
         $this->assign_category($product_id, $offer);
         $this->map_attributes($product, $offer);
+        $this->sync_product_images($product, $offer, $offer_id);
         $product->save();
-
-        $this->attach_images($product_id, $offer);
 
         update_post_meta($product_id, '_allegro_offer_id', $offer_id);
         update_post_meta($product_id, '_allegro_offer_url', esc_url_raw($this->extract_offer_url($offer)));
@@ -93,6 +92,12 @@ class ProductMapper
         update_post_meta($product_id, '_allegro_currency', $currency);
         update_post_meta($product_id, '_allegro_imported_at', gmdate('Y-m-d H:i:s'));
         update_post_meta($product_id, '_allegro_parameters', wp_json_encode($offer['parameters'] ?? []));
+
+        $this->logger->info('Product import upsert completed.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'operation' => $existing_id ? 'updated' : 'created',
+        ]);
 
         return ['result' => $existing_id ? 'updated' : 'created', 'product_id' => $product_id];
     }
@@ -124,9 +129,6 @@ class ProductMapper
                 foreach (($section['items'] ?? []) as $item) {
                     if (($item['type'] ?? '') === 'TEXT' && !empty($item['content'])) {
                         $html .= wp_kses_post((string) $item['content']);
-                    }
-                    if (($item['type'] ?? '') === 'IMAGE' && !empty($item['url'])) {
-                        $html .= '<p><img src="' . esc_url($item['url']) . '" alt=""></p>';
                     }
                 }
             }
@@ -230,12 +232,25 @@ class ProductMapper
         return '';
     }
 
-    private function attach_images(int $product_id, array $offer): void
+    private function sync_product_images(WC_Product $product, array $offer, string $offer_id): void
     {
         $images = $offer['images'] ?? [];
         if (!is_array($images) || empty($images)) {
+            $this->logger->warning('Offer has no images to sync.', ['offer_id' => $offer_id, 'product_id' => $product->get_id()]);
             return;
         }
+
+        $product_id = $product->get_id();
+        if ($product_id <= 0) {
+            $this->logger->error('Cannot sync images for unsaved product.', ['offer_id' => $offer_id]);
+            return;
+        }
+
+        $this->logger->info('Starting product image sync.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'images_found' => count($images),
+        ]);
 
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -277,11 +292,25 @@ class ProductMapper
             $gallery_ids[] = (int) $attachment_id;
         }
 
-        if (!empty($gallery_ids)) {
-            set_post_thumbnail($product_id, $gallery_ids[0]);
-            $gallery = implode(',', array_map('intval', array_slice($gallery_ids, 1)));
-            update_post_meta($product_id, '_product_image_gallery', $gallery);
+        $gallery_ids = array_values(array_unique(array_map('intval', $gallery_ids)));
+
+        if (empty($gallery_ids)) {
+            $this->logger->warning('No valid image attachments were created for offer.', ['offer_id' => $offer_id, 'product_id' => $product_id]);
+            return;
         }
+
+        $featured_id = (int) $gallery_ids[0];
+        $gallery_only = array_values(array_filter(array_map('intval', array_slice($gallery_ids, 1))));
+
+        $product->set_image_id($featured_id);
+        $product->set_gallery_image_ids($gallery_only);
+
+        $this->logger->info('Product image sync completed.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'featured_attachment_id' => $featured_id,
+            'gallery_count' => count($gallery_only),
+        ]);
     }
 
     private function find_existing_attachment_by_source(string $url): int
