@@ -48,7 +48,43 @@ class AllegroClient
         $path = '/sale/product-offers/' . rawurlencode($offer_id);
         $this->logger->info('Fetching Allegro offer details.', ['offer_id' => $offer_id, 'endpoint' => $path]);
 
-        return $this->request('GET', $path);
+        $details = $this->request('GET', $path);
+        if (is_wp_error($details)) {
+            return $details;
+        }
+
+        $this->logger->info('Fetched Allegro offer details payload snapshot.', [
+            'offer_id' => $offer_id,
+            'top_level_parameters_count' => is_array($details['parameters'] ?? null) ? count((array) $details['parameters']) : 0,
+            'product_set_count' => is_array($details['productSet'] ?? null) ? count((array) $details['productSet']) : 0,
+        ]);
+
+        if ($offer_id === '18303384599') {
+            $product_set_preview = [];
+            if (is_array($details['productSet'] ?? null)) {
+                foreach ($details['productSet'] as $index => $product_set_item) {
+                    if (!is_array($product_set_item)) {
+                        continue;
+                    }
+
+                    $product_set_preview[] = [
+                        'index' => (int) $index,
+                        'parameters_count' => is_array($product_set_item['parameters'] ?? null) ? count((array) $product_set_item['parameters']) : 0,
+                        'product_parameters_count' => is_array($product_set_item['product']['parameters'] ?? null) ? count((array) $product_set_item['product']['parameters']) : 0,
+                        'parameters_preview' => is_array($product_set_item['parameters'] ?? null) ? array_slice((array) $product_set_item['parameters'], 0, 6) : [],
+                        'product_parameters_preview' => is_array($product_set_item['product']['parameters'] ?? null) ? array_slice((array) $product_set_item['product']['parameters'], 0, 6) : [],
+                    ];
+                }
+            }
+
+            $this->logger->info('Offer payload debug for requested Allegro offer id.', [
+                'offer_id' => $offer_id,
+                'top_level_parameters_preview' => is_array($details['parameters'] ?? null) ? array_slice((array) $details['parameters'], 0, 10) : [],
+                'product_set_preview' => $product_set_preview,
+            ]);
+        }
+
+        return $details;
     }
 
     public function get_offer_url(array $offer): string
