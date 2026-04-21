@@ -257,11 +257,11 @@ a:hover { text-decoration: underline; }
   border: 1px solid #e5e9f1;
   border-radius: 10px;
   background: #fff;
-  min-height: 88px;
-  padding: 14px 16px;
+  min-height: 64px;
+  padding: 10px 12px;
   display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 14px;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
   align-items: center;
   transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
@@ -271,9 +271,9 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
   transform: translateY(-1px);
 }
-.gp-category-tile__icon { color: #36425c; display: inline-flex; align-items: center; justify-content: center; }
-.gp-category-tile__icon svg { width: 40px; height: 40px; }
-.gp-category-tile__name { font-size: 14px; line-height: 1.35; color: #222939; font-weight: 500; }
+.gp-category-tile__icon { color: #56617b; display: inline-flex; }
+.gp-category-tile__icon svg { width: 22px; height: 22px; }
+.gp-category-tile__name { font-size: 13px; color: #2c3242; }
 
 .gp-home-brands { padding: 6px 0 8px; }
 .gp-home-brands .gp-section-title { text-align: center; margin-bottom: 12px; }
@@ -284,18 +284,17 @@ a:hover { text-decoration: underline; }
 }
 .gp-brand-logo {
   border: 1px solid #e4e8f0;
-  border-radius: 14px;
-  min-height: 72px;
+  border-radius: 999px;
+  min-height: 52px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #303748;
   background: linear-gradient(180deg, #fff, #fafbfd);
-  padding: 10px 14px;
-  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
-.gp-brand-logo img { width: 100%; max-width: 150px; max-height: 48px; object-fit: contain; filter: grayscale(1) contrast(1.05); opacity: 0.9; }
-.gp-brand-logo:hover { border-color: #cfd7e6; box-shadow: 0 6px 14px rgba(16,24,40,.07); transform: translateY(-1px); }
-.gp-brand-logo:hover img { filter: grayscale(.25) contrast(1.1); opacity: 1; }
 
 .gp-seo-content { padding: 20px 0 60px; }
 .gp-seo-content h2 { font-size: 24px; margin: 0 0 10px; }
@@ -328,8 +327,6 @@ a:hover { text-decoration: underline; }
   .gp-hero-promo h2 { font-size: 36px; }
   .gp-hero-brands { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
   .gp-category-columns, .gp-products, .gp-banner-grid { grid-template-columns: 1fr; }
-  .gp-carousel__slide { flex-basis: 100%; max-width: 100%; }
-  .gp-categories-grid, .gp-brand-logos { grid-template-columns: 1fr; }
   .gp-product__name { min-height: 0; font-size: 13px; line-height: 1.35; }
   .gp-product__sku { font-size: 12px; }
   .gp-product__current { font-size: 24px; }

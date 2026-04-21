@@ -3,9 +3,18 @@
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 
 $section_definitions = [
-    ['title' => __('Silniki', 'gp-clone'), 'terms' => ['silniki', 'silnik', 'engines']],
-    ['title' => __('Kierownice', 'gp-clone'), 'terms' => ['kierownice', 'kierownica', 'steering-wheel']],
-    ['title' => __('Felgi', 'gp-clone'), 'terms' => ['felgi', 'felga', 'wheels', 'rim']],
+    [
+        'title' => __('Silniki', 'gp-clone'),
+        'terms' => ['silniki', 'silnik', 'engines'],
+    ],
+    [
+        'title' => __('Kierownice', 'gp-clone'),
+        'terms' => ['kierownice', 'kierownica', 'steering-wheel'],
+    ],
+    [
+        'title' => __('Felgi', 'gp-clone'),
+        'terms' => ['felgi', 'felga', 'wheels', 'rim'],
+    ],
 ];
 
 $category_tiles = [
@@ -23,12 +32,7 @@ $category_tiles = [
     ['label' => 'Akcesoria', 'terms' => ['akcesoria', 'accessories'], 'icon' => 'accessory'],
 ];
 
-$brand_logos = [
-    ['name' => 'BMW', 'file' => 'assets/images/brands/bmw.svg'],
-    ['name' => 'Audi', 'file' => 'assets/images/brands/audi.svg'],
-    ['name' => 'Volkswagen', 'file' => 'assets/images/brands/volkswagen.svg'],
-    ['name' => 'Skoda', 'file' => 'assets/images/brands/skoda.svg'],
-];
+$brand_names = ['BMW', 'Audi', 'Volkswagen', 'Skoda'];
 
 $get_product_categories = static function (array $candidate_slugs): array {
     if (!taxonomy_exists('product_cat')) {
@@ -88,13 +92,10 @@ $get_products_for_section = static function (array $candidate_terms): array {
 
     if ($term_slugs !== []) {
         $args['category'] = array_map('strval', array_unique($term_slugs));
-        $matched = wc_get_products($args);
-        if (!empty($matched)) {
-            return $matched;
-        }
+        return wc_get_products($args);
     }
 
-    return wc_get_products($args);
+    return [];
 };
 
 $get_tile_url = static function (array $candidate_terms) use ($get_product_categories, $shop_url): string {
@@ -127,15 +128,14 @@ $icon = static function (string $type): string {
 
     $body = $paths[$type] ?? $paths['accessory'];
 
-    return '<svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' . $body . '</g></svg>';
+    return '<svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' . $body . '</g></svg>';
 };
-
-$demo_products = function_exists('gp_clone_demo_popular_products') ? gp_clone_demo_popular_products() : [];
 ?>
 
 <div class="gp-home-middle">
-    <?php foreach ($section_definitions as $section) : ?>
+    <?php foreach ($section_definitions as $index => $section) : ?>
         <?php $products = $get_products_for_section($section['terms']); ?>
+        <?php if (empty($products)) { continue; } ?>
         <section class="gp-home-products" data-gp-carousel>
             <div class="gp-container">
                 <div class="gp-popular__head">
@@ -144,48 +144,32 @@ $demo_products = function_exists('gp_clone_demo_popular_products') ? gp_clone_de
                 </div>
                 <div class="gp-carousel__viewport" data-gp-carousel-viewport>
                     <div class="gp-products gp-carousel__track" data-gp-carousel-track>
-                        <?php if (!empty($products)) : ?>
-                            <?php foreach ($products as $product) : ?>
-                                <article class="gp-product gp-carousel__slide">
-                                    <button type="button" class="gp-product__fav" aria-label="<?php echo esc_attr(sprintf(__('Dodaj %s do obserwowanych', 'gp-clone'), $product->get_name())); ?>">&#9825;</button>
-                                    <?php if ($product->is_on_sale()) : ?>
-                                        <span class="gp-product__badge">
-                                            <?php
-                                            $regular = (float) $product->get_regular_price();
-                                            $sale = (float) $product->get_sale_price();
-                                            $discount = $regular > 0 ? round((($regular - $sale) / $regular) * 100) : 0;
-                                            echo esc_html('-' . $discount . '%');
-                                            ?>
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php echo $product->get_image('woocommerce_thumbnail'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-                                    <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
-                                    <h3 class="gp-product__name"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
-                                    <p class="gp-product__price">
-                                        <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
-                                        <span class="<?php echo $product->is_on_sale() ? 'gp-product__current gp-product__current--sale' : 'gp-product__current'; ?>"><?php echo wp_kses_post(wc_price($product->get_price())); ?></span>
-                                    </p>
-                                    <div class="gp-product__delivery product-shipping">Darmowa dostawa: 23–24 kwi</div>
-                                    <div class="gp-product__delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</div>
-                                </article>
-                            <?php endforeach; ?>
-                        <?php else : ?>
-                            <?php foreach ($demo_products as $product) : ?>
-                                <article class="gp-product gp-carousel__slide">
-                                    <button type="button" class="gp-product__fav" aria-label="<?php echo esc_attr(sprintf(__('Dodaj %s do obserwowanych', 'gp-clone'), $product['name'])); ?>">&#9825;</button>
-                                    <?php if (!empty($product['discount'])) : ?><span class="gp-product__badge"><?php echo esc_html($product['discount']); ?></span><?php endif; ?>
-                                    <img src="<?php echo esc_url($product['image']); ?>" alt="<?php echo esc_attr($product['name']); ?>">
-                                    <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product['sku']); ?></strong></div>
-                                    <h3 class="gp-product__name"><a href="#"><?php echo esc_html(gp_format_product_display_name($product['name'])); ?></a></h3>
-                                    <p class="gp-product__price">
-                                        <?php if (!empty($product['old_price'])) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html($product['old_price']); ?></span><?php endif; ?>
-                                        <span class="gp-product__current<?php echo !empty($product['old_price']) ? ' gp-product__current--sale' : ''; ?>"><?php echo esc_html($product['price']); ?></span>
-                                    </p>
-                                    <div class="gp-product__delivery product-shipping">Darmowa dostawa: 23–24 kwi</div>
-                                    <div class="gp-product__delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</div>
-                                </article>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
+                        <?php foreach ($products as $product) : ?>
+                            <article class="gp-product gp-carousel__slide">
+                                <button type="button" class="gp-product__fav" aria-label="<?php echo esc_attr(sprintf(__('Dodaj %s do obserwowanych', 'gp-clone'), $product->get_name())); ?>">
+                                    &#9825;
+                                </button>
+                                <?php if ($product->is_on_sale()) : ?>
+                                    <span class="gp-product__badge">
+                                        <?php
+                                        $regular = (float) $product->get_regular_price();
+                                        $sale = (float) $product->get_sale_price();
+                                        $discount = $regular > 0 ? round((($regular - $sale) / $regular) * 100) : 0;
+                                        echo esc_html('-' . $discount . '%');
+                                        ?>
+                                    </span>
+                                <?php endif; ?>
+                                <?php echo $product->get_image('woocommerce_thumbnail'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                                <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
+                                <h3 class="gp-product__name"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
+                                <p class="gp-product__price">
+                                    <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
+                                    <span class="<?php echo $product->is_on_sale() ? 'gp-product__current gp-product__current--sale' : 'gp-product__current'; ?>"><?php echo wp_kses_post(wc_price($product->get_price())); ?></span>
+                                </p>
+                                <div class="gp-product__delivery product-shipping">Darmowa dostawa: 23–24 kwi</div>
+                                <div class="gp-product__delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</div>
+                            </article>
+                        <?php endforeach; ?>
                     </div>
                 </div>
                 <div class="gp-carousel__nav" data-gp-carousel-nav>
@@ -215,10 +199,8 @@ $demo_products = function_exists('gp_clone_demo_popular_products') ? gp_clone_de
         <div class="gp-container">
             <h2 class="gp-section-title"><?php esc_html_e('Nasze marki', 'gp-clone'); ?></h2>
             <div class="gp-brand-logos" role="list" aria-label="<?php esc_attr_e('Marki sklepu', 'gp-clone'); ?>">
-                <?php foreach ($brand_logos as $logo) : ?>
-                    <span class="gp-brand-logo" role="listitem">
-                        <img src="<?php echo esc_url(get_template_directory_uri() . '/' . $logo['file']); ?>" alt="<?php echo esc_attr($logo['name']); ?>" loading="lazy">
-                    </span>
+                <?php foreach ($brand_names as $brand) : ?>
+                    <span class="gp-brand-logo" role="listitem"><?php echo esc_html($brand); ?></span>
                 <?php endforeach; ?>
             </div>
         </div>
