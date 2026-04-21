@@ -94,6 +94,7 @@ final class Plugin
             'offer_status' => 'ACTIVE',
             'access_token' => '',
             'refresh_token' => '',
+            'expires_at' => '',
             'token_expires_at' => '',
             'token_scope' => '',
             'token_type' => '',
