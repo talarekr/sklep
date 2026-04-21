@@ -8,6 +8,9 @@ if (!defined('ABSPATH')) {
 
 class Importer
 {
+    private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
+    private const BATCH_LIMIT = 40;
+
     private AllegroClient $client;
     private ProductMapper $mapper;
     private Logger $logger;
@@ -99,17 +102,34 @@ class Importer
                     continue;
                 }
 
-                $result = $this->mapper->upsert_product($details, $settings);
-                $processed++;
+                $next_page_token = $this->extract_next_page_token($page);
+                $next_offset = $offset + $batch_size;
+                $next_page_no = $page_no + 1;
+                $has_more = $this->has_more_pages($batch_size, $limit, $next_offset, $total_count_from_api, $next_page_token);
 
-                if (($result['result'] ?? '') === 'created') {
-                    $created++;
-                } elseif (($result['result'] ?? '') === 'updated') {
-                    $updated++;
-                } elseif (($result['result'] ?? '') === 'error') {
-                    $errors++;
-                    $this->logger->error('Product upsert failed.', ['offer_id' => $offer_id, 'error' => $result['error'] ?? 'unknown']);
+                if ($has_more) {
+                    $this->save_checkpoint([
+                        'offset' => $next_offset,
+                        'page_no' => $next_page_no,
+                        'page_token' => $next_page_token !== '' ? $next_page_token : '',
+                        'total_processed' => (int) ($checkpoint['total_processed'] ?? 0) + $processed,
+                        'total_count' => $total_count_from_api,
+                        'updated_at' => gmdate('Y-m-d H:i:s'),
+                    ]);
+                } else {
+                    $this->reset_checkpoint();
+                    $this->logger->info('Import checkpoint reset after reaching end of offers.', [
+                        'last_offset' => $next_offset,
+                        'reported_total_count' => $total_count_from_api,
+                    ]);
                 }
+            } else {
+                $this->reset_checkpoint();
+                $this->logger->info('Offers page returned no results. Checkpoint reset.', [
+                    'offset' => $offset,
+                    'page_no' => $page_no,
+                    'page_token' => $page_token,
+                ]);
             }
 
             $next_page_token = $this->extract_next_page_token($page);
