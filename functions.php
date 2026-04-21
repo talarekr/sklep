@@ -29,11 +29,11 @@ add_action('wp_enqueue_scripts', function () {
         [],
         null
     );
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.2.0');
-    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.2.0', true);
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.0');
+    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.0', true);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.2.0');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.0');
         wp_enqueue_script('wc-cart-fragments');
     }
 });
