@@ -3,6 +3,7 @@
  * @var array  $settings
  * @var array  $history
  * @var string $oauth_url
+ * @var string $callback_uri
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -83,6 +84,10 @@ if (!defined('ABSPATH')) {
         <a class="button button-primary" href="<?php echo esc_url($oauth_url); ?>"><?php esc_html_e('Połącz z Allegro', 'allegro-woo-importer'); ?></a>
         <strong style="margin-left: 12px;"><?php esc_html_e('Status połączenia:', 'allegro-woo-importer'); ?></strong>
         <?php echo !empty($settings['access_token']) ? esc_html__('Połączono', 'allegro-woo-importer') : esc_html__('Brak połączenia', 'allegro-woo-importer'); ?>
+    </p>
+    <p>
+        <?php esc_html_e('Callback OAuth (ustaw ten sam URI w aplikacji Allegro):', 'allegro-woo-importer'); ?>
+        <code><?php echo esc_html($callback_uri); ?></code>
     </p>
     <p>
         <?php esc_html_e('Wygaśnięcie access tokena:', 'allegro-woo-importer'); ?>
