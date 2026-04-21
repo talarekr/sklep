@@ -234,9 +234,9 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id): void
     {
-        $image_urls = $this->extract_image_urls($offer);
-        if (empty($image_urls)) {
-            $this->logger->warning('Offer has no images to sync.', ['offer_id' => $offer_id, 'product_id' => $product->get_id(), 'checked_fields' => ['images', 'productSet[*].product.images']]);
+        $images = $offer['images'] ?? [];
+        if (!is_array($images) || empty($images)) {
+            $this->logger->warning('Offer has no images to sync.', ['offer_id' => $offer_id, 'product_id' => $product->get_id()]);
             return;
         }
 
@@ -249,7 +249,7 @@ class ProductMapper
         $this->logger->info('Starting product image sync.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'images_found' => count($image_urls),
+            'images_found' => count($images),
         ]);
 
         require_once ABSPATH . 'wp-admin/includes/media.php';
@@ -301,15 +301,12 @@ class ProductMapper
 
         $product->set_image_id($featured_id);
         $product->set_gallery_image_ids($gallery_only);
-        update_post_meta($product_id, '_thumbnail_id', $featured_id);
-        update_post_meta($product_id, '_product_image_gallery', implode(',', $gallery_only));
 
         $this->logger->info('Product image sync completed.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
             'featured_attachment_id' => $featured_id,
             'gallery_count' => count($gallery_only),
-            'thumbnail_set' => $featured_id > 0,
         ]);
     }
 
@@ -365,39 +362,5 @@ class ProductMapper
         }
 
         return $missing;
-    }
-
-    private function extract_image_urls(array $offer): array
-    {
-        $urls = [];
-
-        $direct_images = $offer['images'] ?? [];
-        if (is_array($direct_images)) {
-            foreach ($direct_images as $image) {
-                $url = esc_url_raw((string) ($image['url'] ?? ''));
-                if ($url !== '') {
-                    $urls[] = $url;
-                }
-            }
-        }
-
-        $product_set = $offer['productSet'] ?? [];
-        if (is_array($product_set)) {
-            foreach ($product_set as $product_set_entry) {
-                $product_images = $product_set_entry['product']['images'] ?? [];
-                if (!is_array($product_images)) {
-                    continue;
-                }
-
-                foreach ($product_images as $product_image) {
-                    $url = esc_url_raw((string) ($product_image['url'] ?? ''));
-                    if ($url !== '') {
-                        $urls[] = $url;
-                    }
-                }
-            }
-        }
-
-        return array_values(array_unique($urls));
     }
 }
