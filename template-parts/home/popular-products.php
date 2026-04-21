@@ -33,9 +33,9 @@
                                 </span>
                             <?php endif; ?>
                             <?php echo $product->get_image('woocommerce_thumbnail'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-                            <div class="gp-product__sku product-meta">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
-                            <h3 class="gp-product__name product-title"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
-                            <p class="gp-product__price product-price">
+                            <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product->get_sku() ?: 'BRAK'); ?></strong></div>
+                            <h3 class="gp-product__name"><a href="<?php echo esc_url(get_permalink($product->get_id())); ?>"><?php echo esc_html(gp_format_product_display_name($product->get_name())); ?></a></h3>
+                            <p class="gp-product__price">
                                 <?php if ($product->get_regular_price() && $product->is_on_sale()) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html(wc_price($product->get_regular_price())); ?></span><?php endif; ?>
                                 <span class="<?php echo $product->is_on_sale() ? 'gp-product__current gp-product__current--sale' : 'gp-product__current'; ?>"><?php echo wp_kses_post(wc_price($product->get_price())); ?></span>
                             </p>
@@ -57,9 +57,9 @@
                             </button>
                             <?php if (!empty($product['discount'])) : ?><span class="gp-product__badge"><?php echo esc_html($product['discount']); ?></span><?php endif; ?>
                             <img src="<?php echo esc_url($product['image']); ?>" alt="<?php echo esc_attr($product['name']); ?>">
-                            <div class="gp-product__sku product-meta">Numer części: <strong><?php echo esc_html($product['sku']); ?></strong></div>
-                            <h3 class="gp-product__name product-title"><a href="#"><?php echo esc_html(gp_format_product_display_name($product['name'])); ?></a></h3>
-                            <p class="gp-product__price product-price">
+                            <div class="gp-product__sku">Numer części: <strong><?php echo esc_html($product['sku']); ?></strong></div>
+                            <h3 class="gp-product__name"><a href="#"><?php echo esc_html(gp_format_product_display_name($product['name'])); ?></a></h3>
+                            <p class="gp-product__price">
                                 <?php if (!empty($product['old_price'])) : ?><span class="gp-product__promo-label">Cena promocyjna</span><span class="gp-product__old"><?php echo esc_html($product['old_price']); ?></span><?php endif; ?>
                                 <span class="gp-product__current<?php echo !empty($product['old_price']) ? ' gp-product__current--sale' : ''; ?>"><?php echo esc_html($product['price']); ?></span>
                             </p>
