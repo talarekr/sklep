@@ -90,8 +90,8 @@
   border-radius: 12px;
 }
 .single-product div.product div.images .flex-control-thumbs {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-top: 12px !important;
   overflow-x: auto;
@@ -103,11 +103,14 @@
   border-radius: 10px;
   overflow: hidden;
 }
+.single-product div.product div.images .flex-control-thumbs li {
+  border-radius: 10px;
+  overflow: hidden;
+}
 .single-product div.product div.images .flex-control-thumbs li img {
   border: 1px solid #dde3ef;
   border-radius: 8px;
   background: #fff;
-  width: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
 }
@@ -626,7 +629,7 @@
     min-height: 300px;
   }
   .single-product div.product div.images .flex-control-thumbs {
-    gap: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .gp-product-info-card__meta li {
     flex-direction: column;
