@@ -8,9 +8,11 @@
 .tax-product_cat.woocommerce .products.columns-3,
 .tax-product_cat.woocommerce ul.products {
   display: grid !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
   align-items: stretch;
+  margin: 0;
+  padding: 0;
 }
 
 .post-type-archive-product.woocommerce ul.products::before,
@@ -28,6 +30,23 @@
   border: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
+  float: none !important;
+  list-style: none;
+}
+
+.woocommerce ul.products li.product.gp-product-item::before,
+.woocommerce ul.products li.product.gp-product-item::after {
+  content: none !important;
+}
+
+.woocommerce ul.products li.product.gp-product-item .gp-product {
+  height: 100%;
+}
+
+.woocommerce ul.products li.product.gp-product-item .gp-product img {
+  width: 100%;
+  height: 222px;
+  object-fit: contain;
 }
 
 .woocommerce div.product {
