@@ -25,6 +25,98 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  const sidebarCategorySelect = document.querySelector('[data-gp-sidebar-category-select]');
+  const sidebarSubcategoryList = document.querySelector('[data-gp-subcategory-list]');
+  const sidebarMoreButton = document.querySelector('[data-gp-subcategory-more]');
+
+  if (sidebarCategorySelect && sidebarSubcategoryList) {
+    const rawMap = sidebarSubcategoryList.getAttribute('data-gp-subcategory-map') || '{}';
+    const subcategoryMap = JSON.parse(rawMap);
+    const activeCategory = sidebarSubcategoryList.getAttribute('data-gp-active-category-id') || '';
+    const shouldRedirect = sidebarCategorySelect.getAttribute('data-gp-redirect-on-change') === '1';
+    const maxVisibleItems = 6;
+
+    const setupShowMore = () => {
+      const list = sidebarSubcategoryList.querySelector('.gp-cat-filter__list');
+      if (!list || !sidebarMoreButton) return;
+
+      const items = Array.from(list.querySelectorAll('li'));
+      const shouldCollapse = items.length > maxVisibleItems;
+      list.classList.toggle('is-collapsed', shouldCollapse);
+
+      items.forEach((item, index) => {
+        item.toggleAttribute('hidden', shouldCollapse && index >= maxVisibleItems);
+      });
+
+      sidebarMoreButton.hidden = !shouldCollapse;
+      sidebarMoreButton.textContent = 'Wyświetl więcej';
+      sidebarMoreButton.setAttribute('data-expanded', '0');
+    };
+
+    const renderSubcategories = (categoryId) => {
+      const subcategories = subcategoryMap[categoryId] || [];
+
+      if (subcategories.length === 0) {
+        sidebarSubcategoryList.innerHTML = '<p class="gp-cat-filter__empty">Brak podkategorii dla wybranej kategorii.</p>';
+        if (sidebarMoreButton) sidebarMoreButton.hidden = true;
+        return;
+      }
+
+      const listMarkup = subcategories
+        .map((subcategory) => {
+          return `<li><a class="gp-cat-filter__link" href="${subcategory.url}">${subcategory.name}</a></li>`;
+        })
+        .join('');
+
+      sidebarSubcategoryList.innerHTML = `<ul class="gp-cat-filter__list">${listMarkup}</ul>`;
+      setupShowMore();
+    };
+
+    if (!sidebarCategorySelect.value && activeCategory) {
+      const activeOption = sidebarCategorySelect.querySelector(`option[data-category-id="${activeCategory}"]`);
+      if (activeOption) {
+        activeOption.selected = true;
+      }
+    }
+
+    const initialCategoryId = sidebarCategorySelect.selectedOptions[0]?.dataset.categoryId || activeCategory;
+    renderSubcategories(initialCategoryId);
+
+    sidebarCategorySelect.addEventListener('change', () => {
+      const selectedOption = sidebarCategorySelect.selectedOptions[0];
+      if (!selectedOption) return;
+
+      const selectedCategoryId = selectedOption.dataset.categoryId || '';
+      const targetUrl = selectedOption.value || '';
+      renderSubcategories(selectedCategoryId);
+
+      if (shouldRedirect && targetUrl && targetUrl !== '0') {
+        window.location.href = targetUrl;
+      }
+    });
+
+    if (sidebarMoreButton) {
+      sidebarMoreButton.addEventListener('click', () => {
+        const list = sidebarSubcategoryList.querySelector('.gp-cat-filter__list');
+        if (!list) return;
+
+        const isExpanded = sidebarMoreButton.getAttribute('data-expanded') === '1';
+        const items = Array.from(list.querySelectorAll('li'));
+        items.forEach((item, index) => {
+          if (index < maxVisibleItems) {
+            item.hidden = false;
+            return;
+          }
+
+          item.hidden = isExpanded;
+        });
+
+        sidebarMoreButton.textContent = isExpanded ? 'Wyświetl więcej' : 'Pokaż mniej';
+        sidebarMoreButton.setAttribute('data-expanded', isExpanded ? '0' : '1');
+      });
+    }
+  }
+
   const partSearchBox = document.querySelector('[data-gp-part-search-box]');
   if (partSearchBox) {
     const isHeroVariant = partSearchBox.classList.contains('gp-part-search-box--hero');
