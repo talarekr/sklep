@@ -96,23 +96,56 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
-function gp_get_product_category_tree(int $parent_term_id = 0): array
+function gp_get_product_category_term_map(): array
 {
-    $terms = get_terms([
+    static $term_map = null;
+
+    if (is_array($term_map)) {
+        return $term_map;
+    }
+
+    $all_terms = get_terms([
         'taxonomy' => 'product_cat',
-        'hide_empty' => true,
-        'parent' => $parent_term_id,
+        'hide_empty' => false,
         'orderby' => 'name',
         'order' => 'ASC',
     ]);
 
-    return is_array($terms) ? $terms : [];
+    if (!is_array($all_terms)) {
+        $term_map = [];
+        return $term_map;
+    }
+
+    $term_map = [];
+    foreach ($all_terms as $term) {
+        if (!$term instanceof WP_Term) {
+            continue;
+        }
+
+        $parent_id = (int) $term->parent;
+        if (!isset($term_map[$parent_id])) {
+            $term_map[$parent_id] = [];
+        }
+
+        $term_map[$parent_id][] = $term;
+    }
+
+    return $term_map;
+}
+
+function gp_get_product_category_tree(int $parent_term_id = 0): array
+{
+    $term_map = gp_get_product_category_term_map();
+    return $term_map[$parent_term_id] ?? [];
 }
 
 function gp_render_product_category_tree(int $parent_term_id = 0, int $current_term_id = 0, array $active_path_ids = []): void
 {
     $terms = gp_get_product_category_tree($parent_term_id);
     if ($terms === []) {
+        if ($parent_term_id === 0) {
+            echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
+        }
         return;
     }
 
