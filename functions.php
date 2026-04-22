@@ -177,11 +177,13 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
         $tabs['description']['priority'] = 10;
     }
 
-    $tabs['compatibility'] = [
-        'title' => __('Kompatybilność pojazdu', 'gp-clone'),
-        'priority' => 20,
-        'callback' => 'gp_product_tab_compatibility',
-    ];
+    if (isset($tabs['additional_information'])) {
+        $tabs['additional_information']['title'] = __('Informacje dodatkowe', 'gp-clone');
+        $tabs['additional_information']['priority'] = 20;
+    }
+
+    unset($tabs['reviews'], $tabs['compatibility']);
+
     $tabs['warranty'] = [
         'title' => __('Gwarancja', 'gp-clone'),
         'priority' => 30,
