@@ -24,10 +24,7 @@ get_header('shop');
 
             <section class="gp-shop-content">
                 <?php if (woocommerce_product_loop()) : ?>
-                    <div class="gp-shop-toolbar" aria-label="<?php esc_attr_e('Opcje listy produktów', 'gp-clone'); ?>">
-                        <?php woocommerce_result_count(); ?>
-                        <?php woocommerce_catalog_ordering(); ?>
-                    </div>
+                    <?php do_action('woocommerce_before_shop_loop'); ?>
                     <?php woocommerce_product_loop_start(); ?>
                     <?php if (wc_get_loop_prop('total')) : ?>
                         <?php while (have_posts()) : ?>

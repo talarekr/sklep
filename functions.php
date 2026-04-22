@@ -29,14 +29,20 @@ add_action('wp_enqueue_scripts', function () {
         [],
         null
     );
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.0');
-    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.0', true);
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.1');
+    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.1', true);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.0');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.1');
         wp_enqueue_script('wc-cart-fragments');
     }
 });
+
+add_action('wp_head', function (): void {
+    $favicon_url = get_template_directory_uri() . '/assets/images/gp-favicon.png';
+    echo '<link rel="icon" type="image/png" href="' . esc_url($favicon_url) . '" sizes="32x32" />';
+    echo '<link rel="apple-touch-icon" href="' . esc_url($favicon_url) . '" />';
+}, 1);
 
 add_filter('woocommerce_show_page_title', '__return_false');
 
@@ -59,6 +65,7 @@ function gp_shop_loop_toolbar_end(): void
 }
 
 add_action('wp', function (): void {
+    remove_action('woocommerce_shop_loop_header', 'woocommerce_product_taxonomy_archive_header', 10);
     remove_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
     remove_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
 
