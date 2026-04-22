@@ -72,7 +72,7 @@ a:hover { text-decoration: underline; }
 .gp-main-header { border-bottom: 1px solid var(--gp-border); }
 .gp-main-header__top-links {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 40px;
   min-height: 46px;
   align-items: center;
@@ -81,7 +81,7 @@ a:hover { text-decoration: underline; }
 .gp-main-header__top-links a { color: #2f2f2f; font-size: 15px; }
 .gp-rzetelna-link img {
   display: block;
-  max-height: 30px;
+  max-height: 34px;
   width: auto;
 }
 .gp-main-header__row {
@@ -131,6 +131,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 18px;
+  justify-content: flex-end;
 }
 .gp-main-actions__item {
   display: inline-flex;
@@ -174,6 +175,24 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   pointer-events: none;
+}
+.gp-part-search-box--hero {
+  position: sticky;
+  left: auto;
+  top: 120px;
+  transform: none;
+  z-index: 4;
+  pointer-events: auto;
+  align-self: start;
+  justify-self: end;
+  width: min(100%, 300px);
+}
+.gp-part-search-box--hero .gp-part-search-box__panel {
+  width: 100%;
+  margin-left: 0;
+}
+.gp-part-search-box--hero .gp-part-search-box__toggle {
+  display: none;
 }
 .gp-part-search-box__toggle {
   pointer-events: auto;
@@ -268,7 +287,7 @@ a:hover { text-decoration: underline; }
 .gp-btn { display: inline-block; border: 1px solid #111; padding: 9px 13px; font-size: 12px; font-weight: 700; }
 
 .gp-home-title { padding: 22px 0 10px; }
-.gp-home-title h1 { margin: 0; font-size: 30px; }
+.gp-home-title h1 { margin: 0; font-size: 30px; text-align: center; }
 .gp-repeat-search { padding: 0 0 20px; }
 
 .gp-popular { padding: 6px 0 24px; }
@@ -462,9 +481,10 @@ a:hover { text-decoration: underline; }
 .gp-hero__content {
   min-height: 460px;
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 24px;
   align-items: center;
+  padding: 32px 12px;
 }
 .gp-hero-search {
   background: #e8ebf1;
@@ -562,11 +582,19 @@ a:hover { text-decoration: underline; }
 
 @media (max-width: 1199px) {
   .gp-hero__content { grid-template-columns: 1fr; padding: 34px 12px; gap: 24px; }
+  .gp-part-search-box--hero {
+    position: static;
+    width: min(100%, 420px);
+    justify-self: center;
+  }
   .gp-hero-promo h2 { font-size: 52px; }
   .gp-hero-brands { grid-template-columns: repeat(3, minmax(90px, 1fr)); }
 }
 
 @media (max-width: 767px) {
+  .gp-main-header__top-links { justify-content: flex-end; gap: 16px; overflow-x: auto; }
+  .gp-part-search-box--hero { width: 100%; }
+  .gp-part-search-box--hero .gp-part-search-box__panel { width: 100%; }
   .gp-hero { min-height: 0; }
   .gp-hero-promo h2 { font-size: 36px; }
   .gp-hero-brands { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
