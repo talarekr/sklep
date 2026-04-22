@@ -27,10 +27,6 @@ $returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
 $shipping_from = __('Wysyłka z magazynu GP Swiss.', 'gp-clone');
 ?>
 <div id="product-<?php the_ID(); ?>" <?php wc_product_class('gp-product-page', $product); ?>>
-    <div class="gp-product-page__breadcrumb">
-        <?php woocommerce_breadcrumb(); ?>
-    </div>
-
     <section class="gp-product-page__hero">
         <div class="gp-product-page__gallery">
             <?php woocommerce_show_product_images(); ?>
