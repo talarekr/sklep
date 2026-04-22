@@ -46,67 +46,89 @@
 .woocommerce ul.products li.product.gp-product-item .product-card {
   background: #ffffff;
   border-radius: 12px;
-  padding: 16px;
+  padding: 24px 18px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   transition: box-shadow 0.2s ease;
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-card:hover {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-image {
-  height: 180px;
+  height: 226px;
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-bottom: 16px;
+  padding: 10px;
 }
 
-.woocommerce ul.products li.product.gp-product-item .product-image img {
+.woocommerce ul.products li.product.gp-product-item .product-image img,
+.woocommerce ul.products li.product.gp-product-item .product-image .product-image__img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: center;
+  vertical-align: middle;
 }
 
-.woocommerce ul.products li.product.gp-product-item .part-number-label {
+.woocommerce ul.products li.product.gp-product-item .part-number {
+  font-family: 'Poppins', sans-serif;
   font-size: 12px;
-  color: rgb(107, 114, 128);
-  margin-bottom: 2px;
+  font-weight: 400;
+  line-height: 18px;
+  color: rgb(0, 0, 0);
+  margin: 0 0 10px;
 }
 
+.woocommerce ul.products li.product.gp-product-item .part-number strong,
 .woocommerce ul.products li.product.gp-product-item .part-number-value {
+  font-family: 'Poppins', sans-serif;
   font-size: 12px;
   font-weight: 700;
+  line-height: 18px;
   color: rgb(0, 0, 0);
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-title,
 .woocommerce ul.products li.product.gp-product-item .product-title a {
+  font-family: 'Poppins', sans-serif;
   font-size: 14px;
   font-weight: 400;
   color: rgb(0, 0, 0);
-  line-height: 1.4;
-  margin: 6px 0;
+  line-height: 21px;
+  margin: 0 0 12px;
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-price,
 .woocommerce ul.products li.product.gp-product-item .product-price .price {
+  font-family: 'Poppins', sans-serif;
   font-size: 16px;
   font-weight: 700;
+  line-height: 24px;
   color: rgb(0, 0, 0);
-  margin-top: 6px;
+  margin: 0 0 12px;
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-shipping {
-  font-size: 13px;
-  font-weight: 600;
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 21px;
   color: rgb(38, 134, 29);
-  margin-top: 6px;
+  margin: 0 0 8px;
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-shipping-note {
+  font-family: 'Poppins', sans-serif;
   font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
   color: rgb(107, 114, 128);
-  margin-top: 2px;
+  margin: 0;
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-wishlist {
@@ -133,7 +155,7 @@
   border: 0;
   padding: 0;
   background: transparent;
-  font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+  font-family: 'Poppins', sans-serif;
 }
 
 .gp-product-page__breadcrumb { margin-bottom: 16px; }
