@@ -29,11 +29,11 @@ add_action('wp_enqueue_scripts', function () {
         [],
         null
     );
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.1');
-    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.1', true);
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.2');
+    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.2', true);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.1');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.2');
         wp_enqueue_script('wc-cart-fragments');
     }
 });
@@ -468,3 +468,102 @@ function gp_format_product_display_name(string $name): string
 
     return trim($vehicle_prefix . ' ' . $part_suffix);
 }
+
+function gp_should_render_part_number_search_box(): bool
+{
+    if (!class_exists('WooCommerce')) {
+        return false;
+    }
+
+    if (function_exists('is_cart') && is_cart()) {
+        return false;
+    }
+
+    if (function_exists('is_checkout') && is_checkout()) {
+        return false;
+    }
+
+    return is_front_page()
+        || is_shop()
+        || is_post_type_archive('product')
+        || is_tax('product_cat');
+}
+
+function gp_normalize_part_number(string $value): string
+{
+    $value = mb_strtoupper($value);
+    $value = preg_replace('/[^A-Z0-9]/u', '', $value) ?? '';
+    return trim($value);
+}
+
+add_action('wp_footer', function (): void {
+    if (!gp_should_render_part_number_search_box()) {
+        return;
+    }
+
+    get_template_part('template-parts/shared/part-number-search-box');
+}, 20);
+
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (is_admin() || !$query->is_main_query() || !class_exists('WooCommerce')) {
+        return;
+    }
+
+    $part_number_raw = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+    if ($part_number_raw === '') {
+        return;
+    }
+
+    if (
+        !is_shop()
+        && !$query->is_post_type_archive('product')
+        && !is_tax('product_cat')
+    ) {
+        return;
+    }
+
+    $query->set('post_type', 'product');
+    $query->set('part_number_search_active', true);
+    $query->set('part_number_search_raw', $part_number_raw);
+    $query->set('part_number_search_normalized', gp_normalize_part_number($part_number_raw));
+}, 20);
+
+add_filter('posts_where', function (string $where, WP_Query $query): string {
+    if (!($query->get('part_number_search_active'))) {
+        return $where;
+    }
+
+    global $wpdb;
+
+    $raw = sanitize_text_field((string) $query->get('part_number_search_raw'));
+    $normalized = sanitize_text_field((string) $query->get('part_number_search_normalized'));
+
+    if ($raw === '' && $normalized === '') {
+        return $where;
+    }
+
+    $raw_like = $raw !== '' ? '%' . $wpdb->esc_like($raw) . '%' : '';
+    $normalized_like = $normalized !== '' ? '%' . $wpdb->esc_like($normalized) . '%' : '';
+
+    $conditions = [];
+    if ($raw_like !== '') {
+        $conditions[] = $wpdb->prepare('pm.meta_value LIKE %s', $raw_like);
+    }
+    if ($normalized_like !== '') {
+        $conditions[] = $wpdb->prepare("REPLACE(REPLACE(UPPER(pm.meta_value), ' ', ''), '-', '') LIKE %s", $normalized_like);
+    }
+
+    if ($conditions === []) {
+        return $where;
+    }
+
+    $where .= ' AND EXISTS (
+        SELECT 1
+        FROM ' . $wpdb->postmeta . " pm
+        WHERE pm.post_id = {$wpdb->posts}.ID
+          AND pm.meta_key = '_part_number'
+          AND (" . implode(' OR ', $conditions) . ')
+    )';
+
+    return $where;
+}, 20, 2);

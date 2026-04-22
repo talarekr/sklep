@@ -17,6 +17,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  const partSearchBox = document.querySelector('[data-gp-part-search-box]');
+  if (partSearchBox) {
+    const toggleButton = partSearchBox.querySelector('[data-gp-part-search-toggle]');
+    const closeButton = partSearchBox.querySelector('[data-gp-part-search-close]');
+    const stateKey = 'gpPartSearchCollapsed';
+
+    const setCollapsed = (collapsed) => {
+      partSearchBox.classList.toggle('is-collapsed', collapsed);
+      if (toggleButton) {
+        toggleButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      }
+      window.localStorage.setItem(stateKey, collapsed ? '1' : '0');
+    };
+
+    const isCollapsed = window.localStorage.getItem(stateKey) === '1';
+    setCollapsed(isCollapsed);
+
+    if (toggleButton) {
+      toggleButton.addEventListener('click', () => setCollapsed(false));
+    }
+
+    if (closeButton) {
+      closeButton.addEventListener('click', () => setCollapsed(true));
+    }
+  }
+
   document.querySelectorAll('.gp-product__fav').forEach((button) => {
     button.addEventListener('click', () => {
       button.classList.toggle('is-active');
