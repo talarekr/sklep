@@ -368,10 +368,9 @@
 }
 
 .gp-shop-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   margin: 0 0 14px;
 }
 
@@ -384,6 +383,12 @@
 .gp-shop-toolbar .woocommerce-result-count {
   color: #344054;
   font-size: 14px;
+  order: 1;
+}
+
+.gp-shop-toolbar .woocommerce-ordering {
+  order: 2;
+  justify-self: end;
 }
 
 .gp-footer {
@@ -430,8 +435,10 @@
   .gp-purchase-panel__head .product_title { font-size: 26px; }
   .gp-purchase-box .price { font-size: 36px !important; }
   .gp-shop-toolbar {
-    flex-direction: column;
-    align-items: flex-start;
+    gap: 10px;
+  }
+  .gp-shop-toolbar .woocommerce-ordering {
+    justify-self: start;
   }
 }
 
