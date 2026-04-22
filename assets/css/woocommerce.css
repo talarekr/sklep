@@ -304,6 +304,12 @@
   gap: 6px;
 }
 
+.gp-cat-tree__empty {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+}
+
 .gp-cat-tree__details[open] > .gp-cat-tree__summary {
   margin-bottom: 4px;
 }
