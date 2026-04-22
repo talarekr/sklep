@@ -17,6 +17,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  document.querySelectorAll('[data-gp-cat-select]').forEach((select) => {
+    select.addEventListener('change', () => {
+      const targetUrl = select.value;
+      if (!targetUrl) return;
+      window.location.href = targetUrl;
+    });
+  });
+
   const partSearchBox = document.querySelector('[data-gp-part-search-box]');
   if (partSearchBox) {
     const isHeroVariant = partSearchBox.classList.contains('gp-part-search-box--hero');
