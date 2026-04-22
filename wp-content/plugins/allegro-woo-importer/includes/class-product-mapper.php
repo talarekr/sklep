@@ -18,6 +18,8 @@ class ProductMapper
     private AllegroClient $client;
     private Logger $logger;
     private array $image_import_context = [];
+    /** @var array<string, true> */
+    private array $synced_category_subtrees = [];
 
     public function __construct(AllegroClient $client, Logger $logger)
     {
@@ -446,6 +448,15 @@ class ProductMapper
         if ($leaf_term_id > 0) {
             wp_set_post_terms($product_id, [$leaf_term_id], 'product_cat', false);
         }
+
+        foreach ($category_path as $node) {
+            $node_id = sanitize_text_field((string) ($node['id'] ?? ''));
+            if ($node_id === '') {
+                continue;
+            }
+
+            $this->sync_allegro_category_subtree($node_id);
+        }
     }
 
     private function extract_allegro_category_path(array $offer, string $category_id, string $fallback_name): array
@@ -546,6 +557,79 @@ class ProductMapper
         }
 
         return $term_id;
+    }
+
+    private function sync_allegro_category_subtree(string $allegro_category_id, int $depth = 0): void
+    {
+        if ($allegro_category_id === '' || $depth > 8) {
+            return;
+        }
+
+        $cache_key = $allegro_category_id . '|' . $depth;
+        if (isset($this->synced_category_subtrees[$cache_key])) {
+            return;
+        }
+
+        $children = $this->client->get_category_children($allegro_category_id);
+        if (is_wp_error($children)) {
+            $this->logger->warning('Failed to sync Allegro category descendants.', [
+                'allegro_category_id' => $allegro_category_id,
+                'depth' => $depth,
+                'error' => $children->get_error_message(),
+            ]);
+            return;
+        }
+
+        if (!is_array($children) || $children === []) {
+            $this->synced_category_subtrees[$cache_key] = true;
+            return;
+        }
+
+        $parent_term_id = $this->find_category_term_id_by_allegro_id($allegro_category_id);
+        if ($parent_term_id <= 0) {
+            $this->synced_category_subtrees[$cache_key] = true;
+            return;
+        }
+
+        foreach ($children as $child) {
+            $child_id = sanitize_text_field((string) ($child['id'] ?? ''));
+            $child_name = sanitize_text_field((string) ($child['name'] ?? ''));
+            if ($child_id === '' || $child_name === '') {
+                continue;
+            }
+
+            $child_term_id = $this->find_or_create_category_term($child_id, $child_name, $parent_term_id);
+            if ($child_term_id <= 0) {
+                continue;
+            }
+
+            $this->sync_allegro_category_subtree($child_id, $depth + 1);
+        }
+
+        $this->synced_category_subtrees[$cache_key] = true;
+    }
+
+    private function find_category_term_id_by_allegro_id(string $allegro_category_id): int
+    {
+        $terms = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => false,
+            'number' => 1,
+            'fields' => 'ids',
+            'meta_query' => [
+                [
+                    'key' => '_allegro_category_id',
+                    'value' => $allegro_category_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        if (!is_array($terms) || empty($terms[0])) {
+            return 0;
+        }
+
+        return (int) $terms[0];
     }
 
     private function map_attributes(WC_Product $product, array $offer): void

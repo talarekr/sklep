@@ -16,6 +16,8 @@ class AllegroClient
     private array $category_cache = [];
     /** @var array<string, array<int, array{id: string, name: string}>> */
     private array $category_path_cache = [];
+    /** @var array<string, array<int, array{id: string, name: string}>> */
+    private array $category_children_cache = [];
 
     public function __construct(AllegroAuth $auth, Logger $logger)
     {
@@ -155,6 +157,51 @@ class AllegroClient
         $this->category_path_cache[$category_id] = $path;
 
         return $path;
+    }
+
+    public function get_category_children(string $category_id)
+    {
+        $category_id = sanitize_text_field($category_id);
+        if ($category_id === '') {
+            return [];
+        }
+
+        if (isset($this->category_children_cache[$category_id])) {
+            return $this->category_children_cache[$category_id];
+        }
+
+        $response = $this->request('GET', '/sale/categories', [
+            'query' => [
+                'parent.id' => $category_id,
+            ],
+        ]);
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $items = is_array($response['categories'] ?? null) ? (array) $response['categories'] : [];
+        $children = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $id = sanitize_text_field((string) ($item['id'] ?? ''));
+            $name = sanitize_text_field((string) ($item['name'] ?? ''));
+            if ($id === '' || $name === '') {
+                continue;
+            }
+
+            $children[] = [
+                'id' => $id,
+                'name' => $name,
+            ];
+        }
+
+        $this->category_children_cache[$category_id] = $children;
+
+        return $children;
     }
 
     private function request(string $method, string $path, array $args = [])
