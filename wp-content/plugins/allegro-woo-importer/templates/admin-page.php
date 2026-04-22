@@ -95,7 +95,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     </p>
     <p>
         <?php esc_html_e('Wygaśnięcie access tokena:', 'allegro-woo-importer'); ?>
-        <code><?php echo esc_html((string) ($settings['token_expires_at'] ?: '—')); ?></code>
+        <code><?php echo esc_html((string) (($settings['expires_at'] ?? $settings['token_expires_at']) ?: '—')); ?></code>
     </p>
 
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
