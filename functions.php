@@ -230,18 +230,6 @@ function gp_get_product_cat_children(int $parent_id): array
                 $runtime_tree[$term_parent_id][] = $term;
             }
         }
-    }
-
-    return null;
-}
-
-add_action('created_product_cat', static function (): void {
-    delete_transient('gp_product_cat_tree_v1');
-});
-
-add_action('edited_product_cat', static function (): void {
-    delete_transient('gp_product_cat_tree_v1');
-});
 
         set_transient('gp_product_cat_tree_v1', $runtime_tree, 10 * MINUTE_IN_SECONDS);
     }
