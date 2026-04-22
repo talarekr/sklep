@@ -56,22 +56,18 @@
 }
 
 .woocommerce ul.products li.product.gp-product-item .product-image {
-  height: 180px;
+  height: 138px;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 8px;
-  padding: 8px;
 }
 
-.woocommerce ul.products li.product.gp-product-item .product-image img,
-.woocommerce ul.products li.product.gp-product-item .product-image .product-image__img {
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
+.woocommerce ul.products li.product.gp-product-item .product-image img {
+  width: 261px;
+  height: 138px;
   object-fit: contain;
-  object-position: center;
+  overflow: clip;
   vertical-align: middle;
 }
 
