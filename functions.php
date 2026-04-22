@@ -162,6 +162,99 @@ add_filter('woocommerce_variation_prices_price', 'gp_convert_price_to_current_cu
 add_filter('woocommerce_variation_prices_regular_price', 'gp_convert_price_to_current_currency', 99);
 add_filter('woocommerce_variation_prices_sale_price', 'gp_convert_price_to_current_currency', 99);
 
+function gp_extract_brand_from_product_name(string $name): string
+{
+    $name = trim(wp_strip_all_tags($name));
+    if ($name === '') {
+        return '';
+    }
+
+    $tokens = preg_split('/\s+/u', $name);
+    if (!is_array($tokens) || $tokens === []) {
+        return '';
+    }
+
+    $first_word = preg_replace('/[^\p{L}\p{N}\-]/u', '', (string) ($tokens[0] ?? '')) ?? '';
+    if ($first_word === '') {
+        return '';
+    }
+
+    $normalized = mb_strtolower($first_word);
+    return mb_strtoupper(mb_substr($normalized, 0, 1)) . mb_substr($normalized, 1);
+}
+
+add_action('init', function (): void {
+    register_taxonomy('gp_car_brand', ['product'], [
+        'labels' => [
+            'name' => __('Marki', 'gp-clone'),
+            'singular_name' => __('Marka', 'gp-clone'),
+        ],
+        'public' => false,
+        'show_ui' => true,
+        'show_admin_column' => true,
+        'hierarchical' => false,
+        'rewrite' => false,
+        'query_var' => 'brand',
+    ]);
+}, 11);
+
+function gp_sync_product_brand_term(int $product_id): void
+{
+    if ($product_id <= 0 || get_post_type($product_id) !== 'product') {
+        return;
+    }
+
+    $title = get_the_title($product_id);
+    if (!is_string($title) || $title === '') {
+        return;
+    }
+
+    $brand = gp_extract_brand_from_product_name($title);
+    if ($brand === '') {
+        return;
+    }
+
+    wp_set_object_terms($product_id, [$brand], 'gp_car_brand', false);
+    update_post_meta($product_id, '_car_brand', $brand);
+}
+
+add_action('save_post_product', function (int $post_id, WP_Post $post, bool $update): void {
+    if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+        return;
+    }
+
+    gp_sync_product_brand_term($post_id);
+}, 20, 3);
+
+function gp_backfill_missing_product_brands(): void
+{
+    $last_run = (int) get_transient('gp_brand_backfill_last_run');
+    if ($last_run > (time() - HOUR_IN_SECONDS)) {
+        return;
+    }
+
+    $products = get_posts([
+        'post_type' => 'product',
+        'post_status' => 'publish',
+        'posts_per_page' => 150,
+        'fields' => 'ids',
+        'tax_query' => [
+            [
+                'taxonomy' => 'gp_car_brand',
+                'operator' => 'NOT EXISTS',
+            ],
+        ],
+    ]);
+
+    if (is_array($products)) {
+        foreach ($products as $product_id) {
+            gp_sync_product_brand_term((int) $product_id);
+        }
+    }
+
+    set_transient('gp_brand_backfill_last_run', time(), HOUR_IN_SECONDS);
+}
+
 add_action('wp_head', function (): void {
     $favicon_url = get_template_directory_uri() . '/assets/images/favicon.png';
     echo '<link rel="icon" type="image/png" href="' . esc_url($favicon_url) . '" />';
@@ -494,7 +587,7 @@ function gp_render_category_links_list(array $categories, int $active_term_id = 
     echo '</ul>';
 }
 
-function gp_render_category_tree(array $categories, array $lineage_ids): void
+function gp_render_category_tree(array $categories, array $lineage_ids, array $query_args = []): void
 {
     if ($categories === []) {
         return;
@@ -509,6 +602,9 @@ function gp_render_category_tree(array $categories, array $lineage_ids): void
         $term_link = get_term_link($category);
         if (is_wp_error($term_link)) {
             continue;
+        }
+        if ($query_args !== []) {
+            $term_link = add_query_arg($query_args, $term_link);
         }
 
         $term_id = (int) $category->term_id;
@@ -527,7 +623,7 @@ function gp_render_category_tree(array $categories, array $lineage_ids): void
 
         $children = gp_get_product_cat_children($term_id);
         if ($children !== [] && $is_in_lineage) {
-            gp_render_category_tree($children, $lineage_ids);
+            gp_render_category_tree($children, $lineage_ids, $query_args);
         }
 
         echo '</li>';
@@ -545,7 +641,7 @@ function gp_render_category_filter_section(string $title, callable $content_rend
     echo '</details>';
 }
 
-function gp_render_category_select(array $categories, int $selected_category_id): void
+function gp_render_category_select(array $categories, int $selected_category_id, array $query_args = []): void
 {
     echo '<label class="screen-reader-text" for="gp-category-filter-select">' . esc_html__('Kategoria', 'gp-clone') . '</label>';
     echo '<select id="gp-category-filter-select" class="gp-cat-filter__select" data-gp-sidebar-category-select>';
@@ -623,16 +719,21 @@ function gp_render_product_category_sidebar(): void
     }
 
     echo '<div class="gp-cat-filter">';
+    echo '<form method="get" class="gp-cat-filter__form" data-gp-sidebar-filter-form>';
 
-    gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($category_terms, $active_category_id): void {
-        gp_render_category_select($category_terms, $active_category_id);
+    gp_render_category_filter_section(__('Marka', 'gp-clone'), static function () use ($brand_terms, $selected_brand_slug): void {
+        gp_render_brand_select($brand_terms, $selected_brand_slug);
     });
 
-    gp_render_category_filter_section(__('Podkategorie', 'gp-clone'), static function () use ($subcategories, $lineage, $subcategories_map, $active_category_id): void {
+    gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($category_terms, $active_category_id, $persistent_query_args): void {
+        gp_render_category_select($category_terms, $active_category_id, $persistent_query_args);
+    });
+
+    gp_render_category_filter_section(__('Podkategorie', 'gp-clone'), static function () use ($subcategories, $lineage, $subcategories_map, $active_category_id, $persistent_query_args): void {
         echo '<div class="gp-cat-filter__subcategory-list" data-gp-subcategory-list data-gp-subcategory-map="' . esc_attr(wp_json_encode($subcategories_map)) . '" data-gp-active-category-id="' . esc_attr((string) $active_category_id) . '">';
 
         if ($subcategories !== []) {
-            gp_render_category_tree($subcategories, $lineage);
+            gp_render_category_tree($subcategories, $lineage, $persistent_query_args);
         } else {
             echo '<p class="gp-cat-filter__empty">' . esc_html__('Wybierz kategorię, aby zobaczyć podkategorie.', 'gp-clone') . '</p>';
         }
@@ -641,6 +742,15 @@ function gp_render_product_category_sidebar(): void
         echo '<button type="button" class="gp-cat-filter__more" data-gp-subcategory-more hidden>' . esc_html__('Wyświetl więcej', 'gp-clone') . '</button>';
     }, $current_term_id > 0);
 
+    gp_render_category_filter_section(__('Cena', 'gp-clone'), static function () use ($selected_price_min, $selected_price_max): void {
+        echo '<div class="gp-cat-filter__price-row">';
+        echo '<input type="number" min="0" step="1" name="price_min" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena od', 'gp-clone') . '" value="' . esc_attr($selected_price_min) . '">';
+        echo '<input type="number" min="0" step="1" name="price_max" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena do', 'gp-clone') . '" value="' . esc_attr($selected_price_max) . '">';
+        echo '</div>';
+        echo '<button type="submit" class="gp-cat-filter__apply">' . esc_html__('Filtruj', 'gp-clone') . '</button>';
+    }, true);
+
+    echo '</form>';
     echo '</div>';
 }
 
@@ -917,6 +1027,62 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     $query->set('tax_query', []);
     $query->set('product_cat', '');
 }, 20);
+
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (is_admin() || !$query->is_main_query() || !class_exists('WooCommerce')) {
+        return;
+    }
+
+    if (!is_shop() && !$query->is_post_type_archive('product') && !is_tax('product_cat')) {
+        return;
+    }
+
+    if ($query->get('part_number_search_active')) {
+        return;
+    }
+
+    $selected_brand = isset($_GET['brand']) ? sanitize_title((string) wp_unslash($_GET['brand'])) : '';
+    $price_min_raw = isset($_GET['price_min']) ? wc_clean(wp_unslash((string) $_GET['price_min'])) : '';
+    $price_max_raw = isset($_GET['price_max']) ? wc_clean(wp_unslash((string) $_GET['price_max'])) : '';
+    $price_min = is_numeric($price_min_raw) ? (float) $price_min_raw : null;
+    $price_max = is_numeric($price_max_raw) ? (float) $price_max_raw : null;
+
+    if ($selected_brand !== '') {
+        $tax_query = $query->get('tax_query');
+        if (!is_array($tax_query)) {
+            $tax_query = [];
+        }
+
+        $tax_query[] = [
+            'taxonomy' => 'gp_car_brand',
+            'field' => 'slug',
+            'terms' => [$selected_brand],
+        ];
+        $query->set('tax_query', $tax_query);
+    }
+
+    if ($price_min !== null || $price_max !== null) {
+        $meta_query = $query->get('meta_query');
+        if (!is_array($meta_query)) {
+            $meta_query = [];
+        }
+
+        $range = ['key' => '_price', 'type' => 'DECIMAL'];
+        if ($price_min !== null && $price_max !== null) {
+            $range['value'] = [$price_min, $price_max];
+            $range['compare'] = 'BETWEEN';
+        } elseif ($price_min !== null) {
+            $range['value'] = $price_min;
+            $range['compare'] = '>=';
+        } else {
+            $range['value'] = $price_max;
+            $range['compare'] = '<=';
+        }
+
+        $meta_query[] = $range;
+        $query->set('meta_query', $meta_query);
+    }
+}, 25);
 
 add_action('template_redirect', function (): void {
     if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {

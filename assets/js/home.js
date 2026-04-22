@@ -57,6 +57,14 @@ document.addEventListener('DOMContentLoaded', () => {
       window.location.href = targetUrl;
     });
 
+    const sidebarFilterForm = document.querySelector('[data-gp-sidebar-filter-form]');
+    const brandSelect = sidebarFilterForm ? sidebarFilterForm.querySelector('[data-gp-brand-select]') : null;
+    if (sidebarFilterForm && brandSelect) {
+      brandSelect.addEventListener('change', () => {
+        sidebarFilterForm.submit();
+      });
+    }
+
     if (sidebarMoreButton) {
       sidebarMoreButton.addEventListener('click', () => {
         const list = sidebarSubcategoryList.querySelector('.gp-cat-filter__list');
