@@ -68,6 +68,7 @@
   width: 261px;
   height: 168px;
   object-fit: contain;
+  transform: scale(1.1);
   overflow: clip;
   vertical-align: middle;
 }
