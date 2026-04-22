@@ -34,10 +34,7 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
 <header class="gp-main-header">
     <div class="gp-container">
         <div class="gp-main-header__top-links">
-            <a class="gp-contact-link" href="<?php echo esc_url(home_url('/kontakt')); ?>"><?php esc_html_e('Kontakt', 'gp-clone'); ?></a>
-            <a href="#" class="gp-rzetelna-link" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
-                <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
-            </a>
+            <a href="<?php echo esc_url(home_url('/kontakt')); ?>"><?php esc_html_e('Kontakt', 'gp-clone'); ?></a>
         </div>
 
         <div class="gp-main-header__row">
@@ -72,6 +69,9 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
                     <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
                 </a>
 
+                <a href="#" class="gp-rzetelna-link gp-main-actions__item" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
+                    <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
+                </a>
             </div>
         </div>
 

@@ -195,9 +195,6 @@ a:hover { text-decoration: underline; }
 .gp-part-search-box--hero .gp-part-search-box__toggle {
   display: none;
 }
-.gp-part-search-box--hero .gp-part-search-box__collapse {
-  display: none;
-}
 .gp-part-search-box__toggle {
   pointer-events: auto;
   border: 0;
