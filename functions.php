@@ -29,11 +29,11 @@ add_action('wp_enqueue_scripts', function () {
         [],
         null
     );
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.2');
-    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.2', true);
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.3');
+    wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.2');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.3');
         wp_enqueue_script('wc-cart-fragments');
     }
 });
@@ -45,6 +45,60 @@ add_action('wp_head', function (): void {
 }, 1);
 
 add_filter('woocommerce_show_page_title', '__return_false');
+
+add_action('after_switch_theme', function (): void {
+    if (get_page_by_path('kontakt', OBJECT, 'page') instanceof WP_Post) {
+        return;
+    }
+
+    wp_insert_post([
+        'post_type' => 'page',
+        'post_status' => 'publish',
+        'post_title' => 'Kontakt',
+        'post_name' => 'kontakt',
+        'post_content' => '',
+    ]);
+});
+
+add_action('admin_post_nopriv_gp_contact_form', 'gp_handle_contact_form_submit');
+add_action('admin_post_gp_contact_form', 'gp_handle_contact_form_submit');
+
+function gp_handle_contact_form_submit(): void
+{
+    $redirect_url = home_url('/kontakt/');
+    if (!empty($_POST['_wp_http_referer'])) {
+        $redirect_url = esc_url_raw(wp_unslash((string) $_POST['_wp_http_referer']));
+    }
+
+    if (!isset($_POST['gp_contact_nonce']) || !wp_verify_nonce((string) $_POST['gp_contact_nonce'], 'gp_contact_form')) {
+        wp_safe_redirect(add_query_arg('contact_status', 'nonce_error', $redirect_url));
+        exit;
+    }
+
+    $name = sanitize_text_field((string) ($_POST['name'] ?? ''));
+    $email = sanitize_email((string) ($_POST['email'] ?? ''));
+    $message = sanitize_textarea_field((string) ($_POST['message'] ?? ''));
+
+    if ($name === '' || $email === '' || $message === '' || !is_email($email)) {
+        wp_safe_redirect(add_query_arg('contact_status', 'validation_error', $redirect_url));
+        exit;
+    }
+
+    $subject = sprintf('Formularz kontaktowy GP Swiss - %s', $name);
+    $body = "Imię i nazwisko: {$name}\n";
+    $body .= "E-mail: {$email}\n\n";
+    $body .= "Wiadomość:\n{$message}\n";
+
+    $headers = [
+        'Content-Type: text/plain; charset=UTF-8',
+        'Reply-To: ' . $name . ' <' . $email . '>',
+    ];
+
+    $sent = wp_mail('biuro@gpswiss.pl', $subject, $body, $headers);
+
+    wp_safe_redirect(add_query_arg('contact_status', $sent ? 'sent' : 'send_error', $redirect_url));
+    exit;
+}
 
 function gp_shop_loop_toolbar_start(): void
 {
