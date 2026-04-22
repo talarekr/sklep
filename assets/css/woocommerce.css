@@ -43,10 +43,84 @@
   height: 100%;
 }
 
-.woocommerce ul.products li.product.gp-product-item .gp-product img {
-  width: 100%;
-  height: 222px;
+.woocommerce ul.products li.product.gp-product-item .product-card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  transition: box-shadow 0.2s ease;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-image {
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-image img {
+  max-height: 100%;
   object-fit: contain;
+}
+
+.woocommerce ul.products li.product.gp-product-item .part-number-label {
+  font-size: 12px;
+  color: rgb(107, 114, 128);
+  margin-bottom: 2px;
+}
+
+.woocommerce ul.products li.product.gp-product-item .part-number-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgb(0, 0, 0);
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-title,
+.woocommerce ul.products li.product.gp-product-item .product-title a {
+  font-size: 14px;
+  font-weight: 400;
+  color: rgb(0, 0, 0);
+  line-height: 1.4;
+  margin: 6px 0;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-price,
+.woocommerce ul.products li.product.gp-product-item .product-price .price {
+  font-size: 16px;
+  font-weight: 700;
+  color: rgb(0, 0, 0);
+  margin-top: 6px;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-shipping {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(38, 134, 29);
+  margin-top: 6px;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-shipping-note {
+  font-size: 12px;
+  color: rgb(107, 114, 128);
+  margin-top: 2px;
+}
+
+.woocommerce ul.products li.product.gp-product-item .product-wishlist {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgb(229, 231, 235);
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .woocommerce div.product {
@@ -419,7 +493,8 @@
   color: #2e7d32;
 }
 
-.woocommerce ul.products li.product .gp-delivery-note.product-shipping-sub {
+.woocommerce ul.products li.product .gp-delivery-note.product-shipping-sub,
+.woocommerce ul.products li.product .gp-delivery-note.product-shipping-note {
   margin-top: 2px;
   font-size: 13px;
   font-weight: 400;
