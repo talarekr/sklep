@@ -6,6 +6,8 @@ $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('sh
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $shortcuts = [
     ['label' => 'Hamulce', 'slugs' => ['hamulce', 'uklad-hamulcowy', 'brakes']],
+    ['label' => 'Skrzynie biegów', 'slugs' => ['skrzynie-biegow', 'skrzynia-biegow', 'transmission']],
+    ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'engines']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'interior']],
     ['label' => 'Kierownice', 'slugs' => ['kierownice', 'kierownica', 'steering']],
@@ -32,13 +34,7 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
 <header class="gp-main-header">
     <div class="gp-container">
         <div class="gp-main-header__top-links">
-            <a href="#">Gwarancja i zwroty</a>
-            <a href="#">Kontakt</a>
-            <a href="#">Najczęściej zadawane pytania</a>
-            <a href="#">Oferta dla warsztatów</a>
-            <a href="#" class="gp-rzetelna-link" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
-                <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
-            </a>
+            <a href="<?php echo esc_url(home_url('/kontakt')); ?>"><?php esc_html_e('Kontakt', 'gp-clone'); ?></a>
         </div>
 
         <div class="gp-main-header__row">
@@ -72,6 +68,10 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
                     <span><?php esc_html_e('Koszyk', 'gp-clone'); ?></span>
                     <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
                 </a>
+
+                <a href="#" class="gp-rzetelna-link gp-main-actions__item" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
+                    <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
+                </a>
             </div>
         </div>
 
@@ -96,6 +96,7 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
 <?php if (is_front_page()) : ?>
 <section class="gp-hero">
     <div class="gp-container gp-hero__content">
+        <?php get_template_part('template-parts/shared/part-number-search-box', null, ['context' => 'hero']); ?>
         <div class="gp-hero-promo">
             <h2>Kupuj u nas nawet <span>10%</span> taniej</h2>
         </div>
