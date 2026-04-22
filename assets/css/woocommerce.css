@@ -310,6 +310,18 @@
   font-size: 14px;
   color: #1f2937;
   background: #fff;
+  margin-bottom: 10px;
+}
+
+.gp-cat-filter__quick-links-wrap {
+  display: grid;
+  gap: 8px;
+}
+
+.gp-cat-filter__quick-links-label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
 }
 
 .gp-cat-filter__list {
