@@ -30,9 +30,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const sidebarMoreButton = document.querySelector('[data-gp-subcategory-more]');
 
   if (sidebarCategorySelect && sidebarSubcategoryList) {
-    const rawMap = sidebarSubcategoryList.getAttribute('data-gp-subcategory-map') || '{}';
-    const subcategoryMap = JSON.parse(rawMap);
-    const activeCategory = sidebarSubcategoryList.getAttribute('data-gp-active-category-id') || '';
     const maxVisibleItems = 6;
 
     const setupShowMore = () => {
@@ -52,33 +49,12 @@ document.addEventListener('DOMContentLoaded', () => {
       sidebarMoreButton.setAttribute('data-expanded', '0');
     };
 
-    const renderSubcategories = (categoryId) => {
-      const subcategories = subcategoryMap[categoryId] || [];
-
-      if (subcategories.length === 0) {
-        sidebarSubcategoryList.innerHTML = '<p class="gp-cat-filter__empty">Brak podkategorii dla wybranej kategorii.</p>';
-        if (sidebarMoreButton) sidebarMoreButton.hidden = true;
-        return;
-      }
-
-      const listMarkup = subcategories
-        .map((subcategory) => {
-          return `<li><a class="gp-cat-filter__link" href="${subcategory.url}">${subcategory.name}</a></li>`;
-        })
-        .join('');
-
-      sidebarSubcategoryList.innerHTML = `<ul class="gp-cat-filter__list">${listMarkup}</ul>`;
-      setupShowMore();
-    };
-
-    if (!sidebarCategorySelect.value && activeCategory) {
-      sidebarCategorySelect.value = activeCategory;
-    }
-
-    renderSubcategories(sidebarCategorySelect.value || activeCategory);
+    setupShowMore();
 
     sidebarCategorySelect.addEventListener('change', () => {
-      renderSubcategories(sidebarCategorySelect.value);
+      const targetUrl = sidebarCategorySelect.value;
+      if (!targetUrl || targetUrl === '0') return;
+      window.location.href = targetUrl;
     });
 
     if (sidebarMoreButton) {
