@@ -53,6 +53,115 @@ add_action('wp_footer', function (): void {
     echo '<div id="gp-google-translate-element" class="gp-google-translate-element" aria-hidden="true"></div>';
 });
 
+function gp_get_selected_language(): string
+{
+    $allowed_languages = ['pl', 'en', 'fr', 'uk', 'de'];
+    $lang = isset($_COOKIE['gp_selected_language']) ? sanitize_key(wp_unslash((string) $_COOKIE['gp_selected_language'])) : 'pl';
+
+    if (!in_array($lang, $allowed_languages, true)) {
+        return 'pl';
+    }
+
+    return $lang;
+}
+
+function gp_should_use_eur_currency(): bool
+{
+    if (is_admin() && !wp_doing_ajax()) {
+        return false;
+    }
+
+    return gp_get_selected_language() !== 'pl';
+}
+
+function gp_fetch_eur_rate_from_nbp(): ?float
+{
+    $response = wp_remote_get('https://api.nbp.pl/api/exchangerates/rates/A/EUR/?format=json', [
+        'timeout' => 10,
+    ]);
+
+    if (is_wp_error($response)) {
+        return null;
+    }
+
+    $status_code = (int) wp_remote_retrieve_response_code($response);
+    if ($status_code !== 200) {
+        return null;
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $decoded = json_decode($body, true);
+    $rate = isset($decoded['rates'][0]['mid']) ? (float) $decoded['rates'][0]['mid'] : 0.0;
+
+    if ($rate <= 0) {
+        return null;
+    }
+
+    return $rate;
+}
+
+function gp_update_eur_exchange_rate(): void
+{
+    $rate = gp_fetch_eur_rate_from_nbp();
+    if ($rate === null) {
+        return;
+    }
+
+    update_option('gp_eur_exchange_rate', $rate, false);
+    update_option('gp_eur_exchange_rate_updated_at', gmdate('c'), false);
+}
+
+add_action('init', function (): void {
+    if (!wp_next_scheduled('gp_update_eur_rate_daily')) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'gp_update_eur_rate_daily');
+    }
+
+    if ((float) get_option('gp_eur_exchange_rate', 0) <= 0) {
+        gp_update_eur_exchange_rate();
+    }
+});
+
+add_action('gp_update_eur_rate_daily', 'gp_update_eur_exchange_rate');
+
+add_filter('woocommerce_currency', function (string $currency): string {
+    if (!gp_should_use_eur_currency()) {
+        return $currency;
+    }
+
+    return 'EUR';
+});
+
+function gp_convert_price_to_current_currency($price)
+{
+    if (!gp_should_use_eur_currency()) {
+        return $price;
+    }
+
+    if ($price === '' || $price === null) {
+        return $price;
+    }
+
+    $rate = (float) get_option('gp_eur_exchange_rate', 0);
+    if ($rate <= 0) {
+        return $price;
+    }
+
+    $numeric_price = (float) $price;
+    $converted = $numeric_price / $rate;
+
+    return (string) round($converted, wc_get_price_decimals());
+}
+
+add_filter('woocommerce_product_get_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_get_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_get_sale_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_sale_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_sale_price', 'gp_convert_price_to_current_currency', 99);
+
 add_action('wp_head', function (): void {
     $favicon_url = get_template_directory_uri() . '/assets/images/favicon.png';
     echo '<link rel="icon" type="image/png" href="' . esc_url($favicon_url) . '" />';

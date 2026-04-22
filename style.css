@@ -116,7 +116,7 @@ body {
 }
 .gp-rzetelna-link img {
   display: block;
-  max-height: 34px;
+  max-height: 37px;
   width: auto;
 }
 .gp-rzetelna-link--top {
@@ -205,6 +205,7 @@ body {
 .gp-shortcuts .is-promo { color: var(--gp-red); font-weight: 700; }
 .gp-phone { font-weight: 700; font-size: 18px; display: inline-flex; gap: 8px; align-items: center; }
 .gp-phone a { color: #273247; }
+.gp-phone__separator { color: #7b8697; font-weight: 500; }
 .gp-part-search-box {
   position: fixed;
   left: 0;
