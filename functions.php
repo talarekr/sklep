@@ -22,14 +22,19 @@ add_action('after_setup_theme', function () {
     ]);
 });
 
-add_action('wp_enqueue_scripts', function () {
+function gp_enqueue_fonts(): void
+{
     wp_enqueue_style(
-        'gp-clone-poppins-font',
+        'gp-poppins',
         'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap',
         [],
         null
     );
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.3');
+}
+add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
+
+add_action('wp_enqueue_scripts', function () {
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.3');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
     wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
 
