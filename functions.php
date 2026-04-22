@@ -139,49 +139,6 @@ function gp_get_product_category_tree(int $parent_term_id = 0): array
     return $term_map[$parent_term_id] ?? [];
 }
 
-function gp_get_product_category_context(): array
-{
-    $current_term_id = 0;
-    $active_path_ids = [];
-
-    if (is_tax('product_cat')) {
-        $current_term = get_queried_object();
-        if ($current_term instanceof WP_Term) {
-            $current_term_id = (int) $current_term->term_id;
-            $active_path_ids = array_map('intval', array_filter(array_merge(
-                [$current_term_id],
-                get_ancestors($current_term_id, 'product_cat', 'taxonomy')
-            )));
-        }
-    }
-
-    return [$current_term_id, $active_path_ids];
-}
-
-function gp_render_product_category_sidebar(): void
-{
-    [$current_term_id, $active_path_ids] = gp_get_product_category_context();
-
-    $root_categories = gp_get_product_category_tree(0);
-    $current_children = $current_term_id > 0 ? gp_get_product_category_tree($current_term_id) : [];
-
-    $debug_enabled = isset($_GET['gp_cat_debug']) && current_user_can('manage_options');
-    if ($debug_enabled) {
-        $debug_data = [
-            'current_term_id' => $current_term_id,
-            'ancestors' => $active_path_ids,
-            'root_categories_count' => count($root_categories),
-            'current_term_children_count' => count($current_children),
-            'render_will_be_empty' => $root_categories === [],
-        ];
-
-        error_log('GP category sidebar debug: ' . wp_json_encode($debug_data));
-        echo '<pre class="gp-cat-tree__debug">' . esc_html((string) wp_json_encode($debug_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
-    }
-
-    gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
-}
-
 function gp_render_product_category_tree(int $parent_term_id = 0, int $current_term_id = 0, array $active_path_ids = []): void
 {
     $terms = gp_get_product_category_tree($parent_term_id);
