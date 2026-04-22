@@ -351,10 +351,6 @@ function gp_render_product_category_sidebar(): void
         }
         echo '</select>';
 
-        echo '<div class="gp-cat-filter__quick-links-wrap">';
-        echo '<span class="gp-cat-filter__quick-links-label">' . esc_html__('Szybki wybór', 'gp-clone') . '</span>';
-        gp_render_category_links_list($top_categories, $top_category_id);
-        echo '</div>';
     });
 
     if ($subcategories !== []) {
