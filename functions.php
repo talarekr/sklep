@@ -38,7 +38,35 @@ add_action('wp_enqueue_scripts', function () {
     }
 });
 
-add_filter('woocommerce_show_page_title', '__return_true');
+add_filter('woocommerce_show_page_title', '__return_false');
+
+function gp_shop_loop_toolbar_start(): void
+{
+    if (!is_shop() && !is_tax('product_cat')) {
+        return;
+    }
+
+    echo '<div class="gp-shop-toolbar" aria-label="' . esc_attr__('Opcje listy produktów', 'gp-clone') . '">';
+}
+
+function gp_shop_loop_toolbar_end(): void
+{
+    if (!is_shop() && !is_tax('product_cat')) {
+        return;
+    }
+
+    echo '</div>';
+}
+
+add_action('wp', function (): void {
+    remove_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
+    remove_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
+
+    add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_start', 19);
+    add_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
+    add_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
+    add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_end', 31);
+}, 20);
 add_filter('loop_shop_columns', static fn() => 3);
 add_filter('loop_shop_per_page', static fn() => 20);
 
@@ -190,6 +218,74 @@ function gp_render_product_category_tree(int $parent_term_id = 0, int $current_t
         echo '</li>';
     }
 
+    echo '</ul>';
+}
+
+function gp_render_product_category_sidebar(): void
+{
+    if (!taxonomy_exists('product_cat')) {
+        echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    $current_term_id = 0;
+    if (is_tax('product_cat')) {
+        $current_term = get_queried_object();
+        if ($current_term instanceof WP_Term && $current_term->taxonomy === 'product_cat') {
+            $current_term_id = (int) $current_term->term_id;
+        }
+    }
+
+    $active_path_ids = [];
+    if ($current_term_id > 0) {
+        $ancestor_ids = get_ancestors($current_term_id, 'product_cat', 'taxonomy');
+        if (is_array($ancestor_ids)) {
+            $active_path_ids = array_values(array_unique(array_map('intval', $ancestor_ids)));
+        }
+    }
+
+    ob_start();
+    gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
+    $tree_markup = trim((string) ob_get_clean());
+
+    if ($tree_markup !== '') {
+        echo $tree_markup;
+        return;
+    }
+
+    $fallback_terms = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => false,
+        'parent' => 0,
+        'orderby' => 'name',
+        'order' => 'ASC',
+    ]);
+
+    if (!is_array($fallback_terms) || $fallback_terms === []) {
+        echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    echo '<ul class="gp-cat-tree__level gp-cat-tree__level--fallback">';
+    foreach ($fallback_terms as $term) {
+        if (!$term instanceof WP_Term) {
+            continue;
+        }
+
+        $term_link = get_term_link($term);
+        if (is_wp_error($term_link)) {
+            continue;
+        }
+
+        $classes = ['gp-cat-tree__item'];
+        if ((int) $term->term_id === $current_term_id) {
+            $classes[] = 'is-current';
+        }
+
+        echo '<li class="' . esc_attr(implode(' ', $classes)) . '">';
+        echo '<a class="gp-cat-tree__link" href="' . esc_url($term_link) . '">' . esc_html($term->name) . '</a>';
+        echo '</li>';
+    }
     echo '</ul>';
 }
 
