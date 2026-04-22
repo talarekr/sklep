@@ -16,22 +16,8 @@ get_header('shop');
             <aside class="gp-shop-sidebar">
                 <h3 class="gp-shop-sidebar__title"><?php esc_html_e('Kategorie', 'gp-clone'); ?></h3>
                 <?php
-                $current_term_id = 0;
-                $active_path_ids = [];
-
-                if (is_tax('product_cat')) {
-                    $current_term = get_queried_object();
-                    if ($current_term instanceof WP_Term) {
-                        $current_term_id = (int) $current_term->term_id;
-                        $active_path_ids = array_map('intval', array_filter(array_merge(
-                            [$current_term_id],
-                            get_ancestors($current_term_id, 'product_cat', 'taxonomy')
-                        )));
-                    }
-                }
-
-                if (function_exists('gp_render_product_category_tree')) {
-                    gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
+                if (function_exists('gp_render_product_category_sidebar')) {
+                    gp_render_product_category_sidebar();
                 }
                 ?>
             </aside>

@@ -304,6 +304,23 @@
   gap: 6px;
 }
 
+.gp-cat-tree__empty {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+}
+
+.gp-cat-tree__debug {
+  margin: 0 0 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #dbe4f0;
+  color: #0f172a;
+  font-size: 12px;
+  overflow: auto;
+}
+
 .gp-cat-tree__details[open] > .gp-cat-tree__summary {
   margin-bottom: 4px;
 }

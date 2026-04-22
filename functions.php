@@ -96,17 +96,135 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
-function gp_get_product_category_tree(int $parent_term_id = 0): array
+function gp_get_product_category_term_map(): array
 {
-    $terms = get_terms([
+    static $term_map = null;
+
+    if (is_array($term_map)) {
+        return $term_map;
+    }
+
+    $all_terms = get_terms([
         'taxonomy' => 'product_cat',
-        'hide_empty' => true,
-        'parent' => $parent_term_id,
+        'hide_empty' => false,
+        'suppress_filter' => true,
         'orderby' => 'name',
         'order' => 'ASC',
     ]);
 
-    return is_array($terms) ? $terms : [];
+    if (!is_array($all_terms)) {
+        $term_map = [];
+        return $term_map;
+    }
+
+    $term_map = [];
+    foreach ($all_terms as $term) {
+        if (!$term instanceof WP_Term) {
+            continue;
+        }
+
+        $parent_id = (int) $term->parent;
+        if (!isset($term_map[$parent_id])) {
+            $term_map[$parent_id] = [];
+        }
+
+        $term_map[$parent_id][] = $term;
+    }
+
+    return $term_map;
+}
+
+function gp_get_product_category_tree(int $parent_term_id = 0): array
+{
+    $term_map = gp_get_product_category_term_map();
+    return $term_map[$parent_term_id] ?? [];
+}
+
+function gp_get_product_category_context(): array
+{
+    $current_term_id = 0;
+    $active_path_ids = [];
+
+    if (is_tax('product_cat')) {
+        $current_term = get_queried_object();
+        if ($current_term instanceof WP_Term) {
+            $current_term_id = (int) $current_term->term_id;
+            $active_path_ids = array_map('intval', array_filter(array_merge(
+                [$current_term_id],
+                get_ancestors($current_term_id, 'product_cat', 'taxonomy')
+            )));
+        }
+    }
+
+    return [$current_term_id, $active_path_ids];
+}
+
+function gp_render_product_category_sidebar(): void
+{
+    [$current_term_id, $active_path_ids] = gp_get_product_category_context();
+
+    $root_categories = gp_get_product_category_tree(0);
+    $current_children = $current_term_id > 0 ? gp_get_product_category_tree($current_term_id) : [];
+    ob_start();
+    gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
+    $tree_html = trim((string) ob_get_clean());
+
+    $has_tree_items = str_contains($tree_html, 'gp-cat-tree__item');
+    $fallback_terms = [];
+    if (!$has_tree_items) {
+        $fallback_terms = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => false,
+            'suppress_filter' => true,
+            'parent' => 0,
+            'orderby' => 'name',
+            'order' => 'ASC',
+        ]);
+    }
+
+    $debug_enabled = isset($_GET['gp_cat_debug']) && current_user_can('manage_options');
+    if ($debug_enabled) {
+        $fallback_count = is_array($fallback_terms) ? count($fallback_terms) : 0;
+        $debug_data = [
+            'current_term_id' => $current_term_id,
+            'ancestors' => $active_path_ids,
+            'root_categories_count' => count($root_categories),
+            'current_term_children_count' => count($current_children),
+            'tree_html_length' => strlen($tree_html),
+            'tree_has_items' => $has_tree_items,
+            'fallback_root_count' => $fallback_count,
+        ];
+
+        error_log('GP category sidebar debug: ' . wp_json_encode($debug_data));
+        echo '<pre class="gp-cat-tree__debug">' . esc_html((string) wp_json_encode($debug_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+    }
+
+    if ($has_tree_items) {
+        echo $tree_html;
+        return;
+    }
+
+    if (is_array($fallback_terms) && $fallback_terms !== []) {
+        echo '<ul class="gp-cat-tree__level gp-cat-tree__fallback">';
+        foreach ($fallback_terms as $term) {
+            if (!$term instanceof WP_Term) {
+                continue;
+            }
+
+            $term_link = get_term_link($term);
+            if (is_wp_error($term_link)) {
+                continue;
+            }
+
+            echo '<li class="gp-cat-tree__item">';
+            echo '<a class="gp-cat-tree__link" href="' . esc_url($term_link) . '">' . esc_html($term->name) . '</a>';
+            echo '</li>';
+        }
+        echo '</ul>';
+        return;
+    }
+
+    echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
 }
 
 function gp_render_product_category_tree(int $parent_term_id = 0, int $current_term_id = 0, array $active_path_ids = []): void
