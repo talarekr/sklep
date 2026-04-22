@@ -96,7 +96,9 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             </nav>
             <div class="gp-phone">
                 <span aria-hidden="true">&#128222;</span>
-                <a href="tel:+48504266984">504 266 984</a>
+                <a href="tel:+48504266984">+48 504 266 984</a>
+                <span class="gp-phone__separator" aria-hidden="true">|</span>
+                <a href="tel:+48579152665">+48 579 152 665</a>
             </div>
         </div>
     </div>
