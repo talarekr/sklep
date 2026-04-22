@@ -68,6 +68,15 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
                 <td><input class="regular-text" name="<?php echo esc_attr($option_key); ?>[offer_status]" value="<?php echo esc_attr($settings['offer_status']); ?>" /></td>
             </tr>
             <tr>
+                <th scope="row"><?php esc_html_e('Reconciliation (ukrywanie niewidzianych ofert)', 'allegro-woo-importer'); ?></th>
+                <td>
+                    <label>
+                        <input type="checkbox" name="<?php echo esc_attr($option_key); ?>[reconciliation_enabled]" value="1" <?php checked(!empty($settings['reconciliation_enabled'])); ?> />
+                        <?php esc_html_e('Włącz reconciliation (domyślnie WYŁĄCZONE dla bezpieczeństwa)', 'allegro-woo-importer'); ?>
+                    </label>
+                </td>
+            </tr>
+            <tr>
                 <th scope="row"><?php esc_html_e('Auto-sync (WP-Cron)', 'allegro-woo-importer'); ?></th>
                 <td>
                     <select name="<?php echo esc_attr($option_key); ?>[cron_interval]">
@@ -102,6 +111,11 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php wp_nonce_field('awi_manual_import'); ?>
         <input type="hidden" name="action" value="awi_manual_import">
         <?php submit_button(__('Importuj teraz', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+        <?php wp_nonce_field('awi_restore_active_offers'); ?>
+        <input type="hidden" name="action" value="awi_restore_active_offers">
+        <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
 
     <h2><?php esc_html_e('3. Historia importów / log', 'allegro-woo-importer'); ?></h2>

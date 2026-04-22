@@ -92,6 +92,7 @@ final class Plugin
             'inactive_product_status' => 'draft',
             'cron_interval' => 'manual',
             'offer_status' => 'ACTIVE',
+            'reconciliation_enabled' => false,
             'access_token' => '',
             'refresh_token' => '',
             'expires_at' => '',

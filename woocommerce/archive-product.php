@@ -23,6 +23,19 @@ get_header('shop');
             </aside>
 
             <section class="gp-shop-content">
+                <?php
+                $part_number_query = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+                if ($part_number_query !== '') :
+                ?>
+                    <p class="gp-part-search-results-note">
+                        <?php
+                        echo wp_kses_post(sprintf(
+                            __('Wyniki wyszukiwania dla numeru części: %s', 'gp-clone'),
+                            '<strong>' . esc_html($part_number_query) . '</strong>'
+                        ));
+                        ?>
+                    </p>
+                <?php endif; ?>
                 <?php if (woocommerce_product_loop()) : ?>
                     <?php do_action('woocommerce_before_shop_loop'); ?>
                     <?php woocommerce_product_loop_start(); ?>

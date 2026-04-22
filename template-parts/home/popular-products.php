@@ -33,10 +33,10 @@ $category_tiles = [
 ];
 
 $brand_logos = [
-    ['name' => 'BMW', 'file' => 'assets/images/brands/bmw.svg'],
-    ['name' => 'AUDI', 'file' => 'assets/images/brands/audi.svg'],
-    ['name' => 'Volkswagen', 'file' => 'assets/images/brands/volkswagen.svg'],
-    ['name' => 'Skoda', 'file' => 'assets/images/brands/skoda.svg'],
+    ['name' => 'BMW', 'file' => 'assets/images/brands/bmw.jpg'],
+    ['name' => 'AUDI', 'file' => 'assets/images/brands/audi.jpg'],
+    ['name' => 'Volkswagen', 'file' => 'assets/images/brands/volkswagen.jpg'],
+    ['name' => 'Skoda', 'file' => 'assets/images/brands/skoda.jpg'],
 ];
 
 $normalize_term = static function (string $value): string {
