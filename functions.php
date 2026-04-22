@@ -38,7 +38,35 @@ add_action('wp_enqueue_scripts', function () {
     }
 });
 
-add_filter('woocommerce_show_page_title', '__return_true');
+add_filter('woocommerce_show_page_title', '__return_false');
+
+function gp_shop_loop_toolbar_start(): void
+{
+    if (!is_shop() && !is_tax('product_cat')) {
+        return;
+    }
+
+    echo '<div class="gp-shop-toolbar" aria-label="' . esc_attr__('Opcje listy produktów', 'gp-clone') . '">';
+}
+
+function gp_shop_loop_toolbar_end(): void
+{
+    if (!is_shop() && !is_tax('product_cat')) {
+        return;
+    }
+
+    echo '</div>';
+}
+
+add_action('wp', function (): void {
+    remove_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
+    remove_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
+
+    add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_start', 19);
+    add_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
+    add_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
+    add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_end', 31);
+}, 20);
 add_filter('loop_shop_columns', static fn() => 3);
 add_filter('loop_shop_per_page', static fn() => 20);
 
