@@ -93,15 +93,12 @@ a:hover { text-decoration: underline; }
 }
 .gp-language-switcher__select {
   min-height: 30px;
-  min-width: 58px;
   border: 1px solid #cfd6e2;
   border-radius: 8px;
   background: #fff;
   color: #1f2937;
-  font-size: 18px;
-  line-height: 1;
-  padding: 0 6px;
-  text-align: center;
+  font-size: 13px;
+  padding: 0 8px;
 }
 .gp-google-translate-element {
   position: absolute;
