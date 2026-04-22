@@ -18,6 +18,34 @@ Text Domain: gp-clone
 }
 
 * { box-sizing: border-box; }
+html,
+body {
+  font-family: 'Poppins', sans-serif !important;
+}
+body,
+button,
+input,
+select,
+textarea,
+a,
+p,
+span,
+div,
+li,
+ul,
+ol,
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Poppins', sans-serif !important;
+}
+.woocommerce,
+.woocommerce * {
+  font-family: 'Poppins', sans-serif !important;
+}
+input,
+select,
+button {
+  font-family: 'Poppins', sans-serif !important;
+}
 body {
   margin: 0;
   font-family: 'Poppins', sans-serif;
