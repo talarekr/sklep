@@ -12,20 +12,13 @@ get_header();
     ?>
     <?php if (is_tax('product_cat') && $current_category instanceof WP_Term) : ?>
         <section class="gp-category-search-hero">
-            <div class="gp-category-search-hero__media">
-                <div class="gp-container">
-                    <h1 class="gp-category-search-hero__title"><?php echo esc_html($current_category->name); ?></h1>
-                    <p class="gp-category-search-hero__description">
-                        <?php esc_html_e('W sklepie motoryzacyjnym GP Swiss znajdziesz szeroki wybór oryginalnych, używanych części samochodowych do wielu popularnych marek, takich jak BMW, Mini, Mercedes, Audi czy Volkswagen. Każdy oferowany przez nas produkt jest dokładnie sprawdzany pod kątem jakości i sprawności, dzięki czemu masz pewność, że wybierasz sprawdzony i solidny produkt.', 'gp-clone'); ?>
-                    </p>
-                </div>
-            </div>
             <div class="gp-container">
+                <h1 class="gp-category-search-hero__title"><?php echo esc_html($current_category->name); ?></h1>
+                <p class="gp-category-search-hero__description">
+                    <?php esc_html_e('W sklepie motoryzacyjnym GP Swiss znajdziesz szeroki wybór oryginalnych, używanych części samochodowych do wielu popularnych marek, takich jak BMW, Mini, Mercedes, Audi czy Volkswagen. Każdy oferowany przez nas produkt jest dokładnie sprawdzany pod kątem jakości i sprawności, dzięki czemu masz pewność, że wybierasz sprawdzony i solidny produkt.', 'gp-clone'); ?>
+                </p>
+
                 <div class="gp-category-search-hero__panel">
-                    <div class="gp-category-search-hero__modes" aria-hidden="true">
-                        <span class="is-active"><?php esc_html_e('Numer części', 'gp-clone'); ?></span>
-                        <span><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></span>
-                    </div>
                     <form method="get" action="<?php echo esc_url($shop_search_url); ?>" class="gp-category-search-hero__form">
                         <input
                             type="search"
