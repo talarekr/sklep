@@ -5,12 +5,12 @@ $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink(
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $shortcuts = [
-    ['label' => 'Hamulce', 'slugs' => ['hamulce', 'uklad-hamulcowy', 'brakes']],
-    ['label' => 'Skrzynie biegów', 'slugs' => ['skrzynie-biegow', 'skrzynia-biegow', 'transmission']],
     ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'engines']],
+    ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
+    ['label' => 'Filtry DPF', 'slugs' => ['filtry-dpf', 'dpf', 'filtry']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'interior']],
-    ['label' => 'Kierownice', 'slugs' => ['kierownice', 'kierownica', 'steering']],
+    ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
 ];
 
 $resolve_category_url = static function (array $candidate_slugs) use ($shop_url): string {
