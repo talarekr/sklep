@@ -460,7 +460,7 @@ body.home .gp-part-search-box {
 .gp-popular__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .gp-products { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .gp-product,
-.product-card { background: #ffffff; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); transition: box-shadow 0.2s ease; border: 0; position: relative; display: flex; flex-direction: column; min-height: 100%; }
+.product-card { background: #ffffff; border-radius: 12px; padding: 20px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); transition: box-shadow 0.2s ease; border: 0; position: relative; display: flex; flex-direction: column; min-height: 100%; }
 .gp-product:hover,
 .product-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.04); text-decoration: none; }
 .gp-product__fav,

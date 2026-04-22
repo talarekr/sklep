@@ -46,7 +46,7 @@
 .woocommerce ul.products li.product.gp-product-item .product-card {
   background: #ffffff;
   border-radius: 12px;
-  padding: 16px;
+  padding: 20px 16px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   transition: box-shadow 0.2s ease;
 }
