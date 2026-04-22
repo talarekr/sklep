@@ -5,15 +5,15 @@ $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink(
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $shortcuts = [
-    ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'engines']],
+    ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines']],
     ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
     ['label' => 'Filtry DPF', 'slugs' => ['filtry-dpf', 'dpf', 'filtry']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
-    ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'interior']],
+    ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'wyposazenie-wnetrza-samochodu', 'interior']],
     ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
 ];
 
-$resolve_category_url = static function (array $candidate_slugs) use ($shop_url): string {
+$resolve_category_url = static function (array $candidate_slugs, string $label) use ($shop_url): string {
     if (!taxonomy_exists('product_cat')) {
         return $shop_url;
     }
@@ -25,6 +25,20 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             if (!is_wp_error($link)) {
                 return $link;
             }
+        }
+    }
+
+    $matching_terms = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => false,
+        'name__like' => $label,
+        'number' => 1,
+    ]);
+
+    if (is_array($matching_terms) && isset($matching_terms[0]) && $matching_terms[0] instanceof WP_Term) {
+        $link = get_term_link($matching_terms[0]);
+        if (!is_wp_error($link)) {
+            return $link;
         }
     }
 
@@ -91,7 +105,7 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             </a>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
                 <?php foreach ($shortcuts as $shortcut) : ?>
-                    <a href="<?php echo esc_url($resolve_category_url($shortcut['slugs'])); ?>"><?php echo esc_html($shortcut['label']); ?></a>
+                    <a href="<?php echo esc_url($resolve_category_url($shortcut['slugs'], $shortcut['label'])); ?>"><?php echo esc_html($shortcut['label']); ?></a>
                 <?php endforeach; ?>
             </nav>
             <div class="gp-phone">
