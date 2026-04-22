@@ -346,13 +346,13 @@ body.home .gp-part-search-box {
   color: rgba(255, 255, 255, 0.93);
 }
 .gp-category-search-hero__panel {
-  margin: -46px auto 0;
+  margin: -40px 20px 0;
   background: #fff;
   border: 1px solid #dde4ee;
   border-radius: 14px;
   padding: 14px 16px;
   box-shadow: 0 8px 18px rgba(10, 24, 56, 0.12);
-  max-width: 1220px;
+  max-width: none;
   position: relative;
   z-index: 2;
 }
@@ -383,17 +383,17 @@ body.home .gp-part-search-box {
 .gp-category-search-hero .gp-search-tabs {
   display: flex;
   width: fit-content;
-  min-width: 250px;
+  min-width: 0;
   margin: 0 auto 10px;
   background: #dfe4ec;
-  padding: 4px;
+  padding: 2px;
   border-radius: 10px;
 }
 .gp-category-search-hero .gp-search-tabs button {
   color: #334155;
-  font-size: 18px;
-  font-weight: 700;
-  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 10px;
 }
 .gp-category-search-hero .gp-search-tabs .is-active {
   color: var(--gp-navy);
@@ -698,7 +698,7 @@ body.home .gp-part-search-box {
   .gp-category-search-hero__description { font-size: 15px; line-height: 1.5; max-width: 100%; }
   .gp-category-search-hero__panel { margin-top: -34px; border-radius: 12px; padding: 12px; }
   .gp-category-search-hero .gp-search-tabs { width: 100%; min-width: 0; margin-bottom: 12px; }
-  .gp-category-search-hero .gp-search-tabs button { font-size: 16px; padding: 9px 8px; }
+  .gp-category-search-hero .gp-search-tabs button { font-size: 14px; padding: 4px 8px; }
   .gp-category-search-hero__form { grid-template-columns: 1fr; }
   .gp-category-search-hero__form input { font-size: 16px; min-height: 42px; }
   .gp-category-search-hero__form button { width: 100%; min-height: 42px; font-size: 18px; }
