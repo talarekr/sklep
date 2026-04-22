@@ -32,7 +32,7 @@ class Cli
      * Regeneruje wariant zdjęcia listingowego dla istniejących produktów.
      *
      * [--batch-size=<n>]
-     * : Wielkość partii (domyślnie 100).
+     * : Wielkość partii (domyślnie 300).
      *
      * [--force]
      * : Wymuś przebudowę także dla już przetworzonych produktów.
@@ -42,7 +42,7 @@ class Cli
      */
     public function regenerate_listing_images(array $args, array $assoc_args): void
     {
-        $batch_size = isset($assoc_args['batch-size']) ? max(1, (int) $assoc_args['batch-size']) : 100;
+        $batch_size = isset($assoc_args['batch-size']) ? max(1, (int) $assoc_args['batch-size']) : 300;
         $force = isset($assoc_args['force']);
         $reset = isset($assoc_args['reset']);
 

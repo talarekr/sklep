@@ -4,6 +4,7 @@
  * @var array  $history
  * @var string $oauth_url
  * @var string $callback_uri
+ * @var array  $listing_regen_checkpoint
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -118,7 +119,29 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
 
-    <h2><?php esc_html_e('3. Historia importów / log', 'allegro-woo-importer'); ?></h2>
+    <h2><?php esc_html_e('3. Regeneracja zdjęć listingowych (lokalny batch)', 'allegro-woo-importer'); ?></h2>
+    <p><?php esc_html_e('Ta operacja działa wyłącznie na lokalnych attachmentach i plikach z uploads (bez zewnętrznych requestów HTTP).', 'allegro-woo-importer'); ?></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('awi_listing_images_regenerate_batch'); ?>
+        <input type="hidden" name="action" value="awi_listing_images_regenerate_batch">
+        <label for="awi-listing-batch-size"><?php esc_html_e('Batch size:', 'allegro-woo-importer'); ?></label>
+        <input id="awi-listing-batch-size" type="number" min="1" max="300" name="awi_listing_batch_size" value="300" style="width:80px; margin-right:12px;">
+        <label style="margin-right:12px;">
+            <input type="checkbox" name="awi_listing_reset_checkpoint" value="1">
+            <?php esc_html_e('Reset checkpoint (start od początku)', 'allegro-woo-importer'); ?>
+        </label>
+        <?php submit_button(__('Uruchom batch regeneracji', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <ul>
+        <li><?php esc_html_e('Ostatni produkt (checkpoint):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['last_product_id'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Łącznie przetworzono:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['processed_total'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Łącznie utworzono listing image:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['created_total'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Łącznie pominięto:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['skipped_total'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Łącznie błędów:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['error_total'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Aktualizacja checkpointu:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_regen_checkpoint['updated_at'] ?? '—')); ?></strong></li>
+    </ul>
+
+    <h2><?php esc_html_e('4. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
         <thead>
             <tr>
@@ -149,7 +172,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     <h3><?php esc_html_e('Tail logu (uploads/allegro-import.log)', 'allegro-woo-importer'); ?></h3>
     <textarea readonly style="width:100%; min-height:220px; font-family: monospace;"><?php echo esc_textarea($log_tail); ?></textarea>
 
-    <h2><?php esc_html_e('4. Statystyki', 'allegro-woo-importer'); ?></h2>
+    <h2><?php esc_html_e('5. Statystyki', 'allegro-woo-importer'); ?></h2>
     <ul>
         <li><?php esc_html_e('Ostatnia synchronizacja:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($settings['last_sync_at'] ?: '—')); ?></strong></li>
         <li><?php esc_html_e('Liczba zaimportowanych produktów:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) $settings['last_sync_created']); ?></strong></li>
