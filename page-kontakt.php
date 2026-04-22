@@ -38,6 +38,7 @@ $status_config = [
                 <p>08-460 Sobolew</p>
                 <p>NIP: 8262157853</p>
                 <p>REGON: 368948917</p>
+                <p>Tel: <a href="tel:+48504266984">504 266 984</a></p>
                 <p>E-mail: <a href="mailto:biuro@gpswiss.pl">biuro@gpswiss.pl</a></p>
             </section>
 
