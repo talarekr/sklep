@@ -312,55 +312,46 @@ body.home .gp-part-search-box {
   font-size: 14px;
 }
 .gp-category-search-hero {
-  margin: 0 0 16px;
-  padding: 26px 22px 84px;
-  border-radius: 0;
-  background: linear-gradient(rgba(16, 36, 84, 0.58), rgba(16, 36, 84, 0.58)),
-    url('https://images.unsplash.com/photo-1486006920555-c77dcf18193c?auto=format&fit=crop&w=1920&q=80') center/cover no-repeat;
+  margin: 0 0 18px;
+  padding: 28px 22px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #122a66 0%, #1c3f8d 100%);
   color: #fff;
-  position: relative;
-}
-.gp-category-search-hero--full {
-  margin-left: -12px;
-  margin-right: -12px;
-  padding-left: 34px;
-  padding-right: 34px;
 }
 .gp-category-search-hero__title {
   margin: 0 0 8px;
-  font-size: 50px;
+  font-size: 42px;
   line-height: 1.08;
   font-weight: 800;
 }
 .gp-category-search-hero__description {
   margin: 0;
-  max-width: 1180px;
-  font-size: 18px;
+  max-width: 980px;
+  font-size: 17px;
   line-height: 1.45;
 }
 .gp-category-search-hero__panel {
-  margin-top: 22px;
-  background: #f1f2f4;
-  border-radius: 10px;
-  padding: 14px;
-  box-shadow: 0 2px 6px rgba(16, 24, 40, 0.16);
-  color: #1f2937;
+  margin-top: 18px;
+  background: #eef1f6;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 20px rgba(16, 24, 40, 0.2);
 }
 .gp-category-search-hero__modes {
   display: inline-flex;
   padding: 4px;
-  border-radius: 10px;
-  background: #d7dbe3;
+  border-radius: 11px;
+  background: #d3d9e7;
   margin-bottom: 12px;
 }
 .gp-category-search-hero__modes span {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: 38px;
   padding: 0 16px;
   color: #334155;
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
   border-radius: 9px;
 }
@@ -379,7 +370,7 @@ body.home .gp-part-search-box {
   border-radius: 9px;
   min-height: 52px;
   padding: 0 14px;
-  font-size: 16px;
+  font-size: 24px;
 }
 .gp-category-search-hero__form button {
   border: 0;
@@ -387,7 +378,7 @@ body.home .gp-part-search-box {
   min-height: 52px;
   background: var(--gp-navy);
   color: #fff;
-  font-size: 17px;
+  font-size: 30px;
   font-weight: 700;
   padding: 0 20px;
   cursor: pointer;
@@ -395,12 +386,6 @@ body.home .gp-part-search-box {
 
 @media (max-width: 1200px) {
   .gp-part-search-box:not(.gp-part-search-box--hero) { display: none; }
-  .gp-category-search-hero--full {
-    margin-left: 0;
-    margin-right: 0;
-    border-radius: 14px;
-    padding: 22px 18px 18px;
-  }
   .gp-category-search-hero__title { font-size: 34px; }
   .gp-category-search-hero__description { font-size: 15px; }
   .gp-category-search-hero__modes span,
