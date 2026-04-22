@@ -656,28 +656,8 @@ function gp_render_category_select(array $categories, int $selected_category_id,
         if (is_wp_error($term_link)) {
             continue;
         }
-        if ($query_args !== []) {
-            $term_link = add_query_arg($query_args, $term_link);
-        }
 
         echo '<option value="' . esc_url($term_link) . '" data-category-id="' . esc_attr((string) $category->term_id) . '"' . selected((int) $category->term_id, $selected_category_id, false) . '>' . esc_html($category->name) . '</option>';
-    }
-
-    echo '</select>';
-}
-
-function gp_render_brand_select(array $brand_terms, string $selected_brand_slug): void
-{
-    echo '<label class="screen-reader-text" for="gp-brand-filter-select">' . esc_html__('Marka', 'gp-clone') . '</label>';
-    echo '<select id="gp-brand-filter-select" name="brand" class="gp-cat-filter__select" data-gp-brand-select>';
-    echo '<option value="">' . esc_html__('Wybierz markę', 'gp-clone') . '</option>';
-
-    foreach ($brand_terms as $brand_term) {
-        if (!$brand_term instanceof WP_Term) {
-            continue;
-        }
-
-        echo '<option value="' . esc_attr($brand_term->slug) . '"' . selected($brand_term->slug, $selected_brand_slug, false) . '>' . esc_html($brand_term->name) . '</option>';
     }
 
     echo '</select>';
@@ -732,31 +712,6 @@ function gp_render_product_category_sidebar(): void
     $category_terms = gp_get_user_facing_root_categories();
     $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
     $subcategories_map = gp_build_subcategory_map($category_terms);
-    $selected_brand_slug = isset($_GET['brand']) ? sanitize_title((string) wp_unslash($_GET['brand'])) : '';
-    $selected_price_min = isset($_GET['price_min']) ? wc_clean(wp_unslash((string) $_GET['price_min'])) : '';
-    $selected_price_max = isset($_GET['price_max']) ? wc_clean(wp_unslash((string) $_GET['price_max'])) : '';
-
-    gp_backfill_missing_product_brands();
-    $brand_terms = get_terms([
-        'taxonomy' => 'gp_car_brand',
-        'hide_empty' => true,
-        'orderby' => 'name',
-        'order' => 'ASC',
-    ]);
-    if (!is_array($brand_terms)) {
-        $brand_terms = [];
-    }
-
-    $persistent_query_args = [];
-    if ($selected_brand_slug !== '') {
-        $persistent_query_args['brand'] = $selected_brand_slug;
-    }
-    if ($selected_price_min !== '') {
-        $persistent_query_args['price_min'] = $selected_price_min;
-    }
-    if ($selected_price_max !== '') {
-        $persistent_query_args['price_max'] = $selected_price_max;
-    }
 
     if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
