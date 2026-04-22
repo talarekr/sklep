@@ -37,11 +37,16 @@ class ProductMapper
     public function get_preferred_listing_image_id(int $product_id): int
     {
         $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
-        if ($listing_image_id <= 0) {
-            return 0;
+        if ($listing_image_id > 0 && get_post($listing_image_id) instanceof \WP_Post) {
+            return $listing_image_id;
         }
 
-        return get_post($listing_image_id) instanceof \WP_Post ? $listing_image_id : 0;
+        $thumbnail_id = (int) get_post_thumbnail_id($product_id);
+        if ($thumbnail_id > 0 && get_post($thumbnail_id) instanceof \WP_Post) {
+            return $thumbnail_id;
+        }
+
+        return 0;
     }
 
     public function ensure_listing_image_for_product(int $product_id, bool $force = false): array
