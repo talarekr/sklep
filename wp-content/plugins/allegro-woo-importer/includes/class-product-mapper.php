@@ -19,6 +19,8 @@ class ProductMapper
     private const LISTING_IMAGE_GENERATED_AT_META_KEY = '_awi_listing_image_generated_at';
     private const LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY = '_awi_listing_variant';
     private const LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY = '_awi_listing_source_id';
+    private const LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY = '_awi_listing_target_fill_ratio';
+    private const LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY = '_awi_listing_scale_factor';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -81,6 +83,49 @@ class ProductMapper
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
 
         return ['status' => 'created', 'listing_image_id' => $created_listing_id];
+    }
+
+    public function get_listing_image_diagnostics(int $product_id): array
+    {
+        $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $featured_image_id = (int) get_post_thumbnail_id($product_id);
+        $helper_selected_image_id = $this->get_preferred_listing_image_id($product_id);
+
+        $rendered_source = 'placeholder';
+        if ($helper_selected_image_id > 0) {
+            if ($listing_image_id > 0 && $helper_selected_image_id === $listing_image_id) {
+                $rendered_source = 'listing_image';
+            } elseif ($featured_image_id > 0 && $helper_selected_image_id === $featured_image_id) {
+                $rendered_source = 'featured_image_helper_fallback';
+            } else {
+                $rendered_source = 'helper_attachment';
+            }
+        } elseif ($featured_image_id > 0) {
+            $rendered_source = 'featured_image_template_fallback';
+        }
+
+        $listing_path = $listing_image_id > 0 ? (string) get_attached_file($listing_image_id) : '';
+        $featured_path = $featured_image_id > 0 ? (string) get_attached_file($featured_image_id) : '';
+
+        return [
+            'product_id' => $product_id,
+            'listing_image_id' => $listing_image_id,
+            'featured_image_id' => $featured_image_id,
+            'helper_selected_image_id' => $helper_selected_image_id,
+            'rendered_source' => $rendered_source,
+            'listing_image_meta_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
+            'listing_image_generated_at' => (string) get_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, true),
+            'listing_file_path' => $listing_path,
+            'listing_file_exists' => $listing_path !== '' ? file_exists($listing_path) : false,
+            'listing_file_url' => $listing_image_id > 0 ? wp_get_attachment_url($listing_image_id) : '',
+            'featured_file_path' => $featured_path,
+            'featured_file_exists' => $featured_path !== '' ? file_exists($featured_path) : false,
+            'featured_file_url' => $featured_image_id > 0 ? wp_get_attachment_url($featured_image_id) : '',
+            'listing_attachment_variant_flag' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, true),
+            'listing_attachment_source_id' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, true),
+            'listing_attachment_target_fill_ratio' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true),
+            'listing_attachment_scale_factor' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true),
+        ];
     }
 
     public function upsert_product(array $offer, array $settings): array
@@ -1313,6 +1358,8 @@ class ProductMapper
 
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, 1);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, $source_attachment_id);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, $target_ratio);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, round($scale, 6));
 
         return (int) $attachment_id;
     }
