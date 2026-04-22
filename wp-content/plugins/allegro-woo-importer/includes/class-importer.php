@@ -10,6 +10,7 @@ class Importer
 {
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
+    private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
     private const BATCH_LIMIT = 40;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 20;
 
@@ -52,12 +53,14 @@ class Importer
 
         if ($this->is_cycle_start($offset, $page_no, $resume_offer_index)) {
             $this->reset_active_seen_offer_ids();
+            $this->initialize_cycle_state();
             $this->logger->info('Reset active offers set for a new sync cycle.');
         }
 
         $page = $this->client->get_offers((string) $settings['offer_status'], $offset, self::BATCH_LIMIT, $page_token);
         if (is_wp_error($page)) {
             $errors++;
+            $this->mark_cycle_state_error('offers_batch_fetch_failed');
             $this->logger->error('Failed to fetch offers batch.', [
                 'page_no' => $page_no,
                 'offset' => $offset,
@@ -110,6 +113,7 @@ class Importer
             $details = $this->client->get_offer_details($offer_id);
             if (is_wp_error($details)) {
                 $errors++;
+                $this->mark_cycle_state_error('offer_details_fetch_failed');
                 $this->logger->error('Failed to fetch offer details.', [
                     'offer_id' => $offer_id,
                     'error' => $details->get_error_message(),
@@ -126,6 +130,7 @@ class Importer
                 $updated++;
             } elseif (($result['result'] ?? '') === 'error') {
                 $errors++;
+                $this->mark_cycle_state_error('product_upsert_failed');
                 $this->logger->error('Product upsert failed.', [
                     'offer_id' => $offer_id,
                     'error' => (string) ($result['error'] ?? 'unknown_error'),
@@ -179,9 +184,10 @@ class Importer
                 'batch_size' => $batch_size,
             ]);
         } else {
-            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status']);
+            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status'], $total_count_from_api);
             $this->reset_checkpoint();
             $this->reset_active_seen_offer_ids();
+            $this->clear_cycle_state();
             $this->logger->info('Reached end of offers, checkpoint reset for next sync cycle.', [
                 'last_offset' => $next_offset,
                 'processed_in_run' => $processed,
@@ -361,9 +367,17 @@ class Importer
         update_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY, array_keys($seen), false);
     }
 
-    private function sync_missing_active_offers_to_hidden(string $inactive_status): int
+    private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api): int
     {
         $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
+        if (!$this->can_run_reconciliation($total_count_from_api)) {
+            $this->logger->warning('Skipping reconciliation because sync cycle is not confirmed as complete.', [
+                'cycle_state' => $this->load_cycle_state(),
+                'reported_total_count' => $total_count_from_api,
+            ]);
+            return 0;
+        }
+
         $seen_offer_ids = array_keys($this->load_active_seen_offer_ids());
         $processed = 0;
         $page = 1;
@@ -406,9 +420,10 @@ class Importer
                 $product->save();
 
                 $processed++;
-                $this->logger->info('Product hidden because offer is not active / missing in active offers sync.', [
+                $this->logger->info('Product marked as outofstock during reconciliation.', [
                     'product_id' => $product_id,
                     'offer_id' => $offer_id,
+                    'reason' => 'reconciliation_missing_offer_after_full_sync',
                     'status_before' => $status_before,
                     'status_after' => $inactive_status,
                     'stock_before' => $stock_before,
@@ -421,5 +436,170 @@ class Importer
         } while ($page <= (int) $query->max_num_pages);
 
         return $processed;
+    }
+
+    public function restore_active_offers_to_instock(): array
+    {
+        $restored = 0;
+        $checked = 0;
+        $errors = 0;
+        $page = 1;
+
+        do {
+            $query = new \WP_Query([
+                'post_type' => 'product',
+                'post_status' => 'any',
+                'fields' => 'ids',
+                'posts_per_page' => 100,
+                'paged' => $page,
+                'meta_query' => [
+                    [
+                        'key' => '_allegro_offer_id',
+                        'compare' => 'EXISTS',
+                    ],
+                    [
+                        'relation' => 'OR',
+                        [
+                            'key' => '_stock_status',
+                            'value' => 'outofstock',
+                            'compare' => '=',
+                        ],
+                        [
+                            'key' => '_stock',
+                            'value' => 0,
+                            'type' => 'NUMERIC',
+                            'compare' => '<=',
+                        ],
+                    ],
+                ],
+            ]);
+
+            $product_ids = array_map('intval', (array) $query->posts);
+            foreach ($product_ids as $product_id) {
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                if ($offer_id === '') {
+                    continue;
+                }
+
+                $product = wc_get_product($product_id);
+                if (!$product instanceof \WC_Product) {
+                    continue;
+                }
+
+                $checked++;
+                $details = $this->client->get_offer_details($offer_id);
+                if (is_wp_error($details)) {
+                    $errors++;
+                    $this->logger->error('Recovery failed to fetch offer details.', [
+                        'product_id' => $product_id,
+                        'offer_id' => $offer_id,
+                        'error' => $details->get_error_message(),
+                    ]);
+                    continue;
+                }
+
+                $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
+                if ($publication_status !== 'ACTIVE') {
+                    continue;
+                }
+
+                $stock_raw = $details['stock']['available'] ?? null;
+                $stock_available = is_numeric($stock_raw) ? max(0, (int) $stock_raw) : null;
+                $stock_after = ($stock_available !== null && $stock_available > 0) ? $stock_available : 1;
+
+                $status_before = (string) $product->get_status();
+                $stock_before = $product->get_stock_quantity();
+                $stock_status_before = (string) $product->get_stock_status();
+
+                $product->set_manage_stock(true);
+                $product->set_stock_quantity($stock_after);
+                $product->set_stock_status('instock');
+                $product->set_status('publish');
+                $product->save();
+
+                $restored++;
+                $this->logger->info('Product restored to instock during recovery.', [
+                    'product_id' => $product_id,
+                    'offer_id' => $offer_id,
+                    'reason' => 'recovery_offer_active',
+                    'status_before' => $status_before,
+                    'status_after' => 'publish',
+                    'stock_before' => $stock_before,
+                    'stock_after' => $stock_after,
+                    'stock_status_before' => $stock_status_before,
+                    'stock_status_after' => 'instock',
+                ]);
+            }
+
+            $page++;
+            wp_reset_postdata();
+        } while ($page <= (int) $query->max_num_pages);
+
+        $summary = [
+            'checked' => $checked,
+            'restored' => $restored,
+            'errors' => $errors,
+        ];
+        $this->logger->info('Recovery pass completed.', $summary);
+
+        return $summary;
+    }
+
+    private function initialize_cycle_state(): void
+    {
+        update_option(self::CYCLE_STATE_OPTION_KEY, [
+            'started_at' => gmdate('Y-m-d H:i:s'),
+            'has_errors' => false,
+            'reconciliation_allowed' => true,
+        ], false);
+    }
+
+    private function clear_cycle_state(): void
+    {
+        delete_option(self::CYCLE_STATE_OPTION_KEY);
+    }
+
+    private function load_cycle_state(): array
+    {
+        $state = get_option(self::CYCLE_STATE_OPTION_KEY, []);
+        if (!is_array($state)) {
+            return [];
+        }
+
+        return [
+            'started_at' => sanitize_text_field((string) ($state['started_at'] ?? '')),
+            'has_errors' => !empty($state['has_errors']),
+            'reconciliation_allowed' => !isset($state['reconciliation_allowed']) || (bool) $state['reconciliation_allowed'],
+            'last_error_reason' => sanitize_text_field((string) ($state['last_error_reason'] ?? '')),
+            'last_error_at' => sanitize_text_field((string) ($state['last_error_at'] ?? '')),
+        ];
+    }
+
+    private function mark_cycle_state_error(string $reason): void
+    {
+        $state = $this->load_cycle_state();
+        if (empty($state)) {
+            return;
+        }
+
+        $state['has_errors'] = true;
+        $state['reconciliation_allowed'] = false;
+        $state['last_error_reason'] = sanitize_text_field($reason);
+        $state['last_error_at'] = gmdate('Y-m-d H:i:s');
+        update_option(self::CYCLE_STATE_OPTION_KEY, $state, false);
+    }
+
+    private function can_run_reconciliation(?int $total_count_from_api): bool
+    {
+        if ($total_count_from_api === null) {
+            return false;
+        }
+
+        $state = $this->load_cycle_state();
+        if (empty($state)) {
+            return false;
+        }
+
+        return !$state['has_errors'] && !empty($state['reconciliation_allowed']);
     }
 }

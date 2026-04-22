@@ -103,6 +103,11 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <input type="hidden" name="action" value="awi_manual_import">
         <?php submit_button(__('Importuj teraz', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+        <?php wp_nonce_field('awi_restore_active_offers'); ?>
+        <input type="hidden" name="action" value="awi_restore_active_offers">
+        <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
 
     <h2><?php esc_html_e('3. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
