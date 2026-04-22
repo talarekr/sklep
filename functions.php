@@ -399,6 +399,74 @@ function gp_get_product_category_lineage(int $current_term_id, array $ancestor_i
     return array_reverse(array_merge([$current_term_id], $ancestor_ids));
 }
 
+function gp_is_technical_product_category(WP_Term $term): bool
+{
+    static $technical_slugs = [
+        'motoryzacja',
+        'czesci-samochodowe',
+    ];
+    static $technical_names = [
+        'motoryzacja',
+        'części samochodowe',
+    ];
+
+    if (in_array(sanitize_title($term->slug), $technical_slugs, true)) {
+        return true;
+    }
+
+    return in_array(mb_strtolower(wp_strip_all_tags((string) $term->name)), $technical_names, true);
+}
+
+function gp_get_user_facing_category(?WP_Term $current_term): ?WP_Term
+{
+    if (!$current_term instanceof WP_Term) {
+        return null;
+    }
+
+    $current_term_id = (int) $current_term->term_id;
+    if ($current_term_id <= 0) {
+        return null;
+    }
+
+    $ancestor_ids = array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy'));
+    $lineage_ids = array_reverse(array_merge([$current_term_id], $ancestor_ids));
+
+    foreach ($lineage_ids as $lineage_id) {
+        $lineage_term = get_term($lineage_id, 'product_cat');
+        if (!$lineage_term instanceof WP_Term) {
+            continue;
+        }
+
+        if (!gp_is_technical_product_category($lineage_term)) {
+            return $lineage_term;
+        }
+    }
+
+    return $current_term;
+}
+
+function gp_get_user_facing_root_categories(): array
+{
+    $resolved = [];
+    $queue = gp_get_product_cat_children(0);
+
+    while ($queue !== []) {
+        $term = array_shift($queue);
+        if (!$term instanceof WP_Term) {
+            continue;
+        }
+
+        if (gp_is_technical_product_category($term)) {
+            $queue = array_merge($queue, gp_get_product_cat_children((int) $term->term_id));
+            continue;
+        }
+
+        $resolved[] = $term;
+    }
+
+    return $resolved;
+}
+
 function gp_render_category_links_list(array $categories, int $active_term_id = 0): void
 {
     if ($categories === []) {
@@ -485,24 +553,19 @@ function gp_render_product_category_sidebar(): void
     }
 
     $current_term = gp_get_current_product_category_term();
-    $context = gp_get_filter_branch_context($current_term);
-    $category_terms = is_array($context['category_terms'] ?? null) ? $context['category_terms'] : [];
-    $active_category_id = (int) ($context['active_category_id'] ?? 0);
-    $subcategory_terms = is_array($context['subcategory_terms'] ?? null) ? $context['subcategory_terms'] : [];
-    $active_subcategory_id = (int) ($context['active_subcategory_id'] ?? 0);
+    $current_term_id = $current_term instanceof WP_Term ? (int) $current_term->term_id : 0;
+    $ancestor_ids = $current_term_id > 0 ? array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy')) : [];
+    $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
+
+    $active_category = gp_get_user_facing_category($current_term);
+    $active_category_id = $active_category instanceof WP_Term ? (int) $active_category->term_id : 0;
+    $category_terms = $active_category instanceof WP_Term ? [$active_category] : gp_get_user_facing_root_categories();
+    $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
 
     if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
         return;
     }
-
-    $current_term = gp_get_current_product_category_term();
-    $current_term_id = $current_term instanceof WP_Term ? (int) $current_term->term_id : 0;
-    $ancestor_ids = $current_term_id > 0 ? array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy')) : [];
-
-    $top_category_id = $current_term instanceof WP_Term ? gp_get_product_category_root_id($ancestor_ids, $current_term_id) : 0;
-    $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
-    $subcategories = $top_category_id > 0 ? gp_get_product_cat_children($top_category_id) : [];
 
     echo '<div class="gp-cat-filter">';
 
