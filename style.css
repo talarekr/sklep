@@ -80,6 +80,40 @@ a:hover { text-decoration: underline; }
 }
 .gp-main-header__top-links a { color: #2f2f2f; font-size: 15px; }
 .gp-main-header__top-links .gp-contact-link { font-weight: 600; }
+.gp-language-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #4a5568;
+}
+.gp-language-switcher__label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gp-language-switcher__select {
+  min-height: 30px;
+  border: 1px solid #cfd6e2;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2937;
+  font-size: 13px;
+  padding: 0 8px;
+}
+.gp-google-translate-element {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+body > .skiptranslate,
+iframe.goog-te-banner-frame {
+  display: none !important;
+}
+body {
+  top: 0 !important;
+}
 .gp-rzetelna-link img {
   display: block;
   max-height: 34px;
@@ -543,6 +577,9 @@ body.home .gp-part-search-box {
 }
 @media (max-width: 767px) {
   .gp-main-header__top-links { justify-content: flex-start; gap: 16px; overflow-x: auto; }
+  .gp-language-switcher {
+    min-width: max-content;
+  }
   .gp-main-search { min-height: 50px; }
   .gp-main-search input { min-height: 48px; font-size: 16px; }
   .gp-main-search button { padding: 0 14px; }
