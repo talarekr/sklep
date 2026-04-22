@@ -32,6 +32,7 @@ class Settings
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
         add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
         add_action('admin_post_awi_listing_images_regenerate_batch', [$this, 'handle_listing_images_regenerate_batch']);
+        add_action('admin_post_awi_listing_images_inspect_front', [$this, 'handle_listing_images_inspect_front']);
     }
 
     public function register_menu(): void
@@ -190,6 +191,20 @@ class Settings
             );
         }
 
+        if (isset($_GET['awi_listing_inspect_done'])) {
+            add_settings_error(
+                'awi_messages',
+                'awi_listing_inspect_done',
+                sprintf(
+                    __('Diagnostyka frontu listing images zakończona. Zalogowano %1$d produktów (strona %2$d, limit %3$d).', 'allegro-woo-importer'),
+                    (int) ($_GET['awi_listing_inspect_logged'] ?? 0),
+                    (int) ($_GET['awi_listing_inspect_page'] ?? 1),
+                    (int) ($_GET['awi_listing_inspect_limit'] ?? 3)
+                ),
+                'updated'
+            );
+        }
+
         $settings = Plugin::get_settings();
         $history = get_option(Plugin::HISTORY_OPTION_KEY, []);
         if (!is_array($history)) {
@@ -243,6 +258,91 @@ class Settings
 
         wp_safe_redirect($redirect);
         exit;
+    }
+
+    public function handle_listing_images_inspect_front(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_listing_images_inspect_front');
+
+        $limit = isset($_POST['awi_listing_inspect_limit']) ? max(1, (int) $_POST['awi_listing_inspect_limit']) : 3;
+        $page = isset($_POST['awi_listing_inspect_page']) ? max(1, (int) $_POST['awi_listing_inspect_page']) : 1;
+        $limit = min(10, $limit);
+
+        $rows = $this->run_front_listing_images_diagnostics($limit, $page);
+
+        $this->logger->info('Front listing image diagnostics executed from admin.', [
+            'trigger' => 'admin_button',
+            'limit' => $limit,
+            'page' => $page,
+            'logged_products' => count($rows),
+        ]);
+
+        foreach ($rows as $row) {
+            $this->logger->info('Front listing image diagnostics product.', $row);
+        }
+
+        $redirect = add_query_arg([
+            'page' => 'awi-settings',
+            'awi_listing_inspect_done' => '1',
+            'awi_listing_inspect_logged' => count($rows),
+            'awi_listing_inspect_page' => $page,
+            'awi_listing_inspect_limit' => $limit,
+        ], admin_url('admin.php'));
+
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    private function run_front_listing_images_diagnostics(int $limit, int $page): array
+    {
+        if (!function_exists('wc_get_products')) {
+            $this->logger->error('Front listing image diagnostics failed: WooCommerce function wc_get_products() unavailable.', [
+                'limit' => $limit,
+                'page' => $page,
+            ]);
+            return [];
+        }
+
+        $products = wc_get_products([
+            'status' => 'publish',
+            'limit' => $limit,
+            'page' => $page,
+            'orderby' => 'menu_order',
+            'order' => 'ASC',
+            'paginate' => false,
+        ]);
+
+        if (!is_array($products) || $products === []) {
+            return [];
+        }
+
+        $rows = [];
+        foreach ($products as $product) {
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $product_id = (int) $product->get_id();
+            $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
+            $rows[] = [
+                'product_id' => $product_id,
+                'product_name' => $product->get_name(),
+                'permalink' => get_permalink($product_id),
+                'rendered_source' => (string) ($diagnostics['rendered_source'] ?? ''),
+                'helper_selected_image_id' => (int) ($diagnostics['helper_selected_image_id'] ?? 0),
+                'listing_image_id' => (int) ($diagnostics['listing_image_id'] ?? 0),
+                'featured_image_id' => (int) ($diagnostics['featured_image_id'] ?? 0),
+                'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
+                'listing_attachment_scale_factor' => (float) ($diagnostics['listing_attachment_scale_factor'] ?? 0),
+                'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0),
+            ];
+        }
+
+        return $rows;
     }
 
     private function run_listing_images_regeneration_batch(int $batch_size): array

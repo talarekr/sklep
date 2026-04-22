@@ -26,6 +26,7 @@ class Cli
         }
 
         \WP_CLI::add_command('awi listing-images regenerate', [$this, 'regenerate_listing_images']);
+        \WP_CLI::add_command('awi listing-images inspect-front', [$this, 'inspect_front_listing_images']);
     }
 
     /**
@@ -123,5 +124,64 @@ class Cli
             $error_total,
             $last_product_id
         ));
+    }
+
+    /**
+     * Sprawdza realny wybór obrazu dla produktów z pierwszej strony sklepu.
+     *
+     * [--limit=<n>]
+     * : Liczba produktów do sprawdzenia (domyślnie 3).
+     *
+     * [--page=<n>]
+     * : Strona paginacji (domyślnie 1).
+     */
+    public function inspect_front_listing_images(array $args, array $assoc_args): void
+    {
+        $limit = isset($assoc_args['limit']) ? max(1, (int) $assoc_args['limit']) : 3;
+        $page = isset($assoc_args['page']) ? max(1, (int) $assoc_args['page']) : 1;
+
+        if (!function_exists('wc_get_products')) {
+            \WP_CLI::error('WooCommerce nie jest aktywne - brak wc_get_products().');
+            return;
+        }
+
+        $products = wc_get_products([
+            'status' => 'publish',
+            'limit' => $limit,
+            'page' => $page,
+            'orderby' => 'menu_order',
+            'order' => 'ASC',
+            'paginate' => false,
+        ]);
+
+        if (!is_array($products) || $products === []) {
+            \WP_CLI::warning('Brak produktów do analizy dla podanych parametrów.');
+            return;
+        }
+
+        $report = [];
+        foreach ($products as $product) {
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $product_id = (int) $product->get_id();
+            $report[] = [
+                'product_id' => $product_id,
+                'product_name' => $product->get_name(),
+                'permalink' => get_permalink($product_id),
+                'diagnostics' => $this->mapper->get_listing_image_diagnostics($product_id),
+            ];
+        }
+
+        \WP_CLI::line(wp_json_encode([
+            'query' => [
+                'limit' => $limit,
+                'page' => $page,
+                'orderby' => 'menu_order',
+                'order' => 'ASC',
+            ],
+            'products' => $report,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 }
