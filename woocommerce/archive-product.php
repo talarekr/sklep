@@ -30,10 +30,8 @@ get_header('shop');
                     }
                 }
 
-                if (function_exists('gp_get_product_category_tree') && function_exists('gp_render_product_category_tree') && gp_get_product_category_tree(0) !== []) {
+                if (function_exists('gp_render_product_category_tree')) {
                     gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
-                } else {
-                    echo '<p class="gp-shop-sidebar__empty">' . esc_html__('Brak kategorii do wyświetlenia.', 'gp-clone') . '</p>';
                 }
                 ?>
             </aside>

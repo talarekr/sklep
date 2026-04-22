@@ -100,10 +100,8 @@ function gp_get_product_category_tree(int $parent_term_id = 0): array
 {
     $terms = get_terms([
         'taxonomy' => 'product_cat',
-        'hide_empty' => false,
+        'hide_empty' => true,
         'parent' => $parent_term_id,
-        'hierarchical' => true,
-        'pad_counts' => true,
         'orderby' => 'name',
         'order' => 'ASC',
     ]);
