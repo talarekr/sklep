@@ -426,90 +426,45 @@ function gp_render_category_links_list(array $categories, int $active_term_id = 
     echo '</ul>';
 }
 
-function gp_is_hidden_root_category(WP_Term $term): bool
+function gp_render_category_tree(array $categories, array $lineage_ids): void
 {
-    $hidden_root_slugs = ['motoryzacja'];
-    $hidden_root_names = ['motoryzacja'];
-
-    $slug = sanitize_title((string) $term->slug);
-    $name = sanitize_title((string) $term->name);
-
-    return in_array($slug, $hidden_root_slugs, true) || in_array($name, $hidden_root_names, true);
-}
-
-function gp_get_filter_branch_context(?WP_Term $current_term): array
-{
-    if (!$current_term instanceof WP_Term) {
-        return [
-            'branch_parent' => null,
-            'category_terms' => [],
-            'active_category_id' => 0,
-            'subcategory_terms' => [],
-            'active_subcategory_id' => 0,
-        ];
+    if ($categories === []) {
+        return;
     }
 
-    $current_term_id = (int) $current_term->term_id;
-    $ancestor_ids = array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy'));
-    $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
-    $lineage_terms = array_values(array_filter(array_map('get_term', $lineage), static fn($term): bool => $term instanceof WP_Term));
-
-    if ($lineage_terms === []) {
-        return [
-            'branch_parent' => null,
-            'category_terms' => [],
-            'active_category_id' => 0,
-            'subcategory_terms' => [],
-            'active_subcategory_id' => 0,
-        ];
-    }
-
-    $visible_start_index = 0;
-    if (isset($lineage_terms[0]) && gp_is_hidden_root_category($lineage_terms[0])) {
-        $visible_start_index = 1;
-    }
-
-    $branch_parent = $lineage_terms[$visible_start_index] ?? null;
-    if (!$branch_parent instanceof WP_Term) {
-        return [
-            'branch_parent' => null,
-            'category_terms' => [],
-            'active_category_id' => 0,
-            'subcategory_terms' => [],
-            'active_subcategory_id' => 0,
-        ];
-    }
-
-    $category_terms = gp_get_product_cat_children((int) $branch_parent->term_id);
-    $active_category_id = 0;
-
-    foreach ($lineage_terms as $term) {
-        if ((int) $term->parent === (int) $branch_parent->term_id) {
-            $active_category_id = (int) $term->term_id;
-            break;
+    echo '<ul class="gp-cat-filter__list gp-cat-filter__list--tree">';
+    foreach ($categories as $category) {
+        if (!$category instanceof WP_Term) {
+            continue;
         }
-    }
 
-    if ($active_category_id <= 0 && !empty($category_terms[0]) && $category_terms[0] instanceof WP_Term) {
-        $active_category_id = (int) $category_terms[0]->term_id;
-    }
-
-    $subcategory_terms = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
-    $active_subcategory_id = 0;
-    foreach ($lineage_terms as $term) {
-        if ((int) $term->parent === $active_category_id) {
-            $active_subcategory_id = (int) $term->term_id;
-            break;
+        $term_link = get_term_link($category);
+        if (is_wp_error($term_link)) {
+            continue;
         }
-    }
 
-    return [
-        'branch_parent' => $branch_parent,
-        'category_terms' => $category_terms,
-        'active_category_id' => $active_category_id,
-        'subcategory_terms' => $subcategory_terms,
-        'active_subcategory_id' => $active_subcategory_id,
-    ];
+        $term_id = (int) $category->term_id;
+        $is_active = !empty($lineage_ids) && $term_id === (int) end($lineage_ids);
+        $is_in_lineage = in_array($term_id, $lineage_ids, true);
+
+        $classes = ['gp-cat-filter__link'];
+        if ($is_active) {
+            $classes[] = 'is-active';
+        } elseif ($is_in_lineage) {
+            $classes[] = 'is-parent-active';
+        }
+
+        echo '<li>';
+        echo '<a class="' . esc_attr(implode(' ', $classes)) . '" href="' . esc_url($term_link) . '">' . esc_html($category->name) . '</a>';
+
+        $children = gp_get_product_cat_children($term_id);
+        if ($children !== [] && $is_in_lineage) {
+            gp_render_category_tree($children, $lineage_ids);
+        }
+
+        echo '</li>';
+    }
+    echo '</ul>';
 }
 
 function gp_render_category_filter_section(string $title, callable $content_renderer, bool $open = true): void
@@ -541,16 +496,24 @@ function gp_render_product_category_sidebar(): void
         return;
     }
 
+    $current_term = gp_get_current_product_category_term();
+    $current_term_id = $current_term instanceof WP_Term ? (int) $current_term->term_id : 0;
+    $ancestor_ids = $current_term_id > 0 ? array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy')) : [];
+
+    $top_category_id = $current_term instanceof WP_Term ? gp_get_product_category_root_id($ancestor_ids, $current_term_id) : 0;
+    $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
+    $subcategories = $top_category_id > 0 ? gp_get_product_cat_children($top_category_id) : [];
+
     echo '<div class="gp-cat-filter">';
 
     gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($category_terms, $active_category_id): void {
         gp_render_category_links_list($category_terms, $active_category_id);
     });
 
-    if ($subcategory_terms !== []) {
-        gp_render_category_filter_section(__('Podkategorie', 'gp-clone'), static function () use ($subcategory_terms, $active_subcategory_id): void {
-            gp_render_category_links_list($subcategory_terms, $active_subcategory_id);
-        }, true);
+    if ($subcategories !== []) {
+        gp_render_category_filter_section(__('Podkategorie', 'gp-clone'), static function () use ($subcategories, $lineage): void {
+            gp_render_category_tree($subcategories, $lineage);
+        }, $current_term_id > 0);
     }
 
     echo '</div>';
