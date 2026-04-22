@@ -164,6 +164,16 @@ class Importer
         $next_offset = $offset + $batch_size;
         $next_page_no = $page_no + 1;
         $has_more = $this->has_more_pages($batch_size, self::BATCH_LIMIT, $next_offset, $total_count_from_api, $next_page_token);
+        $completion_reason = $this->determine_cycle_completion_reason($batch_size, $next_offset, $total_count_from_api, $next_page_token);
+        $this->logger->info('Cycle completion evaluation.', [
+            'has_more' => $has_more,
+            'reason' => $completion_reason,
+            'batch_size' => $batch_size,
+            'next_offset' => $next_offset,
+            'expected_total_count' => $total_count_from_api,
+            'next_page_token' => $next_page_token,
+            'total_active_offers_seen' => count($this->load_active_seen_offer_ids()),
+        ]);
 
         if ($has_more) {
             $this->save_checkpoint([
@@ -323,6 +333,27 @@ class Importer
         return $batch_size === $limit;
     }
 
+    private function determine_cycle_completion_reason(
+        int $batch_size,
+        int $next_offset,
+        ?int $total_count_from_api,
+        string $next_page_token
+    ): string {
+        if ($next_page_token !== '') {
+            return 'next_page_token_present';
+        }
+
+        if ($total_count_from_api !== null) {
+            return $next_offset < $total_count_from_api
+                ? 'offset_below_total_count'
+                : 'offset_reached_or_exceeded_total_count';
+        }
+
+        return $batch_size === self::BATCH_LIMIT
+            ? 'fallback_batch_equals_limit'
+            : 'fallback_batch_below_limit';
+    }
+
     private function is_cycle_start(int $offset, int $page_no, int $resume_offer_index): bool
     {
         return $offset === 0 && $page_no === 1 && $resume_offer_index === 0;
@@ -379,6 +410,27 @@ class Importer
         }
 
         $seen_offer_ids = array_keys($this->load_active_seen_offer_ids());
+        $seen_count = count($seen_offer_ids);
+        $proposed_to_hide = $this->count_products_missing_seen_offers($seen_offer_ids);
+        $evaluation = $this->evaluate_reconciliation_readiness($settings, $total_count_from_api, $seen_count);
+        $this->logger->info('Reconciliation diagnostics.', [
+            'reconciliation_enabled' => !empty($settings['reconciliation_enabled']),
+            'reconciliation_allowed' => $evaluation['allowed'],
+            'reason' => $evaluation['reason'],
+            'total_active_offers_seen' => $seen_count,
+            'expected_total_count' => $total_count_from_api,
+            'products_proposed_for_hide' => $proposed_to_hide,
+            'offer_status_filter' => (string) ($settings['offer_status'] ?? ''),
+            'cycle_state' => $this->load_cycle_state(),
+        ]);
+
+        if (!$evaluation['allowed']) {
+            $this->logger->warning('Reconciliation blocked. Products will not be changed.', [
+                'reason' => $evaluation['reason'],
+            ]);
+            return 0;
+        }
+
         $processed = 0;
         $page = 1;
 

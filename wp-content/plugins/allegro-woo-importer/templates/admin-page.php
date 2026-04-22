@@ -68,6 +68,15 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
                 <td><input class="regular-text" name="<?php echo esc_attr($option_key); ?>[offer_status]" value="<?php echo esc_attr($settings['offer_status']); ?>" /></td>
             </tr>
             <tr>
+                <th scope="row"><?php esc_html_e('Reconciliation (ukrywanie niewidzianych ofert)', 'allegro-woo-importer'); ?></th>
+                <td>
+                    <label>
+                        <input type="checkbox" name="<?php echo esc_attr($option_key); ?>[reconciliation_enabled]" value="1" <?php checked(!empty($settings['reconciliation_enabled'])); ?> />
+                        <?php esc_html_e('Włącz reconciliation (domyślnie WYŁĄCZONE dla bezpieczeństwa)', 'allegro-woo-importer'); ?>
+                    </label>
+                </td>
+            </tr>
+            <tr>
                 <th scope="row"><?php esc_html_e('Auto-sync (WP-Cron)', 'allegro-woo-importer'); ?></th>
                 <td>
                     <select name="<?php echo esc_attr($option_key); ?>[cron_interval]">

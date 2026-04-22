@@ -67,6 +67,7 @@ class Settings
             'inactive_product_status' => in_array(($input['inactive_product_status'] ?? 'draft'), ['draft', 'private'], true) ? $input['inactive_product_status'] : 'draft',
             'cron_interval' => in_array(($input['cron_interval'] ?? 'manual'), ['manual', 'awi_15_minutes', 'hourly', 'daily'], true) ? $input['cron_interval'] : 'manual',
             'offer_status' => sanitize_text_field($input['offer_status'] ?? 'ACTIVE'),
+            'reconciliation_enabled' => !empty($input['reconciliation_enabled']),
         ];
 
         return array_merge($current, $clean);
