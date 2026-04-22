@@ -555,10 +555,6 @@ add_action('wp_footer', function (): void {
         return;
     }
 
-    if (is_front_page()) {
-        return;
-    }
-
     get_template_part('template-parts/shared/part-number-search-box');
 }, 20);
 

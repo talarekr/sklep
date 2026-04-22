@@ -73,7 +73,7 @@ a:hover { text-decoration: underline; }
 .gp-main-header__top-links {
   display: flex;
   justify-content: flex-end;
-  gap: 40px;
+  gap: 18px;
   min-height: 46px;
   align-items: center;
   border-bottom: 1px solid var(--gp-border);
@@ -84,6 +84,10 @@ a:hover { text-decoration: underline; }
   display: block;
   max-height: 34px;
   width: auto;
+}
+.gp-rzetelna-link--top {
+  display: inline-flex;
+  align-items: center;
 }
 .gp-main-header__row {
   display: grid;
@@ -170,7 +174,7 @@ a:hover { text-decoration: underline; }
 .gp-part-search-box {
   position: fixed;
   left: 0;
-  top: 38%;
+  top: 50%;
   transform: translateY(-50%);
   z-index: 1200;
   display: flex;
@@ -212,8 +216,8 @@ a:hover { text-decoration: underline; }
 }
 .gp-part-search-box__panel {
   pointer-events: auto;
-  width: 320px;
-  margin-left: 10px;
+  width: 260px;
+  margin-left: 8px;
   background: #f4f6fb;
   border: 1px solid #d8deeb;
   border-radius: 14px;
@@ -564,7 +568,7 @@ a:hover { text-decoration: underline; }
 .gp-hero__content {
   min-height: 460px;
   display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: center;
   padding: 32px 12px;
