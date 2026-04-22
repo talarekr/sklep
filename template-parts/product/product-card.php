@@ -16,7 +16,7 @@ if (!$product instanceof WC_Product) {
 
 $wrapper_classes = trim((string) ($args['wrapper_classes'] ?? ''));
 $wrapper_class_attr = $wrapper_classes !== '' ? ' ' . $wrapper_classes : '';
-$product_image_id = $product->get_image_id();
+$product_image_id = class_exists('\\AWI\\Plugin') ? \AWI\Plugin::get_listing_image_id_for_product((int) $product->get_id()) : 0;
 ?>
 <article class="gp-product product-card<?php echo esc_attr($wrapper_class_attr); ?>">
     <button type="button" class="gp-product__fav product-wishlist" aria-label="<?php echo esc_attr(sprintf(__('Dodaj %s do obserwowanych', 'gp-clone'), $product->get_name())); ?>">
@@ -24,7 +24,7 @@ $product_image_id = $product->get_image_id();
     </button>
     <a class="product-image" href="<?php echo esc_url(get_permalink($product->get_id())); ?>" aria-label="<?php echo esc_attr($product->get_name()); ?>">
         <?php
-        if ($product_image_id) {
+        if ($product_image_id > 0) {
             echo wp_get_attachment_image($product_image_id, 'large', false, [
                 'class' => 'product-image__img',
                 'loading' => 'lazy',

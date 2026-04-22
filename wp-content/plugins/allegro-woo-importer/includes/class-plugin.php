@@ -20,6 +20,7 @@ final class Plugin
     private ProductMapper $mapper;
     private Importer $importer;
     private Cron $cron;
+    private Cli $cli;
 
     public static function instance(): self
     {
@@ -40,6 +41,7 @@ final class Plugin
         $this->mapper = new ProductMapper($this->client, $this->logger);
         $this->importer = new Importer($this->client, $this->mapper, $this->logger);
         $this->cron = new Cron($this->importer, $this->logger);
+        $this->cli = new Cli($this->mapper, $this->logger);
         $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron);
 
         add_action('plugins_loaded', [$this, 'bootstrap'], 20);
@@ -56,6 +58,7 @@ final class Plugin
         require_once AWI_PLUGIN_DIR . 'includes/class-product-mapper.php';
         require_once AWI_PLUGIN_DIR . 'includes/class-importer.php';
         require_once AWI_PLUGIN_DIR . 'includes/class-cron.php';
+        require_once AWI_PLUGIN_DIR . 'includes/class-cli.php';
         require_once AWI_PLUGIN_DIR . 'includes/class-settings.php';
     }
 
@@ -70,6 +73,7 @@ final class Plugin
         $this->settings->hooks();
         $this->cron->hooks();
         $this->auth->hooks();
+        $this->cli->register();
     }
 
     public function woocommerce_missing_notice(): void
@@ -134,5 +138,11 @@ final class Plugin
         $history = array_slice($history, 0, 30);
 
         update_option(self::HISTORY_OPTION_KEY, $history, false);
+    }
+
+    public static function get_listing_image_id_for_product(int $product_id): int
+    {
+        $instance = self::instance();
+        return $instance->mapper->get_preferred_listing_image_id($product_id);
     }
 }

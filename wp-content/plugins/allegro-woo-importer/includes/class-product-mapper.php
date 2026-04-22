@@ -14,6 +14,13 @@ class ProductMapper
     private const MAX_IMAGE_FILE_SIZE_BYTES = 12582912; // 12 MB
     private const MAX_IMAGE_TOTAL_PIXELS = 24000000; // 24 MP
     private const IMPORT_ALLOWED_SUBSIZES = ['thumbnail'];
+    private const LISTING_IMAGE_META_KEY = '_awi_listing_image_id';
+    private const LISTING_IMAGE_SOURCE_META_KEY = '_awi_listing_image_source_id';
+    private const LISTING_IMAGE_GENERATED_AT_META_KEY = '_awi_listing_image_generated_at';
+    private const LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY = '_awi_listing_variant';
+    private const LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY = '_awi_listing_source_id';
+    private const LISTING_IMAGE_CANVAS_SIZE = 900;
+    private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
     private AllegroClient $client;
     private Logger $logger;
@@ -25,6 +32,50 @@ class ProductMapper
     {
         $this->client = $client;
         $this->logger = $logger;
+    }
+
+    public function get_preferred_listing_image_id(int $product_id): int
+    {
+        $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        if ($listing_image_id <= 0) {
+            return 0;
+        }
+
+        return get_post($listing_image_id) instanceof \WP_Post ? $listing_image_id : 0;
+    }
+
+    public function ensure_listing_image_for_product(int $product_id, bool $force = false): array
+    {
+        $thumbnail_id = (int) get_post_thumbnail_id($product_id);
+        if ($thumbnail_id <= 0) {
+            return ['status' => 'skipped', 'reason' => 'missing_thumbnail'];
+        }
+
+        $current_listing_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $current_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
+        if (!$force && $current_listing_id > 0 && $current_source_id === $thumbnail_id && get_post($current_listing_id) instanceof \WP_Post) {
+            return ['status' => 'skipped', 'reason' => 'already_generated', 'listing_image_id' => $current_listing_id];
+        }
+
+        $created_listing_id = $this->create_listing_image_attachment($thumbnail_id, $product_id);
+        if (is_wp_error($created_listing_id)) {
+            return [
+                'status' => 'error',
+                'reason' => 'listing_image_generation_failed',
+                'error_code' => $created_listing_id->get_error_code(),
+                'error_message' => $created_listing_id->get_error_message(),
+            ];
+        }
+
+        if ($current_listing_id > 0 && $current_listing_id !== $created_listing_id) {
+            wp_delete_attachment($current_listing_id, true);
+        }
+
+        update_post_meta($product_id, self::LISTING_IMAGE_META_KEY, $created_listing_id);
+        update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $thumbnail_id);
+        update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
+
+        return ['status' => 'created', 'listing_image_id' => $created_listing_id];
     }
 
     public function upsert_product(array $offer, array $settings): array
@@ -818,6 +869,13 @@ class ProductMapper
             'featured_attachment_id' => $featured_id,
             'gallery_count' => count($gallery_only),
         ]);
+
+        $listing_image_result = $this->ensure_listing_image_for_product($product_id, true);
+        $this->logger->info('Listing image generation after import.', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'result' => $listing_image_result,
+        ]);
     }
 
     /**
@@ -1148,5 +1206,109 @@ class ProductMapper
         $checkpoint['logged_at'] = gmdate('Y-m-d H:i:s');
         update_option('awi_last_image_import_checkpoint', wp_json_encode($checkpoint), false);
         $this->logger->info('Image import checkpoint.', $checkpoint);
+    }
+
+    /**
+     * @return int|\WP_Error
+     */
+    private function create_listing_image_attachment(int $source_attachment_id, int $product_id)
+    {
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
+            return new \WP_Error('gd_missing', __('Brak biblioteki GD wymaganej do generowania obrazu listingowego.', 'allegro-woo-importer'));
+        }
+
+        $source_path = get_attached_file($source_attachment_id);
+        if (!is_string($source_path) || $source_path === '' || !file_exists($source_path)) {
+            return new \WP_Error('missing_source_file', __('Brak pliku źródłowego dla zdjęcia listingowego.', 'allegro-woo-importer'));
+        }
+
+        $source_blob = file_get_contents($source_path);
+        if (!is_string($source_blob) || $source_blob === '') {
+            return new \WP_Error('source_read_failed', __('Nie udało się odczytać pliku źródłowego.', 'allegro-woo-importer'));
+        }
+
+        $source_image = @imagecreatefromstring($source_blob);
+        if (!$source_image) {
+            return new \WP_Error('source_decode_failed', __('Nie udało się odczytać obrazu źródłowego.', 'allegro-woo-importer'));
+        }
+
+        $source_width = imagesx($source_image);
+        $source_height = imagesy($source_image);
+        if ($source_width <= 0 || $source_height <= 0) {
+            imagedestroy($source_image);
+            return new \WP_Error('invalid_source_dimensions', __('Nieprawidłowe wymiary obrazu źródłowego.', 'allegro-woo-importer'));
+        }
+
+        $canvas_size = self::LISTING_IMAGE_CANVAS_SIZE;
+        $target_ratio = self::LISTING_IMAGE_TARGET_FILL_RATIO;
+        $max_object_size = (int) round($canvas_size * $target_ratio);
+        $scale = min($max_object_size / $source_width, $max_object_size / $source_height);
+        $target_width = max(1, (int) round($source_width * $scale));
+        $target_height = max(1, (int) round($source_height * $scale));
+        $dst_x = (int) floor(($canvas_size - $target_width) / 2);
+        $dst_y = (int) floor(($canvas_size - $target_height) / 2);
+
+        $canvas = imagecreatetruecolor($canvas_size, $canvas_size);
+        if (!$canvas) {
+            imagedestroy($source_image);
+            return new \WP_Error('canvas_create_failed', __('Nie udało się utworzyć płótna dla obrazu listingowego.', 'allegro-woo-importer'));
+        }
+
+        $white = imagecolorallocate($canvas, 255, 255, 255);
+        imagefill($canvas, 0, 0, $white);
+        imagecopyresampled(
+            $canvas,
+            $source_image,
+            $dst_x,
+            $dst_y,
+            0,
+            0,
+            $target_width,
+            $target_height,
+            $source_width,
+            $source_height
+        );
+
+        $upload_dir = wp_upload_dir();
+        if (!empty($upload_dir['error'])) {
+            imagedestroy($source_image);
+            imagedestroy($canvas);
+            return new \WP_Error('upload_dir_error', (string) $upload_dir['error']);
+        }
+
+        $source_filename = (string) pathinfo((string) basename($source_path), PATHINFO_FILENAME);
+        $target_filename = wp_unique_filename((string) $upload_dir['path'], sanitize_file_name($source_filename . '-awi-listing.jpg'));
+        $target_path = trailingslashit((string) $upload_dir['path']) . $target_filename;
+
+        $saved = imagejpeg($canvas, $target_path, 90);
+        imagedestroy($source_image);
+        imagedestroy($canvas);
+        if (!$saved || !file_exists($target_path)) {
+            return new \WP_Error('listing_image_save_failed', __('Nie udało się zapisać obrazu listingowego.', 'allegro-woo-importer'));
+        }
+
+        $attachment_id = wp_insert_attachment([
+            'post_mime_type' => 'image/jpeg',
+            'post_title' => sanitize_text_field((string) get_the_title($source_attachment_id)) . ' listing',
+            'post_content' => '',
+            'post_status' => 'inherit',
+            'post_parent' => $product_id,
+        ], $target_path, $product_id);
+
+        if (!$attachment_id || is_wp_error($attachment_id)) {
+            @unlink($target_path);
+            return new \WP_Error('listing_attachment_insert_failed', __('Nie udało się dodać załącznika obrazu listingowego.', 'allegro-woo-importer'));
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $attachment_metadata = wp_generate_attachment_metadata((int) $attachment_id, $target_path);
+        if (is_array($attachment_metadata)) {
+            wp_update_attachment_metadata((int) $attachment_id, $attachment_metadata);
+        }
+
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, 1);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, $source_attachment_id);
+
+        return (int) $attachment_id;
     }
 }
