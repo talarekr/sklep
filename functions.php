@@ -35,6 +35,16 @@ add_action('wp_enqueue_scripts', function () {
     if (class_exists('WooCommerce')) {
         wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.3');
         wp_enqueue_script('wc-cart-fragments');
+
+        if (is_product()) {
+            wp_enqueue_script(
+                'gp-clone-single-product',
+                get_template_directory_uri() . '/assets/js/single-product.js',
+                [],
+                '1.0.0',
+                true
+            );
+        }
     }
 });
 
@@ -351,10 +361,6 @@ function gp_render_product_category_sidebar(): void
         }
         echo '</select>';
 
-        echo '<div class="gp-cat-filter__quick-links-wrap">';
-        echo '<span class="gp-cat-filter__quick-links-label">' . esc_html__('Szybki wybór', 'gp-clone') . '</span>';
-        gp_render_category_links_list($top_categories, $top_category_id);
-        echo '</div>';
     });
 
     if ($subcategories !== []) {
