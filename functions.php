@@ -663,6 +663,27 @@ function gp_render_category_select(array $categories, int $selected_category_id,
     echo '</select>';
 }
 
+function gp_render_brand_select(array $brands, string $selected_brand_slug): void
+{
+    if ($brands === []) {
+        return;
+    }
+
+    echo '<label class="screen-reader-text" for="gp-brand-filter-select">' . esc_html__('Marka', 'gp-clone') . '</label>';
+    echo '<select id="gp-brand-filter-select" name="brand" class="gp-cat-filter__select">';
+    echo '<option value="">' . esc_html__('Wszystkie marki', 'gp-clone') . '</option>';
+
+    foreach ($brands as $brand) {
+        if (!$brand instanceof WP_Term) {
+            continue;
+        }
+
+        echo '<option value="' . esc_attr($brand->slug) . '"' . selected($brand->slug, $selected_brand_slug, false) . '>' . esc_html($brand->name) . '</option>';
+    }
+
+    echo '</select>';
+}
+
 function gp_build_subcategory_map(array $categories): array
 {
     $map = [];
@@ -712,6 +733,33 @@ function gp_render_product_category_sidebar(): void
     $category_terms = gp_get_user_facing_root_categories();
     $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
     $subcategories_map = gp_build_subcategory_map($category_terms);
+    $selected_brand_slug = isset($_GET['brand']) ? sanitize_title((string) wp_unslash($_GET['brand'])) : '';
+    $selected_price_min = isset($_GET['price_min']) ? wc_clean(wp_unslash((string) $_GET['price_min'])) : '';
+    $selected_price_max = isset($_GET['price_max']) ? wc_clean(wp_unslash((string) $_GET['price_max'])) : '';
+    $persistent_query_args = [];
+    if ($selected_brand_slug !== '') {
+        $persistent_query_args['brand'] = $selected_brand_slug;
+    }
+    if ($selected_price_min !== '') {
+        $persistent_query_args['price_min'] = $selected_price_min;
+    }
+    if ($selected_price_max !== '') {
+        $persistent_query_args['price_max'] = $selected_price_max;
+    }
+    $brand_terms = [];
+    if (taxonomy_exists('gp_car_brand')) {
+        $brand_term_query = get_terms([
+            'taxonomy' => 'gp_car_brand',
+            'hide_empty' => true,
+            'orderby' => 'name',
+            'order' => 'ASC',
+        ]);
+        if (!is_wp_error($brand_term_query) && is_array($brand_term_query)) {
+            $brand_terms = array_values(array_filter($brand_term_query, static function ($term): bool {
+                return $term instanceof WP_Term;
+            }));
+        }
+    }
 
     if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
@@ -721,9 +769,11 @@ function gp_render_product_category_sidebar(): void
     echo '<div class="gp-cat-filter">';
     echo '<form method="get" class="gp-cat-filter__form" data-gp-sidebar-filter-form>';
 
-    gp_render_category_filter_section(__('Marka', 'gp-clone'), static function () use ($brand_terms, $selected_brand_slug): void {
-        gp_render_brand_select($brand_terms, $selected_brand_slug);
-    });
+    if (function_exists('gp_render_brand_select') && $brand_terms !== []) {
+        gp_render_category_filter_section(__('Marka', 'gp-clone'), static function () use ($brand_terms, $selected_brand_slug): void {
+            gp_render_brand_select($brand_terms, $selected_brand_slug);
+        });
+    }
 
     gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($category_terms, $active_category_id, $persistent_query_args): void {
         gp_render_category_select($category_terms, $active_category_id, $persistent_query_args);
