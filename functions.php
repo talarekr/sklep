@@ -128,12 +128,8 @@ add_action('wp', function (): void {
     add_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
     add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_end', 31);
 }, 20);
-add_filter('loop_shop_columns', static function (): int {
-    return 3;
-});
-add_filter('loop_shop_per_page', static function (): int {
-    return 60;
-});
+add_filter('loop_shop_columns', static fn() => 3);
+add_filter('loop_shop_per_page', static fn() => 60);
 
 add_filter('woocommerce_add_to_cart_fragments', function ($fragments) {
     ob_start();
@@ -234,6 +230,18 @@ function gp_get_product_cat_children(int $parent_id): array
                 $runtime_tree[$term_parent_id][] = $term;
             }
         }
+    }
+
+    return null;
+}
+
+add_action('created_product_cat', static function (): void {
+    delete_transient('gp_product_cat_tree_v1');
+});
+
+add_action('edited_product_cat', static function (): void {
+    delete_transient('gp_product_cat_tree_v1');
+});
 
         set_transient('gp_product_cat_tree_v1', $runtime_tree, 10 * MINUTE_IN_SECONDS);
     }
@@ -243,35 +251,7 @@ function gp_get_product_cat_children(int $parent_id): array
         return [];
     }
 
-    return array_values(array_filter($terms_for_parent, static function ($term): bool {
-        return $term instanceof WP_Term;
-    }));
-}
-
-function gp_is_excluded_product_category(WP_Term $term): bool
-{
-    $default_product_cat_id = (int) get_option('default_product_cat');
-    if ($default_product_cat_id > 0 && (int) $term->term_id === $default_product_cat_id) {
-        return true;
-    }
-
-    $excluded_slugs = ['uncategorized', 'bez-kategorii'];
-    return in_array((string) $term->slug, $excluded_slugs, true);
-}
-
-function gp_find_top_category_by_slug(array $categories, string $slug): ?WP_Term
-{
-    foreach ($categories as $category) {
-        if (!$category instanceof WP_Term) {
-            continue;
-        }
-
-        if ((string) $category->slug === $slug) {
-            return $category;
-        }
-    }
-
-    return null;
+    return array_values(array_filter($terms_for_parent, static fn($term) => $term instanceof WP_Term));
 }
 
 add_action('created_product_cat', static function (): void {
@@ -348,12 +328,7 @@ function gp_render_product_category_sidebar(): void
         return;
     }
 
-    $top_categories = array_values(array_filter(
-        gp_get_product_cat_children(0),
-        static function ($term): bool {
-            return $term instanceof WP_Term && !gp_is_excluded_product_category($term);
-        }
-    ));
+    $top_categories = gp_get_product_cat_children(0);
     if ($top_categories === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
         return;
@@ -364,13 +339,6 @@ function gp_render_product_category_sidebar(): void
     $ancestor_ids = $current_term_id > 0 ? array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy')) : [];
 
     $top_category_id = $current_term instanceof WP_Term ? gp_get_product_category_root_id($ancestor_ids, $current_term_id) : 0;
-    if ($top_category_id === 0) {
-        $default_top_category = gp_find_top_category_by_slug($top_categories, 'motoryzacja');
-        if ($default_top_category instanceof WP_Term) {
-            $top_category_id = (int) $default_top_category->term_id;
-        }
-    }
-
     $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
     $active_subcategory_id = isset($lineage[1]) ? (int) $lineage[1] : 0;
     $active_third_level_id = isset($lineage[2]) ? (int) $lineage[2] : 0;
@@ -394,6 +362,11 @@ function gp_render_product_category_sidebar(): void
             echo '<option value="' . esc_url($term_link) . '"' . selected($top_category_id, (int) $category->term_id, false) . '>' . esc_html($category->name) . '</option>';
         }
         echo '</select>';
+
+        echo '<div class="gp-cat-filter__quick-links-wrap">';
+        echo '<span class="gp-cat-filter__quick-links-label">' . esc_html__('Szybki wybór', 'gp-clone') . '</span>';
+        gp_render_category_links_list($top_categories, $top_category_id);
+        echo '</div>';
     });
 
     if ($subcategories !== []) {
