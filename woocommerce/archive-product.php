@@ -14,15 +14,15 @@ get_header('shop');
     $current_category = get_queried_object();
     $shop_search_url = wc_get_page_permalink('shop');
     ?>
-    <?php if (is_tax('product_cat') && $current_category instanceof WP_Term) : ?>
-        <section class="gp-category-search-hero">
-            <div class="gp-container">
+    <div class="gp-container">
+        <?php if (is_product_category() && $current_category instanceof WP_Term) : ?>
+            <section class="gp-category-search-hero">
                 <div class="gp-category-search-hero__inner">
                     <div class="gp-category-search-hero__media">
-                    <h1 class="gp-category-search-hero__title"><?php echo esc_html($current_category->name); ?></h1>
-                    <p class="gp-category-search-hero__description">
-                        <?php esc_html_e('W sklepie motoryzacyjnym GP Swiss znajdziesz szeroki wybór oryginalnych, używanych części samochodowych do wielu popularnych marek, takich jak BMW, Mini, Mercedes, Audi czy Volkswagen. Każdy oferowany przez nas produkt jest dokładnie sprawdzany pod kątem jakości i sprawności, dzięki czemu masz pewność, że wybierasz sprawdzony i solidny produkt.', 'gp-clone'); ?>
-                    </p>
+                        <h1 class="gp-category-search-hero__title"><?php echo esc_html($current_category->name); ?></h1>
+                        <p class="gp-category-search-hero__description">
+                            <?php esc_html_e('W sklepie motoryzacyjnym GP Swiss znajdziesz szeroki wybór oryginalnych, używanych części samochodowych do wielu popularnych marek, takich jak BMW, Mini, Mercedes, Audi czy Volkswagen. Każdy oferowany przez nas produkt jest dokładnie sprawdzany pod kątem jakości i sprawności, dzięki czemu masz pewność, że wybierasz sprawdzony i solidny produkt.', 'gp-clone'); ?>
+                        </p>
                     </div>
                     <div class="gp-category-search-hero__panel">
                         <div class="gp-search-tabs" data-search-switch>
