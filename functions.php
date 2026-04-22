@@ -484,8 +484,14 @@ function gp_render_product_category_sidebar(): void
         return;
     }
 
-    $top_categories = gp_get_product_cat_children(0);
-    if ($top_categories === []) {
+    $current_term = gp_get_current_product_category_term();
+    $context = gp_get_filter_branch_context($current_term);
+    $category_terms = is_array($context['category_terms'] ?? null) ? $context['category_terms'] : [];
+    $active_category_id = (int) ($context['active_category_id'] ?? 0);
+    $subcategory_terms = is_array($context['subcategory_terms'] ?? null) ? $context['subcategory_terms'] : [];
+    $active_subcategory_id = (int) ($context['active_subcategory_id'] ?? 0);
+
+    if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
         return;
     }
@@ -500,22 +506,8 @@ function gp_render_product_category_sidebar(): void
 
     echo '<div class="gp-cat-filter">';
 
-    gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($top_category_id, $top_categories): void {
-        echo '<label class="screen-reader-text" for="gp-cat-parent-select">' . esc_html__('Wybierz kategorię główną', 'gp-clone') . '</label>';
-        echo '<select id="gp-cat-parent-select" class="gp-cat-filter__select" data-gp-cat-select>';
-        echo '<option value="' . esc_url(wc_get_page_permalink('shop')) . '"' . selected($top_category_id, 0, false) . '>' . esc_html__('Wszystkie kategorie', 'gp-clone') . '</option>';
-        foreach ($top_categories as $category) {
-            if (!$category instanceof WP_Term) {
-                continue;
-            }
-            $term_link = get_term_link($category);
-            if (is_wp_error($term_link)) {
-                continue;
-            }
-            echo '<option value="' . esc_url($term_link) . '"' . selected($top_category_id, (int) $category->term_id, false) . '>' . esc_html($category->name) . '</option>';
-        }
-        echo '</select>';
-
+    gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($category_terms, $active_category_id): void {
+        gp_render_category_links_list($category_terms, $active_category_id);
     });
 
     if ($subcategories !== []) {
