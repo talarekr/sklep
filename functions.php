@@ -685,9 +685,7 @@ function gp_should_render_part_number_search_box(): bool
     }
 
     return is_front_page()
-        || is_shop()
-        || is_post_type_archive('product')
-        || is_tax('product_cat');
+        || (is_post_type_archive('product') && !is_shop());
 }
 
 function gp_normalize_part_number(string $value): string
@@ -695,6 +693,48 @@ function gp_normalize_part_number(string $value): string
     $value = mb_strtoupper($value);
     $value = preg_replace('/[^A-Z0-9]/u', '', $value) ?? '';
     return trim($value);
+}
+
+function gp_find_product_id_by_part_number(string $part_number_raw): int
+{
+    global $wpdb;
+
+    $raw = sanitize_text_field($part_number_raw);
+    $normalized = gp_normalize_part_number($raw);
+    if ($raw === '' && $normalized === '') {
+        return 0;
+    }
+
+    $raw_like = $raw !== '' ? '%' . $wpdb->esc_like($raw) . '%' : '';
+    $normalized_like = $normalized !== '' ? '%' . $wpdb->esc_like($normalized) . '%' : '';
+
+    $sql_conditions = [];
+    if ($raw_like !== '') {
+        $sql_conditions[] = $wpdb->prepare('pm.meta_value = %s', $raw);
+        $sql_conditions[] = $wpdb->prepare('pm.meta_value LIKE %s', $raw_like);
+    }
+    if ($normalized_like !== '') {
+        $sql_conditions[] = $wpdb->prepare("REPLACE(REPLACE(UPPER(pm.meta_value), ' ', ''), '-', '') = %s", $normalized);
+        $sql_conditions[] = $wpdb->prepare("REPLACE(REPLACE(UPPER(pm.meta_value), ' ', ''), '-', '') LIKE %s", $normalized_like);
+    }
+
+    if ($sql_conditions === []) {
+        return 0;
+    }
+
+    $product_id = (int) $wpdb->get_var(
+        "SELECT p.ID
+        FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+        WHERE p.post_type = 'product'
+          AND p.post_status = 'publish'
+          AND pm.meta_key = '_part_number'
+          AND (" . implode(' OR ', $sql_conditions) . ")
+        ORDER BY p.ID ASC
+        LIMIT 1"
+    );
+
+    return $product_id > 0 ? $product_id : 0;
 }
 
 add_action('wp_footer', function (): void {
@@ -727,6 +767,36 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     $query->set('part_number_search_active', true);
     $query->set('part_number_search_raw', $part_number_raw);
     $query->set('part_number_search_normalized', gp_normalize_part_number($part_number_raw));
+    $query->set('tax_query', []);
+    $query->set('product_cat', '');
+}, 20);
+
+add_action('template_redirect', function (): void {
+    if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
+        return;
+    }
+
+    if (!is_shop() && !is_tax('product_cat') && !is_post_type_archive('product')) {
+        return;
+    }
+
+    $part_number_raw = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+    if ($part_number_raw === '') {
+        return;
+    }
+
+    $product_id = gp_find_product_id_by_part_number($part_number_raw);
+    if ($product_id <= 0) {
+        return;
+    }
+
+    $product_url = get_permalink($product_id);
+    if (!is_string($product_url) || $product_url === '') {
+        return;
+    }
+
+    wp_safe_redirect($product_url);
+    exit;
 }, 20);
 
 add_filter('posts_where', function (string $where, WP_Query $query): string {
