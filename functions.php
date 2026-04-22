@@ -467,28 +467,6 @@ function gp_get_user_facing_root_categories(): array
     return $resolved;
 }
 
-function gp_get_user_facing_category_options(?WP_Term $current_term): array
-{
-    $root_categories = gp_get_user_facing_root_categories();
-    if (!$current_term instanceof WP_Term) {
-        return $root_categories;
-    }
-
-    $active_category = gp_get_user_facing_category($current_term);
-    if (!$active_category instanceof WP_Term) {
-        return $root_categories;
-    }
-
-    $sibling_terms = gp_get_product_cat_children((int) $active_category->parent);
-    $options = array_values(array_filter($sibling_terms, static fn($term) => $term instanceof WP_Term && !gp_is_technical_product_category($term)));
-
-    if ($options === []) {
-        return $root_categories;
-    }
-
-    return $options;
-}
-
 function gp_render_category_links_list(array $categories, int $active_term_id = 0): void
 {
     if ($categories === []) {
@@ -570,7 +548,7 @@ function gp_render_category_filter_section(string $title, callable $content_rend
 function gp_render_category_select(array $categories, int $selected_category_id): void
 {
     echo '<label class="screen-reader-text" for="gp-category-filter-select">' . esc_html__('Kategoria', 'gp-clone') . '</label>';
-    echo '<select id="gp-category-filter-select" class="gp-cat-filter__select" data-gp-sidebar-category-select data-gp-redirect-on-change="1">';
+    echo '<select id="gp-category-filter-select" class="gp-cat-filter__select" data-gp-sidebar-category-select>';
     echo '<option value="0">' . esc_html__('Wybierz kategorię', 'gp-clone') . '</option>';
 
     foreach ($categories as $category) {
@@ -578,12 +556,7 @@ function gp_render_category_select(array $categories, int $selected_category_id)
             continue;
         }
 
-        $term_link = get_term_link($category);
-        if (is_wp_error($term_link)) {
-            continue;
-        }
-
-        echo '<option value="' . esc_url($term_link) . '" data-category-id="' . esc_attr((string) $category->term_id) . '"' . selected((int) $category->term_id, $selected_category_id, false) . '>' . esc_html($category->name) . '</option>';
+        echo '<option value="' . esc_attr((string) $category->term_id) . '"' . selected((int) $category->term_id, $selected_category_id, false) . '>' . esc_html($category->name) . '</option>';
     }
 
     echo '</select>';
@@ -635,10 +608,8 @@ function gp_render_product_category_sidebar(): void
 
     $active_category = gp_get_user_facing_category($current_term);
     $active_category_id = $active_category instanceof WP_Term ? (int) $active_category->term_id : 0;
-    $category_terms = gp_get_user_facing_category_options($current_term);
-
+    $category_terms = $active_category instanceof WP_Term ? [$active_category] : gp_get_user_facing_root_categories();
     $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
-    $subcategories_map = gp_build_subcategory_map($category_terms);
 
     if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';

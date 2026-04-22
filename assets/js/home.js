@@ -33,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const rawMap = sidebarSubcategoryList.getAttribute('data-gp-subcategory-map') || '{}';
     const subcategoryMap = JSON.parse(rawMap);
     const activeCategory = sidebarSubcategoryList.getAttribute('data-gp-active-category-id') || '';
-    const shouldRedirect = sidebarCategorySelect.getAttribute('data-gp-redirect-on-change') === '1';
     const maxVisibleItems = 6;
 
     const setupShowMore = () => {
@@ -73,26 +72,13 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (!sidebarCategorySelect.value && activeCategory) {
-      const activeOption = sidebarCategorySelect.querySelector(`option[data-category-id="${activeCategory}"]`);
-      if (activeOption) {
-        activeOption.selected = true;
-      }
+      sidebarCategorySelect.value = activeCategory;
     }
 
-    const initialCategoryId = sidebarCategorySelect.selectedOptions[0]?.dataset.categoryId || activeCategory;
-    renderSubcategories(initialCategoryId);
+    renderSubcategories(sidebarCategorySelect.value || activeCategory);
 
     sidebarCategorySelect.addEventListener('change', () => {
-      const selectedOption = sidebarCategorySelect.selectedOptions[0];
-      if (!selectedOption) return;
-
-      const selectedCategoryId = selectedOption.dataset.categoryId || '';
-      const targetUrl = selectedOption.value || '';
-      renderSubcategories(selectedCategoryId);
-
-      if (shouldRedirect && targetUrl && targetUrl !== '0') {
-        window.location.href = targetUrl;
-      }
+      renderSubcategories(sidebarCategorySelect.value);
     });
 
     if (sidebarMoreButton) {
