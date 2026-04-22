@@ -39,8 +39,8 @@ add_action('wp_enqueue_scripts', function () {
 });
 
 add_action('wp_head', function (): void {
-    $favicon_url = get_template_directory_uri() . '/assets/images/gp-logo-placeholder.svg';
-    echo '<link rel="icon" type="image/svg+xml" href="' . esc_url($favicon_url) . '" />';
+    $favicon_url = get_template_directory_uri() . '/assets/images/favicon.png';
+    echo '<link rel="icon" type="image/png" href="' . esc_url($favicon_url) . '" />';
     echo '<link rel="apple-touch-icon" href="' . esc_url($favicon_url) . '" />';
 }, 1);
 
