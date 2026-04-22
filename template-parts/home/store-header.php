@@ -5,12 +5,12 @@ $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink(
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $shortcuts = [
-    ['label' => 'Hamulce', 'slugs' => ['hamulce', 'uklad-hamulcowy', 'brakes']],
-    ['label' => 'Skrzynie biegów', 'slugs' => ['skrzynie-biegow', 'skrzynia-biegow', 'transmission']],
     ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'engines']],
+    ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
+    ['label' => 'Filtry DPF', 'slugs' => ['filtry-dpf', 'dpf', 'filtry']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'interior']],
-    ['label' => 'Kierownice', 'slugs' => ['kierownice', 'kierownica', 'steering']],
+    ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
 ];
 
 $resolve_category_url = static function (array $candidate_slugs) use ($shop_url): string {
@@ -48,16 +48,6 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             <a href="#" class="gp-rzetelna-link gp-rzetelna-link--top" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
                 <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
             </a>
-            <label class="gp-language-switcher" for="gp-language-select">
-                <span class="gp-language-switcher__label"><?php esc_html_e('Język', 'gp-clone'); ?></span>
-                <select id="gp-language-select" class="gp-language-switcher__select" aria-label="<?php esc_attr_e('Język', 'gp-clone'); ?>">
-                    <option value="pl" title="<?php esc_attr_e('Polski', 'gp-clone'); ?>">🇵🇱</option>
-                    <option value="en" title="<?php esc_attr_e('Angielski', 'gp-clone'); ?>">🇬🇧</option>
-                    <option value="fr" title="<?php esc_attr_e('Francuski', 'gp-clone'); ?>">🇫🇷</option>
-                    <option value="uk" title="<?php esc_attr_e('Ukraiński', 'gp-clone'); ?>">🇺🇦</option>
-                    <option value="de" title="<?php esc_attr_e('Niemiecki', 'gp-clone'); ?>">🇩🇪</option>
-                </select>
-            </label>
         </div>
 
         <div class="gp-main-header__row">
@@ -106,7 +96,9 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             </nav>
             <div class="gp-phone">
                 <span aria-hidden="true">&#128222;</span>
-                <a href="tel:+48504266984">504 266 984</a>
+                <a href="tel:+48504266984">+48 504 266 984</a>
+                <span class="gp-phone__separator" aria-hidden="true">|</span>
+                <a href="tel:+48579152665">+48 579 152 665</a>
             </div>
         </div>
     </div>

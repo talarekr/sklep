@@ -53,6 +53,115 @@ add_action('wp_footer', function (): void {
     echo '<div id="gp-google-translate-element" class="gp-google-translate-element" aria-hidden="true"></div>';
 });
 
+function gp_get_selected_language(): string
+{
+    $allowed_languages = ['pl', 'en', 'fr', 'uk', 'de'];
+    $lang = isset($_COOKIE['gp_selected_language']) ? sanitize_key(wp_unslash((string) $_COOKIE['gp_selected_language'])) : 'pl';
+
+    if (!in_array($lang, $allowed_languages, true)) {
+        return 'pl';
+    }
+
+    return $lang;
+}
+
+function gp_should_use_eur_currency(): bool
+{
+    if (is_admin() && !wp_doing_ajax()) {
+        return false;
+    }
+
+    return gp_get_selected_language() !== 'pl';
+}
+
+function gp_fetch_eur_rate_from_nbp(): ?float
+{
+    $response = wp_remote_get('https://api.nbp.pl/api/exchangerates/rates/A/EUR/?format=json', [
+        'timeout' => 10,
+    ]);
+
+    if (is_wp_error($response)) {
+        return null;
+    }
+
+    $status_code = (int) wp_remote_retrieve_response_code($response);
+    if ($status_code !== 200) {
+        return null;
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $decoded = json_decode($body, true);
+    $rate = isset($decoded['rates'][0]['mid']) ? (float) $decoded['rates'][0]['mid'] : 0.0;
+
+    if ($rate <= 0) {
+        return null;
+    }
+
+    return $rate;
+}
+
+function gp_update_eur_exchange_rate(): void
+{
+    $rate = gp_fetch_eur_rate_from_nbp();
+    if ($rate === null) {
+        return;
+    }
+
+    update_option('gp_eur_exchange_rate', $rate, false);
+    update_option('gp_eur_exchange_rate_updated_at', gmdate('c'), false);
+}
+
+add_action('init', function (): void {
+    if (!wp_next_scheduled('gp_update_eur_rate_daily')) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'gp_update_eur_rate_daily');
+    }
+
+    if ((float) get_option('gp_eur_exchange_rate', 0) <= 0) {
+        gp_update_eur_exchange_rate();
+    }
+});
+
+add_action('gp_update_eur_rate_daily', 'gp_update_eur_exchange_rate');
+
+add_filter('woocommerce_currency', function (string $currency): string {
+    if (!gp_should_use_eur_currency()) {
+        return $currency;
+    }
+
+    return 'EUR';
+});
+
+function gp_convert_price_to_current_currency($price)
+{
+    if (!gp_should_use_eur_currency()) {
+        return $price;
+    }
+
+    if ($price === '' || $price === null) {
+        return $price;
+    }
+
+    $rate = (float) get_option('gp_eur_exchange_rate', 0);
+    if ($rate <= 0) {
+        return $price;
+    }
+
+    $numeric_price = (float) $price;
+    $converted = $numeric_price / $rate;
+
+    return (string) round($converted, wc_get_price_decimals());
+}
+
+add_filter('woocommerce_product_get_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_get_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_get_sale_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_product_variation_get_sale_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_regular_price', 'gp_convert_price_to_current_currency', 99);
+add_filter('woocommerce_variation_prices_sale_price', 'gp_convert_price_to_current_currency', 99);
+
 add_action('wp_head', function (): void {
     $favicon_url = get_template_directory_uri() . '/assets/images/favicon.png';
     echo '<link rel="icon" type="image/png" href="' . esc_url($favicon_url) . '" />';
@@ -576,9 +685,7 @@ function gp_should_render_part_number_search_box(): bool
     }
 
     return is_front_page()
-        || is_shop()
-        || is_post_type_archive('product')
-        || is_tax('product_cat');
+        || (is_post_type_archive('product') && !is_shop());
 }
 
 function gp_normalize_part_number(string $value): string
@@ -586,6 +693,48 @@ function gp_normalize_part_number(string $value): string
     $value = mb_strtoupper($value);
     $value = preg_replace('/[^A-Z0-9]/u', '', $value) ?? '';
     return trim($value);
+}
+
+function gp_find_product_id_by_part_number(string $part_number_raw): int
+{
+    global $wpdb;
+
+    $raw = sanitize_text_field($part_number_raw);
+    $normalized = gp_normalize_part_number($raw);
+    if ($raw === '' && $normalized === '') {
+        return 0;
+    }
+
+    $raw_like = $raw !== '' ? '%' . $wpdb->esc_like($raw) . '%' : '';
+    $normalized_like = $normalized !== '' ? '%' . $wpdb->esc_like($normalized) . '%' : '';
+
+    $sql_conditions = [];
+    if ($raw_like !== '') {
+        $sql_conditions[] = $wpdb->prepare('pm.meta_value = %s', $raw);
+        $sql_conditions[] = $wpdb->prepare('pm.meta_value LIKE %s', $raw_like);
+    }
+    if ($normalized_like !== '') {
+        $sql_conditions[] = $wpdb->prepare("REPLACE(REPLACE(UPPER(pm.meta_value), ' ', ''), '-', '') = %s", $normalized);
+        $sql_conditions[] = $wpdb->prepare("REPLACE(REPLACE(UPPER(pm.meta_value), ' ', ''), '-', '') LIKE %s", $normalized_like);
+    }
+
+    if ($sql_conditions === []) {
+        return 0;
+    }
+
+    $product_id = (int) $wpdb->get_var(
+        "SELECT p.ID
+        FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+        WHERE p.post_type = 'product'
+          AND p.post_status = 'publish'
+          AND pm.meta_key = '_part_number'
+          AND (" . implode(' OR ', $sql_conditions) . ")
+        ORDER BY p.ID ASC
+        LIMIT 1"
+    );
+
+    return $product_id > 0 ? $product_id : 0;
 }
 
 add_action('wp_footer', function (): void {
@@ -618,6 +767,36 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     $query->set('part_number_search_active', true);
     $query->set('part_number_search_raw', $part_number_raw);
     $query->set('part_number_search_normalized', gp_normalize_part_number($part_number_raw));
+    $query->set('tax_query', []);
+    $query->set('product_cat', '');
+}, 20);
+
+add_action('template_redirect', function (): void {
+    if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
+        return;
+    }
+
+    if (!is_shop() && !is_tax('product_cat') && !is_post_type_archive('product')) {
+        return;
+    }
+
+    $part_number_raw = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+    if ($part_number_raw === '') {
+        return;
+    }
+
+    $product_id = gp_find_product_id_by_part_number($part_number_raw);
+    if ($product_id <= 0) {
+        return;
+    }
+
+    $product_url = get_permalink($product_id);
+    if (!is_string($product_url) || $product_url === '') {
+        return;
+    }
+
+    wp_safe_redirect($product_url);
+    exit;
 }, 20);
 
 add_filter('posts_where', function (string $where, WP_Query $query): string {
