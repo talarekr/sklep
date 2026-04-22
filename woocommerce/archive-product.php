@@ -41,11 +41,8 @@ get_header('shop');
                         </form>
                     </div>
                 </div>
-            </div>
-        </section>
-    <?php endif; ?>
-
-    <div class="gp-container">
+            </section>
+        <?php endif; ?>
         <?php woocommerce_breadcrumb(); ?>
 
         <div class="gp-shop-grid">

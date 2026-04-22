@@ -381,6 +381,7 @@ body.home .gp-part-search-box {
   cursor: pointer;
 }
 .gp-category-search-hero .gp-search-tabs {
+  display: flex;
   width: fit-content;
   min-width: 250px;
   margin: 0 auto 10px;
