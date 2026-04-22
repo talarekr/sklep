@@ -94,6 +94,14 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-top: 12px !important;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.single-product div.product div.images .flex-control-thumbs li {
+  flex: 0 0 82px;
+  border-radius: 10px;
+  overflow: hidden;
 }
 .single-product div.product div.images .flex-control-thumbs li {
   border-radius: 10px;
