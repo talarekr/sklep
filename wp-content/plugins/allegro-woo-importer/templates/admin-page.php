@@ -125,7 +125,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php wp_nonce_field('awi_listing_images_regenerate_batch'); ?>
         <input type="hidden" name="action" value="awi_listing_images_regenerate_batch">
         <label for="awi-listing-batch-size"><?php esc_html_e('Batch size:', 'allegro-woo-importer'); ?></label>
-        <input id="awi-listing-batch-size" type="number" min="1" max="300" name="awi_listing_batch_size" value="300" style="width:80px; margin-right:12px;">
+        <input id="awi-listing-batch-size" type="number" min="1" max="50" name="awi_listing_batch_size" value="10" style="width:80px; margin-right:12px;">
         <label style="margin-right:12px;">
             <input type="checkbox" name="awi_listing_reset_checkpoint" value="1">
             <?php esc_html_e('Reset checkpoint (start od początku)', 'allegro-woo-importer'); ?>

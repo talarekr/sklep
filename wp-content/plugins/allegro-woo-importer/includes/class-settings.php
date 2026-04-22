@@ -216,8 +216,8 @@ class Settings
 
         check_admin_referer('awi_listing_images_regenerate_batch');
 
-        $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 300;
-        $batch_size = min(300, $batch_size);
+        $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 10;
+        $batch_size = min(50, $batch_size);
         $reset = !empty($_POST['awi_listing_reset_checkpoint']);
 
         if ($reset) {
