@@ -194,7 +194,7 @@ class Importer
                 'batch_size' => $batch_size,
             ]);
         } else {
-            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status'], $total_count_from_api, $settings);
+            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status'], $total_count_from_api);
             $this->reset_checkpoint();
             $this->reset_active_seen_offer_ids();
             $this->clear_cycle_state();
@@ -398,11 +398,20 @@ class Importer
         update_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY, array_keys($seen), false);
     }
 
-    private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api, array $settings): int
+    private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api): int
     {
         $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
+        if (!$this->can_run_reconciliation($total_count_from_api)) {
+            $this->logger->warning('Skipping reconciliation because sync cycle is not confirmed as complete.', [
+                'cycle_state' => $this->load_cycle_state(),
+                'reported_total_count' => $total_count_from_api,
+            ]);
+            return 0;
+        }
+
         $seen_offer_ids = array_keys($this->load_active_seen_offer_ids());
         $seen_count = count($seen_offer_ids);
+        $proposed_to_hide = $this->count_products_missing_seen_offers($seen_offer_ids);
         $evaluation = $this->evaluate_reconciliation_readiness($settings, $total_count_from_api, $seen_count);
         $this->logger->info('Reconciliation diagnostics.', [
             'reconciliation_enabled' => !empty($settings['reconciliation_enabled']),
@@ -410,7 +419,7 @@ class Importer
             'reason' => $evaluation['reason'],
             'total_active_offers_seen' => $seen_count,
             'expected_total_count' => $total_count_from_api,
-            'products_proposed_for_hide' => null,
+            'products_proposed_for_hide' => $proposed_to_hide,
             'offer_status_filter' => (string) ($settings['offer_status'] ?? ''),
             'cycle_state' => $this->load_cycle_state(),
         ]);
@@ -421,11 +430,6 @@ class Importer
             ]);
             return 0;
         }
-
-        $proposed_to_hide = $this->count_products_missing_seen_offers($seen_offer_ids);
-        $this->logger->info('Reconciliation preflight count completed.', [
-            'products_proposed_for_hide' => $proposed_to_hide,
-        ]);
 
         $processed = 0;
         $page = 1;
@@ -504,6 +508,20 @@ class Importer
                     [
                         'key' => '_allegro_offer_id',
                         'compare' => 'EXISTS',
+                    ],
+                    [
+                        'relation' => 'OR',
+                        [
+                            'key' => '_stock_status',
+                            'value' => 'outofstock',
+                            'compare' => '=',
+                        ],
+                        [
+                            'key' => '_stock',
+                            'value' => 0,
+                            'type' => 'NUMERIC',
+                            'compare' => '<=',
+                        ],
                     ],
                 ],
             ]);
@@ -623,69 +641,17 @@ class Importer
         update_option(self::CYCLE_STATE_OPTION_KEY, $state, false);
     }
 
-    private function evaluate_reconciliation_readiness(array $settings, ?int $total_count_from_api, int $seen_count): array
+    private function can_run_reconciliation(?int $total_count_from_api): bool
     {
-        if (empty($settings['reconciliation_enabled'])) {
-            return ['allowed' => false, 'reason' => 'feature_flag_disabled'];
-        }
-
-        $offer_status = strtoupper((string) ($settings['offer_status'] ?? ''));
-        if ($offer_status !== 'ACTIVE') {
-            return ['allowed' => false, 'reason' => 'offer_status_filter_not_active'];
-        }
-
         if ($total_count_from_api === null) {
-            return ['allowed' => false, 'reason' => 'missing_total_count_from_api'];
+            return false;
         }
 
         $state = $this->load_cycle_state();
         if (empty($state)) {
-            return ['allowed' => false, 'reason' => 'missing_cycle_state'];
+            return false;
         }
 
-        if ($state['has_errors'] || empty($state['reconciliation_allowed'])) {
-            return ['allowed' => false, 'reason' => 'cycle_has_errors_or_marked_unsafe'];
-        }
-
-        if ($seen_count < $total_count_from_api) {
-            return ['allowed' => false, 'reason' => 'seen_offers_less_than_expected_total'];
-        }
-
-        return ['allowed' => true, 'reason' => 'feature_enabled_and_cycle_confirmed_complete'];
-    }
-
-    private function count_products_missing_seen_offers(array $seen_offer_ids): int
-    {
-        $count = 0;
-        $page = 1;
-
-        do {
-            $query = new \WP_Query([
-                'post_type' => 'product',
-                'post_status' => 'any',
-                'fields' => 'ids',
-                'posts_per_page' => 100,
-                'paged' => $page,
-                'meta_query' => [
-                    [
-                        'key' => '_allegro_offer_id',
-                        'compare' => 'EXISTS',
-                    ],
-                ],
-            ]);
-
-            foreach ((array) $query->posts as $product_id) {
-                $offer_id = sanitize_text_field((string) get_post_meta((int) $product_id, '_allegro_offer_id', true));
-                if ($offer_id === '' || in_array($offer_id, $seen_offer_ids, true)) {
-                    continue;
-                }
-                $count++;
-            }
-
-            $page++;
-            wp_reset_postdata();
-        } while ($page <= (int) $query->max_num_pages);
-
-        return $count;
+        return !$state['has_errors'] && !empty($state['reconciliation_allowed']);
     }
 }
