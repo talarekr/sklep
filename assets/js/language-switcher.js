@@ -16,6 +16,12 @@
     document.cookie = 'googtrans=' + value + ';path=/';
   };
 
+  const setStoreLanguageCookie = (lang) => {
+    const safeLang = allowedLanguages.includes(lang) ? lang : 'pl';
+    const oneYear = 60 * 60 * 24 * 365;
+    document.cookie = 'gp_selected_language=' + safeLang + ';path=/;max-age=' + oneYear + ';SameSite=Lax';
+  };
+
   const applyLanguageToWidget = (lang) => {
     const safeLang = allowedLanguages.includes(lang) ? lang : 'pl';
     const combo = document.querySelector('.goog-te-combo');
@@ -34,6 +40,7 @@
 
     localStorage.setItem(storageKey, safeLang);
     setGoogTransCookie(safeLang);
+    setStoreLanguageCookie(safeLang);
 
     if (!applyLanguageToWidget(safeLang)) {
       window.setTimeout(function () {
@@ -70,12 +77,14 @@
   select.addEventListener('change', function (event) {
     const nextLanguage = event.target.value;
     applyLanguage(nextLanguage);
+    window.location.reload();
   });
 
   const initialLanguage = localStorage.getItem(storageKey) || 'pl';
   if (allowedLanguages.includes(initialLanguage)) {
     select.value = initialLanguage;
     setGoogTransCookie(initialLanguage);
+    setStoreLanguageCookie(initialLanguage);
   }
 
   const script = document.createElement('script');
