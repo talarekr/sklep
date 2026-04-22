@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const partSearchBox = document.querySelector('[data-gp-part-search-box]');
   if (partSearchBox) {
+    const isHeroVariant = partSearchBox.classList.contains('gp-part-search-box--hero');
     const toggleButton = partSearchBox.querySelector('[data-gp-part-search-toggle]');
     const closeButton = partSearchBox.querySelector('[data-gp-part-search-close]');
     const stateKey = 'gpPartSearchCollapsed';
@@ -31,14 +32,21 @@ document.addEventListener('DOMContentLoaded', () => {
       window.localStorage.setItem(stateKey, collapsed ? '1' : '0');
     };
 
-    const isCollapsed = window.localStorage.getItem(stateKey) === '1';
-    setCollapsed(isCollapsed);
+    if (isHeroVariant) {
+      setCollapsed(false);
+      if (toggleButton) {
+        toggleButton.setAttribute('aria-expanded', 'true');
+      }
+    } else {
+      const isCollapsed = window.localStorage.getItem(stateKey) === '1';
+      setCollapsed(isCollapsed);
+    }
 
-    if (toggleButton) {
+    if (toggleButton && !isHeroVariant) {
       toggleButton.addEventListener('click', () => setCollapsed(false));
     }
 
-    if (closeButton) {
+    if (closeButton && !isHeroVariant) {
       closeButton.addEventListener('click', () => setCollapsed(true));
     }
   }

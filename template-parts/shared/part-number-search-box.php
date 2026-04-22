@@ -2,8 +2,13 @@
 <?php
 $shop_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('shop') : home_url('/');
 $part_number_query = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+$context = isset($args['context']) ? sanitize_key((string) $args['context']) : '';
+$wrapper_class = 'gp-part-search-box';
+if ($context !== '') {
+    $wrapper_class .= ' gp-part-search-box--' . $context;
+}
 ?>
-<aside class="gp-part-search-box" data-gp-part-search-box>
+<aside class="<?php echo esc_attr($wrapper_class); ?>" data-gp-part-search-box>
     <button type="button" class="gp-part-search-box__toggle" data-gp-part-search-toggle aria-expanded="true" aria-controls="gp-part-search-panel">
         <span class="gp-part-search-box__toggle-icon" aria-hidden="true">&#128269;</span>
         <span class="gp-part-search-box__toggle-label"><?php esc_html_e('Numer części', 'gp-clone'); ?></span>
