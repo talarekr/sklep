@@ -608,16 +608,8 @@ function gp_render_product_category_sidebar(): void
 
     $active_category = gp_get_user_facing_category($current_term);
     $active_category_id = $active_category instanceof WP_Term ? (int) $active_category->term_id : 0;
-    $category_terms = gp_get_user_facing_root_categories();
-    if ($active_category instanceof WP_Term) {
-        $category_ids = array_map(static fn($term) => $term instanceof WP_Term ? (int) $term->term_id : 0, $category_terms);
-        if (!in_array((int) $active_category->term_id, $category_ids, true)) {
-            $category_terms[] = $active_category;
-        }
-    }
-
+    $category_terms = $active_category instanceof WP_Term ? [$active_category] : gp_get_user_facing_root_categories();
     $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
-    $subcategories_map = gp_build_subcategory_map($category_terms);
 
     if ($category_terms === []) {
         echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
