@@ -24,8 +24,8 @@ add_action('after_setup_theme', function () {
 
 add_action('wp_enqueue_scripts', function () {
     wp_enqueue_style(
-        'gp-clone-inter-font',
-        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
+        'gp-clone-poppins-font',
+        'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap',
         [],
         null
     );
