@@ -34,7 +34,7 @@ $category_tiles = [
 
 $brand_logos = [
     ['name' => 'BMW', 'file' => 'assets/images/brands/bmw.svg'],
-    ['name' => 'Audi', 'file' => 'assets/images/brands/audi.svg'],
+    ['name' => 'AUDI', 'file' => 'assets/images/brands/audi.svg'],
     ['name' => 'Volkswagen', 'file' => 'assets/images/brands/volkswagen.svg'],
     ['name' => 'Skoda', 'file' => 'assets/images/brands/skoda.svg'],
 ];

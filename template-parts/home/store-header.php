@@ -4,6 +4,30 @@ $cart_url = function_exists('wc_get_cart_url') ? wc_get_cart_url() : '#';
 $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : '#';
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
+$shortcuts = [
+    ['label' => 'Hamulce', 'slugs' => ['hamulce', 'uklad-hamulcowy', 'brakes']],
+    ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
+    ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'interior']],
+    ['label' => 'Kierownice', 'slugs' => ['kierownice', 'kierownica', 'steering']],
+];
+
+$resolve_category_url = static function (array $candidate_slugs) use ($shop_url): string {
+    if (!taxonomy_exists('product_cat')) {
+        return $shop_url;
+    }
+
+    foreach ($candidate_slugs as $slug) {
+        $term = get_term_by('slug', sanitize_title($slug), 'product_cat');
+        if ($term instanceof WP_Term) {
+            $link = get_term_link($term);
+            if (!is_wp_error($link)) {
+                return $link;
+            }
+        }
+    }
+
+    return $shop_url;
+};
 ?>
 <header class="gp-main-header">
     <div class="gp-container">
@@ -12,19 +36,15 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
             <a href="#">Kontakt</a>
             <a href="#">Najczęściej zadawane pytania</a>
             <a href="#">Oferta dla warsztatów</a>
+            <a href="#" class="gp-rzetelna-link" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
+                <span><?php esc_html_e('Rzetelna Firma', 'gp-clone'); ?></span>
+            </a>
         </div>
 
         <div class="gp-main-header__row">
             <div class="gp-logo-wrap">
                 <a href="<?php echo esc_url(home_url('/')); ?>" class="gp-logo-link" aria-label="<?php esc_attr_e('Strona główna', 'gp-clone'); ?>">
-                    <?php
-                    $custom_logo = get_custom_logo();
-                    if (!empty($custom_logo)) {
-                        echo $custom_logo; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-                    } else {
-                        ?>
-                        <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/gp-logo-placeholder.svg'); ?>" alt="Gregor Swiss">
-                    <?php } ?>
+                    <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/gp-logo-placeholder.svg'); ?>" alt="Gregor Swiss">
                 </a>
             </div>
 
@@ -61,8 +81,8 @@ $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_car
                 <?php esc_html_e('Wszystkie kategorie', 'gp-clone'); ?>
             </a>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
-                <?php foreach (['Silniki', 'Skrzynie biegów', 'Dyferencjały', 'Felgi', 'Fotele', 'Kierownice', 'Promocje'] as $shortcut) : ?>
-                    <a href="#"<?php echo $shortcut === 'Promocje' ? ' class="is-promo"' : ''; ?>><?php echo esc_html($shortcut); ?></a>
+                <?php foreach ($shortcuts as $shortcut) : ?>
+                    <a href="<?php echo esc_url($resolve_category_url($shortcut['slugs'])); ?>"><?php echo esc_html($shortcut['label']); ?></a>
                 <?php endforeach; ?>
             </nav>
             <div class="gp-phone">
