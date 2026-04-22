@@ -16,7 +16,7 @@ if (!$product instanceof WC_Product) {
 
 $wrapper_classes = trim((string) ($args['wrapper_classes'] ?? ''));
 $wrapper_class_attr = $wrapper_classes !== '' ? ' ' . $wrapper_classes : '';
-$product_image_id = class_exists('\\AWI\\Plugin') ? \AWI\Plugin::get_listing_image_id_for_product((int) $product->get_id()) : 0;
+$product_image_id = class_exists('\\AWI\\Plugin') ? \AWI\Plugin::get_listing_image_id_for_product((int) $product->get_id()) : (int) $product->get_image_id();
 ?>
 <article class="gp-product product-card<?php echo esc_attr($wrapper_class_attr); ?>">
     <button type="button" class="gp-product__fav product-wishlist" aria-label="<?php echo esc_attr(sprintf(__('Dodaj %s do obserwowanych', 'gp-clone'), $product->get_name())); ?>">
@@ -31,11 +31,20 @@ $product_image_id = class_exists('\\AWI\\Plugin') ? \AWI\Plugin::get_listing_ima
                 'decoding' => 'async',
             ]); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
         } else {
-            echo wc_placeholder_img('large', [
-                'class' => 'product-image__img',
-                'loading' => 'lazy',
-                'decoding' => 'async',
-            ]); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+            $fallback_featured_id = (int) $product->get_image_id();
+            if ($fallback_featured_id > 0) {
+                echo wp_get_attachment_image($fallback_featured_id, 'large', false, [
+                    'class' => 'product-image__img',
+                    'loading' => 'lazy',
+                    'decoding' => 'async',
+                ]); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+            } else {
+                echo wc_placeholder_img('large', [
+                    'class' => 'product-image__img',
+                    'loading' => 'lazy',
+                    'decoding' => 'async',
+                ]); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+            }
         }
         ?>
     </a>

@@ -42,7 +42,7 @@ final class Plugin
         $this->importer = new Importer($this->client, $this->mapper, $this->logger);
         $this->cron = new Cron($this->importer, $this->logger);
         $this->cli = new Cli($this->mapper, $this->logger);
-        $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron);
+        $this->settings = new Settings($this->auth, $this->importer, $this->logger, $this->cron, $this->mapper);
 
         add_action('plugins_loaded', [$this, 'bootstrap'], 20);
 
