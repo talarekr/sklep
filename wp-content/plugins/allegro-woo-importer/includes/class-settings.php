@@ -26,6 +26,7 @@ class Settings
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
+        add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
     }
 
     public function register_menu(): void
@@ -101,6 +102,36 @@ class Settings
         exit;
     }
 
+    public function handle_restore_active_offers(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_restore_active_offers');
+
+        $token = $this->auth->get_valid_access_token();
+        if (is_wp_error($token)) {
+            $this->logger->error('Recovery blocked: missing valid Allegro token.', ['error' => $token->get_error_message()]);
+            $this->store_admin_notice('error', __('Najpierw połącz wtyczkę z Allegro (brak ważnego access tokena).', 'allegro-woo-importer'));
+            wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+            exit;
+        }
+
+        $summary = $this->importer->restore_active_offers_to_instock();
+
+        $redirect = add_query_arg([
+            'page' => 'awi-settings',
+            'awi_restore_done' => '1',
+            'awi_restore_checked' => (int) ($summary['checked'] ?? 0),
+            'awi_restore_restored' => (int) ($summary['restored'] ?? 0),
+            'awi_restore_errors' => (int) ($summary['errors'] ?? 0),
+        ], admin_url('admin.php'));
+
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
     public function render_page(): void
     {
         if (!current_user_can('manage_woocommerce')) {
@@ -118,6 +149,20 @@ class Settings
                     (int) ($_GET['awi_created'] ?? 0),
                     (int) ($_GET['awi_updated'] ?? 0),
                     (int) ($_GET['awi_errors'] ?? 0)
+                ),
+                'updated'
+            );
+        }
+
+        if (isset($_GET['awi_restore_done'])) {
+            add_settings_error(
+                'awi_messages',
+                'awi_restore_done',
+                sprintf(
+                    __('Recovery zakończony. Sprawdzono: %1$d, przywrócono: %2$d, błędy: %3$d', 'allegro-woo-importer'),
+                    (int) ($_GET['awi_restore_checked'] ?? 0),
+                    (int) ($_GET['awi_restore_restored'] ?? 0),
+                    (int) ($_GET['awi_restore_errors'] ?? 0)
                 ),
                 'updated'
             );

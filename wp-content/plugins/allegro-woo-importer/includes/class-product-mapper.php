@@ -54,7 +54,7 @@ class ProductMapper
         $price = $this->extract_price($offer);
         $currency = sanitize_text_field((string) ($offer['sellingMode']['price']['currency'] ?? 'PLN'));
         $publication_status = strtoupper((string) ($offer['publication']['status'] ?? 'INACTIVE'));
-        $stock_available = isset($offer['stock']['available']) ? (int) $offer['stock']['available'] : null;
+        $stock_available = $this->normalize_stock_available($offer['stock']['available'] ?? null);
         $missing_fields = $this->collect_missing_fields($offer, $title, $description, $price);
         if (!empty($missing_fields)) {
             $this->logger->warning('Offer mapping used fallback values.', ['offer_id' => $offer_id, 'missing_fields' => $missing_fields]);
@@ -77,11 +77,7 @@ class ProductMapper
         $target_status = $this->map_product_status($publication_status, $stock_available, $settings);
         $product->set_status($target_status);
 
-        if ($stock_available !== null) {
-            $product->set_manage_stock(true);
-            $product->set_stock_quantity($stock_available);
-            $product->set_stock_status($stock_available > 0 ? 'instock' : 'outofstock');
-        }
+        $this->apply_stock_state($product, $publication_status, $stock_available);
 
         $product_id = $product->save();
 
@@ -135,19 +131,21 @@ class ProductMapper
             'operation' => $existing_id ? 'updated' : 'created',
         ]);
 
-        if ($stock_available === 0 && $target_status !== 'publish') {
-            $this->logger->info('Product hidden because Allegro stock is zero.', [
+        if ($stock_available === 0) {
+            $this->logger->info('Product marked as outofstock based on explicit Allegro stock=0.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
+                'reason' => 'stock_available_zero',
                 'status_before' => $previous_status,
                 'status_after' => $target_status,
             ]);
         }
 
-        if ($publication_status !== 'ACTIVE' && $target_status !== 'publish') {
-            $this->logger->info('Product hidden because Allegro offer is not active.', [
+        if ($publication_status !== 'ACTIVE') {
+            $this->logger->info('Product marked as outofstock because Allegro publication is not ACTIVE.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
+                'reason' => 'publication_not_active',
                 'publication_status' => $publication_status,
                 'status_before' => $previous_status,
                 'status_after' => $target_status,
@@ -372,6 +370,35 @@ class ProductMapper
         }
 
         return $sources;
+    }
+
+    private function normalize_stock_available($raw_value): ?int
+    {
+        if ($raw_value === null || $raw_value === '') {
+            return null;
+        }
+
+        if (!is_numeric($raw_value)) {
+            return null;
+        }
+
+        return max(0, (int) $raw_value);
+    }
+
+    private function apply_stock_state(WC_Product $product, string $publication_status, ?int $stock_available): void
+    {
+        if ($stock_available !== null) {
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity($stock_available);
+            $product->set_stock_status($stock_available > 0 ? 'instock' : 'outofstock');
+            return;
+        }
+
+        if ($publication_status !== 'ACTIVE') {
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+        }
     }
 
     private function map_product_status(string $publication_status, ?int $stock_available, array $settings): string
