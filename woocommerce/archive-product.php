@@ -23,14 +23,11 @@ get_header('shop');
             </aside>
 
             <section class="gp-shop-content">
-                <?php if (apply_filters('woocommerce_show_page_title', true)) : ?>
-                    <h1 class="woocommerce-products-header__title page-title"><?php woocommerce_page_title(); ?></h1>
-                <?php endif; ?>
-
-                <?php do_action('woocommerce_archive_description'); ?>
-
                 <?php if (woocommerce_product_loop()) : ?>
-                    <?php do_action('woocommerce_before_shop_loop'); ?>
+                    <div class="gp-shop-toolbar" aria-label="<?php esc_attr_e('Opcje listy produktów', 'gp-clone'); ?>">
+                        <?php woocommerce_result_count(); ?>
+                        <?php woocommerce_catalog_ordering(); ?>
+                    </div>
                     <?php woocommerce_product_loop_start(); ?>
                     <?php if (wc_get_loop_prop('total')) : ?>
                         <?php while (have_posts()) : ?>
