@@ -400,7 +400,16 @@ class Importer
 
     private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api): int
     {
+        $settings = Plugin::get_settings();
         $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
+
+        if (empty($settings['reconciliation_enabled'])) {
+            $this->logger->info('Skipping reconciliation because feature flag is disabled.', [
+                'reconciliation_enabled' => false,
+            ]);
+            return 0;
+        }
+
         if (!$this->can_run_reconciliation($total_count_from_api)) {
             $this->logger->warning('Skipping reconciliation because sync cycle is not confirmed as complete.', [
                 'cycle_state' => $this->load_cycle_state(),
@@ -488,6 +497,78 @@ class Importer
         } while ($page <= (int) $query->max_num_pages);
 
         return $processed;
+    }
+
+    private function count_products_missing_seen_offers(array $seen_offer_ids): int
+    {
+        $seen_offer_ids = array_values(array_filter(array_map(static function ($offer_id): string {
+            return sanitize_text_field((string) $offer_id);
+        }, $seen_offer_ids), static function (string $offer_id): bool {
+            return $offer_id !== '';
+        }));
+
+        $total_missing = 0;
+        $page = 1;
+
+        do {
+            $query = new \WP_Query([
+                'post_type' => 'product',
+                'post_status' => 'any',
+                'fields' => 'ids',
+                'posts_per_page' => 200,
+                'paged' => $page,
+                'meta_query' => [
+                    [
+                        'key' => '_allegro_offer_id',
+                        'compare' => 'EXISTS',
+                    ],
+                ],
+            ]);
+
+            $product_ids = array_map('intval', (array) $query->posts);
+            foreach ($product_ids as $product_id) {
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                if ($offer_id === '' || in_array($offer_id, $seen_offer_ids, true)) {
+                    continue;
+                }
+
+                $total_missing++;
+            }
+
+            $page++;
+            wp_reset_postdata();
+        } while ($page <= (int) $query->max_num_pages);
+
+        return $total_missing;
+    }
+
+    private function evaluate_reconciliation_readiness(array $settings, ?int $total_count_from_api, int $seen_count): array
+    {
+        if (empty($settings['reconciliation_enabled'])) {
+            return [
+                'allowed' => false,
+                'reason' => 'feature_flag_disabled',
+            ];
+        }
+
+        if ($total_count_from_api === null) {
+            return [
+                'allowed' => false,
+                'reason' => 'total_count_unavailable',
+            ];
+        }
+
+        if ($seen_count > $total_count_from_api) {
+            return [
+                'allowed' => false,
+                'reason' => 'seen_count_exceeds_reported_total',
+            ];
+        }
+
+        return [
+            'allowed' => true,
+            'reason' => 'ready',
+        ];
     }
 
     public function restore_active_offers_to_instock(): array
