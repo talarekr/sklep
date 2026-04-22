@@ -128,8 +128,12 @@ add_action('wp', function (): void {
     add_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
     add_action('woocommerce_before_shop_loop', 'gp_shop_loop_toolbar_end', 31);
 }, 20);
-add_filter('loop_shop_columns', static fn() => 3);
-add_filter('loop_shop_per_page', static fn() => 20);
+add_filter('loop_shop_columns', static function (): int {
+    return 3;
+});
+add_filter('loop_shop_per_page', static function (): int {
+    return 60;
+});
 
 add_filter('woocommerce_add_to_cart_fragments', function ($fragments) {
     ob_start();
@@ -185,169 +189,228 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
-function gp_get_product_category_term_map(): array
+function gp_get_current_product_category_term(): ?WP_Term
 {
-    static $term_map = null;
-
-    if (is_array($term_map)) {
-        return $term_map;
+    if (!is_tax('product_cat')) {
+        return null;
     }
 
-    $all_terms = get_terms([
-        'taxonomy' => 'product_cat',
-        'hide_empty' => false,
-        'orderby' => 'name',
-        'order' => 'ASC',
-    ]);
-
-    if (!is_array($all_terms)) {
-        $term_map = [];
-        return $term_map;
+    $term = get_queried_object();
+    if ($term instanceof WP_Term && $term->taxonomy === 'product_cat') {
+        return $term;
     }
 
-    $term_map = [];
-    foreach ($all_terms as $term) {
-        if (!$term instanceof WP_Term) {
+    return null;
+}
+
+function gp_get_product_cat_children(int $parent_id): array
+{
+    static $runtime_tree = null;
+
+    if (!is_array($runtime_tree)) {
+        $runtime_tree = get_transient('gp_product_cat_tree_v1');
+    }
+
+    if (!is_array($runtime_tree)) {
+        $terms = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => false,
+            'orderby' => 'name',
+            'order' => 'ASC',
+        ]);
+
+        $runtime_tree = [];
+        if (is_array($terms)) {
+            foreach ($terms as $term) {
+                if (!$term instanceof WP_Term) {
+                    continue;
+                }
+
+                $term_parent_id = (int) $term->parent;
+                if (!isset($runtime_tree[$term_parent_id])) {
+                    $runtime_tree[$term_parent_id] = [];
+                }
+
+                $runtime_tree[$term_parent_id][] = $term;
+            }
+        }
+
+        set_transient('gp_product_cat_tree_v1', $runtime_tree, 10 * MINUTE_IN_SECONDS);
+    }
+
+    $terms_for_parent = $runtime_tree[$parent_id] ?? [];
+    if (!is_array($terms_for_parent)) {
+        return [];
+    }
+
+    return array_values(array_filter($terms_for_parent, static function ($term): bool {
+        return $term instanceof WP_Term;
+    }));
+}
+
+function gp_is_excluded_product_category(WP_Term $term): bool
+{
+    $default_product_cat_id = (int) get_option('default_product_cat');
+    if ($default_product_cat_id > 0 && (int) $term->term_id === $default_product_cat_id) {
+        return true;
+    }
+
+    $excluded_slugs = ['uncategorized', 'bez-kategorii'];
+    return in_array((string) $term->slug, $excluded_slugs, true);
+}
+
+function gp_find_top_category_by_slug(array $categories, string $slug): ?WP_Term
+{
+    foreach ($categories as $category) {
+        if (!$category instanceof WP_Term) {
             continue;
         }
 
-        $parent_id = (int) $term->parent;
-        if (!isset($term_map[$parent_id])) {
-            $term_map[$parent_id] = [];
+        if ((string) $category->slug === $slug) {
+            return $category;
         }
-
-        $term_map[$parent_id][] = $term;
     }
 
-    return $term_map;
+    return null;
 }
 
-function gp_get_product_category_tree(int $parent_term_id = 0): array
+add_action('created_product_cat', static function (): void {
+    delete_transient('gp_product_cat_tree_v1');
+});
+
+add_action('edited_product_cat', static function (): void {
+    delete_transient('gp_product_cat_tree_v1');
+});
+
+add_action('delete_product_cat', static function (): void {
+    delete_transient('gp_product_cat_tree_v1');
+});
+
+function gp_get_product_category_root_id(array $ancestor_ids, int $current_term_id): int
 {
-    $term_map = gp_get_product_category_term_map();
-    return $term_map[$parent_term_id] ?? [];
+    if ($ancestor_ids === []) {
+        return $current_term_id;
+    }
+
+    return (int) end($ancestor_ids);
 }
 
-function gp_render_product_category_tree(int $parent_term_id = 0, int $current_term_id = 0, array $active_path_ids = []): void
+function gp_get_product_category_lineage(int $current_term_id, array $ancestor_ids): array
 {
-    $terms = gp_get_product_category_tree($parent_term_id);
-    if ($terms === []) {
-        if ($parent_term_id === 0) {
-            echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
-        }
+    if ($current_term_id <= 0) {
+        return [];
+    }
+
+    return array_reverse(array_merge([$current_term_id], $ancestor_ids));
+}
+
+function gp_render_category_links_list(array $categories, int $active_term_id = 0): void
+{
+    if ($categories === []) {
         return;
     }
 
-    echo '<ul class="gp-cat-tree__level gp-cat-tree__level--' . esc_attr((string) $parent_term_id) . '">';
-
-    foreach ($terms as $term) {
-        if (!$term instanceof WP_Term) {
+    echo '<ul class="gp-cat-filter__list">';
+    foreach ($categories as $category) {
+        if (!$category instanceof WP_Term) {
             continue;
         }
 
-        $term_id = (int) $term->term_id;
-        $is_current = $term_id === $current_term_id;
-        $is_active = in_array($term_id, $active_path_ids, true);
-        $child_terms = gp_get_product_category_tree($term_id);
-        $has_children = $child_terms !== [];
-        $is_expanded = $is_current || $is_active;
-        $term_link = get_term_link($term);
+        $term_link = get_term_link($category);
         if (is_wp_error($term_link)) {
             continue;
         }
 
-        $item_classes = ['gp-cat-tree__item'];
-        if ($is_current) {
-            $item_classes[] = 'is-current';
-        } elseif ($is_active) {
-            $item_classes[] = 'is-active-path';
+        $classes = ['gp-cat-filter__link'];
+        if ((int) $category->term_id === $active_term_id) {
+            $classes[] = 'is-active';
         }
 
-        echo '<li class="' . esc_attr(implode(' ', $item_classes)) . '">';
-
-        if ($has_children) {
-            echo '<details class="gp-cat-tree__details"' . ($is_expanded ? ' open' : '') . '>';
-            echo '<summary class="gp-cat-tree__summary">';
-            echo '<a class="gp-cat-tree__link" href="' . esc_url($term_link) . '">' . esc_html($term->name) . '</a>';
-            echo '</summary>';
-            gp_render_product_category_tree($term_id, $current_term_id, $active_path_ids);
-            echo '</details>';
-        } else {
-            echo '<a class="gp-cat-tree__link" href="' . esc_url($term_link) . '">' . esc_html($term->name) . '</a>';
-        }
-
-        echo '</li>';
+        echo '<li><a class="' . esc_attr(implode(' ', $classes)) . '" href="' . esc_url($term_link) . '">' . esc_html($category->name) . '</a></li>';
     }
-
     echo '</ul>';
+}
+
+function gp_render_category_filter_section(string $title, callable $content_renderer, bool $open = true): void
+{
+    echo '<details class="gp-cat-filter__section"' . ($open ? ' open' : '') . '>';
+    echo '<summary class="gp-cat-filter__summary">' . esc_html($title) . '</summary>';
+    echo '<div class="gp-cat-filter__section-content">';
+    $content_renderer();
+    echo '</div>';
+    echo '</details>';
 }
 
 function gp_render_product_category_sidebar(): void
 {
     if (!taxonomy_exists('product_cat')) {
-        echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
+        echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
         return;
     }
 
-    $current_term_id = 0;
-    if (is_tax('product_cat')) {
-        $current_term = get_queried_object();
-        if ($current_term instanceof WP_Term && $current_term->taxonomy === 'product_cat') {
-            $current_term_id = (int) $current_term->term_id;
+    $top_categories = array_values(array_filter(
+        gp_get_product_cat_children(0),
+        static function ($term): bool {
+            return $term instanceof WP_Term && !gp_is_excluded_product_category($term);
         }
-    }
-
-    $active_path_ids = [];
-    if ($current_term_id > 0) {
-        $ancestor_ids = get_ancestors($current_term_id, 'product_cat', 'taxonomy');
-        if (is_array($ancestor_ids)) {
-            $active_path_ids = array_values(array_unique(array_map('intval', $ancestor_ids)));
-        }
-    }
-
-    ob_start();
-    gp_render_product_category_tree(0, $current_term_id, $active_path_ids);
-    $tree_markup = trim((string) ob_get_clean());
-
-    if ($tree_markup !== '') {
-        echo $tree_markup;
+    ));
+    if ($top_categories === []) {
+        echo '<p class="gp-cat-filter__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
         return;
     }
 
-    $fallback_terms = get_terms([
-        'taxonomy' => 'product_cat',
-        'hide_empty' => false,
-        'parent' => 0,
-        'orderby' => 'name',
-        'order' => 'ASC',
-    ]);
+    $current_term = gp_get_current_product_category_term();
+    $current_term_id = $current_term instanceof WP_Term ? (int) $current_term->term_id : 0;
+    $ancestor_ids = $current_term_id > 0 ? array_map('intval', get_ancestors($current_term_id, 'product_cat', 'taxonomy')) : [];
 
-    if (!is_array($fallback_terms) || $fallback_terms === []) {
-        echo '<p class="gp-cat-tree__empty">' . esc_html__('Brak kategorii produktów.', 'gp-clone') . '</p>';
-        return;
+    $top_category_id = $current_term instanceof WP_Term ? gp_get_product_category_root_id($ancestor_ids, $current_term_id) : 0;
+    if ($top_category_id === 0) {
+        $default_top_category = gp_find_top_category_by_slug($top_categories, 'motoryzacja');
+        if ($default_top_category instanceof WP_Term) {
+            $top_category_id = (int) $default_top_category->term_id;
+        }
     }
 
-    echo '<ul class="gp-cat-tree__level gp-cat-tree__level--fallback">';
-    foreach ($fallback_terms as $term) {
-        if (!$term instanceof WP_Term) {
-            continue;
-        }
+    $lineage = gp_get_product_category_lineage($current_term_id, $ancestor_ids);
+    $active_subcategory_id = isset($lineage[1]) ? (int) $lineage[1] : 0;
+    $active_third_level_id = isset($lineage[2]) ? (int) $lineage[2] : 0;
+    $subcategories = $top_category_id > 0 ? gp_get_product_cat_children($top_category_id) : [];
+    $third_level_categories = $active_subcategory_id > 0 ? gp_get_product_cat_children($active_subcategory_id) : [];
 
-        $term_link = get_term_link($term);
-        if (is_wp_error($term_link)) {
-            continue;
-        }
+    echo '<div class="gp-cat-filter">';
 
-        $classes = ['gp-cat-tree__item'];
-        if ((int) $term->term_id === $current_term_id) {
-            $classes[] = 'is-current';
+    gp_render_category_filter_section(__('Kategoria', 'gp-clone'), static function () use ($top_category_id, $top_categories): void {
+        echo '<label class="screen-reader-text" for="gp-cat-parent-select">' . esc_html__('Wybierz kategorię główną', 'gp-clone') . '</label>';
+        echo '<select id="gp-cat-parent-select" class="gp-cat-filter__select" data-gp-cat-select>';
+        echo '<option value="' . esc_url(wc_get_page_permalink('shop')) . '"' . selected($top_category_id, 0, false) . '>' . esc_html__('Wszystkie kategorie', 'gp-clone') . '</option>';
+        foreach ($top_categories as $category) {
+            if (!$category instanceof WP_Term) {
+                continue;
+            }
+            $term_link = get_term_link($category);
+            if (is_wp_error($term_link)) {
+                continue;
+            }
+            echo '<option value="' . esc_url($term_link) . '"' . selected($top_category_id, (int) $category->term_id, false) . '>' . esc_html($category->name) . '</option>';
         }
+        echo '</select>';
+    });
 
-        echo '<li class="' . esc_attr(implode(' ', $classes)) . '">';
-        echo '<a class="gp-cat-tree__link" href="' . esc_url($term_link) . '">' . esc_html($term->name) . '</a>';
-        echo '</li>';
+    if ($subcategories !== []) {
+        gp_render_category_filter_section(__('Podkategoria', 'gp-clone'), static function () use ($subcategories, $active_subcategory_id, $current_term_id): void {
+            $active_id = $active_subcategory_id > 0 ? $active_subcategory_id : $current_term_id;
+            gp_render_category_links_list($subcategories, $active_id);
+        }, $current_term_id > 0);
     }
-    echo '</ul>';
+
+    if ($third_level_categories !== []) {
+        gp_render_category_filter_section(__('Dalsze zawężenie', 'gp-clone'), static function () use ($third_level_categories, $active_third_level_id, $current_term_id): void {
+            $active_id = $active_third_level_id > 0 ? $active_third_level_id : $current_term_id;
+            gp_render_category_links_list($third_level_categories, $active_id);
+        }, true);
+    }
+
+    echo '</div>';
 }
 
 function gp_product_tab_compatibility(): void
@@ -552,10 +615,6 @@ function gp_normalize_part_number(string $value): string
 
 add_action('wp_footer', function (): void {
     if (!gp_should_render_part_number_search_box()) {
-        return;
-    }
-
-    if (is_front_page()) {
         return;
     }
 

@@ -266,88 +266,99 @@
   color: #111827;
 }
 
-.gp-cat-tree__level {
+.gp-cat-filter {
+  display: grid;
+  gap: 10px;
+}
+
+.gp-cat-filter__section {
+  border: 1px solid #e2e8f4;
+  border-radius: 10px;
+  background: #f8fafc;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+
+.gp-cat-filter__section + .gp-cat-filter__section {
+  border-top: 1px solid #dce4f2;
+}
+
+.gp-cat-filter__summary {
+  list-style: none;
+  cursor: default;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2937;
+  padding: 12px 14px;
+}
+
+.gp-cat-filter__summary::-webkit-details-marker {
+  display: none;
+}
+
+.gp-cat-filter__section-content {
+  padding: 0 14px 14px;
+}
+
+.gp-cat-filter__select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #cad4e4;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 14px;
+  color: #1f2937;
+  background: #fff;
+}
+
+.gp-cat-filter__list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  max-height: 290px;
+  overflow: auto;
+  scrollbar-width: thin;
 }
 
-.gp-cat-tree__empty {
-  margin: 0;
-  font-size: 14px;
-  color: #64748b;
-}
-
-.gp-cat-tree__details[open] > .gp-cat-tree__summary {
-  margin-bottom: 4px;
-}
-
-.gp-cat-tree__summary {
-  list-style: none;
-  cursor: pointer;
-}
-
-.gp-cat-tree__summary::-webkit-details-marker {
-  display: none;
-}
-
-.gp-cat-tree__summary::before {
-  content: '▸';
-  display: inline-block;
-  margin-right: 8px;
-  color: #64748b;
-  transition: transform .2s ease;
-}
-
-.gp-cat-tree__details[open] > .gp-cat-tree__summary::before {
-  transform: rotate(90deg);
-}
-
-.gp-cat-tree__item .gp-cat-tree__link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  text-decoration: none;
+.gp-cat-filter__link {
+  display: block;
+  border-radius: 8px;
+  border: 1px solid #e3e9f3;
+  background: #fff;
   color: #334155;
   font-size: 14px;
   line-height: 1.35;
-  padding: 6px 10px;
-  border-radius: 8px;
-  transition: background-color .2s ease, color .2s ease;
+  padding: 10px 11px;
+  text-decoration: none;
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease;
 }
 
-.gp-cat-tree__item .gp-cat-tree__link:hover {
-  background: #eef2ff;
+.gp-cat-filter__link:hover {
+  border-color: #c7d5ef;
+  background: #f0f6ff;
   color: #1d4ed8;
 }
 
-.gp-cat-tree__item.is-current > .gp-cat-tree__details > .gp-cat-tree__summary .gp-cat-tree__link,
-.gp-cat-tree__item.is-current > .gp-cat-tree__link {
-  color: #1d4ed8;
-  background: #e0e7ff;
+.gp-cat-filter__link.is-active {
+  border-color: #97b8f4;
+  background: #dbeafe;
+  color: #122a66;
   font-weight: 700;
 }
 
-.gp-cat-tree__item.is-active-path > .gp-cat-tree__details > .gp-cat-tree__summary .gp-cat-tree__link,
-.gp-cat-tree__item.is-active-path > .gp-cat-tree__link {
-  color: #1e3a8a;
-  background: #eff6ff;
-  font-weight: 600;
-}
-
-.gp-cat-tree__item > .gp-cat-tree__details > .gp-cat-tree__level {
-  margin: 6px 0 2px 20px;
-  padding-left: 10px;
-  border-left: 1px solid #e2e8f0;
+.gp-cat-filter__empty {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
 }
 
 .gp-shop-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   margin: 0 0 14px;
 }
 
@@ -360,6 +371,12 @@
 .gp-shop-toolbar .woocommerce-result-count {
   color: #344054;
   font-size: 14px;
+  order: 1;
+}
+
+.gp-shop-toolbar .woocommerce-ordering {
+  order: 2;
+  justify-self: end;
 }
 
 .gp-footer {
@@ -406,8 +423,10 @@
   .gp-purchase-panel__head .product_title { font-size: 26px; }
   .gp-purchase-box .price { font-size: 36px !important; }
   .gp-shop-toolbar {
-    flex-direction: column;
-    align-items: flex-start;
+    gap: 10px;
+  }
+  .gp-shop-toolbar .woocommerce-ordering {
+    justify-self: start;
   }
 }
 
@@ -419,4 +438,21 @@
     grid-template-columns: 1fr;
   }
   .gp-footer__cols { grid-template-columns: 1fr; }
+  .gp-cat-filter__summary {
+    cursor: pointer;
+    position: relative;
+    padding-right: 34px;
+  }
+  .gp-cat-filter__summary::after {
+    content: '+';
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 16px;
+    color: #475569;
+  }
+  .gp-cat-filter__section[open] > .gp-cat-filter__summary::after { content: '−'; }
+  .gp-cat-filter__section:not([open]) .gp-cat-filter__section-content { display: none; }
+  .gp-cat-filter__list { max-height: 220px; }
 }

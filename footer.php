@@ -3,19 +3,11 @@
     <div class="gp-container">
         <div class="gp-footer__cols">
             <div>
-                <h3>Global Parts</h3>
+                <h3>GP Swiss</h3>
                 <ul>
                     <li><a href="#">O nas</a></li>
                     <li><a href="#">Kontakt</a></li>
                     <li><a href="#">Regulamin</a></li>
-                </ul>
-            </div>
-            <div>
-                <h3>Zakupy</h3>
-                <ul>
-                    <li><a href="#">Koszyk</a></li>
-                    <li><a href="#">Checkout</a></li>
-                    <li><a href="#">Moje konto</a></li>
                 </ul>
             </div>
             <div>
@@ -29,8 +21,8 @@
             <div>
                 <h3>Kontakt</h3>
                 <ul>
-                    <li>tel. +48 510 215 506</li>
-                    <li>biuro@globalparts.local</li>
+                    <li>tel. 504 266 984</li>
+                    <li>biuro@gpswiss.pl</li>
                 </ul>
             </div>
         </div>
