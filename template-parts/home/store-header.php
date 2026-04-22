@@ -37,14 +37,14 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             <a href="#">Najczęściej zadawane pytania</a>
             <a href="#">Oferta dla warsztatów</a>
             <a href="#" class="gp-rzetelna-link" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
-                <span><?php esc_html_e('Rzetelna Firma', 'gp-clone'); ?></span>
+                <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
             </a>
         </div>
 
         <div class="gp-main-header__row">
             <div class="gp-logo-wrap">
                 <a href="<?php echo esc_url(home_url('/')); ?>" class="gp-logo-link" aria-label="<?php esc_attr_e('Strona główna', 'gp-clone'); ?>">
-                    <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/gp-logo-placeholder.svg'); ?>" alt="Gregor Swiss">
+                    <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/gp-logo-main.jpg'); ?>" alt="Gregor Swiss">
                 </a>
             </div>
 
