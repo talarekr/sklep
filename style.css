@@ -319,6 +319,18 @@ body.home .gp-part-search-box {
   border-bottom: 1px solid #e7ecf3;
   color: #0f172a;
 }
+.gp-category-search-hero__media {
+  position: relative;
+  min-height: 250px;
+  padding: 34px 0 100px;
+  background:
+    linear-gradient(103deg, rgba(8, 25, 66, 0.78) 8%, rgba(8, 25, 66, 0.42) 62%, rgba(8, 25, 66, 0.2) 100%),
+    url('https://images.unsplash.com/photo-1486006920555-c77dcf18193c?auto=format&fit=crop&w=1920&q=80') center/cover no-repeat;
+}
+.gp-category-search-hero__media .gp-container {
+  position: relative;
+  z-index: 1;
+}
 .gp-category-search-hero__title {
   margin: 0 0 12px;
   font-size: 38px;
@@ -661,6 +673,8 @@ body.home .gp-part-search-box {
   .gp-category-search-hero__title { font-size: 28px; }
   .gp-category-search-hero__panel { max-width: 100%; }
   .gp-category-search-hero__form { grid-template-columns: 1fr; }
+  .gp-category-search-hero__form input { font-size: 17px; min-height: 48px; }
+  .gp-category-search-hero__form button { width: 100%; min-height: 48px; font-size: 18px; }
 }
 .gp-hero {
   position: relative;
