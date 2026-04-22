@@ -181,6 +181,9 @@ a:hover { text-decoration: underline; }
   align-items: center;
   pointer-events: none;
 }
+body.home .gp-part-search-box {
+  top: 62%;
+}
 .gp-part-search-box--hero {
   position: sticky;
   left: auto;
