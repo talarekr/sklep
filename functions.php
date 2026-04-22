@@ -31,6 +31,7 @@ add_action('wp_enqueue_scripts', function () {
     );
     wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), [], '1.3.3');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
+    wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
 
     if (class_exists('WooCommerce')) {
         wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.3');
@@ -46,6 +47,10 @@ add_action('wp_enqueue_scripts', function () {
             );
         }
     }
+});
+
+add_action('wp_footer', function (): void {
+    echo '<div id="gp-google-translate-element" class="gp-google-translate-element" aria-hidden="true"></div>';
 });
 
 add_action('wp_head', function (): void {

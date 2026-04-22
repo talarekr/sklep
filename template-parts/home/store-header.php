@@ -38,6 +38,16 @@ $resolve_category_url = static function (array $candidate_slugs) use ($shop_url)
             <a href="#" class="gp-rzetelna-link gp-rzetelna-link--top" aria-label="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>">
                 <img src="<?php echo esc_url(get_template_directory_uri() . '/assets/images/rzetelna-firma.jpg'); ?>" alt="<?php esc_attr_e('Rzetelna Firma', 'gp-clone'); ?>" loading="lazy">
             </a>
+            <label class="gp-language-switcher" for="gp-language-select">
+                <span class="gp-language-switcher__label"><?php esc_html_e('Język', 'gp-clone'); ?></span>
+                <select id="gp-language-select" class="gp-language-switcher__select" aria-label="<?php esc_attr_e('Język', 'gp-clone'); ?>">
+                    <option value="pl" title="<?php esc_attr_e('Polski', 'gp-clone'); ?>">🇵🇱</option>
+                    <option value="en" title="<?php esc_attr_e('Angielski', 'gp-clone'); ?>">🇬🇧</option>
+                    <option value="fr" title="<?php esc_attr_e('Francuski', 'gp-clone'); ?>">🇫🇷</option>
+                    <option value="uk" title="<?php esc_attr_e('Ukraiński', 'gp-clone'); ?>">🇺🇦</option>
+                    <option value="de" title="<?php esc_attr_e('Niemiecki', 'gp-clone'); ?>">🇩🇪</option>
+                </select>
+            </label>
         </div>
 
         <div class="gp-main-header__row">
