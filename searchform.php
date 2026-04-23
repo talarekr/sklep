@@ -5,5 +5,6 @@
         <button type="button" data-mode="model">Model pojazdu</button>
     </div>
     <input type="search" name="s" value="<?php echo esc_attr(get_search_query()); ?>" placeholder="Wpisz numer części lub model pojazdu">
+    <input type="hidden" name="post_type" value="product">
     <button type="submit">Szukaj</button>
 </form>
