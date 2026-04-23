@@ -1007,7 +1007,7 @@
 
 .woocommerce-checkout form.checkout {
   display: grid;
-  grid-template-columns: minmax(0, 65%) minmax(280px, 35%);
+  grid-template-columns: minmax(0, 62%) minmax(300px, 38%);
   gap: 24px;
   align-items: start;
 }
