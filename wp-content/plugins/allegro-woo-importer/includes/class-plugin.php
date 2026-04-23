@@ -11,6 +11,7 @@ final class Plugin
     public const OPTION_KEY = 'awi_settings';
     public const HISTORY_OPTION_KEY = 'awi_import_history';
     public const CRON_HOOK = 'awi_run_scheduled_import';
+    public const SAFE_MODE_OPTION_KEY = 'awi_safe_mode_enabled';
 
     private static ?self $instance = null;
     private Logger $logger;
@@ -144,5 +145,15 @@ final class Plugin
     {
         $instance = self::instance();
         return $instance->mapper->get_preferred_listing_image_id($product_id);
+    }
+
+    public static function is_safe_mode_enabled(): bool
+    {
+        $raw = get_option(self::SAFE_MODE_OPTION_KEY, null);
+        if ($raw === null) {
+            return true;
+        }
+
+        return !empty($raw);
     }
 }
