@@ -121,3 +121,43 @@ Skrypt wygeneruje lokalnie:
 - `dist/allegro-woo-importer.zip`
 
 Katalog `dist/` i pliki archiwów są ignorowane przez `.gitignore`.
+
+## 13) Konfiguracja SMTP + maile WooCommerce (GPSWISS)
+
+### Sekrety (bez hardcodowania)
+W `wp-config.php` dodaj zmienne (albo ustaw odpowiednie zmienne środowiskowe `GP_*`):
+
+```php
+define('GP_SMTP_HOST', 'thecamels.org');
+define('GP_SMTP_PORT', '587');
+define('GP_SMTP_LOGIN', 'biuro@gpswiss.pl');
+define('GP_SMTP_PASSWORD', 'TU_WPROWADZ_HASLO_POZA_REPO');
+define('GP_MAIL_FROM', 'biuro@gpswiss.pl');
+define('GP_MAIL_FROM_NAME', 'GPSWISS');
+define('GP_MAIL_REPLY_TO', 'biuro@gpswiss.pl');
+```
+
+> `GP_SMTP_PASSWORD` musi być ustawione wyłącznie w bezpiecznej konfiguracji serwera (env / `wp-config.php`), nigdy w motywie ani repozytorium.
+
+### Co zostało podpięte
+- SMTP dla WordPress (`phpmailer_init`) z STARTTLS na porcie 587.
+- Nadawca i nazwa nadawcy (`wp_mail_from`, `wp_mail_from_name`) oraz `Reply-To`.
+- Logowanie błędów wysyłki do WooCommerce loggera (`source: gp-mailer`) albo `error_log`.
+- Branding szablonów WooCommerce przez override:
+  - `woocommerce/emails/email-header.php`
+  - `woocommerce/emails/email-footer.php`
+
+### Zdarzenia mailowe
+- Rejestracja konta — e-mail WooCommerce „Nowe konto klienta” (spersonalizowany temat + treść dodatkowa).
+- Złożenie zamówienia — „On-hold order” (temat: „Przyjęliśmy Twoje zamówienie…”).
+- Potwierdzenie płatności — „Processing order” (temat: „Płatność … została potwierdzona”).
+- Nieudana płatność — dedykowany e-mail klienta na statusie `failed`.
+- Wysyłka zamówienia — „Completed order” (temat: „… zostało wysłane”).
+- Reset hasła — temat + treść resetu dostosowane do GPSWISS.
+- Anulowanie zamówienia — dedykowany e-mail klienta na statusie `cancelled`.
+
+### Test po wdrożeniu (produkcyjnie)
+1. Ustaw hasło SMTP w bezpiecznej konfiguracji.
+2. Wykonaj reset hasła testowego klienta i potwierdź dostarczenie maila.
+3. Złóż testowe zamówienie oraz przełączaj statusy (`on-hold`, `processing`, `failed`, `completed`, `cancelled`) i sprawdź skrzynkę odbiorczą.
+4. Zweryfikuj logi WooCommerce (`WooCommerce → Status → Logi`, źródło `gp-mailer`).
