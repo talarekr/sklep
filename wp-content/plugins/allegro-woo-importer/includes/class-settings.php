@@ -71,6 +71,13 @@ class Settings
             $input = [];
         }
 
+        $safe_mode_raw = $_POST[Plugin::SAFE_MODE_OPTION_KEY] ?? '0';
+        if (is_array($safe_mode_raw)) {
+            $safe_mode_raw = end($safe_mode_raw);
+        }
+        $safe_mode_enabled = !empty($safe_mode_raw) && (string) $safe_mode_raw !== '0';
+        update_option(Plugin::SAFE_MODE_OPTION_KEY, $safe_mode_enabled ? '1' : '0', false);
+
         $current = Plugin::get_settings();
 
         $clean = [
