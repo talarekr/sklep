@@ -101,6 +101,10 @@ class ProductMapper
                 'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
                 'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
                 'selected_source_selection_reason' => $selection_reason,
+                'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? 'unknown'),
+                'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
+                'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
+                'requires_better_source' => !empty($quality['requires_better_source']),
             ];
         }
 
@@ -135,6 +139,10 @@ class ProductMapper
             'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
             'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
             'selected_source_selection_reason' => $selection_reason,
+            'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? 'unknown'),
+            'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
+            'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
+            'requires_better_source' => !empty($quality['requires_better_source']),
         ];
     }
 
@@ -361,6 +369,79 @@ class ProductMapper
         }
 
         return $score;
+    }
+
+    private function update_listing_quality_meta(int $product_id, int $listing_image_id, array $selection): array
+    {
+        $selected_source_image_id = (int) ($selection['selected_source_image_id'] ?? 0);
+
+        $selected_metrics = null;
+        if ($selected_source_image_id > 0) {
+            $selected_metrics = $this->get_attachment_trim_metrics_for_listing_selection($selected_source_image_id);
+        }
+
+        $listing_quality_score = 0.0;
+        $listing_quality_tier = 'unknown';
+        if (is_array($selected_metrics)) {
+            $listing_quality_score = $this->calculate_listing_source_quality_score($selected_metrics);
+            $listing_quality_tier = $this->determine_listing_source_quality_tier($selected_metrics);
+        }
+
+        $best_available_tier = 'unknown';
+        $best_available_rank = 0;
+        $candidate_ids = array_map('intval', (array) ($selection['candidate_source_image_ids'] ?? []));
+        foreach ($candidate_ids as $candidate_id) {
+            if ($candidate_id <= 0) {
+                continue;
+            }
+
+            $candidate_metrics = $this->get_attachment_trim_metrics_for_listing_selection($candidate_id);
+            if (!is_array($candidate_metrics)) {
+                continue;
+            }
+
+            $candidate_tier = $this->determine_listing_source_quality_tier($candidate_metrics);
+            $candidate_rank = $this->get_listing_quality_tier_rank($candidate_tier);
+            if ($candidate_rank > $best_available_rank) {
+                $best_available_rank = $candidate_rank;
+                $best_available_tier = $candidate_tier;
+            }
+        }
+
+        if ($best_available_tier === 'unknown') {
+            $best_available_tier = $listing_quality_tier;
+        }
+
+        $requires_better_source = $this->get_listing_quality_tier_rank($best_available_tier) < $this->get_listing_quality_tier_rank('preferred');
+
+        update_post_meta($product_id, self::LISTING_QUALITY_TIER_META_KEY, $listing_quality_tier);
+        update_post_meta($product_id, self::LISTING_QUALITY_SCORE_META_KEY, round($listing_quality_score, 6));
+        update_post_meta($product_id, self::LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY, $best_available_tier);
+        update_post_meta($product_id, self::LISTING_REQUIRES_BETTER_SOURCE_META_KEY, $requires_better_source ? 1 : 0);
+
+        if ($listing_image_id > 0) {
+            update_post_meta($listing_image_id, self::LISTING_QUALITY_TIER_META_KEY, $listing_quality_tier);
+            update_post_meta($listing_image_id, self::LISTING_QUALITY_SCORE_META_KEY, round($listing_quality_score, 6));
+            update_post_meta($listing_image_id, self::LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY, $best_available_tier);
+            update_post_meta($listing_image_id, self::LISTING_REQUIRES_BETTER_SOURCE_META_KEY, $requires_better_source ? 1 : 0);
+        }
+
+        return [
+            'listing_quality_tier' => $listing_quality_tier,
+            'listing_quality_score' => round($listing_quality_score, 6),
+            'best_available_source_quality_tier' => $best_available_tier,
+            'requires_better_source' => $requires_better_source,
+        ];
+    }
+
+    private function get_listing_quality_tier_rank(string $tier): int
+    {
+        return match ($tier) {
+            'preferred' => 3,
+            'acceptable' => 2,
+            'degraded' => 1,
+            default => 0,
+        };
     }
 
     public function upsert_product(array $offer, array $settings): array
