@@ -1507,8 +1507,7 @@ function gp_render_product_category_sidebar(): void
         echo '</div>';
         echo '<div class="gp-cat-filter__actions">';
         echo '<button type="submit" class="gp-cat-filter__apply">' . esc_html__('Filtruj', 'gp-clone') . '</button>';
-        echo '<a href="' . esc_url($clear_filters_url) . '" class="gp-cat-filter__apply gp-cat-filter__apply--secondary">' . esc_html__('Wyczyść filtry', 'gp-clone') . '</a>';
-        echo '</div>';
+        echo '<a href="' . esc_url($clear_filters_url) . '" class="gp-cat-filter__apply">' . esc_html__('Wyczyść filtry', 'gp-clone') . '</a>';
     }, true);
 
     echo '</form>';

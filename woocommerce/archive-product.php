@@ -14,7 +14,6 @@ get_header('shop');
     $model_query = isset($_GET['s']) ? sanitize_text_field((string) wp_unslash($_GET['s'])) : '';
     $current_category = get_queried_object();
     $category_search_mode = $model_query !== '' ? 'model' : 'part';
-    $search_mode_value = $category_search_mode === 'model' ? 'vehicle_model' : 'part_number';
     $search_value = $category_search_mode === 'model' ? $model_query : $part_number_query;
     $category_search_action = ($current_category instanceof WP_Term && is_product_category()) ? get_term_link($current_category) : wc_get_page_permalink('shop');
     if (is_wp_error($category_search_action) || !is_string($category_search_action) || $category_search_action === '') {
@@ -33,11 +32,10 @@ get_header('shop');
                     </div>
                     <div class="gp-category-search-hero__panel">
                         <div class="gp-search-tabs" data-search-switch>
-                            <button type="button" data-mode="part" data-search-mode="part_number" data-input-name="part_number" data-placeholder="<?php echo esc_attr__('Wprowadź numer części', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'part' ? 'is-active' : ''; ?>"><?php esc_html_e('Numer części', 'gp-clone'); ?></button>
-                            <button type="button" data-mode="model" data-search-mode="vehicle_model" data-input-name="s" data-placeholder="<?php echo esc_attr__('Wprowadź model pojazdu', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'model' ? 'is-active' : ''; ?>"><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></button>
+                            <button type="button" data-mode="part" data-input-name="part_number" data-placeholder="<?php echo esc_attr__('Wprowadź numer części', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'part' ? 'is-active' : ''; ?>"><?php esc_html_e('Numer części', 'gp-clone'); ?></button>
+                            <button type="button" data-mode="model" data-input-name="s" data-placeholder="<?php echo esc_attr__('Wprowadź model pojazdu', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'model' ? 'is-active' : ''; ?>"><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></button>
                         </div>
                         <form method="get" action="<?php echo esc_url($category_search_action); ?>" class="gp-category-search-hero__form" data-category-search-form>
-                            <input type="hidden" name="search_mode" value="<?php echo esc_attr($search_mode_value); ?>" data-category-search-mode>
                             <input
                                 type="search"
                                 name="<?php echo $category_search_mode === 'model' ? 's' : 'part_number'; ?>"
