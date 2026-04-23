@@ -15,6 +15,10 @@ $section_definitions = [
         'title' => __('Zwrotnice', 'gp-clone'),
         'terms' => ['zwrotnice'],
     ],
+    [
+        'title' => __('Filtry DPF', 'gp-clone'),
+        'terms' => ['filtry-czastek-stalych-dpf-fap'],
+    ],
 ];
 
 $category_tiles = [
@@ -186,6 +190,7 @@ $icon = static function (string $type): string {
         </section>
     <?php endforeach; ?>
 
+    <?php if (!is_front_page()) : ?>
     <section class="gp-home-categories">
         <div class="gp-container">
             <h2 class="gp-section-title"><?php esc_html_e('Kategorie części i akcesoriów samochodowych', 'gp-clone'); ?></h2>
@@ -199,6 +204,7 @@ $icon = static function (string $type): string {
             </div>
         </div>
     </section>
+    <?php endif; ?>
 
     <section class="gp-home-brands">
         <div class="gp-container">

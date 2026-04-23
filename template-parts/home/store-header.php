@@ -14,7 +14,7 @@ $is_logged_in = is_user_logged_in();
 $shortcuts = [
     ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines']],
     ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
-    ['label' => 'Filtry DPF', 'slugs' => ['filtry-dpf', 'dpf', 'filtry']],
+    ['label' => 'Filtry DPF', 'slugs' => ['filtry-czastek-stalych-dpf-fap']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'wyposazenie-wnetrza-samochodu', 'interior']],
     ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
@@ -61,16 +61,90 @@ if (taxonomy_exists('product_cat')) {
     }
 
     if ($motoryzacja_term instanceof WP_Term) {
-        $all_product_categories = get_terms([
+        $is_technical_category = static function (WP_Term $term): bool {
+            $technical_slugs = [
+                'motoryzacja',
+                'czesci-samochodowe',
+            ];
+            $technical_names = [
+                'motoryzacja',
+                'części samochodowe',
+            ];
+
+            if (in_array(sanitize_title($term->slug), $technical_slugs, true)) {
+                return true;
+            }
+
+            return in_array(mb_strtolower(wp_strip_all_tags((string) $term->name)), $technical_names, true);
+        };
+
+        $terms_by_parent = [];
+        $all_terms = get_terms([
             'taxonomy' => 'product_cat',
-            'parent' => (int) $motoryzacja_term->term_id,
-            'hide_empty' => true,
+            'hide_empty' => false,
             'orderby' => 'name',
             'order' => 'ASC',
+            'fields' => 'all',
         ]);
+
+        if (is_array($all_terms)) {
+            foreach ($all_terms as $term) {
+                if (!$term instanceof WP_Term) {
+                    continue;
+                }
+
+                $parent_id = (int) $term->parent;
+                if (!isset($terms_by_parent[$parent_id])) {
+                    $terms_by_parent[$parent_id] = [];
+                }
+
+                $terms_by_parent[$parent_id][] = $term;
+            }
+        }
+
+        $queue = [(int) $motoryzacja_term->term_id];
+        $visited = [];
+        $resolved_ids = [];
+
+        while ($queue !== []) {
+            $parent_id = array_shift($queue);
+            if (isset($visited[$parent_id])) {
+                continue;
+            }
+
+            $visited[$parent_id] = true;
+            $children = $terms_by_parent[$parent_id] ?? [];
+
+            foreach ($children as $child) {
+                if (!$child instanceof WP_Term) {
+                    continue;
+                }
+
+                if ($is_technical_category($child)) {
+                    $queue[] = (int) $child->term_id;
+                    continue;
+                }
+
+                if ((int) $child->count > 0) {
+                    $resolved_ids[] = (int) $child->term_id;
+                }
+            }
+        }
+
+        $resolved_ids = array_values(array_unique($resolved_ids));
+
+        if ($resolved_ids !== []) {
+            $all_product_categories = get_terms([
+                'taxonomy' => 'product_cat',
+                'include' => $resolved_ids,
+                'hide_empty' => true,
+                'orderby' => 'name',
+                'order' => 'ASC',
+            ]);
+        }
     }
 
-    if (is_wp_error($all_product_categories)) {
+    if (is_wp_error($all_product_categories) || !is_array($all_product_categories)) {
         $all_product_categories = [];
     }
 }
@@ -185,7 +259,7 @@ if (taxonomy_exists('product_cat')) {
                     data-gp-all-cat-trigger
                 >
                     <span class="gp-hamburger" aria-hidden="true">&#9776;</span>
-                    <?php esc_html_e('Wszystkie kategorie', 'gp-clone'); ?>
+                    <?php esc_html_e('Menu', 'gp-clone'); ?>
                 </button>
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
                     <ul class="gp-all-cat-dropdown__list">

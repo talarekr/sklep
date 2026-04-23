@@ -1489,12 +1489,26 @@ function gp_render_product_category_sidebar(): void
         echo '<button type="button" class="gp-cat-filter__more" data-gp-subcategory-more hidden>' . esc_html__('Wyświetl więcej', 'gp-clone') . '</button>';
     }, $current_term_id > 0);
 
-    gp_render_category_filter_section(__('Cena', 'gp-clone'), static function () use ($selected_price_min, $selected_price_max): void {
+    $clear_filters_url = home_url('/kategoria-produktu/motoryzacja/');
+    if (taxonomy_exists('product_cat')) {
+        $motoryzacja_term = get_term_by('slug', sanitize_title('motoryzacja'), 'product_cat');
+        if ($motoryzacja_term instanceof WP_Term) {
+            $motoryzacja_link = get_term_link($motoryzacja_term);
+            if (!is_wp_error($motoryzacja_link) && is_string($motoryzacja_link) && $motoryzacja_link !== '') {
+                $clear_filters_url = $motoryzacja_link;
+            }
+        }
+    }
+
+    gp_render_category_filter_section(__('Cena', 'gp-clone'), static function () use ($selected_price_min, $selected_price_max, $clear_filters_url): void {
         echo '<div class="gp-cat-filter__price-row">';
         echo '<input type="number" min="0" step="1" name="price_min" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena od', 'gp-clone') . '" value="' . esc_attr($selected_price_min) . '">';
         echo '<input type="number" min="0" step="1" name="price_max" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena do', 'gp-clone') . '" value="' . esc_attr($selected_price_max) . '">';
         echo '</div>';
+        echo '<div class="gp-cat-filter__actions">';
         echo '<button type="submit" class="gp-cat-filter__apply">' . esc_html__('Filtruj', 'gp-clone') . '</button>';
+        echo '<a href="' . esc_url($clear_filters_url) . '" class="gp-cat-filter__apply gp-cat-filter__apply--secondary">' . esc_html__('Wyczyść filtry', 'gp-clone') . '</a>';
+        echo '</div>';
     }, true);
 
     echo '</form>';
@@ -1924,6 +1938,27 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
     $raw_phrase = trim((string) $query->get('s'));
     if ($raw_phrase === '') {
         return $search;
+    }
+
+    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
+    $is_vehicle_model_search = $search_mode === 'vehicle_model' && (is_tax('product_cat') || $query->is_tax('product_cat'));
+
+    if ($is_vehicle_model_search) {
+        $terms = preg_split('/\s+/u', $raw_phrase) ?: [];
+        $terms = array_values(array_filter(array_map(static fn($term) => sanitize_text_field((string) $term), $terms)));
+
+        $title_conditions = [];
+        foreach ($terms as $term) {
+            $term_like = '%' . $wpdb->esc_like($term) . '%';
+            $title_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $term_like);
+        }
+
+        if ($title_conditions === []) {
+            $phrase_like = '%' . $wpdb->esc_like($raw_phrase) . '%';
+            $title_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $phrase_like);
+        }
+
+        return ' AND (' . implode(' AND ', $title_conditions) . ')';
     }
 
     $terms = preg_split('/\s+/u', $raw_phrase) ?: [];

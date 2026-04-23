@@ -1,9 +1,34 @@
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-search-switch]').forEach((switcher) => {
+    const container = switcher.closest('.gp-category-search-hero__panel') || switcher.parentElement;
+    const form = container ? container.querySelector('[data-category-search-form]') : null;
+    const input = form ? form.querySelector('[data-category-search-input]') : null;
+    const modeInput = form ? form.querySelector('[data-category-search-mode]') : null;
+
     switcher.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
         switcher.querySelectorAll('button').forEach((item) => item.classList.remove('is-active'));
         button.classList.add('is-active');
+
+        if (!input) return;
+
+        const inputName = button.getAttribute('data-input-name');
+        const placeholder = button.getAttribute('data-placeholder');
+
+        if (inputName) {
+          input.setAttribute('name', inputName);
+        }
+
+        if (placeholder) {
+          input.setAttribute('placeholder', placeholder);
+        }
+
+        if (modeInput) {
+          const searchMode = button.getAttribute('data-search-mode');
+          if (searchMode) {
+            modeInput.setAttribute('value', searchMode);
+          }
+        }
       });
     });
   });

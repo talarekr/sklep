@@ -11,8 +11,15 @@ get_header('shop');
 <main class="gp-woo-layout">
     <?php
     $part_number_query = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
+    $model_query = isset($_GET['s']) ? sanitize_text_field((string) wp_unslash($_GET['s'])) : '';
     $current_category = get_queried_object();
-    $shop_search_url = wc_get_page_permalink('shop');
+    $category_search_mode = $model_query !== '' ? 'model' : 'part';
+    $search_mode_value = $category_search_mode === 'model' ? 'vehicle_model' : 'part_number';
+    $search_value = $category_search_mode === 'model' ? $model_query : $part_number_query;
+    $category_search_action = ($current_category instanceof WP_Term && is_product_category()) ? get_term_link($current_category) : wc_get_page_permalink('shop');
+    if (is_wp_error($category_search_action) || !is_string($category_search_action) || $category_search_action === '') {
+        $category_search_action = wc_get_page_permalink('shop');
+    }
     ?>
     <div class="gp-container">
         <?php if (is_product_category() && $current_category instanceof WP_Term) : ?>
@@ -26,16 +33,18 @@ get_header('shop');
                     </div>
                     <div class="gp-category-search-hero__panel">
                         <div class="gp-search-tabs" data-search-switch>
-                            <button type="button" class="is-active" data-mode="part"><?php esc_html_e('Numer części', 'gp-clone'); ?></button>
-                            <button type="button" data-mode="model"><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></button>
+                            <button type="button" data-mode="part" data-search-mode="part_number" data-input-name="part_number" data-placeholder="<?php echo esc_attr__('Wprowadź numer części', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'part' ? 'is-active' : ''; ?>"><?php esc_html_e('Numer części', 'gp-clone'); ?></button>
+                            <button type="button" data-mode="model" data-search-mode="vehicle_model" data-input-name="s" data-placeholder="<?php echo esc_attr__('Wprowadź model pojazdu', 'gp-clone'); ?>" class="<?php echo $category_search_mode === 'model' ? 'is-active' : ''; ?>"><?php esc_html_e('Model pojazdu', 'gp-clone'); ?></button>
                         </div>
-                        <form method="get" action="<?php echo esc_url($shop_search_url); ?>" class="gp-category-search-hero__form">
+                        <form method="get" action="<?php echo esc_url($category_search_action); ?>" class="gp-category-search-hero__form" data-category-search-form>
+                            <input type="hidden" name="search_mode" value="<?php echo esc_attr($search_mode_value); ?>" data-category-search-mode>
                             <input
                                 type="search"
-                                name="part_number"
-                                value="<?php echo esc_attr($part_number_query); ?>"
-                                placeholder="<?php esc_attr_e('Wprowadź numer części', 'gp-clone'); ?>"
+                                name="<?php echo $category_search_mode === 'model' ? 's' : 'part_number'; ?>"
+                                value="<?php echo esc_attr($search_value); ?>"
+                                placeholder="<?php echo esc_attr($category_search_mode === 'model' ? __('Wprowadź model pojazdu', 'gp-clone') : __('Wprowadź numer części', 'gp-clone')); ?>"
                                 required
+                                data-category-search-input
                             >
                             <button type="submit"><?php esc_html_e('Szukaj', 'gp-clone'); ?></button>
                         </form>
@@ -47,7 +56,6 @@ get_header('shop');
 
         <div class="gp-shop-grid">
             <aside class="gp-shop-sidebar">
-                <h3 class="gp-shop-sidebar__title"><?php esc_html_e('Kategorie', 'gp-clone'); ?></h3>
                 <?php
                 if (function_exists('gp_render_product_category_sidebar')) {
                     gp_render_product_category_sidebar();
