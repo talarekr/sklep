@@ -997,6 +997,13 @@
   }
 }
 
+.woocommerce-checkout .woocommerce-form-coupon-toggle,
+.woocommerce-checkout .woocommerce-NoticeGroup-checkout {
+  display: none;
+  margin: 0;
+  padding: 0;
+}
+
 .woocommerce-checkout #order_review_heading,
 .woocommerce-checkout #order_review {
   background: #f7f8fb;

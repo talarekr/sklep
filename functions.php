@@ -842,6 +842,39 @@ add_action('woocommerce_before_checkout_form', function (): void {
     wc_get_logger()->warning('Brak dostępnych metod płatności na checkout.', ['source' => 'gp-checkout']);
 }, 10);
 
+
+add_action('wp', function (): void {
+    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
+        return;
+    }
+
+    remove_action('woocommerce_before_checkout_form', 'woocommerce_checkout_coupon_form', 10);
+}, 20);
+
+add_filter('woocommerce_coupons_enabled', function (bool $enabled): bool {
+    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
+        return $enabled;
+    }
+
+    return false;
+}, 20);
+
+add_filter('woocommerce_no_available_payment_methods_message', function (string $message): string {
+    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
+        return $message;
+    }
+
+    return '';
+}, 20);
+
+add_filter('woocommerce_cart_no_available_payment_methods_message', function (string $message): string {
+    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
+        return $message;
+    }
+
+    return '';
+}, 20);
+
 add_action('woocommerce_after_shop_loop_item_title', function () {
     echo '<p class="gp-delivery-note product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
 }, 15);
