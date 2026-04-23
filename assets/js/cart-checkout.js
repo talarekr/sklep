@@ -165,4 +165,83 @@
   $(document.body).on('added_to_cart wc_fragments_refreshed', function () {
     refreshMiniCart();
   });
+
+  var replaceExactText = function (scope, from, to) {
+    if (!scope) return;
+
+    scope.querySelectorAll('*').forEach(function (el) {
+      if (!el.childNodes || el.childNodes.length !== 1) {
+        return;
+      }
+
+      var node = el.childNodes[0];
+      if (!node || node.nodeType !== Node.TEXT_NODE) {
+        return;
+      }
+
+      var text = node.textContent ? node.textContent.trim() : '';
+      if (text !== from) {
+        return;
+      }
+
+      node.textContent = to;
+    });
+  };
+
+  var sanitizeProductMetaLine = function (scope) {
+    if (!scope) return;
+
+    scope.querySelectorAll('.wc-block-cart-item__product .wc-block-components-product-details__witam, .wc-block-components-product-details__witam, .wc-block-components-product-metadata').forEach(function (el) {
+      if (!el.textContent) return;
+      if (el.textContent.indexOf('Witam oferta dotyczy:') === -1) return;
+      el.textContent = el.textContent.replace('Witam oferta dotyczy:', '').trim();
+      if (el.textContent === '') {
+        el.remove();
+      }
+    });
+
+    scope.querySelectorAll('.wc-block-components-product-details__value').forEach(function (el) {
+      if (!el.textContent) return;
+      if (el.textContent.trim() !== 'Witam oferta dotyczy:') return;
+      el.remove();
+    });
+  };
+
+  var enhanceCartBlock = function () {
+    if (!document.body.classList.contains('woocommerce-cart')) {
+      return;
+    }
+
+    var cartScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartScope) {
+      return;
+    }
+
+    replaceExactText(cartScope, 'Free shipping', 'Koszt dostawy');
+    replaceExactText(cartScope, 'BEZPŁATNIE', '0 zł');
+    replaceExactText(cartScope, 'FREE!', '0 zł');
+    replaceExactText(cartScope, 'Estimated total', 'Suma');
+    replaceExactText(cartScope, 'Szacowana łączna kwota', 'Suma');
+    sanitizeProductMetaLine(cartScope);
+
+    cartScope.querySelectorAll('.wc-block-cart__submit-button, .wc-block-components-checkout-place-order-button').forEach(function (button) {
+      button.classList.add('gp-cart-cta-button');
+      if (button.textContent) {
+        button.textContent = 'Przejdź do płatności';
+      }
+    });
+  };
+
+  enhanceCartBlock();
+
+  if (document.body.classList.contains('woocommerce-cart')) {
+    var cartObserver = new MutationObserver(function () {
+      enhanceCartBlock();
+    });
+
+    cartObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
 })(jQuery);
