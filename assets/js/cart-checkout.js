@@ -169,15 +169,23 @@
   var replaceExactText = function (scope, from, to) {
     if (!scope) return;
 
-    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
-    var node = walker.nextNode();
-    while (node) {
-      var text = node.textContent ? node.textContent.trim() : '';
-      if (text === from) {
-        node.textContent = to;
+    scope.querySelectorAll('*').forEach(function (el) {
+      if (!el.childNodes || el.childNodes.length !== 1) {
+        return;
       }
-      node = walker.nextNode();
-    }
+
+      var node = el.childNodes[0];
+      if (!node || node.nodeType !== Node.TEXT_NODE) {
+        return;
+      }
+
+      var text = node.textContent ? node.textContent.trim() : '';
+      if (text !== from) {
+        return;
+      }
+
+      node.textContent = to;
+    });
   };
 
   var sanitizeProductMetaLine = function (scope) {
@@ -201,12 +209,12 @@
 
   var enhanceCartBlock = function () {
     if (!document.body.classList.contains('woocommerce-cart')) {
-      return null;
+      return;
     }
 
     var cartScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
     if (!cartScope) {
-      return null;
+      return;
     }
 
     replaceExactText(cartScope, 'Free shipping', 'Koszt dostawy');
@@ -222,45 +230,16 @@
         button.textContent = 'Przejdź do płatności';
       }
     });
-
-    return cartScope;
   };
 
-  var observedCartScope = enhanceCartBlock();
+  enhanceCartBlock();
 
-  if (document.body.classList.contains('woocommerce-cart') && observedCartScope) {
-    var isApplyingEnhancements = false;
-    var applyQueued = false;
-
-    var scheduleEnhancement = function () {
-      if (applyQueued) {
-        return;
-      }
-
-      applyQueued = true;
-
-      window.requestAnimationFrame(function () {
-        applyQueued = false;
-        if (isApplyingEnhancements) {
-          return;
-        }
-
-        isApplyingEnhancements = true;
-        cartObserver.disconnect();
-        observedCartScope = enhanceCartBlock() || observedCartScope;
-        cartObserver.observe(observedCartScope, {
-          childList: true,
-          subtree: true
-        });
-        isApplyingEnhancements = false;
-      });
-    };
-
+  if (document.body.classList.contains('woocommerce-cart')) {
     var cartObserver = new MutationObserver(function () {
-      scheduleEnhancement();
+      enhanceCartBlock();
     });
 
-    cartObserver.observe(observedCartScope, {
+    cartObserver.observe(document.body, {
       childList: true,
       subtree: true
     });
