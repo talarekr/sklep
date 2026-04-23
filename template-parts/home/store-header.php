@@ -54,13 +54,24 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
 
 $all_product_categories = [];
 if (taxonomy_exists('product_cat')) {
-    $all_product_categories = get_terms([
-        'taxonomy' => 'product_cat',
-        'hide_empty' => false,
-        'parent' => 0,
-        'orderby' => 'name',
-        'order' => 'ASC',
-    ]);
+    $resolved_categories = function_exists('gp_get_user_facing_root_categories')
+        ? gp_get_user_facing_root_categories()
+        : [];
+
+    $candidate_category_ids = array_values(array_unique(array_filter(array_map(
+        static fn($term): int => $term instanceof WP_Term ? (int) $term->term_id : 0,
+        $resolved_categories
+    ))));
+
+    if ($candidate_category_ids !== []) {
+        $all_product_categories = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => true,
+            'include' => $candidate_category_ids,
+            'orderby' => 'name',
+            'order' => 'ASC',
+        ]);
+    }
 
     if (is_wp_error($all_product_categories)) {
         $all_product_categories = [];
