@@ -97,6 +97,7 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
                         aria-expanded="false"
                         aria-controls="gp-profile-dropdown"
                         data-gp-profile-trigger
+                        data-gp-auth-modal-open
                     >
                         <span class="gp-main-actions__icon" aria-hidden="true">&#128100;</span>
                         <span><?php esc_html_e('Mój profil', 'gp-clone'); ?></span>
@@ -146,8 +147,8 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
         </div>
     </div>
 </header>
-<div class="gp-mini-cart-overlay" data-gp-mini-cart-overlay hidden></div>
-<aside class="gp-mini-cart-panel" id="gp-mini-cart-panel" data-gp-mini-cart-panel hidden>
+<div class="gp-mini-cart-overlay" data-gp-mini-cart-overlay aria-hidden="true" hidden></div>
+<aside class="gp-mini-cart-panel" id="gp-mini-cart-panel" data-gp-mini-cart-panel aria-hidden="true" hidden>
     <button type="button" class="gp-mini-cart-panel__close" data-gp-mini-cart-close aria-label="<?php esc_attr_e('Zamknij podgląd koszyka', 'gp-clone'); ?>">×</button>
     <h3><?php esc_html_e('Koszyk', 'gp-clone'); ?></h3>
     <div class="gp-mini-cart-panel__content" data-gp-mini-cart-content>
@@ -159,7 +160,7 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
     </div>
 </aside>
 
-<div class="gp-auth-modal" data-gp-auth-modal hidden>
+<div class="gp-auth-modal" data-gp-auth-modal aria-hidden="true" hidden>
     <div class="gp-auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="gp-auth-modal-title">
         <button type="button" class="gp-auth-modal__close" data-gp-auth-modal-close aria-label="<?php esc_attr_e('Zamknij', 'gp-clone'); ?>">×</button>
         <div class="gp-auth-modal__grid">
