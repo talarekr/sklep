@@ -76,7 +76,6 @@ class ProductMapper
         $selected_source_id = (int) ($selection['selected_source_image_id'] ?? 0);
         $selected_source_aspect_ratio = (float) ($selection['selected_source_aspect_ratio'] ?? 0.0);
         $selected_source_square_fill_ratio = (float) ($selection['selected_source_square_fill_ratio'] ?? 0.0);
-        $selected_source_quality_tier = (string) ($selection['selected_source_quality_tier'] ?? 'unknown');
         $selection_reason = (string) ($selection['selected_source_selection_reason'] ?? '');
         if ($selected_source_id <= 0) {
             return [
@@ -85,7 +84,6 @@ class ProductMapper
                 'selected_source_image_id' => 0,
                 'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
                 'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
-                'selected_source_quality_tier' => $selected_source_quality_tier,
                 'selected_source_selection_reason' => $selection_reason,
             ];
         }
@@ -102,12 +100,7 @@ class ProductMapper
                 'selected_source_image_id' => $selected_source_id,
                 'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
                 'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
-                'selected_source_quality_tier' => $selected_source_quality_tier,
                 'selected_source_selection_reason' => $selection_reason,
-                'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? ''),
-                'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
-                'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? ''),
-                'requires_better_source' => !empty($quality['requires_better_source']),
             ];
         }
 
@@ -121,7 +114,6 @@ class ProductMapper
                 'selected_source_image_id' => $selected_source_id,
                 'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
                 'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
-                'selected_source_quality_tier' => $selected_source_quality_tier,
                 'selected_source_selection_reason' => $selection_reason,
             ];
         }
@@ -142,12 +134,7 @@ class ProductMapper
             'selected_source_image_id' => $selected_source_id,
             'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
             'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
-            'selected_source_quality_tier' => $selected_source_quality_tier,
             'selected_source_selection_reason' => $selection_reason,
-            'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? ''),
-            'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
-            'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? ''),
-            'requires_better_source' => !empty($quality['requires_better_source']),
         ];
     }
 
@@ -292,7 +279,6 @@ class ProductMapper
                 'selected_source_image_id' => $fallback_candidate_id,
                 'selected_source_aspect_ratio' => 0.0,
                 'selected_source_square_fill_ratio' => 0.0,
-                'selected_source_quality_tier' => 'unknown',
                 'selected_source_selection_reason' => 'fallback_first_candidate_missing_metrics',
             ];
         }
@@ -318,7 +304,6 @@ class ProductMapper
             'selected_source_image_id' => (int) $best_candidate['attachment_id'],
             'selected_source_aspect_ratio' => round((float) $best_candidate['aspect_ratio'], 6),
             'selected_source_square_fill_ratio' => round((float) $best_candidate['square_fill_ratio'], 6),
-            'selected_source_quality_tier' => (string) ($best_candidate['quality_tier'] ?? 'unknown'),
             'selected_source_selection_reason' => $selection_reason,
         ]);
 
@@ -328,106 +313,7 @@ class ProductMapper
             'selected_source_image_id' => (int) $best_candidate['attachment_id'],
             'selected_source_aspect_ratio' => round((float) $best_candidate['aspect_ratio'], 6),
             'selected_source_square_fill_ratio' => round((float) $best_candidate['square_fill_ratio'], 6),
-            'selected_source_quality_tier' => (string) ($best_candidate['quality_tier'] ?? 'unknown'),
             'selected_source_selection_reason' => $selection_reason,
-        ];
-    }
-
-    private function update_listing_quality_meta(int $product_id, int $listing_attachment_id, array $selection): array
-    {
-        if ($product_id <= 0 || $listing_attachment_id <= 0) {
-            return [];
-        }
-
-        $quality = $this->evaluate_listing_quality($listing_attachment_id, $selection);
-        if ($quality === []) {
-            return [];
-        }
-
-        update_post_meta($product_id, self::LISTING_QUALITY_TIER_META_KEY, (string) $quality['listing_quality_tier']);
-        update_post_meta($product_id, self::LISTING_QUALITY_SCORE_META_KEY, round((float) $quality['listing_quality_score'], 6));
-        update_post_meta($product_id, self::LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY, (string) $quality['best_available_source_quality_tier']);
-        update_post_meta($product_id, self::LISTING_REQUIRES_BETTER_SOURCE_META_KEY, !empty($quality['requires_better_source']) ? 1 : 0);
-
-        update_post_meta($listing_attachment_id, self::LISTING_QUALITY_TIER_META_KEY, (string) $quality['listing_quality_tier']);
-        update_post_meta($listing_attachment_id, self::LISTING_QUALITY_SCORE_META_KEY, round((float) $quality['listing_quality_score'], 6));
-        update_post_meta($listing_attachment_id, self::LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY, (string) $quality['best_available_source_quality_tier']);
-        update_post_meta($listing_attachment_id, self::LISTING_REQUIRES_BETTER_SOURCE_META_KEY, !empty($quality['requires_better_source']) ? 1 : 0);
-
-        return $quality;
-    }
-
-    private function evaluate_listing_quality(int $listing_attachment_id, array $selection): array
-    {
-        $source_aspect_ratio = (float) ($selection['selected_source_aspect_ratio'] ?? 0.0);
-        $source_square_fill_ratio = (float) ($selection['selected_source_square_fill_ratio'] ?? 0.0);
-        $best_source_tier = (string) ($selection['selected_source_quality_tier'] ?? 'unknown');
-        $final_fit_mode = (string) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, true);
-        $used_crop = (int) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, true) === 1;
-        $fill_ratio = (float) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, true);
-
-        if ($fill_ratio <= 0) {
-            return [];
-        }
-
-        $quality_score = ($source_square_fill_ratio * 450.0)
-            + (min(1.0, max(0.0, $fill_ratio)) * 500.0)
-            - (abs(1.0 - max(0.000001, $source_aspect_ratio)) * 90.0);
-
-        if ($final_fit_mode === 'smart_crop_square') {
-            $quality_score += 45.0;
-        }
-
-        if ($used_crop) {
-            $quality_score += 15.0;
-        }
-
-        if ($source_square_fill_ratio < 0.50) {
-            $quality_score -= 120.0;
-        }
-
-        if ($source_aspect_ratio < 0.55 || $source_aspect_ratio > 1.80) {
-            $quality_score -= 120.0;
-        }
-
-        if ($source_aspect_ratio < 0.40 || $source_aspect_ratio > 2.50) {
-            $quality_score -= 220.0;
-        }
-
-        $listing_quality_tier = 'degraded';
-        if (
-            $source_square_fill_ratio >= 0.72
-            && $fill_ratio >= 0.86
-            && $source_aspect_ratio >= 0.55
-            && $source_aspect_ratio <= 1.80
-        ) {
-            $listing_quality_tier = 'preferred';
-        } elseif (
-            $source_square_fill_ratio >= 0.56
-            && $fill_ratio >= 0.70
-            && $source_aspect_ratio >= 0.50
-            && $source_aspect_ratio <= 2.00
-        ) {
-            $listing_quality_tier = 'acceptable';
-        }
-
-        if (
-            $source_square_fill_ratio < 0.40
-            || $fill_ratio < 0.60
-            || $source_aspect_ratio < 0.40
-            || $source_aspect_ratio > 2.50
-        ) {
-            $listing_quality_tier = 'last_resort';
-        }
-
-        $requires_better_source = in_array($listing_quality_tier, ['degraded', 'last_resort'], true)
-            && in_array($best_source_tier, ['degraded', 'unknown'], true);
-
-        return [
-            'listing_quality_tier' => $listing_quality_tier,
-            'listing_quality_score' => round($quality_score, 6),
-            'best_available_source_quality_tier' => $best_source_tier,
-            'requires_better_source' => $requires_better_source,
         ];
     }
 
