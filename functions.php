@@ -888,6 +888,18 @@ function gp_checkout_payment_debug_snapshot(string $stage): void
         $cart_total = $cart->get_total('edit');
     }
 
+    $registered_gateway_ids = array_keys($registered_gateway_diagnostics);
+
+    wc_get_logger()->info('ALL REGISTERED GATEWAYS: ' . implode(',', $registered_gateway_ids), [
+        'source' => 'gp-checkout',
+        'stage' => $stage,
+    ]);
+
+    wc_get_logger()->info('AVAILABLE GATEWAYS: ' . implode(',', $available_gateway_ids), [
+        'source' => 'gp-checkout',
+        'stage' => $stage,
+    ]);
+
     wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
         'source' => 'gp-checkout',
         'stage' => $stage,
@@ -977,6 +989,16 @@ add_filter('woocommerce_available_payment_gateways', function (array $gateways):
 
     $country = gpswiss_get_customer_country_safe();
     $gateway_ids = array_keys((array) $gateways);
+
+    wc_get_logger()->debug(
+        'ALL REGISTERED GATEWAYS: ' . implode(',', array_keys((array) (WC()->payment_gateways() ? WC()->payment_gateways()->payment_gateways() : []))),
+        ['source' => 'gpswiss-payu-debug']
+    );
+
+    wc_get_logger()->debug(
+        'AVAILABLE GATEWAYS: ' . implode(',', $gateway_ids),
+        ['source' => 'gpswiss-payu-debug']
+    );
 
     wc_get_logger()->debug(
         'PAYMENT DEBUG: country=' . $country . '; gateways=' . implode(',', $gateway_ids),
