@@ -22,7 +22,6 @@ $availability_class = !empty($availability['class']) ? sanitize_html_class($avai
 $part_number = function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak';
 $sku = $product->get_sku();
 $delivery_window = __('Dostawa: 23–24 kwi', 'gp-clone');
-$payment_methods = __('BLIK, szybki przelew, karta, przelew tradycyjny.', 'gp-clone');
 $returns_info = __('Zwrot do 21 dni zgodnie z regulaminem.', 'gp-clone');
 ?>
 <div id="product-<?php the_ID(); ?>" <?php wc_product_class('gp-product-page', $product); ?>>
@@ -68,7 +67,7 @@ $returns_info = __('Zwrot do 21 dni zgodnie z regulaminem.', 'gp-clone');
                 </div>
                 <div class="gp-product-trust__item">
                     <h3><?php esc_html_e('Metody płatności', 'gp-clone'); ?></h3>
-                    <p><?php echo esc_html($payment_methods); ?></p>
+                    <img src="/wp-content/uploads/payments.jpg" alt="Metody płatności" class="gp-payments-image">
                 </div>
                 <div class="gp-product-trust__item">
                     <h3><?php esc_html_e('Zwroty', 'gp-clone'); ?></h3>
