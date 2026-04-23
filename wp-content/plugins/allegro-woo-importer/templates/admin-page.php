@@ -5,6 +5,7 @@
  * @var string $oauth_url
  * @var string $callback_uri
  * @var array  $listing_regen_checkpoint
+ * @var array  $listing_last_batch
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {

@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 class Settings
 {
     private const LISTING_IMAGES_CHECKPOINT_OPTION_KEY = 'awi_listing_images_regen_checkpoint';
+    private const LISTING_IMAGES_LAST_BATCH_OPTION_KEY = 'awi_listing_images_last_batch';
 
     private AllegroAuth $auth;
     private Importer $importer;
@@ -217,6 +218,10 @@ class Settings
         if (!is_array($listing_regen_checkpoint)) {
             $listing_regen_checkpoint = [];
         }
+        $listing_last_batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
+        if (!is_array($listing_last_batch)) {
+            $listing_last_batch = [];
+        }
 
         $log_tail = $this->logger->read_tail(80);
 
@@ -387,6 +392,7 @@ class Settings
         $batch_created = 0;
         $batch_skipped = 0;
         $batch_errors = 0;
+        $processed_product_ids = [];
 
         foreach ($ids as $raw_id) {
             $product_id = (int) $raw_id;
@@ -396,6 +402,7 @@ class Settings
             $batch_processed++;
             $processed_total++;
             $last_product_id = $product_id;
+            $processed_product_ids[] = $product_id;
 
             if ($status === 'created') {
                 $batch_created++;
@@ -426,12 +433,26 @@ class Settings
             'updated_at' => gmdate('Y-m-d H:i:s'),
         ], false);
 
+        update_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, [
+            'product_ids' => $processed_product_ids,
+            'first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
+            'last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
+            'processed' => $batch_processed,
+            'created' => $batch_created,
+            'skipped' => $batch_skipped,
+            'errors' => $batch_errors,
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ], false);
+
         return [
             'processed' => $batch_processed,
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
             'next_after_id' => $last_product_id,
+            'batch_product_ids' => $processed_product_ids,
+            'batch_first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
+            'batch_last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'done' => false,
         ];
     }
