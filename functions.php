@@ -735,6 +735,19 @@ add_filter('gettext', function (string $translated, string $text, string $domain
     return $translated;
 }, 20, 3);
 
+add_filter('woocommerce_cart_shipping_method_full_label', function (string $label, WC_Shipping_Rate $method): string {
+    $cost = (float) $method->get_cost();
+    if ($cost > 0) {
+        return $label;
+    }
+
+    return sprintf(
+        '%s: <span class="amount">%s</span>',
+        esc_html__('Koszt dostawy', 'gp-clone'),
+        esc_html__('0 zł', 'gp-clone')
+    );
+}, 20, 2);
+
 add_filter('woocommerce_cart_item_name', function (string $product_name, array $_cart_item): string {
     if (!function_exists('is_cart') || !is_cart()) {
         return $product_name;
