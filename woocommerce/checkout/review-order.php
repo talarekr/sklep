@@ -91,9 +91,20 @@ $cart = function_exists('gpswiss_wc_cart_safe') ? gpswiss_wc_cart_safe() : null;
 				<?php endif; ?>
 		<?php endif; ?>
 
+		<?php do_action('woocommerce_review_order_before_order_total'); ?>
+
 		<tr class="order-total">
 			<th><?php esc_html_e('Łącznie', 'gp-clone'); ?></th>
 			<td><?php wc_cart_totals_order_total_html(); ?></td>
 		</tr>
+
+		<?php do_action('woocommerce_review_order_after_order_total'); ?>
 	</tfoot>
 </table>
+
+<?php
+if (!has_action('woocommerce_checkout_order_review', 'woocommerce_checkout_payment')) {
+	do_action('woocommerce_review_order_before_payment');
+	wc_get_template('checkout/payment.php');
+	do_action('woocommerce_review_order_after_payment');
+}
