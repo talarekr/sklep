@@ -312,8 +312,9 @@
   color: #344054;
 }
 .gp-product-trust {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .gp-product-trust__item {
   border: 1px solid #e3e8f2;
