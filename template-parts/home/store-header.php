@@ -54,30 +54,13 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
 
 $all_product_categories = [];
 if (taxonomy_exists('product_cat')) {
-    $motoryzacja_category = get_term_by('slug', 'motoryzacja', 'product_cat');
-
-    if (!$motoryzacja_category instanceof WP_Term) {
-        $motoryzacja_terms_by_name = get_terms([
-            'taxonomy' => 'product_cat',
-            'hide_empty' => false,
-            'name' => 'Motoryzacja',
-            'number' => 1,
-        ]);
-
-        if (is_array($motoryzacja_terms_by_name) && isset($motoryzacja_terms_by_name[0]) && $motoryzacja_terms_by_name[0] instanceof WP_Term) {
-            $motoryzacja_category = $motoryzacja_terms_by_name[0];
-        }
-    }
-
-    if ($motoryzacja_category instanceof WP_Term) {
-        $all_product_categories = get_terms([
-            'taxonomy' => 'product_cat',
-            'hide_empty' => true,
-            'parent' => (int) $motoryzacja_category->term_id,
-            'orderby' => 'name',
-            'order' => 'ASC',
-        ]);
-    }
+    $all_product_categories = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => false,
+        'parent' => 0,
+        'orderby' => 'name',
+        'order' => 'ASC',
+    ]);
 
     if (is_wp_error($all_product_categories)) {
         $all_product_categories = [];
