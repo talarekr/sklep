@@ -203,10 +203,10 @@ class Settings
                 'awi_messages',
                 'awi_listing_inspect_done',
                 sprintf(
-                    __('Diagnostyka frontu listing images zakończona. Zalogowano %1$d produktów (strona %2$d, limit %3$d).', 'allegro-woo-importer'),
+                    __('Diagnostyka ostatniego batcha zakończona. Zalogowano %1$d/%2$d produktów z batcha z %3$s.', 'allegro-woo-importer'),
                     (int) ($_GET['awi_listing_inspect_logged'] ?? 0),
-                    (int) ($_GET['awi_listing_inspect_page'] ?? 1),
-                    (int) ($_GET['awi_listing_inspect_limit'] ?? 3)
+                    (int) ($_GET['awi_listing_inspect_batch_count'] ?? 0),
+                    sanitize_text_field((string) ($_GET['awi_listing_inspect_batch_ts'] ?? '—'))
                 ),
                 'updated'
             );
@@ -285,16 +285,26 @@ class Settings
             return;
         }
 
-        $limit = isset($_POST['awi_listing_inspect_limit']) ? max(1, (int) $_POST['awi_listing_inspect_limit']) : 3;
-        $page = isset($_POST['awi_listing_inspect_page']) ? max(1, (int) $_POST['awi_listing_inspect_page']) : 1;
-        $limit = min(10, $limit);
+        $batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
+        if (!is_array($batch)) {
+            $batch = [];
+        }
+        $product_ids = array_values(array_filter(array_map('intval', (array) ($batch['product_ids'] ?? [])), static function (int $product_id): bool {
+            return $product_id > 0;
+        }));
+        if ($product_ids === []) {
+            $this->store_admin_notice('error', __('Brak zapisanych produktów z ostatniego batcha. Najpierw uruchom regenerację batcha.', 'allegro-woo-importer'));
+            wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+            exit;
+        }
 
-        $rows = $this->run_front_listing_images_diagnostics($limit, $page);
+        $rows = $this->run_front_listing_images_diagnostics_for_products($product_ids);
+        $batch_timestamp = sanitize_text_field((string) ($batch['updated_at'] ?? ''));
 
         $this->logger->info('Front listing image diagnostics executed from admin.', [
             'trigger' => 'admin_button',
-            'limit' => $limit,
-            'page' => $page,
+            'batch_products' => count($product_ids),
+            'batch_timestamp' => $batch_timestamp,
             'logged_products' => count($rows),
         ]);
 
@@ -306,44 +316,45 @@ class Settings
             'page' => 'awi-settings',
             'awi_listing_inspect_done' => '1',
             'awi_listing_inspect_logged' => count($rows),
-            'awi_listing_inspect_page' => $page,
-            'awi_listing_inspect_limit' => $limit,
+            'awi_listing_inspect_batch_count' => count($product_ids),
+            'awi_listing_inspect_batch_ts' => $batch_timestamp !== '' ? $batch_timestamp : '—',
         ], admin_url('admin.php'));
 
         wp_safe_redirect($redirect);
         exit;
     }
 
-    private function run_front_listing_images_diagnostics(int $limit, int $page): array
+    private function run_front_listing_images_diagnostics_for_products(array $product_ids): array
     {
-        if (!function_exists('wc_get_products')) {
-            $this->logger->error('Front listing image diagnostics failed: WooCommerce function wc_get_products() unavailable.', [
-                'limit' => $limit,
-                'page' => $page,
-            ]);
-            return [];
-        }
-
-        $products = wc_get_products([
-            'status' => 'publish',
-            'limit' => $limit,
-            'page' => $page,
-            'orderby' => 'menu_order',
-            'order' => 'ASC',
-            'paginate' => false,
-        ]);
-
-        if (!is_array($products) || $products === []) {
+        if (!function_exists('wc_get_product')) {
+            $this->logger->error('Front listing image diagnostics failed: WooCommerce function wc_get_product() unavailable.');
             return [];
         }
 
         $rows = [];
-        foreach ($products as $product) {
-            if (!$product instanceof \WC_Product) {
+        foreach ($product_ids as $product_id) {
+            $product_id = (int) $product_id;
+            if ($product_id <= 0) {
                 continue;
             }
 
-            $product_id = (int) $product->get_id();
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                $rows[] = [
+                    'product_id' => $product_id,
+                    'product_name' => '',
+                    'permalink' => '',
+                    'rendered_source' => 'product_not_found',
+                    'helper_selected_image_id' => 0,
+                    'listing_image_id' => 0,
+                    'featured_image_id' => 0,
+                    'listing_file_exists' => false,
+                    'listing_attachment_scale_factor' => 0.0,
+                    'listing_attachment_target_fill_ratio' => 0.0,
+                ];
+                continue;
+            }
+
             $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
             $rows[] = [
                 'product_id' => $product_id,
@@ -449,6 +460,7 @@ class Settings
             'product_ids' => $processed_product_ids,
             'first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
             'last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
+            'batch_size' => $batch_size,
             'processed' => $batch_processed,
             'created' => $batch_created,
             'skipped' => $batch_skipped,
