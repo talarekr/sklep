@@ -501,6 +501,14 @@ class Settings
                 $batch_created++;
                 $created_total++;
                 $created_listing_image_id = (int) ($result['listing_image_id'] ?? 0);
+                $this->accumulate_listing_quality_batch_counters(
+                    $result,
+                    $batch_preferred_count,
+                    $batch_acceptable_count,
+                    $batch_degraded_count,
+                    $batch_last_resort_count,
+                    $batch_requires_better_source_count
+                );
                 $is_extreme_ratio = $created_listing_image_id > 0
                     ? (int) get_post_meta($created_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
                     : false;
@@ -514,6 +522,14 @@ class Settings
             if ($status === 'skipped') {
                 $batch_skipped++;
                 $skipped_total++;
+                $this->accumulate_listing_quality_batch_counters(
+                    $result,
+                    $batch_preferred_count,
+                    $batch_acceptable_count,
+                    $batch_degraded_count,
+                    $batch_last_resort_count,
+                    $batch_requires_better_source_count
+                );
                 $this->logger->info('Listing image regeneration skipped (admin batch).', [
                     'product_id' => $product_id,
                     'skip_reason' => (string) ($result['reason'] ?? 'unknown'),
@@ -591,6 +607,30 @@ class Settings
         ];
     }
 
+    private function accumulate_listing_quality_batch_counters(
+        array $result,
+        int &$preferred_count,
+        int &$acceptable_count,
+        int &$degraded_count,
+        int &$last_resort_count,
+        int &$requires_better_source_count
+    ): void {
+        $tier = strtolower(trim((string) ($result['listing_quality_tier'] ?? '')));
+        if ($tier === 'preferred') {
+            $preferred_count++;
+        } elseif ($tier === 'acceptable') {
+            $acceptable_count++;
+        } elseif ($tier === 'degraded') {
+            $degraded_count++;
+        } elseif ($tier !== '') {
+            $last_resort_count++;
+        }
+
+        if (!empty($result['requires_better_source'])) {
+            $requires_better_source_count++;
+        }
+    }
+
     private function log_listing_selection_qa_snapshot(int $product_id, array $result): void
     {
         $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
@@ -603,6 +643,9 @@ class Settings
             'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
             'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
             'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
+            'render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? ''),
+            'quality_boost_applied' => !empty($diagnostics['listing_attachment_quality_boost_applied']),
+            'quality_boost_upgraded' => !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
             'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
         ]);
     }
