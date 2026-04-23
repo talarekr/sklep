@@ -34,7 +34,7 @@ function gp_enqueue_fonts(): void
 add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
 
 add_action('wp_enqueue_scripts', function () {
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.4');
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.5');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
     wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
     wp_enqueue_script('gp-clone-profile-auth', get_template_directory_uri() . '/assets/js/profile-auth.js', [], '1.0.1', true);
@@ -47,7 +47,7 @@ add_action('wp_enqueue_scripts', function () {
     ]);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.4');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.5');
         wp_enqueue_script('wc-cart-fragments');
 
         if (is_product()) {
@@ -276,8 +276,9 @@ add_action('wp_head', function (): void {
 
 add_filter('woocommerce_show_page_title', '__return_false');
 
-add_action('after_switch_theme', function (): void {
-    $pages_to_create = [
+function gp_get_required_pages(): array
+{
+    return [
         ['title' => 'Kontakt', 'slug' => 'kontakt'],
         ['title' => 'Zaloguj', 'slug' => 'zaloguj'],
         ['title' => 'Zarejestruj', 'slug' => 'zarejestruj'],
@@ -285,8 +286,11 @@ add_action('after_switch_theme', function (): void {
         ['title' => 'Zwroty', 'slug' => 'zwroty'],
         ['title' => 'Regulamin', 'slug' => 'regulamin-platnosci'],
     ];
+}
 
-    foreach ($pages_to_create as $page) {
+function gp_ensure_required_pages(): void
+{
+    foreach (gp_get_required_pages() as $page) {
         if (get_page_by_path($page['slug'], OBJECT, 'page') instanceof WP_Post) {
             continue;
         }
@@ -299,6 +303,17 @@ add_action('after_switch_theme', function (): void {
             'post_content' => '',
         ]);
     }
+}
+
+add_action('after_switch_theme', 'gp_ensure_required_pages');
+
+add_action('init', function (): void {
+    if (get_option('gp_required_pages_ensured') === '1') {
+        return;
+    }
+
+    gp_ensure_required_pages();
+    update_option('gp_required_pages_ensured', '1', false);
 });
 
 add_action('admin_post_nopriv_gp_contact_form', 'gp_handle_contact_form_submit');

@@ -1,34 +1,27 @@
 (function ($) {
   var miniCartPanel = document.querySelector('[data-gp-mini-cart-panel]');
-  var miniCartOverlay = document.querySelector('[data-gp-mini-cart-overlay]');
+  var miniCartWrap = document.querySelector('[data-gp-mini-cart-wrap]');
   var miniCartContent = document.querySelector('[data-gp-mini-cart-content]');
   var authModal = document.querySelector('[data-gp-auth-modal]');
-  var isMiniCartOpen = function () {
-    return !!miniCartPanel && !miniCartPanel.hidden;
-  };
   var isAuthModalOpen = function () {
     return !!authModal && !authModal.hidden;
   };
   var syncBodyScrollLock = function () {
-    document.body.classList.toggle('gp-lock-scroll', isMiniCartOpen() || isAuthModalOpen());
+    document.body.classList.toggle('gp-lock-scroll', isAuthModalOpen());
   };
 
   var openMiniCart = function () {
-    if (!miniCartPanel || !miniCartOverlay) return;
+    if (!miniCartPanel) return;
     closeAuthModal();
     miniCartPanel.hidden = false;
-    miniCartOverlay.hidden = false;
     miniCartPanel.setAttribute('aria-hidden', 'false');
-    miniCartOverlay.setAttribute('aria-hidden', 'false');
     syncBodyScrollLock();
   };
 
   var closeMiniCart = function () {
-    if (!miniCartPanel || !miniCartOverlay) return;
+    if (!miniCartPanel) return;
     miniCartPanel.hidden = true;
-    miniCartOverlay.hidden = true;
     miniCartPanel.setAttribute('aria-hidden', 'true');
-    miniCartOverlay.setAttribute('aria-hidden', 'true');
     syncBodyScrollLock();
   };
 
@@ -62,10 +55,6 @@
     button.addEventListener('click', closeMiniCart);
   });
 
-  if (miniCartOverlay) {
-    miniCartOverlay.addEventListener('click', closeMiniCart);
-  }
-
   document.querySelectorAll('[data-gp-auth-modal-close]').forEach(function (button) {
     button.addEventListener('click', closeAuthModal);
   });
@@ -81,6 +70,18 @@
   document.addEventListener('keydown', function (event) {
     if (event.key !== 'Escape') return;
     closeAuthModal();
+    closeMiniCart();
+  });
+
+  document.addEventListener('click', function (event) {
+    if (!miniCartWrap || !miniCartPanel || miniCartPanel.hidden) {
+      return;
+    }
+
+    if (miniCartWrap.contains(event.target)) {
+      return;
+    }
+
     closeMiniCart();
   });
 

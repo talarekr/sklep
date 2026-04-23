@@ -113,17 +113,31 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
                     </div>
                 </div>
 
-                <button
-                    type="button"
-                    class="gp-main-actions__item gp-main-actions__item--cart"
-                    data-gp-mini-cart-open
-                    aria-haspopup="dialog"
-                    aria-controls="gp-mini-cart-panel"
-                >
-                    <span class="gp-main-actions__icon" aria-hidden="true">&#128722;</span>
-                    <span><?php esc_html_e('Koszyk', 'gp-clone'); ?></span>
-                    <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
-                </button>
+                <div class="gp-mini-cart-wrap" data-gp-mini-cart-wrap>
+                    <button
+                        type="button"
+                        class="gp-main-actions__item gp-main-actions__item--cart"
+                        data-gp-mini-cart-open
+                        aria-haspopup="dialog"
+                        aria-controls="gp-mini-cart-panel"
+                    >
+                        <span class="gp-main-actions__icon" aria-hidden="true">&#128722;</span>
+                        <span><?php esc_html_e('Koszyk', 'gp-clone'); ?></span>
+                        <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
+                    </button>
+
+                    <aside class="gp-mini-cart-panel" id="gp-mini-cart-panel" data-gp-mini-cart-panel aria-hidden="true" hidden>
+                        <button type="button" class="gp-mini-cart-panel__close" data-gp-mini-cart-close aria-label="<?php esc_attr_e('Zamknij podgląd koszyka', 'gp-clone'); ?>">×</button>
+                        <h3><?php esc_html_e('Koszyk', 'gp-clone'); ?></h3>
+                        <div class="gp-mini-cart-panel__content" data-gp-mini-cart-content>
+                            <?php if (function_exists('gp_render_mini_cart_content')) { gp_render_mini_cart_content(); } ?>
+                        </div>
+                        <div class="gp-mini-cart-panel__footer">
+                            <a href="<?php echo esc_url($checkout_url); ?>" class="gp-btn gp-btn--primary gp-mini-cart-checkout" data-gp-order-cta><?php esc_html_e('Zamówienie', 'gp-clone'); ?></a>
+                            <a href="<?php echo esc_url($cart_url); ?>" class="gp-btn gp-btn--outline"><?php esc_html_e('Przejdź do koszyka', 'gp-clone'); ?></a>
+                        </div>
+                    </aside>
+                </div>
             </div>
         </div>
 
@@ -146,19 +160,6 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
         </div>
     </div>
 </header>
-<div class="gp-mini-cart-overlay" data-gp-mini-cart-overlay aria-hidden="true" hidden></div>
-<aside class="gp-mini-cart-panel" id="gp-mini-cart-panel" data-gp-mini-cart-panel aria-hidden="true" hidden>
-    <button type="button" class="gp-mini-cart-panel__close" data-gp-mini-cart-close aria-label="<?php esc_attr_e('Zamknij podgląd koszyka', 'gp-clone'); ?>">×</button>
-    <h3><?php esc_html_e('Koszyk', 'gp-clone'); ?></h3>
-    <div class="gp-mini-cart-panel__content" data-gp-mini-cart-content>
-        <?php if (function_exists('gp_render_mini_cart_content')) { gp_render_mini_cart_content(); } ?>
-    </div>
-    <div class="gp-mini-cart-panel__footer">
-        <a href="<?php echo esc_url($checkout_url); ?>" class="gp-btn gp-btn--primary gp-mini-cart-checkout" data-gp-order-cta><?php esc_html_e('Zamówienie', 'gp-clone'); ?></a>
-        <a href="<?php echo esc_url($cart_url); ?>" class="gp-btn gp-btn--outline"><?php esc_html_e('Przejdź do koszyka', 'gp-clone'); ?></a>
-    </div>
-</aside>
-
 <div class="gp-auth-modal" data-gp-auth-modal aria-hidden="true" hidden>
     <div class="gp-auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="gp-auth-modal-title">
         <button type="button" class="gp-auth-modal__close" data-gp-auth-modal-close aria-label="<?php esc_attr_e('Zamknij', 'gp-clone'); ?>">×</button>
