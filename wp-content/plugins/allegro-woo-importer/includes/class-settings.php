@@ -368,6 +368,9 @@ class Settings
                     'listing_file_exists' => false,
                     'listing_attachment_scale_factor' => 0.0,
                     'listing_attachment_target_fill_ratio' => 0.0,
+                    'aspect_ratio' => 0.0,
+                    'is_extreme_aspect_ratio' => false,
+                    'fit_limited_by' => '',
                 ];
                 continue;
             }
@@ -384,6 +387,9 @@ class Settings
                 'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
                 'listing_attachment_scale_factor' => (float) ($diagnostics['listing_attachment_scale_factor'] ?? 0),
                 'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0),
+                'aspect_ratio' => (float) ($diagnostics['aspect_ratio'] ?? 0),
+                'is_extreme_aspect_ratio' => !empty($diagnostics['is_extreme_aspect_ratio']),
+                'fit_limited_by' => (string) ($diagnostics['fit_limited_by'] ?? ''),
             ];
         }
 
@@ -432,6 +438,7 @@ class Settings
         $batch_created = 0;
         $batch_skipped = 0;
         $batch_errors = 0;
+        $batch_extreme_ratio_products = 0;
         $processed_product_ids = [];
 
         foreach ($ids as $raw_id) {
@@ -447,6 +454,13 @@ class Settings
             if ($status === 'created') {
                 $batch_created++;
                 $created_total++;
+                $created_listing_image_id = (int) ($result['listing_image_id'] ?? 0);
+                $is_extreme_ratio = $created_listing_image_id > 0
+                    ? (int) get_post_meta($created_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
+                    : false;
+                if ($is_extreme_ratio) {
+                    $batch_extreme_ratio_products++;
+                }
                 continue;
             }
 
@@ -489,6 +503,7 @@ class Settings
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
+            'extreme_ratio_products_count' => $batch_extreme_ratio_products,
             'updated_at' => gmdate('Y-m-d H:i:s'),
         ], false);
 
@@ -497,6 +512,7 @@ class Settings
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
+            'extreme_ratio_products_count' => $batch_extreme_ratio_products,
             'next_after_id' => $last_product_id,
             'batch_product_ids' => $processed_product_ids,
             'batch_first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
