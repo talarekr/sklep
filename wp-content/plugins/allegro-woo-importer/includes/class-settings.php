@@ -263,15 +263,17 @@ class Settings
         $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 10;
         $batch_size = min(50, $batch_size);
         $reset = !empty($_POST['awi_listing_reset_checkpoint']);
+        $force_regenerate = !empty($_POST['awi_listing_force_regenerate']);
 
         if ($reset) {
             delete_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY);
         }
 
-        $result = $this->run_listing_images_regeneration_batch($batch_size);
+        $result = $this->run_listing_images_regeneration_batch($batch_size, $force_regenerate);
         $this->logger->info('Listing images regeneration batch executed from admin.', $result + [
             'batch_size' => $batch_size,
             'reset' => $reset,
+            'force_regenerate' => $force_regenerate,
             'trigger' => 'admin_button',
         ]);
 
@@ -366,6 +368,9 @@ class Settings
                     'listing_file_exists' => false,
                     'listing_attachment_scale_factor' => 0.0,
                     'listing_attachment_target_fill_ratio' => 0.0,
+                    'aspect_ratio' => 0.0,
+                    'is_extreme_aspect_ratio' => false,
+                    'fit_limited_by' => '',
                 ];
                 continue;
             }
@@ -382,13 +387,16 @@ class Settings
                 'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
                 'listing_attachment_scale_factor' => (float) ($diagnostics['listing_attachment_scale_factor'] ?? 0),
                 'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0),
+                'aspect_ratio' => (float) ($diagnostics['aspect_ratio'] ?? 0),
+                'is_extreme_aspect_ratio' => !empty($diagnostics['is_extreme_aspect_ratio']),
+                'fit_limited_by' => (string) ($diagnostics['fit_limited_by'] ?? ''),
             ];
         }
 
         return $rows;
     }
 
-    private function run_listing_images_regeneration_batch(int $batch_size): array
+    private function run_listing_images_regeneration_batch(int $batch_size, bool $force_regenerate = false): array
     {
         $checkpoint = get_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY, []);
         if (!is_array($checkpoint)) {
@@ -430,11 +438,12 @@ class Settings
         $batch_created = 0;
         $batch_skipped = 0;
         $batch_errors = 0;
+        $batch_extreme_ratio_products = 0;
         $processed_product_ids = [];
 
         foreach ($ids as $raw_id) {
             $product_id = (int) $raw_id;
-            $result = $this->mapper->ensure_listing_image_for_product($product_id, false);
+            $result = $this->mapper->ensure_listing_image_for_product($product_id, $force_regenerate);
             $status = (string) ($result['status'] ?? 'error');
 
             $batch_processed++;
@@ -445,12 +454,32 @@ class Settings
             if ($status === 'created') {
                 $batch_created++;
                 $created_total++;
+                $created_listing_image_id = (int) ($result['listing_image_id'] ?? 0);
+                $is_extreme_ratio = $created_listing_image_id > 0
+                    ? (int) get_post_meta($created_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
+                    : false;
+                if ($is_extreme_ratio) {
+                    $batch_extreme_ratio_products++;
+                }
                 continue;
             }
 
             if ($status === 'skipped') {
                 $batch_skipped++;
                 $skipped_total++;
+                $skipped_listing_image_id = (int) ($result['listing_image_id'] ?? 0);
+                $is_extreme_ratio = $skipped_listing_image_id > 0
+                    ? (int) get_post_meta($skipped_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
+                    : false;
+                if ($is_extreme_ratio) {
+                    $batch_extreme_ratio_products++;
+                }
+                $this->logger->info('Listing image regeneration skipped (admin batch).', [
+                    'product_id' => $product_id,
+                    'skip_reason' => (string) ($result['reason'] ?? 'unknown'),
+                    'force_regenerate' => $force_regenerate,
+                    'listing_image_id' => (int) ($result['listing_image_id'] ?? 0),
+                ]);
                 continue;
             }
 
@@ -476,10 +505,12 @@ class Settings
             'first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
             'last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'batch_size' => $batch_size,
+            'force_regenerate' => $force_regenerate,
             'processed' => $batch_processed,
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
+            'extreme_ratio_products_count' => $batch_extreme_ratio_products,
             'updated_at' => gmdate('Y-m-d H:i:s'),
         ], false);
 
@@ -488,6 +519,7 @@ class Settings
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
+            'extreme_ratio_products_count' => $batch_extreme_ratio_products,
             'next_after_id' => $last_product_id,
             'batch_product_ids' => $processed_product_ids,
             'batch_first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,

@@ -27,6 +27,8 @@ class ProductMapper
     private const LISTING_IMAGE_ATTACHMENT_OBJECT_HEIGHT_META_KEY = '_awi_listing_object_height';
     private const LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_META_KEY = '_awi_listing_rendered_width';
     private const LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY = '_awi_listing_rendered_height';
+    private const LISTING_IMAGE_ASPECT_RATIO_META_KEY = '_gp_listing_aspect_ratio';
+    private const LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY = '_gp_listing_is_extreme_ratio';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -114,6 +116,11 @@ class ProductMapper
 
         $listing_path = $listing_image_id > 0 ? (string) get_attached_file($listing_image_id) : '';
         $featured_path = $featured_image_id > 0 ? (string) get_attached_file($featured_image_id) : '';
+        $object_width = (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OBJECT_WIDTH_META_KEY, true);
+        $object_height = (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OBJECT_HEIGHT_META_KEY, true);
+        $aspect_ratio = (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, true);
+        $is_extreme_aspect_ratio = (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY, true) === 1;
+        $fit_limited_by = $object_height > $object_width ? 'height' : 'width';
 
         return [
             'product_id' => $product_id,
@@ -135,10 +142,13 @@ class ProductMapper
             'listing_attachment_scale_factor' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true),
             'listing_attachment_source_width' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_WIDTH_META_KEY, true),
             'listing_attachment_source_height' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_HEIGHT_META_KEY, true),
-            'listing_attachment_object_width' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OBJECT_WIDTH_META_KEY, true),
-            'listing_attachment_object_height' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OBJECT_HEIGHT_META_KEY, true),
+            'listing_attachment_object_width' => $object_width,
+            'listing_attachment_object_height' => $object_height,
             'listing_attachment_rendered_width' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_META_KEY, true),
             'listing_attachment_rendered_height' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY, true),
+            'aspect_ratio' => $aspect_ratio,
+            'is_extreme_aspect_ratio' => $is_extreme_aspect_ratio,
+            'fit_limited_by' => $fit_limited_by,
         ];
     }
 
@@ -1396,6 +1406,10 @@ class ProductMapper
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_OBJECT_HEIGHT_META_KEY, $object_height);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_META_KEY, $target_width);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY, $target_height);
+        $aspect_ratio = $object_width / max(1, $object_height);
+        $is_extreme = ($aspect_ratio < 0.55 || $aspect_ratio > 1.8);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, round($aspect_ratio, 6));
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY, $is_extreme ? 1 : 0);
 
         $this->logger->info('Listing image render metrics.', [
             'product_id' => $product_id,
@@ -1409,6 +1423,9 @@ class ProductMapper
             'final_rendered_height' => $target_height,
             'target_fill_ratio' => $target_ratio,
             'scale_factor' => round($scale, 6),
+            'aspect_ratio' => round($aspect_ratio, 6),
+            'is_extreme_aspect_ratio' => $is_extreme,
+            'fit_limited_by' => $object_height > $object_width ? 'height' : 'width',
         ]);
 
         return (int) $attachment_id;
@@ -1466,6 +1483,15 @@ class ProductMapper
                 update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY, $rendered_height);
             }
         }
+
+        $aspect_ratio = (float) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, true);
+        if ($aspect_ratio <= 0) {
+            $aspect_ratio = $object_width / max(1, $object_height);
+            update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, round($aspect_ratio, 6));
+        }
+
+        $is_extreme = ($aspect_ratio < 0.55 || $aspect_ratio > 1.8) ? 1 : 0;
+        update_post_meta($listing_attachment_id, self::LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY, $is_extreme);
     }
 
     private function detect_non_white_bbox($image, int $width, int $height): ?array
