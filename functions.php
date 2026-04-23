@@ -1505,6 +1505,7 @@ function gp_render_product_category_sidebar(): void
         echo '<input type="number" min="0" step="1" name="price_min" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena od', 'gp-clone') . '" value="' . esc_attr($selected_price_min) . '">';
         echo '<input type="number" min="0" step="1" name="price_max" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena do', 'gp-clone') . '" value="' . esc_attr($selected_price_max) . '">';
         echo '</div>';
+        echo '<div class="gp-cat-filter__actions">';
         echo '<button type="submit" class="gp-cat-filter__apply">' . esc_html__('Filtruj', 'gp-clone') . '</button>';
         echo '<a href="' . esc_url($clear_filters_url) . '" class="gp-cat-filter__apply">' . esc_html__('Wyczyść filtry', 'gp-clone') . '</a>';
     }, true);
