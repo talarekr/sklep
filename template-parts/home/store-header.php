@@ -52,16 +52,36 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
     return $shop_url;
 };
 
-$all_product_categories_markup = '';
+$all_product_categories = [];
 if (taxonomy_exists('product_cat')) {
-    $all_product_categories_markup = wp_list_categories([
-        'taxonomy' => 'product_cat',
-        'title_li' => '',
-        'echo' => false,
-        'hide_empty' => false,
-        'hierarchical' => true,
-        'depth' => 0,
-    ]);
+    $motoryzacja_category = get_term_by('slug', 'motoryzacja', 'product_cat');
+
+    if (!$motoryzacja_category instanceof WP_Term) {
+        $motoryzacja_terms_by_name = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => false,
+            'name' => 'Motoryzacja',
+            'number' => 1,
+        ]);
+
+        if (is_array($motoryzacja_terms_by_name) && isset($motoryzacja_terms_by_name[0]) && $motoryzacja_terms_by_name[0] instanceof WP_Term) {
+            $motoryzacja_category = $motoryzacja_terms_by_name[0];
+        }
+    }
+
+    if ($motoryzacja_category instanceof WP_Term) {
+        $all_product_categories = get_terms([
+            'taxonomy' => 'product_cat',
+            'hide_empty' => true,
+            'parent' => (int) $motoryzacja_category->term_id,
+            'orderby' => 'name',
+            'order' => 'ASC',
+        ]);
+    }
+
+    if (is_wp_error($all_product_categories)) {
+        $all_product_categories = [];
+    }
 }
 ?>
 <header class="gp-main-header">
@@ -178,8 +198,20 @@ if (taxonomy_exists('product_cat')) {
                 </button>
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
                     <ul class="gp-all-cat-dropdown__list">
-                        <?php if ($all_product_categories_markup !== '') : ?>
-                            <?php echo wp_kses_post($all_product_categories_markup); ?>
+                        <?php if (!empty($all_product_categories)) : ?>
+                            <?php foreach ($all_product_categories as $category) : ?>
+                                <?php
+                                $category_link = get_term_link($category);
+                                if (is_wp_error($category_link)) {
+                                    continue;
+                                }
+                                ?>
+                                <li>
+                                    <a href="<?php echo esc_url($category_link); ?>">
+                                        <?php echo esc_html($category->name); ?>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
                         <?php else : ?>
                             <li class="gp-all-cat-dropdown__empty"><?php esc_html_e('Brak dostępnych kategorii.', 'gp-clone'); ?></li>
                         <?php endif; ?>
