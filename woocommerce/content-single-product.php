@@ -65,7 +65,7 @@ $returns_info = __('Zwrot do 21 dni zgodnie z regulaminem.', 'gp-clone');
                     <h3><?php esc_html_e('Czas dostawy', 'gp-clone'); ?></h3>
                     <p><?php echo esc_html($delivery_window); ?></p>
                 </div>
-                <div class="gp-product-trust__item">
+                <div class="gp-product-trust__item gp-payment-box">
                     <h3><?php esc_html_e('Metody płatności', 'gp-clone'); ?></h3>
                     <img src="/wp-content/uploads/payments.jpg" alt="Metody płatności" class="gp-payments-image">
                 </div>
