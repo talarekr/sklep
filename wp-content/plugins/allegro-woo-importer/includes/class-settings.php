@@ -494,6 +494,7 @@ class Settings
                 if ($is_extreme_ratio) {
                     $batch_extreme_ratio_products++;
                 }
+                $this->log_listing_selection_qa_snapshot($product_id, $result);
                 continue;
             }
 
@@ -506,6 +507,7 @@ class Settings
                     'force_regenerate' => $force_regenerate,
                     'listing_image_id' => (int) ($result['listing_image_id'] ?? 0),
                 ]);
+                $this->log_listing_selection_qa_snapshot($product_id, $result);
                 continue;
             }
 
@@ -552,6 +554,22 @@ class Settings
             'batch_last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'done' => false,
         ];
+    }
+
+    private function log_listing_selection_qa_snapshot(int $product_id, array $result): void
+    {
+        $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
+
+        $this->logger->info('Listing source selection QA snapshot.', [
+            'product_id' => $product_id,
+            'selected_source_image_id' => (int) ($result['selected_source_image_id'] ?? ($diagnostics['selected_source_image_id'] ?? 0)),
+            'selected_source_aspect_ratio' => round((float) ($result['selected_source_aspect_ratio'] ?? ($diagnostics['selected_source_aspect_ratio'] ?? 0.0)), 6),
+            'square_fill_ratio' => round((float) ($result['selected_source_square_fill_ratio'] ?? 0.0), 6),
+            'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
+            'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
+            'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
+            'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
+        ]);
     }
 
     private function block_heavy_operation(string $operation): bool
