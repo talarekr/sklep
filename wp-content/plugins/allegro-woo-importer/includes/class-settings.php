@@ -261,9 +261,16 @@ class Settings
         }
 
         $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 10;
-        $batch_size = min(50, $batch_size);
+        $batch_size = min(400, $batch_size);
         $reset = !empty($_POST['awi_listing_reset_checkpoint']);
         $force_regenerate = !empty($_POST['awi_listing_force_regenerate']);
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(900);
+        }
+        if (function_exists('ini_set')) {
+            @ini_set('max_execution_time', '900');
+        }
 
         if ($reset) {
             delete_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY);
