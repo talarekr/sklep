@@ -1718,36 +1718,6 @@ function gp_get_catalog_search_mode(): string
     return in_array($search_mode, ['part_number', 'vehicle_model'], true) ? $search_mode : '';
 }
 
-function gp_debug_log_catalog_search_request(string $source): void
-{
-    if (!defined('WP_DEBUG') || !WP_DEBUG) {
-        return;
-    }
-
-    if (is_admin() || !class_exists('WooCommerce')) {
-        return;
-    }
-
-    if (!is_shop() && !is_tax('product_cat') && !is_post_type_archive('product')) {
-        return;
-    }
-
-    $has_part_number = isset($_GET['part_number']) && sanitize_text_field((string) wp_unslash($_GET['part_number'])) !== '';
-    $has_text_search = isset($_GET['s']) && sanitize_text_field((string) wp_unslash($_GET['s'])) !== '';
-    if (!$has_part_number && !$has_text_search && !isset($_GET['search_mode'])) {
-        return;
-    }
-
-    error_log(sprintf(
-        '[gp-search-debug][%s] search_mode=%s has_part_number=%s has_s=%s query=%s',
-        $source,
-        gp_get_catalog_search_mode(),
-        $has_part_number ? '1' : '0',
-        $has_text_search ? '1' : '0',
-        wp_json_encode($_GET)
-    ));
-}
-
 function gp_find_product_id_by_part_number(string $part_number_raw): int
 {
     global $wpdb;
@@ -1897,8 +1867,6 @@ add_action('template_redirect', function (): void {
     if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
         return;
     }
-
-    gp_debug_log_catalog_search_request('template_redirect');
 
     if (gp_get_catalog_search_mode() === 'vehicle_model') {
         return;

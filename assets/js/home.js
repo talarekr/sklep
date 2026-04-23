@@ -4,22 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const form = container ? container.querySelector('[data-category-search-form]') : null;
     const input = form ? form.querySelector('[data-category-search-input]') : null;
     const searchModeInput = form ? form.querySelector('[data-category-search-mode]') : null;
-    const syncActiveMode = () => {
-      if (!form || !input) return;
-
-      const activeButton = switcher.querySelector('button.is-active');
-      if (!activeButton) return;
-
-      const activeInputName = activeButton.getAttribute('data-input-name');
-      const activeSearchMode = activeButton.getAttribute('data-search-mode');
-      if (activeInputName) {
-        input.setAttribute('name', activeInputName);
-      }
-
-      if (searchModeInput && activeSearchMode) {
-        searchModeInput.setAttribute('value', activeSearchMode);
-      }
-    };
 
     switcher.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
