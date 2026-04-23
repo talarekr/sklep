@@ -226,20 +226,138 @@
 
     cartScope.querySelectorAll('.wc-block-cart__submit-button, .wc-block-components-checkout-place-order-button').forEach(function (button) {
       button.classList.add('gp-cart-cta-button');
-      if (button.textContent) {
+      if (button.textContent && button.textContent.trim() !== 'Przejdź do płatności') {
         button.textContent = 'Przejdź do płatności';
       }
     });
   };
 
-  enhanceCartBlock();
+  var replaceTextContains = function (scope, from, to) {
+    if (!scope) return;
 
-  if (document.body.classList.contains('woocommerce-cart')) {
-    var cartObserver = new MutationObserver(function () {
-      enhanceCartBlock();
+    scope.querySelectorAll('*').forEach(function (el) {
+      if (!el.childNodes || el.childNodes.length !== 1) {
+        return;
+      }
+
+      var node = el.childNodes[0];
+      if (!node || node.nodeType !== Node.TEXT_NODE || !node.textContent) {
+        return;
+      }
+
+      if (node.textContent.indexOf(from) === -1) {
+        return;
+      }
+
+      node.textContent = node.textContent.replace(from, to);
+    });
+  };
+
+  var removeCheckoutShippingOptions = function (scope) {
+    if (!scope) return;
+
+    scope.querySelectorAll('h1, h2, h3, h4, h5, h6, .wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
+      var title = titleEl.textContent ? titleEl.textContent.trim() : '';
+      if (title !== 'Opcje wysyłki' && title !== 'Shipping options') {
+        return;
+      }
+
+      var shippingContainer = titleEl.closest(
+        '.wc-block-components-checkout-step, .wc-block-checkout__shipping-method-block, .wc-block-checkout__shipping-fields-block, .wc-block-components-address-form, .wc-block-checkout__contact-fields'
+      );
+
+      if (shippingContainer) {
+        shippingContainer.remove();
+        return;
+      }
+
+      var nextElement = titleEl.nextElementSibling;
+      titleEl.remove();
+      if (nextElement) {
+        nextElement.remove();
+      }
     });
 
-    cartObserver.observe(document.body, {
+    scope.querySelectorAll('.wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
+      var title = titleEl.textContent ? titleEl.textContent.trim() : '';
+      if (title !== 'Opcje wysyłki' && title !== 'Shipping options') {
+        return;
+      }
+
+      var shippingStep = titleEl.closest('.wc-block-components-checkout-step, .wc-block-checkout__shipping-method-block');
+      if (shippingStep) {
+        shippingStep.remove();
+      }
+    });
+  };
+
+  var enhanceCheckoutBlock = function () {
+    if (!document.body.classList.contains('woocommerce-checkout') || document.body.classList.contains('woocommerce-order-received')) {
+      return;
+    }
+
+    var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout, form.checkout, .woocommerce-checkout');
+    if (!checkoutScope) {
+      return;
+    }
+
+    replaceExactText(checkoutScope, 'Free shipping', 'Koszt dostawy');
+    replaceExactText(checkoutScope, 'BEZPŁATNIE', '0 zł');
+    replaceExactText(checkoutScope, 'FREE!', '0 zł');
+    replaceTextContains(checkoutScope, 'Free shipping', 'Koszt dostawy');
+    replaceTextContains(checkoutScope, 'BEZPŁATNIE', '0 zł');
+    replaceTextContains(checkoutScope, 'FREE!', '0 zł');
+    removeCheckoutShippingOptions(checkoutScope);
+  };
+
+  enhanceCartBlock();
+  enhanceCheckoutBlock();
+
+  if (document.body.classList.contains('woocommerce-cart')) {
+    var isEnhancingCartBlock = false;
+    var cartObserver = new MutationObserver(function () {
+      if (isEnhancingCartBlock) {
+        return;
+      }
+
+      isEnhancingCartBlock = true;
+      window.requestAnimationFrame(function () {
+        enhanceCartBlock();
+        isEnhancingCartBlock = false;
+      });
+    });
+
+    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartObserverScope) {
+      return;
+    }
+
+    cartObserver.observe(cartObserverScope, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  if (document.body.classList.contains('woocommerce-checkout') && !document.body.classList.contains('woocommerce-order-received')) {
+    var isEnhancingCheckoutBlock = false;
+    var checkoutObserver = new MutationObserver(function () {
+      if (isEnhancingCheckoutBlock) {
+        return;
+      }
+
+      isEnhancingCheckoutBlock = true;
+      window.requestAnimationFrame(function () {
+        enhanceCheckoutBlock();
+        isEnhancingCheckoutBlock = false;
+      });
+    });
+
+    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout, form.checkout, .woocommerce-checkout');
+    if (!checkoutObserverScope) {
+      return;
+    }
+
+    checkoutObserver.observe(checkoutObserverScope, {
       childList: true,
       subtree: true
     });
