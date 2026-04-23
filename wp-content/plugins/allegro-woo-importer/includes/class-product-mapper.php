@@ -31,6 +31,9 @@ class ProductMapper
     private const LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY = '_awi_listing_final_fit_mode';
     private const LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY = '_awi_listing_used_crop';
     private const LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY = '_awi_listing_fill_ratio';
+    private const LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY = '_awi_listing_render_profile';
+    private const LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY = '_awi_listing_quality_boost_applied';
+    private const LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY = '_awi_listing_quality_boost_upgraded';
     private const LISTING_IMAGE_ASPECT_RATIO_META_KEY = '_gp_listing_aspect_ratio';
     private const LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY = '_gp_listing_is_extreme_ratio';
     private const LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY = '_gp_listing_selected_source_image_id';
@@ -108,7 +111,7 @@ class ProductMapper
             ];
         }
 
-        $created_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id);
+        $created_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id, 'standard');
         if (is_wp_error($created_listing_id)) {
             return [
                 'status' => 'error',
@@ -131,6 +134,41 @@ class ProductMapper
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
         $this->ensure_listing_attachment_generation_meta($created_listing_id, $selected_source_id);
         $quality = $this->update_listing_quality_meta($product_id, (int) $created_listing_id, $selection);
+        $quality_boost_applied = false;
+        $quality_boost_upgraded = false;
+
+        if (
+            $created_listing_id > 0
+            && (
+                (string) ($quality['listing_quality_tier'] ?? '') === 'degraded'
+                || !empty($quality['requires_better_source'])
+            )
+        ) {
+            $baseline_tier = (string) ($quality['listing_quality_tier'] ?? 'unknown');
+            $boost_profile = $this->determine_listing_quality_boost_profile($selected_source_aspect_ratio);
+            $boosted_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id, $boost_profile);
+            if (!is_wp_error($boosted_listing_id)) {
+                wp_delete_attachment((int) $created_listing_id, true);
+                $created_listing_id = (int) $boosted_listing_id;
+                update_post_meta($product_id, self::LISTING_IMAGE_META_KEY, $created_listing_id);
+                update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $selected_source_id);
+                update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
+                $this->ensure_listing_attachment_generation_meta($created_listing_id, $selected_source_id);
+                $quality = $this->update_listing_quality_meta($product_id, $created_listing_id, $selection);
+                $quality_boost_applied = true;
+                $quality_boost_upgraded = $this->get_listing_quality_tier_rank((string) ($quality['listing_quality_tier'] ?? 'unknown')) > $this->get_listing_quality_tier_rank($baseline_tier);
+                update_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, 1);
+                update_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, $quality_boost_upgraded ? 1 : 0);
+            } else {
+                $this->logger->warning('Listing quality boost render failed, keeping standard render.', [
+                    'product_id' => $product_id,
+                    'source_attachment_id' => $selected_source_id,
+                    'boost_profile' => $boost_profile,
+                    'error_code' => $boosted_listing_id->get_error_code(),
+                    'error_message' => $boosted_listing_id->get_error_message(),
+                ]);
+            }
+        }
 
         return [
             'status' => 'created',
@@ -215,6 +253,9 @@ class ProductMapper
             'listing_attachment_final_fit_mode' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, true),
             'listing_attachment_used_crop' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, true) === 1,
             'listing_attachment_fallback_used' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, true) === 1,
+            'listing_attachment_render_profile' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true),
+            'listing_attachment_quality_boost_applied' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, true) === 1,
+            'listing_attachment_quality_boost_upgraded' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, true) === 1,
             'aspect_ratio' => $aspect_ratio,
             'is_extreme_aspect_ratio' => $is_extreme_aspect_ratio,
             'fit_limited_by' => $fit_limited_by,
@@ -1577,7 +1618,7 @@ class ProductMapper
     /**
      * @return int|\WP_Error
      */
-    private function create_listing_image_attachment(int $source_attachment_id, int $product_id)
+    private function create_listing_image_attachment(int $source_attachment_id, int $product_id, string $render_profile = 'standard')
     {
         if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
             return new \WP_Error('gd_missing', __('Brak biblioteki GD wymaganej do generowania obrazu listingowego.', 'allegro-woo-importer'));
@@ -1607,6 +1648,20 @@ class ProductMapper
         $canvas_size = self::LISTING_IMAGE_CANVAS_SIZE;
         $target_ratio = 0.96;
         $safe_margin_ratio = 0.02;
+        $crop_padding_ratio = 0.08;
+        if ($render_profile === 'boost_wide') {
+            $target_ratio = 0.995;
+            $safe_margin_ratio = 0.002;
+            $crop_padding_ratio = 0.02;
+        } elseif ($render_profile === 'boost_tall') {
+            $target_ratio = 0.995;
+            $safe_margin_ratio = 0.002;
+            $crop_padding_ratio = 0.02;
+        } elseif ($render_profile === 'boost_generic') {
+            $target_ratio = 0.99;
+            $safe_margin_ratio = 0.005;
+            $crop_padding_ratio = 0.03;
+        }
         $usable_canvas_size = max(1, (int) floor($canvas_size * (1 - (2 * $safe_margin_ratio))));
         $target_object_size = max(1, (int) round($usable_canvas_size * $target_ratio));
         $bbox = $this->detect_non_white_bbox($source_image, $source_width, $source_height);
@@ -1634,11 +1689,17 @@ class ProductMapper
         $crop_width = $object_width;
         $crop_height = $object_height;
 
-        if ($is_extreme_object_ratio) {
-            $fit_mode = 'smart_crop_square';
+        $use_quality_boost_profile = $render_profile !== 'standard';
+        if ($is_extreme_object_ratio || $use_quality_boost_profile) {
+            $fit_mode = $use_quality_boost_profile ? ('quality_boost_' . $render_profile) : 'smart_crop_square';
             $used_crop = 1;
-            $padding_ratio = 0.08;
-            $desired_side = (int) round(max($object_width, $object_height) * (1 + $padding_ratio));
+            if ($render_profile === 'boost_wide') {
+                $desired_side = (int) round($object_height * (1 + $crop_padding_ratio));
+            } elseif ($render_profile === 'boost_tall') {
+                $desired_side = (int) round($object_width * (1 + $crop_padding_ratio));
+            } else {
+                $desired_side = (int) round(max($object_width, $object_height) * (1 + $crop_padding_ratio));
+            }
             $crop_side = max($object_min_size, min($desired_side, min($source_width, $source_height)));
 
             $object_center_x = $object_x + ($object_width / 2);
@@ -1747,6 +1808,9 @@ class ProductMapper
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, $fit_mode);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, $used_crop);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, round($fill_ratio, 6));
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, $render_profile);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, $render_profile === 'standard' ? 0 : 1);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, 0);
         $aspect_ratio = $crop_width / max(1, $crop_height);
         $is_extreme = ($aspect_ratio < 0.55 || $aspect_ratio > 1.8);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, round($aspect_ratio, 6));
@@ -1768,6 +1832,7 @@ class ProductMapper
             'fill_ratio' => round($fill_ratio, 6),
             'scale_factor' => round($scale, 6),
             'fit_mode' => $fit_mode,
+            'render_profile' => $render_profile,
             'used_crop' => $used_crop === 1,
             'fallback_used' => $used_crop === 1,
             'aspect_ratio' => round($aspect_ratio, 6),
@@ -1851,6 +1916,21 @@ class ProductMapper
             update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, 0);
         }
 
+        $render_profile = (string) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true);
+        if ($render_profile === '') {
+            update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, 'standard');
+        }
+
+        $quality_boost_applied = get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, true);
+        if ($quality_boost_applied === '') {
+            update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, 0);
+        }
+
+        $quality_boost_upgraded = get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, true);
+        if ($quality_boost_upgraded === '') {
+            update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, 0);
+        }
+
         $aspect_ratio = (float) get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, true);
         if ($aspect_ratio <= 0) {
             $aspect_ratio = $object_width / max(1, $object_height);
@@ -1859,6 +1939,19 @@ class ProductMapper
 
         $is_extreme = ($aspect_ratio < 0.55 || $aspect_ratio > 1.8) ? 1 : 0;
         update_post_meta($listing_attachment_id, self::LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY, $is_extreme);
+    }
+
+    private function determine_listing_quality_boost_profile(float $selected_source_aspect_ratio): string
+    {
+        if ($selected_source_aspect_ratio > 2.0) {
+            return 'boost_wide';
+        }
+
+        if ($selected_source_aspect_ratio < 0.55) {
+            return 'boost_tall';
+        }
+
+        return 'boost_generic';
     }
 
     private function detect_non_white_bbox($image, int $width, int $height): ?array

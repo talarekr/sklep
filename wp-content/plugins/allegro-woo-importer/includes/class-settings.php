@@ -643,6 +643,9 @@ class Settings
             'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
             'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
             'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
+            'render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? ''),
+            'quality_boost_applied' => !empty($diagnostics['listing_attachment_quality_boost_applied']),
+            'quality_boost_upgraded' => !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
             'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
         ]);
     }
