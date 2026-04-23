@@ -197,8 +197,10 @@ class Settings
                 'awi_messages',
                 'awi_listing_inspect_done',
                 sprintf(
-                    __('Diagnostyka frontu listing images zakończona. Zalogowano %d produktów z ostatniego batcha.', 'allegro-woo-importer'),
-                    (int) ($_GET['awi_listing_inspect_logged'] ?? 0)
+                    __('Diagnostyka frontu listing images zakończona. Zalogowano %1$d produktów (strona %2$d, limit %3$d).', 'allegro-woo-importer'),
+                    (int) ($_GET['awi_listing_inspect_logged'] ?? 0),
+                    (int) ($_GET['awi_listing_inspect_page'] ?? 1),
+                    (int) ($_GET['awi_listing_inspect_limit'] ?? 3)
                 ),
                 'updated'
             );
@@ -271,21 +273,16 @@ class Settings
 
         check_admin_referer('awi_listing_images_inspect_front');
 
-        $last_batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
-        if (!is_array($last_batch)) {
-            $last_batch = [];
-        }
-        $product_ids_raw = $last_batch['product_ids'] ?? [];
-        $product_ids = is_array($product_ids_raw) ? array_values(array_filter(array_map('intval', $product_ids_raw), static fn (int $id): bool => $id > 0)) : [];
+        $limit = isset($_POST['awi_listing_inspect_limit']) ? max(1, (int) $_POST['awi_listing_inspect_limit']) : 3;
+        $page = isset($_POST['awi_listing_inspect_page']) ? max(1, (int) $_POST['awi_listing_inspect_page']) : 1;
+        $limit = min(10, $limit);
 
-        $rows = $this->run_front_listing_images_diagnostics_for_products($product_ids);
+        $rows = $this->run_front_listing_images_diagnostics($limit, $page);
 
         $this->logger->info('Front listing image diagnostics executed from admin.', [
             'trigger' => 'admin_button',
-            'batch_updated_at' => (string) ($last_batch['updated_at'] ?? ''),
-            'batch_first_product_id' => (int) ($last_batch['first_product_id'] ?? 0),
-            'batch_last_product_id' => (int) ($last_batch['last_product_id'] ?? 0),
-            'batch_products_total' => count($product_ids),
+            'limit' => $limit,
+            'page' => $page,
             'logged_products' => count($rows),
         ]);
 
@@ -297,22 +294,39 @@ class Settings
             'page' => 'awi-settings',
             'awi_listing_inspect_done' => '1',
             'awi_listing_inspect_logged' => count($rows),
+            'awi_listing_inspect_page' => $page,
+            'awi_listing_inspect_limit' => $limit,
         ], admin_url('admin.php'));
 
         wp_safe_redirect($redirect);
         exit;
     }
 
-    private function run_front_listing_images_diagnostics_for_products(array $product_ids): array
+    private function run_front_listing_images_diagnostics(int $limit, int $page): array
     {
-        if ($product_ids === []) {
-            $this->logger->warning('Front listing image diagnostics skipped: empty last regeneration batch.');
+        if (!function_exists('wc_get_products')) {
+            $this->logger->error('Front listing image diagnostics failed: WooCommerce function wc_get_products() unavailable.', [
+                'limit' => $limit,
+                'page' => $page,
+            ]);
+            return [];
+        }
+
+        $products = wc_get_products([
+            'status' => 'publish',
+            'limit' => $limit,
+            'page' => $page,
+            'orderby' => 'menu_order',
+            'order' => 'ASC',
+            'paginate' => false,
+        ]);
+
+        if (!is_array($products) || $products === []) {
             return [];
         }
 
         $rows = [];
-        foreach ($product_ids as $product_id) {
-            $product = wc_get_product((int) $product_id);
+        foreach ($products as $product) {
             if (!$product instanceof \WC_Product) {
                 continue;
             }

@@ -109,22 +109,6 @@ class ProductMapper
         $listing_path = $listing_image_id > 0 ? (string) get_attached_file($listing_image_id) : '';
         $featured_path = $featured_image_id > 0 ? (string) get_attached_file($featured_image_id) : '';
 
-        $listing_attachment_scale_factor_raw = get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true);
-        $listing_attachment_target_fill_ratio_raw = get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true);
-        $listing_attachment_scale_factor = is_numeric($listing_attachment_scale_factor_raw) ? (float) $listing_attachment_scale_factor_raw : 0.0;
-        $listing_attachment_target_fill_ratio = is_numeric($listing_attachment_target_fill_ratio_raw) ? (float) $listing_attachment_target_fill_ratio_raw : 0.0;
-
-        if ($listing_attachment_target_fill_ratio <= 0 && $listing_image_id > 0) {
-            $listing_attachment_target_fill_ratio = self::LISTING_IMAGE_TARGET_FILL_RATIO;
-        }
-
-        if ($listing_attachment_scale_factor <= 0 && $listing_image_id > 0) {
-            $calculated_scale = $this->calculate_listing_scale_factor_from_source((int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, true));
-            if ($calculated_scale !== null) {
-                $listing_attachment_scale_factor = $calculated_scale;
-            }
-        }
-
         return [
             'product_id' => $product_id,
             'listing_image_id' => $listing_image_id,
@@ -141,8 +125,8 @@ class ProductMapper
             'featured_file_url' => $featured_image_id > 0 ? wp_get_attachment_url($featured_image_id) : '',
             'listing_attachment_variant_flag' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, true),
             'listing_attachment_source_id' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, true),
-            'listing_attachment_target_fill_ratio' => $listing_attachment_target_fill_ratio,
-            'listing_attachment_scale_factor' => $listing_attachment_scale_factor,
+            'listing_attachment_target_fill_ratio' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true),
+            'listing_attachment_scale_factor' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true),
         ];
     }
 
@@ -1378,7 +1362,6 @@ class ProductMapper
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, $source_attachment_id);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, $target_ratio);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, round($scale, 6));
-        $this->ensure_listing_attachment_generation_meta((int) $attachment_id, $source_attachment_id);
 
         return (int) $attachment_id;
     }
