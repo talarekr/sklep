@@ -29,9 +29,16 @@ defined('ABSPATH') || exit;
 				?>
 				<tr class="<?php echo esc_attr(apply_filters('woocommerce_cart_item_class', 'cart_item', $cart_item, $cart_item_key)); ?>">
 					<td class="product-name">
-						<?php echo wp_kses_post(apply_filters('woocommerce_cart_item_name', $_product->get_name(), $cart_item, $cart_item_key)) . '&nbsp;'; ?>
-						<strong class="product-quantity"><?php echo esc_html(sprintf('× %s', $cart_item['quantity'])); ?></strong>
-						<?php echo wc_get_formatted_cart_item_data($cart_item); ?>
+						<div class="gp-checkout-review-item">
+							<div class="gp-checkout-review-item__thumb" aria-hidden="true">
+								<?php echo wp_kses_post($_product->get_image('woocommerce_thumbnail', ['class' => 'gp-checkout-review-item__image'])); ?>
+							</div>
+							<div class="gp-checkout-review-item__content">
+								<?php echo wp_kses_post(apply_filters('woocommerce_cart_item_name', $_product->get_name(), $cart_item, $cart_item_key)); ?>
+								<strong class="product-quantity"><?php echo esc_html(sprintf('× %s', $cart_item['quantity'])); ?></strong>
+								<?php echo wc_get_formatted_cart_item_data($cart_item); ?>
+							</div>
+						</div>
 					</td>
 					<td class="product-total">
 						<?php echo wp_kses_post(apply_filters('woocommerce_cart_item_subtotal', WC()->cart->get_product_subtotal($_product, $cart_item['quantity']), $cart_item, $cart_item_key)); ?>
