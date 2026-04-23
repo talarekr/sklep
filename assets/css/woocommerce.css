@@ -376,6 +376,9 @@
 .gp-purchase-box .cart {
   margin: 0;
 }
+.gp-purchase-box .cart .stock {
+  display: none;
+}
 .gp-purchase-box .quantity input.qty {
   min-height: 44px;
   border-radius: 10px;
