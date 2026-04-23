@@ -1393,16 +1393,32 @@
   color: #1f2937;
 }
 
-.gp-cat-filter__apply {
+.gp-cat-filter__actions {
   margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gp-cat-filter__apply {
   min-height: 40px;
-  border: 0;
+  border: 1px solid #123a86;
   border-radius: 8px;
   padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
   background: #123a86;
   color: #fff;
-  font-weight: 600;
   cursor: pointer;
+}
+
+.gp-cat-filter__apply--secondary {
+  background: #fff;
+  color: #123a86;
 }
 
 .gp-shop-toolbar {
@@ -1502,6 +1518,10 @@
 @media (max-width: 767px) {
   .gp-cat-filter__price-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gp-cat-filter__actions {
+    grid-template-columns: 1fr;
   }
 }
 
