@@ -782,6 +782,92 @@
   font-weight: 700 !important;
 }
 
+.woocommerce-cart table.shop_table th.product-name,
+.woocommerce-cart table.shop_table th.product-subtotal {
+  font-weight: 700;
+}
+
+.woocommerce-cart table.shop_table td.product-thumbnail img {
+  width: 62px;
+  max-width: 62px;
+}
+
+.woocommerce-cart table.shop_table td.product-name {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.woocommerce-cart table.shop_table td.product-name a {
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.woocommerce-cart table.shop_table td.product-name .gp-cart-muted-note {
+  display: none;
+}
+
+.woocommerce-cart table.shop_table td.product-price .amount,
+.woocommerce-cart table.shop_table td.product-subtotal .amount {
+  font-weight: 700;
+}
+
+.woocommerce-cart .cart_totals h2 {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.woocommerce-cart .gp-cart-totals .shipping td,
+.woocommerce-cart .gp-cart-totals .shipping th {
+  font-size: 18px;
+}
+
+.woocommerce-cart .gp-cart-totals .shipping .amount {
+  font-weight: 700;
+}
+
+.woocommerce-cart .gp-cart-totals .order-total .amount {
+  font-weight: 800;
+}
+
+.woocommerce-cart .wc-proceed-to-checkout .checkout-button.button {
+  display: inline-flex !important;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 24px;
+  border: 1px solid #122a66 !important;
+  color: #fff !important;
+  text-decoration: none !important;
+  transition: background-color .2s ease, border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+  box-shadow: 0 10px 22px rgba(18, 42, 102, 0.2);
+}
+
+.woocommerce-cart .wc-proceed-to-checkout .checkout-button.button:hover,
+.woocommerce-cart .wc-proceed-to-checkout .checkout-button.button:focus-visible {
+  background: #0f2353 !important;
+  border-color: #0f2353 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(15, 35, 83, 0.24);
+}
+
+@media (max-width: 1024px) {
+  .woocommerce-cart table.shop_table td.product-name {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 767px) {
+  .woocommerce-cart table.shop_table td.product-thumbnail img {
+    width: 58px;
+    max-width: 58px;
+  }
+
+  .woocommerce-cart table.shop_table td.product-name {
+    font-size: 15px;
+  }
+}
+
 .woocommerce-cart .cart_totals h2 {
   font-size: 36px;
   margin-bottom: 16px;
