@@ -1864,11 +1864,12 @@ add_action('pre_get_posts', function (WP_Query $query): void {
 }, 30);
 
 add_action('template_redirect', function (): void {
-    if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
+    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
+    if ($search_mode === 'vehicle_model') {
         return;
     }
 
-    if (gp_get_catalog_search_mode() === 'vehicle_model') {
+    if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
         return;
     }
 

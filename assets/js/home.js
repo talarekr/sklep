@@ -2,37 +2,42 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-search-switch]').forEach((switcher) => {
     const container = switcher.closest('.gp-category-search-hero__panel') || switcher.parentElement;
     const form = container ? container.querySelector('[data-category-search-form]') : null;
-    const input = form ? form.querySelector('[data-category-search-input]') : null;
     const searchModeInput = form ? form.querySelector('[data-category-search-mode]') : null;
+    const partInput = form ? form.querySelector('[data-category-search-input="part"]') : null;
+    const modelInput = form ? form.querySelector('[data-category-search-input="model"]') : null;
+
+    const setActiveMode = (mode) => {
+      const isModel = mode === 'model';
+
+      if (searchModeInput) {
+        searchModeInput.value = isModel ? 'vehicle_model' : 'part_number';
+      }
+
+      if (partInput) {
+        partInput.disabled = isModel;
+        partInput.hidden = isModel;
+      }
+
+      if (modelInput) {
+        modelInput.disabled = !isModel;
+        modelInput.hidden = !isModel;
+      }
+    };
 
     switcher.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
         switcher.querySelectorAll('button').forEach((item) => item.classList.remove('is-active'));
         button.classList.add('is-active');
 
-        if (!input) return;
-
-        const inputName = button.getAttribute('data-input-name');
-        const searchMode = button.getAttribute('data-search-mode');
-        const placeholder = button.getAttribute('data-placeholder');
-
-        if (inputName) {
-          input.setAttribute('name', inputName);
-        }
-
-        if (searchModeInput && searchMode) {
-          searchModeInput.setAttribute('value', searchMode);
-        }
-
-        if (placeholder) {
-          input.setAttribute('placeholder', placeholder);
-        }
+        const mode = button.getAttribute('data-mode') || 'part';
+        setActiveMode(mode);
       });
     });
 
     if (form) {
       form.addEventListener('submit', () => {
-        syncActiveMode();
+        const activeButton = switcher.querySelector('button.is-active') || switcher.querySelector('button[data-mode="part"]');
+        setActiveMode(activeButton ? activeButton.getAttribute('data-mode') || 'part' : 'part');
 
         const actionUrl = form.getAttribute('action');
         if (!actionUrl) return;
@@ -49,7 +54,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    syncActiveMode();
+    const initialActiveButton = switcher.querySelector('button.is-active') || switcher.querySelector('button[data-mode="part"]');
+    setActiveMode(initialActiveButton ? initialActiveButton.getAttribute('data-mode') || 'part' : 'part');
   });
 
   document.querySelectorAll('[data-close-bar]').forEach((button) => {
