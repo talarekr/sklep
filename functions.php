@@ -86,6 +86,18 @@ function gp_should_use_eur_currency(): bool
         return false;
     }
 
+    if (function_exists('is_cart') && is_cart()) {
+        return false;
+    }
+
+    if (function_exists('is_checkout') && is_checkout()) {
+        return false;
+    }
+
+    if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
+        return false;
+    }
+
     return gp_get_selected_language() !== 'pl';
 }
 
@@ -787,6 +799,16 @@ add_filter('the_content', function (string $content): string {
 
 add_filter('woocommerce_is_checkout_block_default', '__return_false', 100);
 
+add_action('wp', function (): void {
+    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
+        return;
+    }
+
+    if (has_action('woocommerce_checkout_order_review', 'woocommerce_checkout_payment') === false) {
+        add_action('woocommerce_checkout_order_review', 'woocommerce_checkout_payment', 20);
+    }
+}, 15);
+
 add_action('wp_enqueue_scripts', function (): void {
     if (!gp_should_force_classic_checkout()) {
         return;
@@ -834,8 +856,23 @@ add_action('woocommerce_before_checkout_form', function (): void {
         return;
     }
 
-    $available_gateways = WC()->payment_gateways()->get_available_payment_gateways();
+    $payment_gateways = WC()->payment_gateways();
+    $available_gateways = $payment_gateways->get_available_payment_gateways();
     $available_gateway_ids = array_keys($available_gateways);
+    $registered_gateways = $payment_gateways->payment_gateways();
+    $registered_gateway_diagnostics = [];
+
+    foreach ($registered_gateways as $gateway_id => $gateway) {
+        if (!$gateway instanceof WC_Payment_Gateway) {
+            continue;
+        }
+
+        $registered_gateway_diagnostics[$gateway_id] = [
+            'enabled' => $gateway->enabled,
+            'is_available' => $gateway->is_available(),
+        ];
+    }
+
     $billing_country = WC()->customer->get_billing_country();
     $shipping_country = WC()->customer->get_shipping_country();
 
@@ -850,6 +887,7 @@ add_action('woocommerce_before_checkout_form', function (): void {
     wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
         'source' => 'gp-checkout',
         'available_gateway_ids' => $available_gateway_ids,
+        'registered_gateways' => $registered_gateway_diagnostics,
         'payu_available' => $payu_available,
         'currency' => get_woocommerce_currency(),
         'billing_country' => $billing_country,
