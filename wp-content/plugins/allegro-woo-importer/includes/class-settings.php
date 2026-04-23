@@ -640,12 +640,14 @@ class Settings
             'selected_source_image_id' => (int) ($result['selected_source_image_id'] ?? ($diagnostics['selected_source_image_id'] ?? 0)),
             'selected_source_aspect_ratio' => round((float) ($result['selected_source_aspect_ratio'] ?? ($diagnostics['selected_source_aspect_ratio'] ?? 0.0)), 6),
             'square_fill_ratio' => round((float) ($result['selected_source_square_fill_ratio'] ?? 0.0), 6),
+            'standard_quality_tier_before_boost' => (string) ($result['standard_quality_tier_before_boost'] ?? ''),
+            'final_quality_tier_after_boost' => (string) ($result['final_quality_tier_after_boost'] ?? ($result['listing_quality_tier'] ?? '')),
             'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
             'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
             'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
             'render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? ''),
-            'quality_boost_applied' => !empty($diagnostics['listing_attachment_quality_boost_applied']),
-            'quality_boost_upgraded' => !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
+            'quality_boost_applied' => !empty($result['quality_boost_applied']) || !empty($diagnostics['listing_attachment_quality_boost_applied']),
+            'quality_boost_upgraded' => !empty($result['quality_boost_upgraded']) || !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
             'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
         ]);
     }
