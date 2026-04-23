@@ -97,7 +97,6 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
                         aria-expanded="false"
                         aria-controls="gp-profile-dropdown"
                         data-gp-profile-trigger
-                        data-gp-auth-modal-open
                     >
                         <span class="gp-main-actions__icon" aria-hidden="true">&#128100;</span>
                         <span><?php esc_html_e('Mój profil', 'gp-clone'); ?></span>

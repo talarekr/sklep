@@ -70,13 +70,6 @@
     button.addEventListener('click', closeAuthModal);
   });
 
-  document.querySelectorAll('[data-gp-auth-modal-open]').forEach(function (button) {
-    button.addEventListener('click', function (event) {
-      event.preventDefault();
-      openAuthModal();
-    });
-  });
-
   if (authModal) {
     authModal.addEventListener('click', function (event) {
       if (event.target === authModal) {
