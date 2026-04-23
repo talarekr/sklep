@@ -19,6 +19,8 @@ class ProductMapper
     private const LISTING_IMAGE_GENERATED_AT_META_KEY = '_awi_listing_image_generated_at';
     private const LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY = '_awi_listing_variant';
     private const LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY = '_awi_listing_source_id';
+    private const LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY = '_awi_listing_target_fill_ratio';
+    private const LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY = '_awi_listing_scale_factor';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -59,6 +61,7 @@ class ProductMapper
         $current_listing_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
         $current_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
         if (!$force && $current_listing_id > 0 && $current_source_id === $thumbnail_id && get_post($current_listing_id) instanceof \WP_Post) {
+            $this->ensure_listing_attachment_generation_meta($current_listing_id, $thumbnail_id);
             return ['status' => 'skipped', 'reason' => 'already_generated', 'listing_image_id' => $current_listing_id];
         }
 
@@ -79,8 +82,68 @@ class ProductMapper
         update_post_meta($product_id, self::LISTING_IMAGE_META_KEY, $created_listing_id);
         update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $thumbnail_id);
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
+        $this->ensure_listing_attachment_generation_meta($created_listing_id, $thumbnail_id);
 
         return ['status' => 'created', 'listing_image_id' => $created_listing_id];
+    }
+
+    public function get_listing_image_diagnostics(int $product_id): array
+    {
+        $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $featured_image_id = (int) get_post_thumbnail_id($product_id);
+        $helper_selected_image_id = $this->get_preferred_listing_image_id($product_id);
+
+        $rendered_source = 'placeholder';
+        if ($helper_selected_image_id > 0) {
+            if ($listing_image_id > 0 && $helper_selected_image_id === $listing_image_id) {
+                $rendered_source = 'listing_image';
+            } elseif ($featured_image_id > 0 && $helper_selected_image_id === $featured_image_id) {
+                $rendered_source = 'featured_image_helper_fallback';
+            } else {
+                $rendered_source = 'helper_attachment';
+            }
+        } elseif ($featured_image_id > 0) {
+            $rendered_source = 'featured_image_template_fallback';
+        }
+
+        $listing_path = $listing_image_id > 0 ? (string) get_attached_file($listing_image_id) : '';
+        $featured_path = $featured_image_id > 0 ? (string) get_attached_file($featured_image_id) : '';
+
+        $listing_attachment_scale_factor_raw = get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true);
+        $listing_attachment_target_fill_ratio_raw = get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true);
+        $listing_attachment_scale_factor = is_numeric($listing_attachment_scale_factor_raw) ? (float) $listing_attachment_scale_factor_raw : 0.0;
+        $listing_attachment_target_fill_ratio = is_numeric($listing_attachment_target_fill_ratio_raw) ? (float) $listing_attachment_target_fill_ratio_raw : 0.0;
+
+        if ($listing_attachment_target_fill_ratio <= 0 && $listing_image_id > 0) {
+            $listing_attachment_target_fill_ratio = self::LISTING_IMAGE_TARGET_FILL_RATIO;
+        }
+
+        if ($listing_attachment_scale_factor <= 0 && $listing_image_id > 0) {
+            $calculated_scale = $this->calculate_listing_scale_factor_from_source((int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, true));
+            if ($calculated_scale !== null) {
+                $listing_attachment_scale_factor = $calculated_scale;
+            }
+        }
+
+        return [
+            'product_id' => $product_id,
+            'listing_image_id' => $listing_image_id,
+            'featured_image_id' => $featured_image_id,
+            'helper_selected_image_id' => $helper_selected_image_id,
+            'rendered_source' => $rendered_source,
+            'listing_image_meta_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
+            'listing_image_generated_at' => (string) get_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, true),
+            'listing_file_path' => $listing_path,
+            'listing_file_exists' => $listing_path !== '' ? file_exists($listing_path) : false,
+            'listing_file_url' => $listing_image_id > 0 ? wp_get_attachment_url($listing_image_id) : '',
+            'featured_file_path' => $featured_path,
+            'featured_file_exists' => $featured_path !== '' ? file_exists($featured_path) : false,
+            'featured_file_url' => $featured_image_id > 0 ? wp_get_attachment_url($featured_image_id) : '',
+            'listing_attachment_variant_flag' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, true),
+            'listing_attachment_source_id' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, true),
+            'listing_attachment_target_fill_ratio' => $listing_attachment_target_fill_ratio,
+            'listing_attachment_scale_factor' => $listing_attachment_scale_factor,
+        ];
     }
 
     public function upsert_product(array $offer, array $settings): array
@@ -1313,7 +1376,72 @@ class ProductMapper
 
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, 1);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SOURCE_META_KEY, $source_attachment_id);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, $target_ratio);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, round($scale, 6));
+        $this->ensure_listing_attachment_generation_meta((int) $attachment_id, $source_attachment_id);
 
         return (int) $attachment_id;
+    }
+
+    private function ensure_listing_attachment_generation_meta(int $listing_attachment_id, int $source_attachment_id): void
+    {
+        if ($listing_attachment_id <= 0) {
+            return;
+        }
+
+        $target_fill_ratio_raw = get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true);
+        if (!is_numeric($target_fill_ratio_raw) || (float) $target_fill_ratio_raw <= 0) {
+            update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, self::LISTING_IMAGE_TARGET_FILL_RATIO);
+        }
+
+        $scale_factor_raw = get_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true);
+        if (!is_numeric($scale_factor_raw) || (float) $scale_factor_raw <= 0) {
+            $scale = $this->calculate_listing_scale_factor_from_source($source_attachment_id);
+            if ($scale !== null) {
+                update_post_meta($listing_attachment_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, round($scale, 6));
+            }
+        }
+    }
+
+    private function calculate_listing_scale_factor_from_source(int $source_attachment_id): ?float
+    {
+        if ($source_attachment_id <= 0) {
+            return null;
+        }
+
+        $source_width = 0;
+        $source_height = 0;
+        $source_metadata = wp_get_attachment_metadata($source_attachment_id);
+        if (is_array($source_metadata)) {
+            $source_width = isset($source_metadata['width']) ? (int) $source_metadata['width'] : 0;
+            $source_height = isset($source_metadata['height']) ? (int) $source_metadata['height'] : 0;
+        }
+
+        if ($source_width <= 0 || $source_height <= 0) {
+            $source_path = get_attached_file($source_attachment_id);
+            if (is_string($source_path) && $source_path !== '' && file_exists($source_path)) {
+                $source_size = @getimagesize($source_path);
+                if (is_array($source_size)) {
+                    $source_width = isset($source_size[0]) ? (int) $source_size[0] : 0;
+                    $source_height = isset($source_size[1]) ? (int) $source_size[1] : 0;
+                }
+            }
+        }
+
+        if ($source_width <= 0 || $source_height <= 0) {
+            return null;
+        }
+
+        $max_object_size = (int) round(self::LISTING_IMAGE_CANVAS_SIZE * self::LISTING_IMAGE_TARGET_FILL_RATIO);
+        if ($max_object_size <= 0) {
+            return null;
+        }
+
+        $scale = min($max_object_size / $source_width, $max_object_size / $source_height);
+        if (!is_finite($scale) || $scale <= 0) {
+            return null;
+        }
+
+        return (float) $scale;
     }
 }

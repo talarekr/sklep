@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 class Settings
 {
     private const LISTING_IMAGES_CHECKPOINT_OPTION_KEY = 'awi_listing_images_regen_checkpoint';
+    private const LISTING_IMAGES_LAST_BATCH_OPTION_KEY = 'awi_listing_images_last_batch';
 
     private AllegroAuth $auth;
     private Importer $importer;
@@ -32,6 +33,7 @@ class Settings
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
         add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
         add_action('admin_post_awi_listing_images_regenerate_batch', [$this, 'handle_listing_images_regenerate_batch']);
+        add_action('admin_post_awi_listing_images_inspect_front', [$this, 'handle_listing_images_inspect_front']);
     }
 
     public function register_menu(): void
@@ -190,6 +192,18 @@ class Settings
             );
         }
 
+        if (isset($_GET['awi_listing_inspect_done'])) {
+            add_settings_error(
+                'awi_messages',
+                'awi_listing_inspect_done',
+                sprintf(
+                    __('Diagnostyka frontu listing images zakończona. Zalogowano %d produktów z ostatniego batcha.', 'allegro-woo-importer'),
+                    (int) ($_GET['awi_listing_inspect_logged'] ?? 0)
+                ),
+                'updated'
+            );
+        }
+
         $settings = Plugin::get_settings();
         $history = get_option(Plugin::HISTORY_OPTION_KEY, []);
         if (!is_array($history)) {
@@ -201,6 +215,10 @@ class Settings
         $listing_regen_checkpoint = get_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY, []);
         if (!is_array($listing_regen_checkpoint)) {
             $listing_regen_checkpoint = [];
+        }
+        $listing_last_batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
+        if (!is_array($listing_last_batch)) {
+            $listing_last_batch = [];
         }
 
         $log_tail = $this->logger->read_tail(80);
@@ -245,6 +263,79 @@ class Settings
         exit;
     }
 
+    public function handle_listing_images_inspect_front(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_listing_images_inspect_front');
+
+        $last_batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
+        if (!is_array($last_batch)) {
+            $last_batch = [];
+        }
+        $product_ids_raw = $last_batch['product_ids'] ?? [];
+        $product_ids = is_array($product_ids_raw) ? array_values(array_filter(array_map('intval', $product_ids_raw), static fn (int $id): bool => $id > 0)) : [];
+
+        $rows = $this->run_front_listing_images_diagnostics_for_products($product_ids);
+
+        $this->logger->info('Front listing image diagnostics executed from admin.', [
+            'trigger' => 'admin_button',
+            'batch_updated_at' => (string) ($last_batch['updated_at'] ?? ''),
+            'batch_first_product_id' => (int) ($last_batch['first_product_id'] ?? 0),
+            'batch_last_product_id' => (int) ($last_batch['last_product_id'] ?? 0),
+            'batch_products_total' => count($product_ids),
+            'logged_products' => count($rows),
+        ]);
+
+        foreach ($rows as $row) {
+            $this->logger->info('Front listing image diagnostics product.', $row);
+        }
+
+        $redirect = add_query_arg([
+            'page' => 'awi-settings',
+            'awi_listing_inspect_done' => '1',
+            'awi_listing_inspect_logged' => count($rows),
+        ], admin_url('admin.php'));
+
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    private function run_front_listing_images_diagnostics_for_products(array $product_ids): array
+    {
+        if ($product_ids === []) {
+            $this->logger->warning('Front listing image diagnostics skipped: empty last regeneration batch.');
+            return [];
+        }
+
+        $rows = [];
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product((int) $product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $product_id = (int) $product->get_id();
+            $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
+            $rows[] = [
+                'product_id' => $product_id,
+                'product_name' => $product->get_name(),
+                'permalink' => get_permalink($product_id),
+                'rendered_source' => (string) ($diagnostics['rendered_source'] ?? ''),
+                'helper_selected_image_id' => (int) ($diagnostics['helper_selected_image_id'] ?? 0),
+                'listing_image_id' => (int) ($diagnostics['listing_image_id'] ?? 0),
+                'featured_image_id' => (int) ($diagnostics['featured_image_id'] ?? 0),
+                'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
+                'listing_attachment_scale_factor' => (float) ($diagnostics['listing_attachment_scale_factor'] ?? 0),
+                'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0),
+            ];
+        }
+
+        return $rows;
+    }
+
     private function run_listing_images_regeneration_batch(int $batch_size): array
     {
         $checkpoint = get_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY, []);
@@ -287,6 +378,7 @@ class Settings
         $batch_created = 0;
         $batch_skipped = 0;
         $batch_errors = 0;
+        $processed_product_ids = [];
 
         foreach ($ids as $raw_id) {
             $product_id = (int) $raw_id;
@@ -296,6 +388,7 @@ class Settings
             $batch_processed++;
             $processed_total++;
             $last_product_id = $product_id;
+            $processed_product_ids[] = $product_id;
 
             if ($status === 'created') {
                 $batch_created++;
@@ -326,12 +419,26 @@ class Settings
             'updated_at' => gmdate('Y-m-d H:i:s'),
         ], false);
 
+        update_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, [
+            'product_ids' => $processed_product_ids,
+            'first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
+            'last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
+            'processed' => $batch_processed,
+            'created' => $batch_created,
+            'skipped' => $batch_skipped,
+            'errors' => $batch_errors,
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ], false);
+
         return [
             'processed' => $batch_processed,
             'created' => $batch_created,
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
             'next_after_id' => $last_product_id,
+            'batch_product_ids' => $processed_product_ids,
+            'batch_first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
+            'batch_last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'done' => false,
         ];
     }

@@ -5,6 +5,7 @@
  * @var string $oauth_url
  * @var string $callback_uri
  * @var array  $listing_regen_checkpoint
+ * @var array  $listing_last_batch
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -141,7 +142,22 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Aktualizacja checkpointu:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_regen_checkpoint['updated_at'] ?? '—')); ?></strong></li>
     </ul>
 
-    <h2><?php esc_html_e('4. Historia importów / log', 'allegro-woo-importer'); ?></h2>
+    <h2><?php esc_html_e('4. Diagnostyka renderingu zdjęć listingowych (front /sklep/)', 'allegro-woo-importer'); ?></h2>
+    <p><?php esc_html_e('Uruchamia diagnostykę dokładnie dla produktów z ostatniego batcha regeneracji listing images i zapisuje szczegóły do logu.', 'allegro-woo-importer'); ?></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('awi_listing_images_inspect_front'); ?>
+        <input type="hidden" name="action" value="awi_listing_images_inspect_front">
+        <?php submit_button(__('Sprawdź rendering zdjęć (listing)', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <ul>
+        <li><?php esc_html_e('Ostatni batch: liczba produktów', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) count((array) ($listing_last_batch['product_ids'] ?? []))); ?></strong></li>
+        <li><?php esc_html_e('Ostatni batch: pierwszy product_id', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['first_product_id'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Ostatni batch: ostatni product_id', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['last_product_id'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Ostatni batch: aktualizacja', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_last_batch['updated_at'] ?? '—')); ?></strong></li>
+    </ul>
+    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio.', 'allegro-woo-importer'); ?></em></p>
+
+    <h2><?php esc_html_e('5. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
         <thead>
             <tr>
@@ -172,7 +188,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     <h3><?php esc_html_e('Tail logu (uploads/allegro-import.log)', 'allegro-woo-importer'); ?></h3>
     <textarea readonly style="width:100%; min-height:220px; font-family: monospace;"><?php echo esc_textarea($log_tail); ?></textarea>
 
-    <h2><?php esc_html_e('5. Statystyki', 'allegro-woo-importer'); ?></h2>
+    <h2><?php esc_html_e('6. Statystyki', 'allegro-woo-importer'); ?></h2>
     <ul>
         <li><?php esc_html_e('Ostatnia synchronizacja:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($settings['last_sync_at'] ?: '—')); ?></strong></li>
         <li><?php esc_html_e('Liczba zaimportowanych produktów:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) $settings['last_sync_created']); ?></strong></li>
