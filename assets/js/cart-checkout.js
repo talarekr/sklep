@@ -232,40 +232,13 @@
     });
   };
 
-  var removeCheckoutShippingOptions = function (scope) {
-    if (!scope) return;
-
-    scope.querySelectorAll('.wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
-      var title = titleEl.textContent ? titleEl.textContent.trim() : '';
-      if (title !== 'Opcje wysyłki' && title !== 'Shipping options') {
-        return;
-      }
-
-      var shippingStep = titleEl.closest('.wc-block-components-checkout-step, .wc-block-checkout__shipping-method-block');
-      if (shippingStep) {
-        shippingStep.remove();
-      }
-    });
-  };
-
-  var enhanceCheckoutBlock = function () {
-    if (!document.body.classList.contains('woocommerce-checkout') || document.body.classList.contains('woocommerce-order-received')) {
-      return;
-    }
-
-    var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
-    if (!checkoutScope) {
-      return;
-    }
-
+  enhanceCartBlock();
+  var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
+  if (checkoutScope) {
     replaceExactText(checkoutScope, 'Free shipping', 'Koszt dostawy');
     replaceExactText(checkoutScope, 'BEZPŁATNIE', '0 zł');
     replaceExactText(checkoutScope, 'FREE!', '0 zł');
-    removeCheckoutShippingOptions(checkoutScope);
-  };
-
-  enhanceCartBlock();
-  enhanceCheckoutBlock();
+  }
 
   if (document.body.classList.contains('woocommerce-cart')) {
     var isEnhancingCartBlock = false;
@@ -283,6 +256,11 @@
   }
 
   if (document.body.classList.contains('woocommerce-checkout') && !document.body.classList.contains('woocommerce-order-received')) {
+    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
+    if (!checkoutObserverScope) {
+      return;
+    }
+
     var isEnhancingCheckoutBlock = false;
     var checkoutObserver = new MutationObserver(function () {
       if (isEnhancingCheckoutBlock) {
@@ -291,22 +269,14 @@
 
       isEnhancingCheckoutBlock = true;
       window.requestAnimationFrame(function () {
-        enhanceCheckoutBlock();
+        replaceExactText(checkoutObserverScope, 'Free shipping', 'Koszt dostawy');
+        replaceExactText(checkoutObserverScope, 'BEZPŁATNIE', '0 zł');
+        replaceExactText(checkoutObserverScope, 'FREE!', '0 zł');
         isEnhancingCheckoutBlock = false;
       });
     });
 
-    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
-    if (!checkoutObserverScope) {
-      return;
-    }
-
-    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
-    if (!cartObserverScope) {
-      return;
-    }
-
-    cartObserver.observe(cartObserverScope, {
+    checkoutObserver.observe(checkoutObserverScope, {
       childList: true,
       subtree: true
     });

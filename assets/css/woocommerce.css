@@ -991,6 +991,101 @@
   padding: 14px;
 }
 
+.woocommerce-checkout form.checkout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 24px;
+  align-items: start;
+}
+
+.woocommerce-checkout #customer_details {
+  display: grid;
+  gap: 18px;
+}
+
+.woocommerce-checkout .woocommerce-billing-fields,
+.woocommerce-checkout .woocommerce-additional-fields,
+.woocommerce-checkout .woocommerce-account-fields,
+.woocommerce-checkout .woocommerce-shipping-fields {
+  border: 1px solid #e3eaf4;
+  border-radius: 14px;
+  background: #fff;
+  padding: 18px;
+  box-shadow: 0 8px 20px rgba(16, 24, 40, 0.04);
+}
+
+.woocommerce-checkout .woocommerce-billing-fields h3,
+.woocommerce-checkout .woocommerce-additional-fields h3,
+.woocommerce-checkout .woocommerce-shipping-fields h3 {
+  margin: 0 0 14px;
+  font-size: 20px;
+  color: #122a66;
+}
+
+.woocommerce-checkout .form-row label {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.woocommerce-checkout .input-text,
+.woocommerce-checkout select,
+.woocommerce-checkout textarea {
+  border: 1px solid #c8d3e3;
+  border-radius: 10px;
+  min-height: 46px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.woocommerce-checkout .woocommerce-checkout-review-order {
+  border: 1px solid #dbe4f2;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f7f8fb 0%, #f2f6ff 100%);
+  padding: 18px;
+}
+
+.woocommerce-checkout #order_review_heading {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 22px;
+  color: #122a66;
+}
+
+.woocommerce-checkout #payment {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.woocommerce-checkout #payment ul.payment_methods {
+  border: 1px solid #dbe4f2;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 14px;
+}
+
+.woocommerce-checkout #payment div.payment_box {
+  border-radius: 10px;
+  border: 1px solid #d8e3f5;
+  background: #f7faff;
+}
+
+.woocommerce-checkout #payment .place-order {
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.woocommerce-checkout #payment #place_order {
+  width: 100%;
+  min-height: 50px;
+  border-radius: 10px;
+  border: 1px solid #122a66;
+  background: #122a66;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .woocommerce-checkout #order_review {
   position: sticky;
   top: 20px;
@@ -1012,6 +1107,15 @@
 }
 
 @media (max-width: 767px) {
+  .woocommerce-checkout form.checkout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .woocommerce-checkout #order_review {
+    position: static;
+  }
+
   .gp-mini-cart-panel__footer .gp-btn {
     min-height: 46px;
     padding: 0 14px;
