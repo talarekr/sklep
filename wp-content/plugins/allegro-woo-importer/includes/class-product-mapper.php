@@ -101,6 +101,10 @@ class ProductMapper
                 'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
                 'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
                 'selected_source_selection_reason' => $selection_reason,
+                'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? 'unknown'),
+                'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
+                'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
+                'requires_better_source' => !empty($quality['requires_better_source']),
             ];
         }
 
@@ -135,6 +139,10 @@ class ProductMapper
             'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
             'selected_source_square_fill_ratio' => $selected_source_square_fill_ratio,
             'selected_source_selection_reason' => $selection_reason,
+            'listing_quality_tier' => (string) ($quality['listing_quality_tier'] ?? 'unknown'),
+            'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
+            'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
+            'requires_better_source' => !empty($quality['requires_better_source']),
         ];
     }
 
