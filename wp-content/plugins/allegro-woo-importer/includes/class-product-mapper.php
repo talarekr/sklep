@@ -108,8 +108,6 @@ class ProductMapper
                 'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
                 'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
                 'requires_better_source' => !empty($quality['requires_better_source']),
-                'quality_boost_applied' => false,
-                'quality_boost_upgraded' => false,
             ];
         }
 
@@ -183,8 +181,6 @@ class ProductMapper
             'listing_quality_score' => (float) ($quality['listing_quality_score'] ?? 0.0),
             'best_available_source_quality_tier' => (string) ($quality['best_available_source_quality_tier'] ?? 'unknown'),
             'requires_better_source' => !empty($quality['requires_better_source']),
-            'quality_boost_applied' => $quality_boost_applied,
-            'quality_boost_upgraded' => $quality_boost_upgraded,
         ];
     }
 
