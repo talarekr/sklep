@@ -467,13 +467,6 @@ class Settings
             if ($status === 'skipped') {
                 $batch_skipped++;
                 $skipped_total++;
-                $skipped_listing_image_id = (int) ($result['listing_image_id'] ?? 0);
-                $is_extreme_ratio = $skipped_listing_image_id > 0
-                    ? (int) get_post_meta($skipped_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
-                    : false;
-                if ($is_extreme_ratio) {
-                    $batch_extreme_ratio_products++;
-                }
                 $this->logger->info('Listing image regeneration skipped (admin batch).', [
                     'product_id' => $product_id,
                     'skip_reason' => (string) ($result['reason'] ?? 'unknown'),

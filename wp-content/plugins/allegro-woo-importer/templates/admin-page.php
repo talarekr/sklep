@@ -171,7 +171,6 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Utworzono listing image (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['created'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Pominięto (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['skipped'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Błędy (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['errors'] ?? 0))); ?></strong></li>
-        <li><?php esc_html_e('Extreme ratio products (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['extreme_ratio_products_count'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Force regenerate (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html(!empty($listing_last_batch['force_regenerate']) ? 'true' : 'false'); ?></strong></li>
         <li><?php esc_html_e('Timestamp ostatniego batcha:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_last_batch['updated_at'] ?? '—')); ?></strong></li>
     </ul>
