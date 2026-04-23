@@ -149,6 +149,11 @@ final class Plugin
 
     public static function is_safe_mode_enabled(): bool
     {
-        return !empty(get_option(self::SAFE_MODE_OPTION_KEY, false));
+        $raw = get_option(self::SAFE_MODE_OPTION_KEY, null);
+        if ($raw === null) {
+            return true;
+        }
+
+        return !empty($raw);
     }
 }
