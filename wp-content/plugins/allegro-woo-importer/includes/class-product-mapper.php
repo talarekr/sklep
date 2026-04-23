@@ -29,6 +29,9 @@ class ProductMapper
     private const LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY = '_awi_listing_rendered_height';
     private const LISTING_IMAGE_ASPECT_RATIO_META_KEY = '_gp_listing_aspect_ratio';
     private const LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY = '_gp_listing_is_extreme_ratio';
+    private const LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY = '_gp_listing_selected_source_image_id';
+    private const LISTING_SOURCE_SELECTION_REASON_META_KEY = '_gp_listing_source_selection_reason';
+    private const LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY = '_gp_listing_selected_source_aspect_ratio';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -61,25 +64,33 @@ class ProductMapper
 
     public function ensure_listing_image_for_product(int $product_id, bool $force = false): array
     {
-        $thumbnail_id = (int) get_post_thumbnail_id($product_id);
-        if ($thumbnail_id <= 0) {
-            return ['status' => 'skipped', 'reason' => 'missing_thumbnail'];
+        $selection = $this->select_best_listing_source_image($product_id);
+        $selected_source_id = (int) ($selection['selected_source_image_id'] ?? 0);
+        if ($selected_source_id <= 0) {
+            return ['status' => 'skipped', 'reason' => 'missing_listing_source_image'];
         }
 
         $current_listing_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
         $current_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
-        if (!$force && $current_listing_id > 0 && $current_source_id === $thumbnail_id && get_post($current_listing_id) instanceof \WP_Post) {
-            $this->ensure_listing_attachment_generation_meta($current_listing_id, $thumbnail_id);
-            return ['status' => 'skipped', 'reason' => 'already_generated', 'listing_image_id' => $current_listing_id];
+        if (!$force && $current_listing_id > 0 && $current_source_id === $selected_source_id && get_post($current_listing_id) instanceof \WP_Post) {
+            $this->ensure_listing_attachment_generation_meta($current_listing_id, $selected_source_id);
+            return [
+                'status' => 'skipped',
+                'reason' => 'already_generated',
+                'listing_image_id' => $current_listing_id,
+                'selected_source_image_id' => $selected_source_id,
+                'selected_source_selection_reason' => (string) ($selection['selected_source_selection_reason'] ?? ''),
+            ];
         }
 
-        $created_listing_id = $this->create_listing_image_attachment($thumbnail_id, $product_id);
+        $created_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id);
         if (is_wp_error($created_listing_id)) {
             return [
                 'status' => 'error',
                 'reason' => 'listing_image_generation_failed',
                 'error_code' => $created_listing_id->get_error_code(),
                 'error_message' => $created_listing_id->get_error_message(),
+                'selected_source_image_id' => $selected_source_id,
             ];
         }
 
@@ -88,11 +99,16 @@ class ProductMapper
         }
 
         update_post_meta($product_id, self::LISTING_IMAGE_META_KEY, $created_listing_id);
-        update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $thumbnail_id);
+        update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $selected_source_id);
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
-        $this->ensure_listing_attachment_generation_meta($created_listing_id, $thumbnail_id);
+        $this->ensure_listing_attachment_generation_meta($created_listing_id, $selected_source_id);
 
-        return ['status' => 'created', 'listing_image_id' => $created_listing_id];
+        return [
+            'status' => 'created',
+            'listing_image_id' => $created_listing_id,
+            'selected_source_image_id' => $selected_source_id,
+            'selected_source_selection_reason' => (string) ($selection['selected_source_selection_reason'] ?? ''),
+        ];
     }
 
     public function get_listing_image_diagnostics(int $product_id): array
@@ -100,6 +116,10 @@ class ProductMapper
         $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
         $featured_image_id = (int) get_post_thumbnail_id($product_id);
         $helper_selected_image_id = $this->get_preferred_listing_image_id($product_id);
+        $selected_source_image_id = (int) get_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, true);
+        $selected_source_aspect_ratio = (float) get_post_meta($product_id, self::LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY, true);
+        $selected_source_selection_reason = (string) get_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, true);
+        $gallery_image_ids = $this->get_listing_source_candidate_image_ids($product_id);
 
         $rendered_source = 'placeholder';
         if ($helper_selected_image_id > 0) {
@@ -126,6 +146,11 @@ class ProductMapper
             'product_id' => $product_id,
             'listing_image_id' => $listing_image_id,
             'featured_image_id' => $featured_image_id,
+            'candidate_source_image_ids' => $gallery_image_ids,
+            'gallery_images_count' => count($gallery_image_ids),
+            'selected_source_image_id' => $selected_source_image_id,
+            'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
+            'selected_source_selection_reason' => $selected_source_selection_reason,
             'helper_selected_image_id' => $helper_selected_image_id,
             'rendered_source' => $rendered_source,
             'listing_image_meta_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
@@ -149,6 +174,92 @@ class ProductMapper
             'aspect_ratio' => $aspect_ratio,
             'is_extreme_aspect_ratio' => $is_extreme_aspect_ratio,
             'fit_limited_by' => $fit_limited_by,
+        ];
+    }
+
+    public function select_best_listing_source_image(int $product_id): array
+    {
+        $candidate_ids = $this->get_listing_source_candidate_image_ids($product_id);
+        if ($candidate_ids === []) {
+            update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, 0);
+            update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY, 0);
+            update_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, 'no_valid_image_candidates');
+            return [
+                'candidate_source_image_ids' => [],
+                'gallery_images_count' => 0,
+                'selected_source_image_id' => 0,
+                'selected_source_aspect_ratio' => 0.0,
+                'selected_source_selection_reason' => 'no_valid_image_candidates',
+            ];
+        }
+
+        $best_candidate = null;
+        foreach ($candidate_ids as $candidate_id) {
+            $metrics = $this->get_attachment_trim_metrics_for_listing_selection((int) $candidate_id);
+            if ($metrics === null) {
+                continue;
+            }
+
+            if ($best_candidate === null) {
+                $best_candidate = $metrics;
+                continue;
+            }
+
+            $is_better_aspect = $metrics['aspect_distance_from_square'] < $best_candidate['aspect_distance_from_square'];
+            $is_tie_aspect = abs($metrics['aspect_distance_from_square'] - $best_candidate['aspect_distance_from_square']) < 0.000001;
+            $is_better_area = $metrics['object_area_ratio'] > $best_candidate['object_area_ratio'];
+            $is_tie_area = abs($metrics['object_area_ratio'] - $best_candidate['object_area_ratio']) < 0.000001;
+            $is_better_fill = $metrics['square_fill_ratio'] > $best_candidate['square_fill_ratio'];
+
+            if (
+                $is_better_aspect
+                || ($is_tie_aspect && $is_better_area)
+                || ($is_tie_aspect && $is_tie_area && $is_better_fill)
+            ) {
+                $best_candidate = $metrics;
+            }
+        }
+
+        if ($best_candidate === null) {
+            $fallback_candidate_id = (int) $candidate_ids[0];
+            update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, $fallback_candidate_id);
+            update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY, 0);
+            update_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, 'fallback_first_candidate_missing_metrics');
+            return [
+                'candidate_source_image_ids' => $candidate_ids,
+                'gallery_images_count' => count($candidate_ids),
+                'selected_source_image_id' => $fallback_candidate_id,
+                'selected_source_aspect_ratio' => 0.0,
+                'selected_source_selection_reason' => 'fallback_first_candidate_missing_metrics',
+            ];
+        }
+
+        $selection_reason = sprintf(
+            'best_square_fit:aspect_distance=%.6f;object_area_ratio=%.6f;square_fill_ratio=%.6f',
+            $best_candidate['aspect_distance_from_square'],
+            $best_candidate['object_area_ratio'],
+            $best_candidate['square_fill_ratio']
+        );
+
+        update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, (int) $best_candidate['attachment_id']);
+        update_post_meta($product_id, self::LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY, round((float) $best_candidate['aspect_ratio'], 6));
+        update_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, $selection_reason);
+
+        $this->logger->info('Listing source image selected.', [
+            'product_id' => $product_id,
+            'candidate_source_image_ids' => $candidate_ids,
+            'gallery_images_count' => count($candidate_ids),
+            'selected_source_image_id' => (int) $best_candidate['attachment_id'],
+            'selected_source_aspect_ratio' => round((float) $best_candidate['aspect_ratio'], 6),
+            'selected_source_selection_reason' => $selection_reason,
+        ]);
+
+        return [
+            'candidate_source_image_ids' => $candidate_ids,
+            'gallery_images_count' => count($candidate_ids),
+            'selected_source_image_id' => (int) $best_candidate['attachment_id'],
+            'selected_source_aspect_ratio' => round((float) $best_candidate['aspect_ratio'], 6),
+            'selected_source_selection_reason' => $selection_reason,
         ];
     }
 
@@ -1542,6 +1653,82 @@ class ProductMapper
             'y' => $min_y,
             'width' => ($max_x - $min_x) + 1,
             'height' => ($max_y - $min_y) + 1,
+        ];
+    }
+
+    private function get_listing_source_candidate_image_ids(int $product_id): array
+    {
+        $featured_id = (int) get_post_thumbnail_id($product_id);
+        $gallery_ids = [];
+        $product = wc_get_product($product_id);
+        if ($product instanceof \WC_Product) {
+            $gallery_ids = array_map('intval', $product->get_gallery_image_ids());
+        }
+
+        $candidate_ids = [];
+        if ($featured_id > 0) {
+            $candidate_ids[] = $featured_id;
+        }
+
+        foreach ($gallery_ids as $gallery_id) {
+            if ($gallery_id > 0) {
+                $candidate_ids[] = (int) $gallery_id;
+            }
+        }
+
+        $candidate_ids = array_values(array_unique(array_map('intval', $candidate_ids)));
+        $candidate_ids = array_values(array_filter($candidate_ids, static fn(int $attachment_id): bool => $attachment_id > 0 && get_post($attachment_id) instanceof \WP_Post));
+
+        return $candidate_ids;
+    }
+
+    private function get_attachment_trim_metrics_for_listing_selection(int $attachment_id): ?array
+    {
+        $source_path = get_attached_file($attachment_id);
+        if (!is_string($source_path) || $source_path === '' || !file_exists($source_path)) {
+            return null;
+        }
+
+        $source_blob = file_get_contents($source_path);
+        if (!is_string($source_blob) || $source_blob === '') {
+            return null;
+        }
+
+        $image = @imagecreatefromstring($source_blob);
+        if (!$image) {
+            return null;
+        }
+
+        $source_width = imagesx($image);
+        $source_height = imagesy($image);
+        if ($source_width <= 0 || $source_height <= 0) {
+            imagedestroy($image);
+            return null;
+        }
+
+        $bbox = $this->detect_non_white_bbox($image, $source_width, $source_height);
+        imagedestroy($image);
+
+        $object_width = $source_width;
+        $object_height = $source_height;
+        if (is_array($bbox)) {
+            $object_width = max(1, (int) ($bbox['width'] ?? $source_width));
+            $object_height = max(1, (int) ($bbox['height'] ?? $source_height));
+        }
+
+        $longer_side = max($object_width, $object_height);
+        $shorter_side = max(1, min($object_width, $object_height));
+        $aspect_ratio = $object_width / max(1, $object_height);
+        $aspect_distance_from_square = abs(1 - $aspect_ratio);
+        $square_fill_ratio = $shorter_side / max(1, $longer_side);
+        $object_area_ratio = ($object_width * $object_height) / max(1, ($source_width * $source_height));
+
+        return [
+            'attachment_id' => $attachment_id,
+            'aspect_ratio' => $aspect_ratio,
+            'aspect_distance_from_square' => $aspect_distance_from_square,
+            'square_fill_ratio' => $square_fill_ratio,
+            'object_area_ratio' => $object_area_ratio,
         ];
     }
 
