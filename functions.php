@@ -91,6 +91,13 @@ function gp_should_use_eur_currency(): bool
         return false;
     }
 
+    // WooCommerce checkout updates payment gateways via AJAX.
+    // Keep the store currency unchanged for all AJAX requests so gateway
+    // availability checks (e.g. PayU requiring PLN) stay consistent.
+    if (wp_doing_ajax()) {
+        return false;
+    }
+
     if (function_exists('is_cart') && is_cart()) {
         return false;
     }
@@ -779,9 +786,9 @@ add_filter('wc_add_to_cart_message_html', '__return_empty_string', 10, 2);
 
 function gp_should_force_classic_checkout(): bool
 {
-    return function_exists('is_checkout')
-        && is_checkout()
-        && !is_wc_endpoint_url('order-received');
+    // PayU GPO supports WooCommerce Blocks checkout. Forcing classic checkout can
+    // break block-based gateway rendering (e.g. separate BLIK/Google Pay methods).
+    return false;
 }
 
 function gpswiss_wc_cart_safe(): ?WC_Cart
