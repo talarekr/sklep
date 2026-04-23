@@ -4,16 +4,16 @@ $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('sh
 
 $section_definitions = [
     [
-        'title' => __('Silniki', 'gp-clone'),
-        'terms' => ['silniki', 'silnik', 'engines'],
+        'title' => __('Silniki kompletne', 'gp-clone'),
+        'terms' => ['silniki-kompletne'],
     ],
     [
-        'title' => __('Kierownice', 'gp-clone'),
-        'terms' => ['kierownice', 'kierownica', 'steering-wheel'],
+        'title' => __('Skrzynie kompletne', 'gp-clone'),
+        'terms' => ['kompletne-skrzynie'],
     ],
     [
-        'title' => __('Felgi', 'gp-clone'),
-        'terms' => ['felgi', 'felga', 'wheels', 'rim'],
+        'title' => __('Zwrotnice', 'gp-clone'),
+        'terms' => ['zwrotnice'],
     ],
 ];
 
