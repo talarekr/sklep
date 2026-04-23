@@ -799,54 +799,6 @@ add_filter('the_content', function (string $content): string {
 
 add_filter('woocommerce_is_checkout_block_default', '__return_false', 100);
 
-function gp_checkout_payment_debug_snapshot(string $stage): void
-{
-    if (!function_exists('WC') || !WC()->payment_gateways() || !WC()->customer || !WC()->cart) {
-        return;
-    }
-
-    $payment_gateways = WC()->payment_gateways();
-    $available_gateways = $payment_gateways->get_available_payment_gateways();
-    $registered_gateways = $payment_gateways->payment_gateways();
-    $registered_gateway_diagnostics = [];
-    $payu_gateway_diagnostics = [];
-
-    foreach ($registered_gateways as $gateway_id => $gateway) {
-        if (!$gateway instanceof WC_Payment_Gateway) {
-            continue;
-        }
-
-        $registered_gateway_diagnostics[$gateway_id] = [
-            'enabled' => $gateway->enabled,
-            'is_available' => $gateway->is_available(),
-            'supports' => $gateway->supports,
-        ];
-
-        if (stripos((string) $gateway_id, 'payu') !== false || stripos((string) $gateway->id, 'payu') !== false) {
-            $payu_gateway_diagnostics[$gateway_id] = $registered_gateway_diagnostics[$gateway_id];
-        }
-    }
-
-    wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
-        'source' => 'gp-checkout',
-        'stage' => $stage,
-        'checkout_hooks' => [
-            'woocommerce_checkout_payment_attached' => has_action('woocommerce_checkout_order_review', 'woocommerce_checkout_payment') !== false,
-            'woocommerce_review_order_before_submit_attached' => has_action('woocommerce_review_order_before_submit') !== false,
-            'woocommerce_review_order_after_submit_attached' => has_action('woocommerce_review_order_after_submit') !== false,
-        ],
-        'available_gateway_ids' => array_keys($available_gateways),
-        'registered_gateways' => $registered_gateway_diagnostics,
-        'payu_gateways' => $payu_gateway_diagnostics,
-        'currency' => get_woocommerce_currency(),
-        'billing_country' => WC()->customer->get_billing_country(),
-        'shipping_country' => WC()->customer->get_shipping_country(),
-        'cart_total' => WC()->cart->get_total('edit'),
-        'customer_logged_in' => is_user_logged_in(),
-        'force_classic_checkout' => gp_should_force_classic_checkout(),
-    ]);
-}
-
 add_action('wp', function (): void {
     if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
         return;
@@ -903,9 +855,25 @@ add_action('woocommerce_before_checkout_form', function (): void {
     gp_checkout_payment_debug_snapshot('before_checkout_form');
 }, 10);
 
-add_action('woocommerce_review_order_before_submit', function (): void {
-    gp_checkout_payment_debug_snapshot('review_order_before_submit');
-}, 1);
+    $payment_gateways = WC()->payment_gateways();
+    $available_gateways = $payment_gateways->get_available_payment_gateways();
+    $available_gateway_ids = array_keys($available_gateways);
+    $registered_gateways = $payment_gateways->payment_gateways();
+    $registered_gateway_diagnostics = [];
+
+    foreach ($registered_gateways as $gateway_id => $gateway) {
+        if (!$gateway instanceof WC_Payment_Gateway) {
+            continue;
+        }
+
+        $registered_gateway_diagnostics[$gateway_id] = [
+            'enabled' => $gateway->enabled,
+            'is_available' => $gateway->is_available(),
+        ];
+    }
+
+    $billing_country = WC()->customer->get_billing_country();
+    $shipping_country = WC()->customer->get_shipping_country();
 
 add_action('woocommerce_review_order_after_submit', function (): void {
     gp_checkout_payment_debug_snapshot('review_order_after_submit');
@@ -916,9 +884,18 @@ add_filter('default_checkout_billing_country', function (?string $country): stri
         return $country;
     }
 
-    if (function_exists('WC') && WC()->countries) {
-        return WC()->countries->get_base_country();
-    }
+    wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
+        'source' => 'gp-checkout',
+        'available_gateway_ids' => $available_gateway_ids,
+        'registered_gateways' => $registered_gateway_diagnostics,
+        'payu_available' => $payu_available,
+        'currency' => get_woocommerce_currency(),
+        'billing_country' => $billing_country,
+        'shipping_country' => $shipping_country,
+        'cart_total' => WC()->cart->get_total('edit'),
+        'customer_logged_in' => is_user_logged_in(),
+        'force_classic_checkout' => gp_should_force_classic_checkout(),
+    ]);
 
     return 'PL';
 }, 20);
