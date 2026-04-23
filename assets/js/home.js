@@ -3,6 +3,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = switcher.closest('.gp-category-search-hero__panel') || switcher.parentElement;
     const form = container ? container.querySelector('[data-category-search-form]') : null;
     const input = form ? form.querySelector('[data-category-search-input]') : null;
+    const searchModeInput = form ? form.querySelector('[data-category-search-mode]') : null;
+    const syncActiveMode = () => {
+      if (!form || !input) return;
+
+      const activeButton = switcher.querySelector('button.is-active');
+      if (!activeButton) return;
+
+      const activeInputName = activeButton.getAttribute('data-input-name');
+      const activeSearchMode = activeButton.getAttribute('data-search-mode');
+      if (activeInputName) {
+        input.setAttribute('name', activeInputName);
+      }
+
+      if (searchModeInput && activeSearchMode) {
+        searchModeInput.setAttribute('value', activeSearchMode);
+      }
+    };
 
     switcher.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
@@ -12,10 +29,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!input) return;
 
         const inputName = button.getAttribute('data-input-name');
+        const searchMode = button.getAttribute('data-search-mode');
         const placeholder = button.getAttribute('data-placeholder');
 
         if (inputName) {
           input.setAttribute('name', inputName);
+        }
+
+        if (searchModeInput && searchMode) {
+          searchModeInput.setAttribute('value', searchMode);
         }
 
         if (placeholder) {
@@ -23,6 +45,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     });
+
+    if (form) {
+      form.addEventListener('submit', () => {
+        syncActiveMode();
+
+        const actionUrl = form.getAttribute('action');
+        if (!actionUrl) return;
+
+        try {
+          const parsedUrl = new URL(actionUrl, window.location.origin);
+          parsedUrl.searchParams.delete('part_number');
+          parsedUrl.searchParams.delete('s');
+          parsedUrl.searchParams.delete('search_mode');
+          form.setAttribute('action', `${parsedUrl.pathname}${parsedUrl.search}`);
+        } catch (error) {
+          // ignore invalid action URL, keep current form action
+        }
+      });
+    }
+
+    syncActiveMode();
   });
 
   document.querySelectorAll('[data-close-bar]').forEach((button) => {
