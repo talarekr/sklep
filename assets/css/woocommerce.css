@@ -863,7 +863,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 64%) minmax(230px, 36%);
+    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
     gap: 20px;
   }
 }
@@ -980,7 +980,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 64%) minmax(230px, 36%);
+    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
     gap: 20px;
   }
 }
@@ -1014,8 +1014,8 @@
 
 .woocommerce-checkout form.checkout {
   display: grid;
-  grid-template-columns: minmax(0, 67%) minmax(260px, 33%);
-  gap: 16px;
+  grid-template-columns: minmax(0, 65%) minmax(280px, 35%);
+  gap: 24px;
   align-items: start;
 }
 
@@ -1202,7 +1202,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 64%) minmax(230px, 36%);
+    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
     gap: 20px;
   }
 }
@@ -1478,7 +1478,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 64%) minmax(230px, 36%);
+    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
     gap: 20px;
   }
 }
@@ -1491,7 +1491,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 64%) minmax(230px, 36%);
+    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
     gap: 20px;
   }
 }
