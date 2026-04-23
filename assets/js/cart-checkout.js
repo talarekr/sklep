@@ -226,20 +226,92 @@
 
     cartScope.querySelectorAll('.wc-block-cart__submit-button, .wc-block-components-checkout-place-order-button').forEach(function (button) {
       button.classList.add('gp-cart-cta-button');
-      if (button.textContent) {
+      if (button.textContent && button.textContent.trim() !== 'Przejdź do płatności') {
         button.textContent = 'Przejdź do płatności';
       }
     });
   };
 
+  var removeCheckoutShippingOptions = function (scope) {
+    if (!scope) return;
+
+    scope.querySelectorAll('.wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
+      var title = titleEl.textContent ? titleEl.textContent.trim() : '';
+      if (title !== 'Opcje wysyłki' && title !== 'Shipping options') {
+        return;
+      }
+
+      var shippingStep = titleEl.closest('.wc-block-components-checkout-step, .wc-block-checkout__shipping-method-block');
+      if (shippingStep) {
+        shippingStep.remove();
+      }
+    });
+  };
+
+  var enhanceCheckoutBlock = function () {
+    if (!document.body.classList.contains('woocommerce-checkout') || document.body.classList.contains('woocommerce-order-received')) {
+      return;
+    }
+
+    var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
+    if (!checkoutScope) {
+      return;
+    }
+
+    replaceExactText(checkoutScope, 'Free shipping', 'Koszt dostawy');
+    replaceExactText(checkoutScope, 'BEZPŁATNIE', '0 zł');
+    replaceExactText(checkoutScope, 'FREE!', '0 zł');
+    removeCheckoutShippingOptions(checkoutScope);
+  };
+
   enhanceCartBlock();
+  enhanceCheckoutBlock();
 
   if (document.body.classList.contains('woocommerce-cart')) {
+    var isEnhancingCartBlock = false;
     var cartObserver = new MutationObserver(function () {
-      enhanceCartBlock();
+      if (isEnhancingCartBlock) {
+        return;
+      }
+
+      isEnhancingCartBlock = true;
+      window.requestAnimationFrame(function () {
+        enhanceCartBlock();
+        isEnhancingCartBlock = false;
+      });
     });
 
-    cartObserver.observe(document.body, {
+    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartObserverScope) {
+      return;
+    }
+
+    cartObserver.observe(cartObserverScope, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  if (document.body.classList.contains('woocommerce-checkout') && !document.body.classList.contains('woocommerce-order-received')) {
+    var isEnhancingCheckoutBlock = false;
+    var checkoutObserver = new MutationObserver(function () {
+      if (isEnhancingCheckoutBlock) {
+        return;
+      }
+
+      isEnhancingCheckoutBlock = true;
+      window.requestAnimationFrame(function () {
+        enhanceCheckoutBlock();
+        isEnhancingCheckoutBlock = false;
+      });
+    });
+
+    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
+    if (!checkoutObserverScope) {
+      return;
+    }
+
+    checkoutObserver.observe(checkoutObserverScope, {
       childList: true,
       subtree: true
     });

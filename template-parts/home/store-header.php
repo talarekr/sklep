@@ -5,9 +5,12 @@ $login_url = home_url('/zaloguj');
 $register_url = home_url('/zarejestruj');
 $favourites_url = home_url('/ulubione');
 $orders_url = function_exists('wc_get_account_endpoint_url') ? wc_get_account_endpoint_url('orders') : home_url('/historia-zamowien');
+$account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/moje-konto');
+$logout_url = wp_logout_url(home_url('/'));
 $checkout_url = function_exists('wc_get_checkout_url') ? wc_get_checkout_url() : home_url('/zamowienie');
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
+$is_logged_in = is_user_logged_in();
 $shortcuts = [
     ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines']],
     ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
@@ -102,13 +105,21 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
                         <span><?php esc_html_e('Mój profil', 'gp-clone'); ?></span>
                     </button>
                     <div class="gp-profile-dropdown" id="gp-profile-dropdown" data-gp-profile-dropdown hidden>
-                        <div class="gp-profile-dropdown__actions">
-                            <a class="gp-btn gp-btn--primary" href="<?php echo esc_url($login_url); ?>"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></a>
-                            <a class="gp-btn gp-btn--outline" href="<?php echo esc_url($register_url); ?>"><?php esc_html_e('Zarejestruj się', 'gp-clone'); ?></a>
-                        </div>
+                        <?php if (!$is_logged_in) : ?>
+                            <div class="gp-profile-dropdown__actions">
+                                <a class="gp-btn gp-btn--primary" href="<?php echo esc_url($login_url); ?>"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></a>
+                                <a class="gp-btn gp-btn--outline" href="<?php echo esc_url($register_url); ?>"><?php esc_html_e('Zarejestruj się', 'gp-clone'); ?></a>
+                            </div>
+                        <?php endif; ?>
                         <div class="gp-profile-dropdown__links">
-                            <a href="<?php echo esc_url($favourites_url); ?>">❤️ <?php esc_html_e('Ulubione', 'gp-clone'); ?></a>
-                            <a href="<?php echo esc_url($orders_url); ?>">🧾 <?php esc_html_e('Historia zamówień', 'gp-clone'); ?></a>
+                            <?php if ($is_logged_in) : ?>
+                                <a href="<?php echo esc_url($account_url); ?>">👤 <?php esc_html_e('Moje konto', 'gp-clone'); ?></a>
+                                <a href="<?php echo esc_url($orders_url); ?>">🧾 <?php esc_html_e('Moje zamówienia', 'gp-clone'); ?></a>
+                                <a href="<?php echo esc_url($logout_url); ?>">↪ <?php esc_html_e('Wyloguj się', 'gp-clone'); ?></a>
+                            <?php else : ?>
+                                <a href="<?php echo esc_url($favourites_url); ?>">❤️ <?php esc_html_e('Ulubione', 'gp-clone'); ?></a>
+                                <a href="<?php echo esc_url($orders_url); ?>">🧾 <?php esc_html_e('Historia zamówień', 'gp-clone'); ?></a>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
