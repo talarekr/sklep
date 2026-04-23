@@ -964,17 +964,16 @@ add_filter('default_checkout_billing_country', function (?string $country): stri
     $payu_available = false;
     $cart_total = null;
 
-    $customer = gpswiss_wc_customer_safe();
-    if ($customer) {
-        if (method_exists($customer, 'get_billing_country')) {
-            $billing_country = (string) $customer->get_billing_country();
+    if (function_exists('WC') && WC() && WC()->customer && is_object(WC()->customer)) {
+        if (method_exists(WC()->customer, 'get_billing_country')) {
+            $billing_country = (string) WC()->customer->get_billing_country();
             if ($billing_country === '') {
                 $billing_country = $base_country;
             }
         }
 
-        if (method_exists($customer, 'get_shipping_country')) {
-            $shipping_country = (string) $customer->get_shipping_country();
+        if (method_exists(WC()->customer, 'get_shipping_country')) {
+            $shipping_country = (string) WC()->customer->get_shipping_country();
             if ($shipping_country === '') {
                 $shipping_country = $base_country;
             }
@@ -1018,38 +1017,6 @@ add_filter('default_checkout_billing_country', function (?string $country): stri
     ]);
 
     return $base_country;
-}, 20);
-
-add_filter('woocommerce_available_payment_gateways', function (array $gateways): array {
-    if (!function_exists('wc_get_logger')) {
-        return $gateways;
-    }
-
-    $customer = gpswiss_wc_customer_safe();
-    $base_location = function_exists('wc_get_base_location') ? wc_get_base_location() : [];
-    $base_country = is_array($base_location) && !empty($base_location['country']) ? (string) $base_location['country'] : 'PL';
-    $billing_country = $base_country;
-
-    if ($customer && method_exists($customer, 'get_billing_country')) {
-        $billing_country = (string) $customer->get_billing_country();
-        if ($billing_country === '') {
-            $billing_country = $base_country;
-        }
-    }
-
-    $payu_gateway_keys = array_values(array_filter(array_keys($gateways), static function (string $gateway_id): bool {
-        return stripos($gateway_id, 'payu') !== false;
-    }));
-
-    wc_get_logger()->info('Gateway availability at woocommerce_available_payment_gateways.', [
-        'source' => 'gp-checkout',
-        'gateway_ids' => array_keys($gateways),
-        'payu_gateway_ids' => $payu_gateway_keys,
-        'payu_present' => !empty($payu_gateway_keys),
-        'billing_country' => $billing_country,
-    ]);
-
-    return $gateways;
 }, 20);
 
 add_filter('default_checkout_shipping_country', function (?string $country): string {
