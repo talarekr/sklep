@@ -27,7 +27,7 @@
     nextButton.innerHTML = '<span aria-hidden="true">›</span>';
 
     nav.append(prevButton, nextButton);
-    slider.appendChild(nav);
+    productGallery.appendChild(nav);
 
     const triggerSlide = (direction) => {
       if (!window.jQuery(slider).data('flexslider')) {
