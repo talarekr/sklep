@@ -87,6 +87,9 @@ class Settings
         }
 
         check_admin_referer('awi_manual_import');
+        if ($this->block_heavy_operation('manual_import')) {
+            return;
+        }
 
         $token = $this->auth->get_valid_access_token();
         if (is_wp_error($token)) {
@@ -117,6 +120,9 @@ class Settings
         }
 
         check_admin_referer('awi_restore_active_offers');
+        if ($this->block_heavy_operation('restore_active_offers')) {
+            return;
+        }
 
         $token = $this->auth->get_valid_access_token();
         if (is_wp_error($token)) {
@@ -235,6 +241,9 @@ class Settings
         }
 
         check_admin_referer('awi_listing_images_regenerate_batch');
+        if ($this->block_heavy_operation('listing_images_regenerate_batch')) {
+            return;
+        }
 
         $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 10;
         $batch_size = min(50, $batch_size);
@@ -272,6 +281,9 @@ class Settings
         }
 
         check_admin_referer('awi_listing_images_inspect_front');
+        if ($this->block_heavy_operation('listing_images_inspect_front')) {
+            return;
+        }
 
         $limit = isset($_POST['awi_listing_inspect_limit']) ? max(1, (int) $_POST['awi_listing_inspect_limit']) : 3;
         $page = isset($_POST['awi_listing_inspect_page']) ? max(1, (int) $_POST['awi_listing_inspect_page']) : 1;
@@ -455,6 +467,25 @@ class Settings
             'batch_last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'done' => false,
         ];
+    }
+
+    private function block_heavy_operation(string $operation): bool
+    {
+        if (!Plugin::is_safe_mode_enabled()) {
+            return false;
+        }
+
+        $this->logger->warning('Safe mode enabled: blocked heavy admin operation.', [
+            'operation' => $operation,
+        ]);
+
+        $this->store_admin_notice(
+            'error',
+            __('Tryb awaryjny jest aktywny. Operacje importu i diagnostyki zostały tymczasowo wyłączone dla stabilności.', 'allegro-woo-importer')
+        );
+
+        wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+        exit;
     }
 
     private function consume_admin_notice(): void
