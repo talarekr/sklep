@@ -997,11 +997,14 @@
   }
 }
 
-.woocommerce-checkout .woocommerce-form-coupon-toggle,
-.woocommerce-checkout .woocommerce-NoticeGroup-checkout {
+.woocommerce-checkout .woocommerce-form-coupon-toggle {
   display: none;
   margin: 0;
   padding: 0;
+}
+
+.woocommerce-checkout .woocommerce-NoticeGroup-checkout {
+  margin: 0 0 12px;
 }
 
 .woocommerce-checkout #order_review_heading,
