@@ -226,7 +226,7 @@
 
     cartScope.querySelectorAll('.wc-block-cart__submit-button, .wc-block-components-checkout-place-order-button').forEach(function (button) {
       button.classList.add('gp-cart-cta-button');
-      if (button.textContent) {
+      if (button.textContent && button.textContent.trim() !== 'Przejdź do płatności') {
         button.textContent = 'Przejdź do płatności';
       }
     });
@@ -235,11 +235,25 @@
   enhanceCartBlock();
 
   if (document.body.classList.contains('woocommerce-cart')) {
+    var isEnhancingCartBlock = false;
     var cartObserver = new MutationObserver(function () {
-      enhanceCartBlock();
+      if (isEnhancingCartBlock) {
+        return;
+      }
+
+      isEnhancingCartBlock = true;
+      window.requestAnimationFrame(function () {
+        enhanceCartBlock();
+        isEnhancingCartBlock = false;
+      });
     });
 
-    cartObserver.observe(document.body, {
+    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartObserverScope) {
+      return;
+    }
+
+    cartObserver.observe(cartObserverScope, {
       childList: true,
       subtree: true
     });
