@@ -788,18 +788,18 @@
 }
 
 .woocommerce-cart table.shop_table td.product-thumbnail img {
-  width: 62px;
-  max-width: 62px;
+  width: 65px;
+  max-width: 65px;
 }
 
 .woocommerce-cart table.shop_table td.product-name {
-  font-size: 17px;
+  font-size: 18px;
   line-height: 1.4;
 }
 
 .woocommerce-cart table.shop_table td.product-name a {
   font-size: inherit;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .woocommerce-cart table.shop_table td.product-name .gp-cart-muted-note {
@@ -822,6 +822,10 @@
 }
 
 .woocommerce-cart .gp-cart-totals .shipping .amount {
+  font-weight: 700;
+}
+
+.woocommerce-cart .gp-cart-totals .shipping td {
   font-weight: 700;
 }
 
@@ -853,24 +857,26 @@
 
 @media (max-width: 1024px) {
   .woocommerce-cart table.shop_table td.product-name {
-    font-size: 16px;
+    font-size: 17px;
   }
 }
 
 @media (max-width: 767px) {
   .woocommerce-cart table.shop_table td.product-thumbnail img {
-    width: 58px;
-    max-width: 58px;
+    width: 61px;
+    max-width: 61px;
   }
 
   .woocommerce-cart table.shop_table td.product-name {
-    font-size: 15px;
+    font-size: 16px;
   }
 }
 
 .woocommerce-cart .cart_totals h2 {
   font-size: 36px;
   margin-bottom: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .woocommerce-cart .gp-cart-totals .shop_table td,

@@ -6,7 +6,7 @@
 defined('ABSPATH') || exit;
 ?>
 <div class="cart_totals <?php echo WC()->customer->has_calculated_shipping() ? 'calculated_shipping' : ''; ?> gp-cart-totals">
-    <h2><?php esc_html_e('Razem w koszyku', 'gp-clone'); ?></h2>
+    <h2><?php esc_html_e('Podsumowanie koszyka', 'gp-clone'); ?></h2>
 
     <table cellspacing="0" class="shop_table shop_table_responsive">
         <tr class="cart-subtotal">
@@ -15,8 +15,8 @@ defined('ABSPATH') || exit;
         </tr>
 
         <tr class="shipping">
-            <th><?php esc_html_e('Dostawa', 'gp-clone'); ?></th>
-            <td data-title="<?php esc_attr_e('Dostawa', 'gp-clone'); ?>">0 zł</td>
+            <th><?php esc_html_e('Koszt dostawy', 'gp-clone'); ?></th>
+            <td data-title="<?php esc_attr_e('Koszt dostawy', 'gp-clone'); ?>">0 zł</td>
         </tr>
 
         <?php foreach (WC()->cart->get_coupons() as $code => $coupon) : ?>
@@ -34,7 +34,7 @@ defined('ABSPATH') || exit;
 
     <div class="wc-proceed-to-checkout">
         <a href="<?php echo esc_url(wc_get_checkout_url()); ?>" class="checkout-button button alt wc-forward" data-gp-order-cta>
-            <?php esc_html_e('Zamówienie', 'gp-clone'); ?>
+            <?php esc_html_e('Przejdź do płatności', 'gp-clone'); ?>
         </a>
     </div>
 </div>
