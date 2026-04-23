@@ -713,11 +713,15 @@ add_filter('gettext', function (string $translated, string $text, string $domain
     }
 
     if ($text === 'Free shipping') {
-        return 'Dostawa';
+        return 'Koszt dostawy';
     }
 
     if ($text === 'FREE!') {
         return '0 zł';
+    }
+
+    if ($text === 'Witam oferta dotyczy:') {
+        return '';
     }
 
     if ($text === 'Estimated total') {
@@ -727,7 +731,18 @@ add_filter('gettext', function (string $translated, string $text, string $domain
     return $translated;
 }, 20, 3);
 
+add_filter('woocommerce_cart_item_name', function (string $product_name, array $_cart_item): string {
+    if (!function_exists('is_cart') || !is_cart()) {
+        return $product_name;
+    }
+
+    return str_replace('Witam oferta dotyczy:', '', $product_name);
+}, 20, 2);
+
 add_filter('woocommerce_order_button_text', static fn() => 'Przejdź do płatności');
+
+add_filter('wc_add_to_cart_message_html', '__return_empty_string', 10, 2);
+add_filter('wc_add_to_cart_message', '__return_empty_string', 10, 2);
 
 add_filter('the_content', function (string $content): string {
     if (!function_exists('is_checkout') || !is_checkout() || is_wc_endpoint_url('order-received')) {
