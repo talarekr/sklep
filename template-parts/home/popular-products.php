@@ -4,16 +4,16 @@ $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('sh
 
 $section_definitions = [
     [
-        'title' => __('Silniki', 'gp-clone'),
-        'terms' => ['silniki', 'silnik', 'engines'],
+        'title' => __('Silniki kompletne', 'gp-clone'),
+        'terms' => ['silniki-kompletne'],
     ],
     [
-        'title' => __('Kierownice', 'gp-clone'),
-        'terms' => ['kierownice', 'kierownica', 'steering-wheel'],
+        'title' => __('Skrzynie kompletne', 'gp-clone'),
+        'terms' => ['kompletne-skrzynie'],
     ],
     [
-        'title' => __('Felgi', 'gp-clone'),
-        'terms' => ['felgi', 'felga', 'wheels', 'rim'],
+        'title' => __('Zwrotnice', 'gp-clone'),
+        'terms' => ['zwrotnice'],
     ],
 ];
 
@@ -168,7 +168,7 @@ $icon = static function (string $type): string {
             <div class="gp-container">
                 <div class="gp-popular__head">
                     <h2 class="gp-section-title"><?php echo esc_html($section['title']); ?></h2>
-                    <a href="<?php echo esc_url($get_tile_url($section['terms'])); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
+                    <a class="gp-home-section-link" href="<?php echo esc_url($get_tile_url($section['terms'])); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
                 </div>
                 <div class="gp-carousel__viewport" data-gp-carousel-viewport>
                     <div class="gp-products gp-carousel__track" data-gp-carousel-track>
