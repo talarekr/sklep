@@ -256,6 +256,12 @@ body {
 .gp-profile-dropdown__actions .gp-btn--outline {
   border-width: 1px;
 }
+.gp-profile-dropdown__actions .gp-btn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  justify-content: center;
+}
 .gp-btn {
   min-height: 46px;
   border-radius: 10px;
