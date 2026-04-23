@@ -261,9 +261,16 @@ class Settings
         }
 
         $batch_size = isset($_POST['awi_listing_batch_size']) ? max(1, (int) $_POST['awi_listing_batch_size']) : 10;
-        $batch_size = min(50, $batch_size);
+        $batch_size = min(400, $batch_size);
         $reset = !empty($_POST['awi_listing_reset_checkpoint']);
         $force_regenerate = !empty($_POST['awi_listing_force_regenerate']);
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(900);
+        }
+        if (function_exists('ini_set')) {
+            @ini_set('max_execution_time', '900');
+        }
 
         if ($reset) {
             delete_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY);
@@ -640,12 +647,14 @@ class Settings
             'selected_source_image_id' => (int) ($result['selected_source_image_id'] ?? ($diagnostics['selected_source_image_id'] ?? 0)),
             'selected_source_aspect_ratio' => round((float) ($result['selected_source_aspect_ratio'] ?? ($diagnostics['selected_source_aspect_ratio'] ?? 0.0)), 6),
             'square_fill_ratio' => round((float) ($result['selected_source_square_fill_ratio'] ?? 0.0), 6),
+            'standard_quality_tier_before_boost' => (string) ($result['standard_quality_tier_before_boost'] ?? ''),
+            'final_quality_tier_after_boost' => (string) ($result['final_quality_tier_after_boost'] ?? ($result['listing_quality_tier'] ?? '')),
             'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
             'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
             'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
             'render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? ''),
-            'quality_boost_applied' => !empty($diagnostics['listing_attachment_quality_boost_applied']),
-            'quality_boost_upgraded' => !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
+            'quality_boost_applied' => !empty($result['quality_boost_applied']) || !empty($diagnostics['listing_attachment_quality_boost_applied']),
+            'quality_boost_upgraded' => !empty($result['quality_boost_upgraded']) || !empty($diagnostics['listing_attachment_quality_boost_upgraded']),
             'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
         ]);
     }

@@ -136,7 +136,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php wp_nonce_field('awi_listing_images_regenerate_batch'); ?>
         <input type="hidden" name="action" value="awi_listing_images_regenerate_batch">
         <label for="awi-listing-batch-size"><?php esc_html_e('Batch size:', 'allegro-woo-importer'); ?></label>
-        <input id="awi-listing-batch-size" type="number" min="1" max="50" name="awi_listing_batch_size" value="10" style="width:80px; margin-right:12px;">
+        <input id="awi-listing-batch-size" type="number" min="1" max="400" name="awi_listing_batch_size" value="10" style="width:80px; margin-right:12px;">
         <label style="margin-right:12px;">
             <input type="checkbox" name="awi_listing_reset_checkpoint" value="1">
             <?php esc_html_e('Reset checkpoint (start od początku)', 'allegro-woo-importer'); ?>
@@ -179,7 +179,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Force regenerate (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html(!empty($listing_last_batch['force_regenerate']) ? 'true' : 'false'); ?></strong></li>
         <li><?php esc_html_e('Timestamp ostatniego batcha:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_last_batch['updated_at'] ?? '—')); ?></strong></li>
     </ul>
-    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, candidate_source_image_ids, selected_source_image_id, selected_source_aspect_ratio, selected_source_selection_reason, listing_quality_tier, listing_quality_score, best_available_source_quality_tier, requires_better_source, gallery_images_count, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
+    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, candidate_source_image_ids, selected_source_image_id, selected_source_aspect_ratio, selected_source_selection_reason, standard_quality_tier_before_boost, final_quality_tier_after_boost, listing_quality_tier, listing_quality_score, best_available_source_quality_tier, requires_better_source, quality_boost_applied, quality_boost_upgraded, fill_ratio, render_profile, gallery_images_count, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
 
     <h2><?php esc_html_e('5. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
