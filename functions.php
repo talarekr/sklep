@@ -777,16 +777,15 @@ add_filter('the_content', function (string $content): string {
         return $content;
     }
 
-    $post_id = get_the_ID();
-    $has_checkout_block = strpos($content, 'wp:woocommerce/checkout') !== false
-        || strpos($content, 'wp-block-woocommerce-checkout') !== false
-        || ($post_id ? has_block('woocommerce/checkout', $post_id) : false);
-    if (!$has_checkout_block) {
+    if (!in_the_loop() || !is_main_query()) {
         return $content;
     }
 
     return do_shortcode('[woocommerce_checkout]');
 }, 20);
+
+
+add_filter('woocommerce_is_checkout_block_default', '__return_false', 100);
 
 add_action('wp_enqueue_scripts', function (): void {
     if (!gp_should_force_classic_checkout()) {

@@ -993,7 +993,7 @@
 
 .woocommerce-checkout form.checkout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  grid-template-columns: minmax(0, 62%) minmax(300px, 38%);
   gap: 24px;
   align-items: start;
 }
@@ -1002,6 +1002,30 @@
   display: grid;
   gap: 18px;
 }
+.woocommerce-checkout #customer_details {
+  grid-column: 1;
+}
+
+.woocommerce-checkout #order_review_heading,
+.woocommerce-checkout #order_review {
+  grid-column: 2;
+}
+
+.woocommerce-checkout #order_review_heading {
+  background: #fff;
+  border-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.woocommerce-checkout #order_review {
+  background: #fff;
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: 0 10px 24px rgba(16, 24, 40, 0.06);
+}
+
 
 .woocommerce-checkout .woocommerce-billing-fields,
 .woocommerce-checkout .woocommerce-additional-fields,
@@ -1110,6 +1134,12 @@
   .woocommerce-checkout form.checkout {
     grid-template-columns: 1fr;
     gap: 16px;
+  }
+
+  .woocommerce-checkout #customer_details,
+  .woocommerce-checkout #order_review_heading,
+  .woocommerce-checkout #order_review {
+    grid-column: 1;
   }
 
   .woocommerce-checkout #order_review {
