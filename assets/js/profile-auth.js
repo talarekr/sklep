@@ -10,11 +10,6 @@
     };
 
     trigger.addEventListener('click', function () {
-      if (trigger.hasAttribute('data-gp-auth-modal-open')) {
-        closeDropdown();
-        return;
-      }
-
       var isOpen = trigger.getAttribute('aria-expanded') === 'true';
       trigger.setAttribute('aria-expanded', String(!isOpen));
       dropdown.hidden = isOpen;

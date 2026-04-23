@@ -236,6 +236,12 @@ body {
   display: grid;
   gap: 10px;
 }
+.gp-profile-dropdown__actions .gp-btn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  justify-content: center;
+}
 .gp-btn {
   min-height: 46px;
   border-radius: 10px;
