@@ -28,6 +28,26 @@
     });
   }
 
+
+
+  var showFormFeedback = function (form, message, level) {
+    if (!form || !message) {
+      return;
+    }
+
+    var existing = form.querySelector('.gp-auth-notice');
+    if (existing) {
+      existing.remove();
+    }
+
+    var notice = document.createElement('div');
+    notice.className = 'gp-auth-notice ' + (level === 'success' ? 'is-success' : 'is-error');
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+    notice.textContent = message;
+    form.insertBefore(notice, form.firstChild);
+  };
+
   document.querySelectorAll('[data-gp-password-toggle]').forEach(function (toggleButton) {
     toggleButton.addEventListener('click', function () {
       var target = document.getElementById(toggleButton.getAttribute('data-gp-password-toggle'));
@@ -47,7 +67,21 @@
       if (!form.checkValidity()) {
         event.preventDefault();
         form.reportValidity();
+        return;
       }
+
+      var submitButton = form.querySelector('.gp-auth-submit');
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.dataset.originalText = submitButton.textContent;
+        submitButton.textContent = 'Trwa wysyłanie…';
+      }
+    });
+
+    form.querySelectorAll('[data-gp-disabled-google]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        showFormFeedback(form, button.getAttribute('data-gp-feedback'), 'error');
+      });
     });
   });
 })();

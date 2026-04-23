@@ -2,13 +2,25 @@
 if (!defined('ABSPATH')) {
     exit;
 }
+
+$google_auth_url = gp_get_google_auth_url('login');
+$lost_password_url = wp_lostpassword_url(home_url('/zaloguj'));
+
 get_header();
 ?>
 <main class="gp-auth-page">
     <div class="gp-auth-card">
         <h1><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></h1>
-        <form class="gp-auth-form" method="post" action="#" data-gp-auth-form novalidate>
-            <button type="button" class="gp-auth-social" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+        <?php gp_render_auth_notice_from_query(); ?>
+        <form class="gp-auth-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-auth-form novalidate>
+            <input type="hidden" name="action" value="gp_profile_login">
+            <?php wp_nonce_field('gp_profile_login', 'gp_auth_nonce'); ?>
+
+            <?php if ($google_auth_url !== '') : ?>
+                <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></a>
+            <?php else : ?>
+                <button type="button" class="gp-auth-social" aria-label="Kontynuuj z Google" data-gp-disabled-google data-gp-feedback="<?php echo esc_attr__('Logowanie Google jest obecnie niedostępne. Użyj e-maila i hasła.', 'gp-clone'); ?>">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+            <?php endif; ?>
 
             <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
 
@@ -30,7 +42,7 @@ get_header();
                     <input id="gp-remember-me" type="checkbox" name="remember_me">
                     <span><?php esc_html_e('Zapamiętaj mnie', 'gp-clone'); ?></span>
                 </label>
-                <a href="#"><?php esc_html_e('Zapomniałeś hasła?', 'gp-clone'); ?></a>
+                <a href="<?php echo esc_url($lost_password_url); ?>"><?php esc_html_e('Zapomniałeś hasła?', 'gp-clone'); ?></a>
             </div>
 
             <button class="gp-auth-submit" type="submit"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></button>
