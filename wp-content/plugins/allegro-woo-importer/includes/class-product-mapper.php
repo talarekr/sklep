@@ -36,9 +36,6 @@ class ProductMapper
     private const LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY = '_gp_listing_selected_source_image_id';
     private const LISTING_SOURCE_SELECTION_REASON_META_KEY = '_gp_listing_source_selection_reason';
     private const LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY = '_gp_listing_selected_source_aspect_ratio';
-    private const LISTING_NEEDS_EXTREME_RATIO_FALLBACK_META_KEY = '_gp_listing_needs_extreme_ratio_fallback';
-    private const LISTING_BEST_SOURCE_STILL_EXTREME_META_KEY = '_gp_listing_best_available_source_still_extreme';
-    private const LISTING_EXTREME_FALLBACK_SCALE_FACTOR_THRESHOLD = 0.5;
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -74,8 +71,6 @@ class ProductMapper
         $selection = $this->select_best_listing_source_image($product_id);
         $selected_source_id = (int) ($selection['selected_source_image_id'] ?? 0);
         if ($selected_source_id <= 0) {
-            update_post_meta($product_id, self::LISTING_BEST_SOURCE_STILL_EXTREME_META_KEY, 0);
-            update_post_meta($product_id, self::LISTING_NEEDS_EXTREME_RATIO_FALLBACK_META_KEY, 0);
             return ['status' => 'skipped', 'reason' => 'missing_listing_source_image'];
         }
 
@@ -83,7 +78,6 @@ class ProductMapper
         $current_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
         if (!$force && $current_listing_id > 0 && $current_source_id === $selected_source_id && get_post($current_listing_id) instanceof \WP_Post) {
             $this->ensure_listing_attachment_generation_meta($current_listing_id, $selected_source_id);
-            $this->update_listing_extreme_ratio_fallback_flags($product_id, $current_listing_id, $selection);
             return [
                 'status' => 'skipped',
                 'reason' => 'already_generated',
@@ -112,7 +106,6 @@ class ProductMapper
         update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $selected_source_id);
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
         $this->ensure_listing_attachment_generation_meta($created_listing_id, $selected_source_id);
-        $this->update_listing_extreme_ratio_fallback_flags($product_id, $created_listing_id, $selection);
 
         return [
             'status' => 'created',
@@ -131,8 +124,6 @@ class ProductMapper
         $selected_source_aspect_ratio = (float) get_post_meta($product_id, self::LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY, true);
         $selected_source_selection_reason = (string) get_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, true);
         $gallery_image_ids = $this->get_listing_source_candidate_image_ids($product_id);
-        $best_available_source_still_extreme = (int) get_post_meta($product_id, self::LISTING_BEST_SOURCE_STILL_EXTREME_META_KEY, true) === 1;
-        $needs_extreme_ratio_fallback = (int) get_post_meta($product_id, self::LISTING_NEEDS_EXTREME_RATIO_FALLBACK_META_KEY, true) === 1;
 
         $rendered_source = 'placeholder';
         if ($helper_selected_image_id > 0) {
@@ -164,8 +155,6 @@ class ProductMapper
             'selected_source_image_id' => $selected_source_image_id,
             'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
             'selected_source_selection_reason' => $selected_source_selection_reason,
-            'best_available_source_still_extreme' => $best_available_source_still_extreme,
-            'needs_extreme_ratio_fallback' => $needs_extreme_ratio_fallback,
             'helper_selected_image_id' => $helper_selected_image_id,
             'rendered_source' => $rendered_source,
             'listing_image_meta_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
@@ -1825,37 +1814,6 @@ class ProductMapper
             'square_fill_ratio' => $square_fill_ratio,
             'object_area_ratio' => $object_area_ratio,
         ];
-    }
-
-    private function update_listing_extreme_ratio_fallback_flags(int $product_id, int $listing_image_id, array $selection): void
-    {
-        if ($product_id <= 0 || $listing_image_id <= 0) {
-            return;
-        }
-
-        $selected_source_aspect_ratio = (float) ($selection['selected_source_aspect_ratio'] ?? 0.0);
-        $best_available_source_still_extreme = ($selected_source_aspect_ratio > 0)
-            ? ($selected_source_aspect_ratio < 0.55 || $selected_source_aspect_ratio > 1.8)
-            : false;
-
-        $is_extreme_aspect_ratio = (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY, true) === 1;
-        $scale_factor = (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SCALE_FACTOR_META_KEY, true);
-        $is_low_scale_factor = ($scale_factor > 0 && $scale_factor < self::LISTING_EXTREME_FALLBACK_SCALE_FACTOR_THRESHOLD);
-        $needs_extreme_ratio_fallback = $is_extreme_aspect_ratio && $best_available_source_still_extreme && $is_low_scale_factor;
-
-        update_post_meta($product_id, self::LISTING_BEST_SOURCE_STILL_EXTREME_META_KEY, $best_available_source_still_extreme ? 1 : 0);
-        update_post_meta($product_id, self::LISTING_NEEDS_EXTREME_RATIO_FALLBACK_META_KEY, $needs_extreme_ratio_fallback ? 1 : 0);
-
-        $this->logger->info('Listing extreme ratio fallback state updated.', [
-            'product_id' => $product_id,
-            'listing_image_id' => $listing_image_id,
-            'is_extreme_aspect_ratio' => $is_extreme_aspect_ratio,
-            'best_available_source_still_extreme' => $best_available_source_still_extreme,
-            'selected_source_aspect_ratio' => round($selected_source_aspect_ratio, 6),
-            'scale_factor' => round($scale_factor, 6),
-            'scale_threshold' => self::LISTING_EXTREME_FALLBACK_SCALE_FACTOR_THRESHOLD,
-            'needs_extreme_ratio_fallback' => $needs_extreme_ratio_fallback,
-        ]);
     }
 
     private function calculate_listing_scale_factor_from_source(int $source_attachment_id): ?float
