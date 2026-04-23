@@ -165,4 +165,104 @@
   $(document.body).on('added_to_cart wc_fragments_refreshed', function () {
     refreshMiniCart();
   });
+
+  var replaceExactText = function (scope, from, to) {
+    if (!scope) return;
+
+    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+    var node = walker.nextNode();
+    while (node) {
+      var text = node.textContent ? node.textContent.trim() : '';
+      if (text === from) {
+        node.textContent = to;
+      }
+      node = walker.nextNode();
+    }
+  };
+
+  var sanitizeProductMetaLine = function (scope) {
+    if (!scope) return;
+
+    scope.querySelectorAll('.wc-block-cart-item__product .wc-block-components-product-details__witam, .wc-block-components-product-details__witam, .wc-block-components-product-metadata').forEach(function (el) {
+      if (!el.textContent) return;
+      if (el.textContent.indexOf('Witam oferta dotyczy:') === -1) return;
+      el.textContent = el.textContent.replace('Witam oferta dotyczy:', '').trim();
+      if (el.textContent === '') {
+        el.remove();
+      }
+    });
+
+    scope.querySelectorAll('.wc-block-components-product-details__value').forEach(function (el) {
+      if (!el.textContent) return;
+      if (el.textContent.trim() !== 'Witam oferta dotyczy:') return;
+      el.remove();
+    });
+  };
+
+  var enhanceCartBlock = function () {
+    if (!document.body.classList.contains('woocommerce-cart')) {
+      return null;
+    }
+
+    var cartScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartScope) {
+      return null;
+    }
+
+    replaceExactText(cartScope, 'Free shipping', 'Koszt dostawy');
+    replaceExactText(cartScope, 'BEZPŁATNIE', '0 zł');
+    replaceExactText(cartScope, 'FREE!', '0 zł');
+    replaceExactText(cartScope, 'Estimated total', 'Suma');
+    replaceExactText(cartScope, 'Szacowana łączna kwota', 'Suma');
+    sanitizeProductMetaLine(cartScope);
+
+    cartScope.querySelectorAll('.wc-block-cart__submit-button, .wc-block-components-checkout-place-order-button').forEach(function (button) {
+      button.classList.add('gp-cart-cta-button');
+      if (button.textContent) {
+        button.textContent = 'Przejdź do płatności';
+      }
+    });
+
+    return cartScope;
+  };
+
+  var observedCartScope = enhanceCartBlock();
+
+  if (document.body.classList.contains('woocommerce-cart') && observedCartScope) {
+    var isApplyingEnhancements = false;
+    var applyQueued = false;
+
+    var scheduleEnhancement = function () {
+      if (applyQueued) {
+        return;
+      }
+
+      applyQueued = true;
+
+      window.requestAnimationFrame(function () {
+        applyQueued = false;
+        if (isApplyingEnhancements) {
+          return;
+        }
+
+        isApplyingEnhancements = true;
+        cartObserver.disconnect();
+        observedCartScope = enhanceCartBlock() || observedCartScope;
+        cartObserver.observe(observedCartScope, {
+          childList: true,
+          subtree: true
+        });
+        isApplyingEnhancements = false;
+      });
+    };
+
+    var cartObserver = new MutationObserver(function () {
+      scheduleEnhancement();
+    });
+
+    cartObserver.observe(observedCartScope, {
+      childList: true,
+      subtree: true
+    });
+  }
 })(jQuery);
