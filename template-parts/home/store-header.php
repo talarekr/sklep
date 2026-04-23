@@ -51,6 +51,18 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
 
     return $shop_url;
 };
+
+$all_product_categories_markup = '';
+if (taxonomy_exists('product_cat')) {
+    $all_product_categories_markup = wp_list_categories([
+        'taxonomy' => 'product_cat',
+        'title_li' => '',
+        'echo' => false,
+        'hide_empty' => false,
+        'hierarchical' => true,
+        'depth' => 0,
+    ]);
+}
 ?>
 <header class="gp-main-header">
     <div class="gp-container">
@@ -153,10 +165,27 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
         </div>
 
         <div class="gp-main-header__nav-row">
-            <a href="<?php echo esc_url($shop_url); ?>" class="gp-all-cat">
-                <span class="gp-hamburger" aria-hidden="true">&#9776;</span>
-                <?php esc_html_e('Wszystkie kategorie', 'gp-clone'); ?>
-            </a>
+            <div class="gp-all-cat-menu" data-gp-all-cat-menu>
+                <button
+                    type="button"
+                    class="gp-all-cat"
+                    aria-expanded="false"
+                    aria-controls="gp-all-categories-dropdown"
+                    data-gp-all-cat-trigger
+                >
+                    <span class="gp-hamburger" aria-hidden="true">&#9776;</span>
+                    <?php esc_html_e('Wszystkie kategorie', 'gp-clone'); ?>
+                </button>
+                <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
+                    <ul class="gp-all-cat-dropdown__list">
+                        <?php if ($all_product_categories_markup !== '') : ?>
+                            <?php echo wp_kses_post($all_product_categories_markup); ?>
+                        <?php else : ?>
+                            <li class="gp-all-cat-dropdown__empty"><?php esc_html_e('Brak dostępnych kategorii.', 'gp-clone'); ?></li>
+                        <?php endif; ?>
+                    </ul>
+                </div>
+            </div>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
                 <?php foreach ($shortcuts as $shortcut) : ?>
                     <a href="<?php echo esc_url($resolve_category_url($shortcut['slugs'], $shortcut['label'])); ?>"><?php echo esc_html($shortcut['label']); ?></a>
