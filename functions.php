@@ -91,6 +91,13 @@ function gp_should_use_eur_currency(): bool
         return false;
     }
 
+    // WooCommerce checkout updates payment gateways via AJAX.
+    // Keep the store currency unchanged for all AJAX requests so gateway
+    // availability checks (e.g. PayU requiring PLN) stay consistent.
+    if (wp_doing_ajax()) {
+        return false;
+    }
+
     if (function_exists('is_cart') && is_cart()) {
         return false;
     }
