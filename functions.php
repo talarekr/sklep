@@ -977,16 +977,9 @@ add_filter('woocommerce_available_payment_gateways', function (array $gateways):
 
     $country = gpswiss_get_customer_country_safe();
     $gateway_ids = array_keys((array) $gateways);
-    $registered_gateway_ids = [];
-
-    if (function_exists('WC') && WC() && WC()->payment_gateways()) {
-        $registered_gateway_ids = array_keys((array) WC()->payment_gateways()->payment_gateways());
-    }
 
     wc_get_logger()->debug(
-        'PAYMENT DEBUG: country=' . $country
-        . '; ALL REGISTERED GATEWAYS: ' . implode(',', $registered_gateway_ids)
-        . '; AVAILABLE GATEWAYS: ' . implode(',', $gateway_ids),
+        'PAYMENT DEBUG: country=' . $country . '; gateways=' . implode(',', $gateway_ids),
         ['source' => 'gpswiss-payu-debug']
     );
 
