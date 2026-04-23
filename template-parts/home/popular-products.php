@@ -168,7 +168,7 @@ $icon = static function (string $type): string {
             <div class="gp-container">
                 <div class="gp-popular__head">
                     <h2 class="gp-section-title"><?php echo esc_html($section['title']); ?></h2>
-                    <a href="<?php echo esc_url($get_tile_url($section['terms'])); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
+                    <a class="gp-home-section-link" href="<?php echo esc_url($get_tile_url($section['terms'])); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
                 </div>
                 <div class="gp-carousel__viewport" data-gp-carousel-viewport>
                     <div class="gp-products gp-carousel__track" data-gp-carousel-track>
