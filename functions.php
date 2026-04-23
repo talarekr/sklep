@@ -795,6 +795,36 @@ function gpswiss_wc_session_safe(): ?WC_Session
     return (function_exists('WC') && WC() && isset(WC()->session) && is_object(WC()->session)) ? WC()->session : null;
 }
 
+function gpswiss_get_customer_country_safe(): string
+{
+    $base_location = function_exists('wc_get_base_location') ? wc_get_base_location() : [];
+    $fallback_country = !empty($base_location['country']) ? (string) $base_location['country'] : 'PL';
+    $country = '';
+    $customer = gpswiss_wc_customer_safe();
+
+    if ($customer && method_exists($customer, 'get_billing_country')) {
+        $country = (string) $customer->get_billing_country();
+    }
+
+    if ($country === '' && isset($_POST['billing_country'])) {
+        $country = wc_clean(wp_unslash((string) $_POST['billing_country']));
+    }
+
+    if ($country === '' && isset($_POST['post_data'])) {
+        $posted_data = [];
+        parse_str(wp_unslash((string) $_POST['post_data']), $posted_data);
+        if (!empty($posted_data['billing_country'])) {
+            $country = wc_clean((string) $posted_data['billing_country']);
+        }
+    }
+
+    if ($country === '') {
+        $country = $fallback_country;
+    }
+
+    return $country;
+}
+
 function gp_checkout_payment_debug_snapshot(string $stage): void
 {
     if (!function_exists('wc_get_logger')) {
@@ -949,6 +979,26 @@ add_action('woocommerce_review_order_after_submit', function (): void {
     gp_checkout_payment_debug_snapshot('review_order_after_submit');
 }, 1);
 
+add_filter('woocommerce_available_payment_gateways', function (array $gateways): array {
+    if (is_admin() && !wp_doing_ajax()) {
+        return $gateways;
+    }
+
+    if (!function_exists('wc_get_logger')) {
+        return $gateways;
+    }
+
+    $country = gpswiss_get_customer_country_safe();
+    $gateway_ids = array_keys((array) $gateways);
+
+    wc_get_logger()->debug(
+        'PAYMENT DEBUG: country=' . $country . '; gateways=' . implode(',', $gateway_ids),
+        ['source' => 'gpswiss-payu-debug']
+    );
+
+    return $gateways;
+}, 999);
+
 add_filter('default_checkout_billing_country', function (?string $country): string {
     if (is_string($country) && $country !== '') {
         return $country;
@@ -956,65 +1006,6 @@ add_filter('default_checkout_billing_country', function (?string $country): stri
 
     $base_location = function_exists('wc_get_base_location') ? wc_get_base_location() : [];
     $base_country = is_array($base_location) && !empty($base_location['country']) ? (string) $base_location['country'] : 'PL';
-
-    $billing_country = $base_country;
-    $shipping_country = $base_country;
-    $available_gateway_ids = [];
-    $registered_gateway_diagnostics = [];
-    $payu_available = false;
-    $cart_total = null;
-
-    if (function_exists('WC') && WC() && WC()->customer && is_object(WC()->customer)) {
-        if (method_exists(WC()->customer, 'get_billing_country')) {
-            $billing_country = (string) WC()->customer->get_billing_country();
-            if ($billing_country === '') {
-                $billing_country = $base_country;
-            }
-        }
-
-        if (method_exists(WC()->customer, 'get_shipping_country')) {
-            $shipping_country = (string) WC()->customer->get_shipping_country();
-            if ($shipping_country === '') {
-                $shipping_country = $base_country;
-            }
-        }
-    }
-
-    if (function_exists('WC') && WC() && WC()->payment_gateways()) {
-        $payment_gateways = WC()->payment_gateways();
-        $available_gateways = $payment_gateways->get_available_payment_gateways();
-        $available_gateway_ids = array_keys($available_gateways);
-        $payu_available = in_array('payu', $available_gateway_ids, true);
-        $registered_gateways = $payment_gateways->payment_gateways();
-
-        foreach ($registered_gateways as $gateway_id => $gateway) {
-            if (!$gateway instanceof WC_Payment_Gateway) {
-                continue;
-            }
-
-            $registered_gateway_diagnostics[$gateway_id] = [
-                'enabled' => $gateway->enabled,
-                'is_available' => $gateway->is_available(),
-            ];
-        }
-    }
-
-    if (function_exists('WC') && WC() && WC()->cart) {
-        $cart_total = WC()->cart->get_total('edit');
-    }
-
-    wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
-        'source' => 'gp-checkout',
-        'available_gateway_ids' => $available_gateway_ids,
-        'registered_gateways' => $registered_gateway_diagnostics,
-        'payu_available' => $payu_available,
-        'currency' => get_woocommerce_currency(),
-        'billing_country' => $billing_country,
-        'shipping_country' => $shipping_country,
-        'cart_total' => $cart_total,
-        'customer_logged_in' => is_user_logged_in(),
-        'force_classic_checkout' => gp_should_force_classic_checkout(),
-    ]);
 
     return $base_country;
 }, 20);
