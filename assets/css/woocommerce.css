@@ -581,6 +581,13 @@
   z-index: 1100;
 }
 
+.gp-mini-cart-overlay[hidden],
+.gp-mini-cart-panel[hidden],
+.gp-auth-modal[hidden],
+.gp-profile-dropdown[hidden] {
+  display: none !important;
+}
+
 .gp-mini-cart-panel {
   position: fixed;
   top: 0;
@@ -609,6 +616,7 @@
   background: transparent;
   font-size: 28px;
   cursor: pointer;
+  z-index: 2;
 }
 
 .gp-mini-cart-panel__content {
