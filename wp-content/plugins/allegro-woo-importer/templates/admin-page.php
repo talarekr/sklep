@@ -89,6 +89,16 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
                     </select>
                 </td>
             </tr>
+            <tr>
+                <th scope="row"><?php esc_html_e('Tryb awaryjny', 'allegro-woo-importer'); ?></th>
+                <td>
+                    <input type="hidden" name="<?php echo esc_attr(\AWI\Plugin::SAFE_MODE_OPTION_KEY); ?>" value="0" />
+                    <label>
+                        <input type="checkbox" name="<?php echo esc_attr(\AWI\Plugin::SAFE_MODE_OPTION_KEY); ?>" value="1" <?php checked(\AWI\Plugin::is_safe_mode_enabled()); ?> />
+                        <?php esc_html_e('Włącz tryb awaryjny (blokuje import, cron i diagnostykę)', 'allegro-woo-importer'); ?>
+                    </label>
+                </td>
+            </tr>
         </table>
 
         <?php submit_button(__('Zapisz ustawienia', 'allegro-woo-importer')); ?>

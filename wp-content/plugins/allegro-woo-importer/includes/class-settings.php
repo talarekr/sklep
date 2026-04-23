@@ -55,6 +55,14 @@ class Settings
             'sanitize_callback' => [$this, 'sanitize_settings'],
             'default' => Plugin::get_settings(),
         ]);
+
+        register_setting('awi_settings_group', Plugin::SAFE_MODE_OPTION_KEY, [
+            'type' => 'boolean',
+            'sanitize_callback' => static function ($value): bool {
+                return !empty($value);
+            },
+            'default' => false,
+        ]);
     }
 
     public function sanitize_settings($input = null): array
