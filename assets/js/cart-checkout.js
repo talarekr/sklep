@@ -280,16 +280,6 @@
         isEnhancingCartBlock = false;
       });
     });
-
-    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
-    if (!cartObserverScope) {
-      return;
-    }
-
-    cartObserver.observe(cartObserverScope, {
-      childList: true,
-      subtree: true
-    });
   }
 
   if (document.body.classList.contains('woocommerce-checkout') && !document.body.classList.contains('woocommerce-order-received')) {
@@ -311,7 +301,12 @@
       return;
     }
 
-    checkoutObserver.observe(checkoutObserverScope, {
+    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartObserverScope) {
+      return;
+    }
+
+    cartObserver.observe(cartObserverScope, {
       childList: true,
       subtree: true
     });
