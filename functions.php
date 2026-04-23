@@ -830,16 +830,48 @@ add_action('wp_enqueue_scripts', function (): void {
 }, 100);
 
 add_action('woocommerce_before_checkout_form', function (): void {
-    if (!function_exists('WC') || !WC()->payment_gateways()) {
+    if (!function_exists('WC') || !WC()->payment_gateways() || !WC()->customer || !WC()->cart) {
         return;
     }
 
     $available_gateways = WC()->payment_gateways()->get_available_payment_gateways();
+    $available_gateway_ids = array_keys($available_gateways);
+    $billing_country = WC()->customer->get_billing_country();
+    $shipping_country = WC()->customer->get_shipping_country();
+
+    $payu_available = false;
+    foreach ($available_gateway_ids as $gateway_id) {
+        if (stripos((string) $gateway_id, 'payu') !== false) {
+            $payu_available = true;
+            break;
+        }
+    }
+
+    wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
+        'source' => 'gp-checkout',
+        'available_gateway_ids' => $available_gateway_ids,
+        'payu_available' => $payu_available,
+        'currency' => get_woocommerce_currency(),
+        'billing_country' => $billing_country,
+        'shipping_country' => $shipping_country,
+        'cart_total' => WC()->cart->get_total('edit'),
+        'customer_logged_in' => is_user_logged_in(),
+        'force_classic_checkout' => gp_should_force_classic_checkout(),
+    ]);
+
     if ($available_gateways !== []) {
         return;
     }
 
-    wc_get_logger()->warning('Brak dostępnych metod płatności na checkout.', ['source' => 'gp-checkout']);
+    wc_get_logger()->warning('Brak dostępnych metod płatności na checkout.', [
+        'source' => 'gp-checkout',
+        'currency' => get_woocommerce_currency(),
+        'billing_country' => $billing_country,
+        'shipping_country' => $shipping_country,
+        'cart_total' => WC()->cart->get_total('edit'),
+        'customer_logged_in' => is_user_logged_in(),
+        'force_classic_checkout' => gp_should_force_classic_checkout(),
+    ]);
 }, 10);
 
 
@@ -859,21 +891,6 @@ add_filter('woocommerce_coupons_enabled', function (bool $enabled): bool {
     return false;
 }, 20);
 
-add_filter('woocommerce_no_available_payment_methods_message', function (string $message): string {
-    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
-        return $message;
-    }
-
-    return '';
-}, 20);
-
-add_filter('woocommerce_cart_no_available_payment_methods_message', function (string $message): string {
-    if (!function_exists('is_checkout') || !is_checkout() || (function_exists('is_order_received_page') && is_order_received_page())) {
-        return $message;
-    }
-
-    return '';
-}, 20);
 
 add_action('woocommerce_after_shop_loop_item_title', function () {
     echo '<p class="gp-delivery-note product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
