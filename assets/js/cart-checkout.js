@@ -3,35 +3,59 @@
   var miniCartOverlay = document.querySelector('[data-gp-mini-cart-overlay]');
   var miniCartContent = document.querySelector('[data-gp-mini-cart-content]');
   var authModal = document.querySelector('[data-gp-auth-modal]');
+  var isMiniCartOpen = function () {
+    return !!miniCartPanel && !miniCartPanel.hidden;
+  };
+  var isAuthModalOpen = function () {
+    return !!authModal && !authModal.hidden;
+  };
+  var syncBodyScrollLock = function () {
+    document.body.classList.toggle('gp-lock-scroll', isMiniCartOpen() || isAuthModalOpen());
+  };
 
   var openMiniCart = function () {
     if (!miniCartPanel || !miniCartOverlay) return;
+    closeAuthModal();
     miniCartPanel.hidden = false;
     miniCartOverlay.hidden = false;
-    document.body.classList.add('gp-lock-scroll');
+    miniCartPanel.setAttribute('aria-hidden', 'false');
+    miniCartOverlay.setAttribute('aria-hidden', 'false');
+    syncBodyScrollLock();
   };
 
   var closeMiniCart = function () {
     if (!miniCartPanel || !miniCartOverlay) return;
     miniCartPanel.hidden = true;
     miniCartOverlay.hidden = true;
-    document.body.classList.remove('gp-lock-scroll');
+    miniCartPanel.setAttribute('aria-hidden', 'true');
+    miniCartOverlay.setAttribute('aria-hidden', 'true');
+    syncBodyScrollLock();
   };
 
   var openAuthModal = function () {
     if (!authModal) return;
+    closeMiniCart();
     authModal.hidden = false;
-    document.body.classList.add('gp-lock-scroll');
+    authModal.setAttribute('aria-hidden', 'false');
+    syncBodyScrollLock();
   };
 
   var closeAuthModal = function () {
     if (!authModal) return;
     authModal.hidden = true;
-    document.body.classList.remove('gp-lock-scroll');
+    authModal.setAttribute('aria-hidden', 'true');
+    syncBodyScrollLock();
   };
 
+  // Hard reset defensive state on page entry to prevent accidental auto-open.
+  closeMiniCart();
+  closeAuthModal();
+
   document.querySelectorAll('[data-gp-mini-cart-open]').forEach(function (button) {
-    button.addEventListener('click', openMiniCart);
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      openMiniCart();
+    });
   });
 
   document.querySelectorAll('[data-gp-mini-cart-close]').forEach(function (button) {
@@ -53,6 +77,12 @@
       }
     });
   }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    closeAuthModal();
+    closeMiniCart();
+  });
 
   var refreshCartNumbers = function (count) {
     document.querySelectorAll('.gp-mini-cart-count').forEach(function (badge) {
