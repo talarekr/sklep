@@ -333,6 +333,13 @@
   line-height: 1.55;
 }
 
+.gp-payments-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
 .gp-product-page__purchase {
   position: sticky;
   top: 14px;
