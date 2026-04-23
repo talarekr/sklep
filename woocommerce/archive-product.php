@@ -21,7 +21,6 @@ get_header('shop');
     } else {
         $category_search_mode = $model_query !== '' ? 'model' : 'part';
     }
-    $search_value = $category_search_mode === 'model' ? $model_query : $part_number_query;
     $category_search_action = ($current_category instanceof WP_Term && is_product_category()) ? get_term_link($current_category) : wc_get_page_permalink('shop');
     if (is_wp_error($category_search_action) || !is_string($category_search_action) || $category_search_action === '') {
         $category_search_action = wc_get_page_permalink('shop');
@@ -46,11 +45,23 @@ get_header('shop');
                             <input type="hidden" name="search_mode" value="<?php echo esc_attr($category_search_mode === 'model' ? 'vehicle_model' : 'part_number'); ?>" data-category-search-mode>
                             <input
                                 type="search"
-                                name="<?php echo $category_search_mode === 'model' ? 's' : 'part_number'; ?>"
-                                value="<?php echo esc_attr($search_value); ?>"
-                                placeholder="<?php echo esc_attr($category_search_mode === 'model' ? __('Wprowadź model pojazdu', 'gp-clone') : __('Wprowadź numer części', 'gp-clone')); ?>"
+                                name="part_number"
+                                value="<?php echo esc_attr($part_number_query); ?>"
+                                placeholder="<?php esc_attr_e('Wprowadź numer części', 'gp-clone'); ?>"
                                 required
-                                data-category-search-input
+                                data-category-search-input="part"
+                                <?php disabled($category_search_mode === 'model'); ?>
+                                <?php echo $category_search_mode === 'model' ? 'hidden' : ''; ?>
+                            >
+                            <input
+                                type="search"
+                                name="s"
+                                value="<?php echo esc_attr($model_query); ?>"
+                                placeholder="<?php esc_attr_e('Wprowadź model pojazdu', 'gp-clone'); ?>"
+                                required
+                                data-category-search-input="model"
+                                <?php disabled($category_search_mode !== 'model'); ?>
+                                <?php echo $category_search_mode !== 'model' ? 'hidden' : ''; ?>
                             >
                             <button type="submit"><?php esc_html_e('Szukaj', 'gp-clone'); ?></button>
                         </form>
