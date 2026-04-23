@@ -14,7 +14,7 @@ $is_logged_in = is_user_logged_in();
 $shortcuts = [
     ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines']],
     ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
-    ['label' => 'Filtry DPF', 'slugs' => ['filtry-dpf', 'dpf', 'filtry']],
+    ['label' => 'Filtry DPF', 'slugs' => ['filtry-czastek-stalych-dpf-fap']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'wyposazenie-wnetrza-samochodu', 'interior']],
     ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
@@ -259,7 +259,7 @@ if (taxonomy_exists('product_cat')) {
                     data-gp-all-cat-trigger
                 >
                     <span class="gp-hamburger" aria-hidden="true">&#9776;</span>
-                    <?php esc_html_e('Wszystkie kategorie', 'gp-clone'); ?>
+                    <?php esc_html_e('Menu', 'gp-clone'); ?>
                 </button>
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
                     <ul class="gp-all-cat-dropdown__list">
