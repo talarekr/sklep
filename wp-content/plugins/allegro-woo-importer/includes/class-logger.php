@@ -10,7 +10,8 @@ class Logger
 {
     private const MAX_LOG_LINE_BYTES = 4096;
     private const MAX_CONTEXT_DEPTH = 2;
-    private const MAX_CONTEXT_ITEMS = 20;
+    private const MAX_CONTEXT_ITEMS = 12;
+    private const MAX_ARRAY_SAMPLE_ITEMS = 5;
     private const TAIL_READ_BYTES = 65536;
 
     private string $file;
@@ -149,6 +150,17 @@ class Logger
             return '[unsupported_type]';
         }
 
+        if ($this->is_large_list_array($value)) {
+            return [
+                'type' => 'list',
+                'count' => count($value),
+                'sample' => array_map(
+                    fn($item) => $this->normalize_value($item, $depth + 1),
+                    array_slice($value, 0, self::MAX_ARRAY_SAMPLE_ITEMS)
+                ),
+            ];
+        }
+
         $normalized = [];
         $count = 0;
         foreach ($value as $key => $item) {
@@ -162,5 +174,18 @@ class Logger
         }
 
         return $normalized;
+    }
+
+    private function is_large_list_array(array $value): bool
+    {
+        if ($value === []) {
+            return false;
+        }
+
+        if (array_keys($value) !== range(0, count($value) - 1)) {
+            return false;
+        }
+
+        return count($value) > self::MAX_ARRAY_SAMPLE_ITEMS;
     }
 }

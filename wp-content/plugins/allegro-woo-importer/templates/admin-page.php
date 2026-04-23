@@ -161,7 +161,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('awi_listing_images_inspect_front'); ?>
         <input type="hidden" name="action" value="awi_listing_images_inspect_front">
-        <?php submit_button(__('Diagnostyka ostatniego batcha', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+        <?php submit_button(__('Sprawdź ostatni batch', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
     <ul>
         <li><?php esc_html_e('Produkty w ostatnim batchu:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['processed'] ?? 0))); ?></strong></li>

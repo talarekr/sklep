@@ -348,6 +348,9 @@ class Settings
             return [];
         }
 
+        $last_batch = get_option(self::LISTING_IMAGES_LAST_BATCH_OPTION_KEY, []);
+        $batch_id = is_array($last_batch) ? (string) ($last_batch['updated_at'] ?? '') : '';
+
         $rows = [];
         foreach ($product_ids as $product_id) {
             $product_id = (int) $product_id;
@@ -361,6 +364,7 @@ class Settings
                     'product_id' => $product_id,
                     'product_name' => '',
                     'permalink' => '',
+                    'batch_id' => $batch_id,
                     'rendered_source' => 'product_not_found',
                     'helper_selected_image_id' => 0,
                     'listing_image_id' => 0,
@@ -371,8 +375,17 @@ class Settings
                     'selected_source_selection_reason' => '',
                     'gallery_images_count' => 0,
                     'listing_file_exists' => false,
+                    'listing_attachment_source_width' => 0,
+                    'listing_attachment_source_height' => 0,
+                    'listing_attachment_source_aspect_ratio' => 0.0,
+                    'listing_attachment_rendered_width' => 0,
+                    'listing_attachment_rendered_height' => 0,
                     'listing_attachment_scale_factor' => 0.0,
+                    'listing_attachment_fill_ratio' => 0.0,
                     'listing_attachment_target_fill_ratio' => 0.0,
+                    'listing_attachment_final_fit_mode' => '',
+                    'listing_attachment_used_crop' => false,
+                    'listing_attachment_fallback_used' => false,
                     'aspect_ratio' => 0.0,
                     'is_extreme_aspect_ratio' => false,
                     'fit_limited_by' => '',
@@ -385,6 +398,7 @@ class Settings
                 'product_id' => $product_id,
                 'product_name' => $product->get_name(),
                 'permalink' => get_permalink($product_id),
+                'batch_id' => $batch_id,
                 'rendered_source' => (string) ($diagnostics['rendered_source'] ?? ''),
                 'helper_selected_image_id' => (int) ($diagnostics['helper_selected_image_id'] ?? 0),
                 'listing_image_id' => (int) ($diagnostics['listing_image_id'] ?? 0),
@@ -395,8 +409,17 @@ class Settings
                 'selected_source_selection_reason' => (string) ($diagnostics['selected_source_selection_reason'] ?? ''),
                 'gallery_images_count' => (int) ($diagnostics['gallery_images_count'] ?? 0),
                 'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
+                'listing_attachment_source_width' => (int) ($diagnostics['listing_attachment_source_width'] ?? 0),
+                'listing_attachment_source_height' => (int) ($diagnostics['listing_attachment_source_height'] ?? 0),
+                'listing_attachment_source_aspect_ratio' => (float) ($diagnostics['listing_attachment_source_aspect_ratio'] ?? 0),
+                'listing_attachment_rendered_width' => (int) ($diagnostics['listing_attachment_rendered_width'] ?? 0),
+                'listing_attachment_rendered_height' => (int) ($diagnostics['listing_attachment_rendered_height'] ?? 0),
                 'listing_attachment_scale_factor' => (float) ($diagnostics['listing_attachment_scale_factor'] ?? 0),
+                'listing_attachment_fill_ratio' => (float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0),
                 'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0),
+                'listing_attachment_final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
+                'listing_attachment_used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
+                'listing_attachment_fallback_used' => !empty($diagnostics['listing_attachment_fallback_used']),
                 'aspect_ratio' => (float) ($diagnostics['aspect_ratio'] ?? 0),
                 'is_extreme_aspect_ratio' => !empty($diagnostics['is_extreme_aspect_ratio']),
                 'fit_limited_by' => (string) ($diagnostics['fit_limited_by'] ?? ''),
