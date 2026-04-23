@@ -15,6 +15,7 @@
 
   var openMiniCart = function () {
     if (!miniCartPanel || !miniCartOverlay) return;
+    closeAuthModal();
     miniCartPanel.hidden = false;
     miniCartOverlay.hidden = false;
     miniCartPanel.setAttribute('aria-hidden', 'false');
@@ -33,6 +34,7 @@
 
   var openAuthModal = function () {
     if (!authModal) return;
+    closeMiniCart();
     authModal.hidden = false;
     authModal.setAttribute('aria-hidden', 'false');
     syncBodyScrollLock();
