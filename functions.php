@@ -34,10 +34,10 @@ function gp_enqueue_fonts(): void
 add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
 
 add_action('wp_enqueue_scripts', function () {
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.5');
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.6');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
     wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
-    wp_enqueue_script('gp-clone-profile-auth', get_template_directory_uri() . '/assets/js/profile-auth.js', [], '1.0.1', true);
+    wp_enqueue_script('gp-clone-profile-auth', get_template_directory_uri() . '/assets/js/profile-auth.js', [], '1.0.2', true);
     wp_enqueue_script('gp-clone-cart-checkout', get_template_directory_uri() . '/assets/js/cart-checkout.js', ['jquery'], '1.0.1', true);
     wp_localize_script('gp-clone-cart-checkout', 'gpCartCheckout', [
         'ajaxUrl' => admin_url('admin-ajax.php'),
@@ -315,6 +315,198 @@ add_action('init', function (): void {
     gp_ensure_required_pages();
     update_option('gp_required_pages_ensured', '1', false);
 });
+
+
+
+function gp_get_google_auth_url(string $context = 'login'): string
+{
+    $context = $context === 'register' ? 'register' : 'login';
+
+    $url_from_filter = apply_filters('gp_google_auth_url', '', $context);
+    if (is_string($url_from_filter) && $url_from_filter !== '') {
+        return esc_url_raw($url_from_filter);
+    }
+
+    $option_url = get_option('gp_google_auth_url', '');
+    if (is_string($option_url) && $option_url !== '') {
+        return esc_url_raw($option_url);
+    }
+
+    return '';
+}
+
+function gp_get_auth_notice(string $type): array
+{
+    $messages = [
+        'login_required_fields' => ['error', __('Uzupełnij adres e-mail i hasło.', 'gp-clone')],
+        'login_invalid_email' => ['error', __('Podaj poprawny adres e-mail.', 'gp-clone')],
+        'login_failed' => ['error', __('Nieprawidłowy e-mail lub hasło.', 'gp-clone')],
+        'login_success' => ['success', __('Zalogowano pomyślnie.', 'gp-clone')],
+        'register_required_fields' => ['error', __('Wypełnij wszystkie wymagane pola formularza.', 'gp-clone')],
+        'register_invalid_email' => ['error', __('Podaj poprawny adres e-mail.', 'gp-clone')],
+        'register_password_mismatch' => ['error', __('Hasła nie są takie same.', 'gp-clone')],
+        'register_password_too_short' => ['error', __('Hasło musi mieć co najmniej 8 znaków.', 'gp-clone')],
+        'register_terms_required' => ['error', __('Musisz zaakceptować Regulamin oraz Politykę prywatności.', 'gp-clone')],
+        'register_email_exists' => ['error', __('Konto z tym adresem e-mail już istnieje.', 'gp-clone')],
+        'register_invalid_nip' => ['error', __('Numer NIP musi składać się z 10 cyfr lub pozostać pusty.', 'gp-clone')],
+        'register_failed' => ['error', __('Nie udało się utworzyć konta. Spróbuj ponownie.', 'gp-clone')],
+        'register_success' => ['success', __('Konto zostało utworzone poprawnie. Możesz się teraz zalogować.', 'gp-clone')],
+        'google_auth_not_configured' => ['error', __('Logowanie Google jest obecnie niedostępne. Skontaktuj się z administratorem.', 'gp-clone')],
+    ];
+
+    return $messages[$type] ?? ['', ''];
+}
+
+function gp_render_auth_notice_from_query(): void
+{
+    $notice_type = isset($_GET['auth_notice']) ? sanitize_key(wp_unslash((string) $_GET['auth_notice'])) : '';
+    if ($notice_type === '') {
+        return;
+    }
+
+    [$level, $message] = gp_get_auth_notice($notice_type);
+    if ($level === '' || $message === '') {
+        return;
+    }
+
+    $class = $level === 'success' ? 'is-success' : 'is-error';
+    printf(
+        '<div class="gp-auth-notice %1$s" role="status" aria-live="polite">%2$s</div>',
+        esc_attr($class),
+        esc_html($message)
+    );
+}
+
+function gp_auth_redirect_with_notice(string $path, string $notice): void
+{
+    $url = add_query_arg('auth_notice', sanitize_key($notice), home_url($path));
+    wp_safe_redirect($url);
+    exit;
+}
+
+function gp_handle_profile_login_submit(): void
+{
+    if (!isset($_POST['gp_auth_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_POST['gp_auth_nonce'])), 'gp_profile_login')) {
+        gp_auth_redirect_with_notice('/zaloguj', 'login_failed');
+    }
+
+    $email = isset($_POST['email']) ? sanitize_email(wp_unslash((string) $_POST['email'])) : '';
+    $password = isset($_POST['password']) ? (string) wp_unslash($_POST['password']) : '';
+    $remember = !empty($_POST['remember_me']);
+
+    if ($email === '' || $password === '') {
+        gp_auth_redirect_with_notice('/zaloguj', 'login_required_fields');
+    }
+
+    if (!is_email($email)) {
+        gp_auth_redirect_with_notice('/zaloguj', 'login_invalid_email');
+    }
+
+    $credentials = [
+        'user_login' => $email,
+        'user_password' => $password,
+        'remember' => $remember,
+    ];
+
+    $user = wp_signon($credentials, is_ssl());
+    if ($user instanceof WP_Error) {
+        gp_auth_redirect_with_notice('/zaloguj', 'login_failed');
+    }
+
+    $redirect = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/moj-profil');
+    wp_safe_redirect($redirect);
+    exit;
+}
+
+function gp_handle_profile_register_submit(): void
+{
+    if (!isset($_POST['gp_auth_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_POST['gp_auth_nonce'])), 'gp_profile_register')) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+    }
+
+    $first_name = isset($_POST['first_name']) ? sanitize_text_field(wp_unslash((string) $_POST['first_name'])) : '';
+    $last_name = isset($_POST['last_name']) ? sanitize_text_field(wp_unslash((string) $_POST['last_name'])) : '';
+    $phone = isset($_POST['phone']) ? sanitize_text_field(wp_unslash((string) $_POST['phone'])) : '';
+    $email = isset($_POST['email']) ? sanitize_email(wp_unslash((string) $_POST['email'])) : '';
+    $password = isset($_POST['password']) ? (string) wp_unslash($_POST['password']) : '';
+    $password_confirm = isset($_POST['password_confirm']) ? (string) wp_unslash($_POST['password_confirm']) : '';
+    $company = isset($_POST['company']) ? sanitize_text_field(wp_unslash((string) $_POST['company'])) : '';
+    $nip = isset($_POST['nip']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['nip'])) : '';
+    $accepted_terms = !empty($_POST['accept_terms']);
+
+    if ($first_name === '' || $last_name === '' || $phone === '' || $email === '' || $password === '' || $password_confirm === '') {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_required_fields');
+    }
+
+    if (!is_email($email)) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_invalid_email');
+    }
+
+    if (strlen($password) < 8) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_password_too_short');
+    }
+
+    if ($password !== $password_confirm) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_password_mismatch');
+    }
+
+    if (!$accepted_terms) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_terms_required');
+    }
+
+    if ($nip !== '' && strlen($nip) !== 10) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_invalid_nip');
+    }
+
+    if (email_exists($email)) {
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_email_exists');
+    }
+
+    if (function_exists('wc_create_new_customer')) {
+        $user_id = wc_create_new_customer($email, $email, $password, [
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+        ]);
+    } else {
+        $user_id = wp_create_user($email, $password, $email);
+    }
+
+    if ($user_id instanceof WP_Error) {
+        if ($user_id->get_error_code() === 'registration-error-email-exists' || $user_id->get_error_code() === 'existing_user_email') {
+            gp_auth_redirect_with_notice('/zarejestruj', 'register_email_exists');
+        }
+
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+    }
+
+    wp_update_user([
+        'ID' => (int) $user_id,
+        'first_name' => $first_name,
+        'last_name' => $last_name,
+        'display_name' => trim($first_name . ' ' . $last_name),
+    ]);
+
+    update_user_meta((int) $user_id, 'billing_first_name', $first_name);
+    update_user_meta((int) $user_id, 'billing_last_name', $last_name);
+    update_user_meta((int) $user_id, 'billing_email', $email);
+    update_user_meta((int) $user_id, 'billing_phone', $phone);
+
+    if ($company !== '') {
+        update_user_meta((int) $user_id, 'billing_company', $company);
+    }
+
+    if ($nip !== '') {
+        update_user_meta((int) $user_id, 'billing_nip', $nip);
+        update_user_meta((int) $user_id, 'billing_tax_id', $nip);
+    }
+
+    gp_auth_redirect_with_notice('/zaloguj', 'register_success');
+}
+
+add_action('admin_post_nopriv_gp_profile_login', 'gp_handle_profile_login_submit');
+add_action('admin_post_gp_profile_login', 'gp_handle_profile_login_submit');
+add_action('admin_post_nopriv_gp_profile_register', 'gp_handle_profile_register_submit');
+add_action('admin_post_gp_profile_register', 'gp_handle_profile_register_submit');
 
 add_action('admin_post_nopriv_gp_contact_form', 'gp_handle_contact_form_submit');
 add_action('admin_post_gp_contact_form', 'gp_handle_contact_form_submit');

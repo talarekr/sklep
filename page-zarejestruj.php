@@ -2,13 +2,22 @@
 if (!defined('ABSPATH')) {
     exit;
 }
+
+$google_auth_url = gp_get_google_auth_url('register');
+$terms_url = home_url('/regulamin-platnosci');
+$privacy_url = home_url('/polityka-prywatnosci');
+
 get_header();
 ?>
 <main class="gp-auth-page">
     <div class="gp-auth-card">
         <h1><?php esc_html_e('Utwórz konto', 'gp-clone'); ?></h1>
+        <?php gp_render_auth_notice_from_query(); ?>
 
-        <form class="gp-auth-form" method="post" action="#" data-gp-auth-form novalidate>
+        <form class="gp-auth-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-auth-form novalidate>
+            <input type="hidden" name="action" value="gp_profile_register">
+            <?php wp_nonce_field('gp_profile_register', 'gp_auth_nonce'); ?>
+
             <fieldset class="gp-account-types">
                 <legend class="screen-reader-text"><?php esc_html_e('Typ konta', 'gp-clone'); ?></legend>
                 <label class="gp-account-type" for="gp-account-customer">
@@ -17,19 +26,23 @@ get_header();
                 </label>
             </fieldset>
 
-            <button type="button" class="gp-auth-social" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+            <?php if ($google_auth_url !== '') : ?>
+                <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></a>
+            <?php else : ?>
+                <button type="button" class="gp-auth-social" aria-label="Kontynuuj z Google" data-gp-disabled-google data-gp-feedback="<?php echo esc_attr__('Rejestracja Google jest obecnie niedostępna. Użyj formularza.', 'gp-clone'); ?>">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+            <?php endif; ?>
 
             <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
 
             <div class="gp-auth-grid gp-auth-grid--two">
                 <div>
-                    <label for="gp-register-nip"><?php esc_html_e('Numer NIP', 'gp-clone'); ?></label>
-                    <input id="gp-register-nip" type="text" name="nip" inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10" required>
+                    <label for="gp-register-nip"><?php esc_html_e('Numer NIP (opcjonalnie)', 'gp-clone'); ?></label>
+                    <input id="gp-register-nip" type="text" name="nip" inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10">
                 </div>
 
                 <div>
-                    <label for="gp-register-company"><?php esc_html_e('Nazwa firmy', 'gp-clone'); ?></label>
-                    <input id="gp-register-company" type="text" name="company" required>
+                    <label for="gp-register-company"><?php esc_html_e('Nazwa firmy (opcjonalnie)', 'gp-clone'); ?></label>
+                    <input id="gp-register-company" type="text" name="company">
                 </div>
 
                 <div>
@@ -69,14 +82,14 @@ get_header();
                 </div>
             </div>
 
-            <label class="gp-auth-checkbox" for="gp-accept-all">
-                <input id="gp-accept-all" type="checkbox" name="accept_all" required>
-                <span><?php esc_html_e('Akceptuję wszystkie warunki', 'gp-clone'); ?></span>
-            </label>
-
-            <label class="gp-auth-checkbox" for="gp-marketing-consent">
-                <input id="gp-marketing-consent" type="checkbox" name="marketing_consent" required>
-                <span><?php esc_html_e('Zgoda marketingowa + polityka prywatności', 'gp-clone'); ?></span>
+            <label class="gp-auth-checkbox" for="gp-accept-terms">
+                <input id="gp-accept-terms" type="checkbox" name="accept_terms" required>
+                <span>
+                    <?php esc_html_e('Akceptuję', 'gp-clone'); ?>
+                    <a href="<?php echo esc_url($terms_url); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Regulamin', 'gp-clone'); ?></a>
+                    <?php esc_html_e('oraz', 'gp-clone'); ?>
+                    <a href="<?php echo esc_url($privacy_url); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Politykę prywatności', 'gp-clone'); ?></a>
+                </span>
             </label>
 
             <button class="gp-auth-submit" type="submit"><?php esc_html_e('Zarejestruj się', 'gp-clone'); ?></button>
