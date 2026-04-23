@@ -36,6 +36,10 @@ class ProductMapper
     private const LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY = '_gp_listing_selected_source_image_id';
     private const LISTING_SOURCE_SELECTION_REASON_META_KEY = '_gp_listing_source_selection_reason';
     private const LISTING_SELECTED_SOURCE_ASPECT_RATIO_META_KEY = '_gp_listing_selected_source_aspect_ratio';
+    private const LISTING_QUALITY_TIER_META_KEY = '_gp_listing_quality_tier';
+    private const LISTING_QUALITY_SCORE_META_KEY = '_gp_listing_quality_score';
+    private const LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY = '_gp_listing_best_available_source_quality_tier';
+    private const LISTING_REQUIRES_BETTER_SOURCE_META_KEY = '_gp_listing_requires_better_source';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
 
@@ -88,6 +92,7 @@ class ProductMapper
         $current_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
         if (!$force && $current_listing_id > 0 && $current_source_id === $selected_source_id && get_post($current_listing_id) instanceof \WP_Post) {
             $this->ensure_listing_attachment_generation_meta($current_listing_id, $selected_source_id);
+            $quality = $this->update_listing_quality_meta($product_id, $current_listing_id, $selection);
             return [
                 'status' => 'skipped',
                 'reason' => 'already_generated',
@@ -121,6 +126,7 @@ class ProductMapper
         update_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, $selected_source_id);
         update_post_meta($product_id, self::LISTING_IMAGE_GENERATED_AT_META_KEY, gmdate('Y-m-d H:i:s'));
         $this->ensure_listing_attachment_generation_meta($created_listing_id, $selected_source_id);
+        $quality = $this->update_listing_quality_meta($product_id, (int) $created_listing_id, $selection);
 
         return [
             'status' => 'created',
@@ -172,6 +178,10 @@ class ProductMapper
             'selected_source_image_id' => $selected_source_image_id,
             'selected_source_aspect_ratio' => $selected_source_aspect_ratio,
             'selected_source_selection_reason' => $selected_source_selection_reason,
+            'listing_quality_tier' => (string) get_post_meta($product_id, self::LISTING_QUALITY_TIER_META_KEY, true),
+            'listing_quality_score' => (float) get_post_meta($product_id, self::LISTING_QUALITY_SCORE_META_KEY, true),
+            'best_available_source_quality_tier' => (string) get_post_meta($product_id, self::LISTING_BEST_AVAILABLE_SOURCE_QUALITY_TIER_META_KEY, true),
+            'requires_better_source' => (int) get_post_meta($product_id, self::LISTING_REQUIRES_BETTER_SOURCE_META_KEY, true) === 1,
             'helper_selected_image_id' => $helper_selected_image_id,
             'rendered_source' => $rendered_source,
             'listing_image_meta_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
@@ -215,6 +225,7 @@ class ProductMapper
                 'gallery_images_count' => 0,
                 'selected_source_image_id' => 0,
                 'selected_source_aspect_ratio' => 0.0,
+                'selected_source_quality_tier' => 'unknown',
                 'selected_source_selection_reason' => 'no_valid_image_candidates',
             ];
         }

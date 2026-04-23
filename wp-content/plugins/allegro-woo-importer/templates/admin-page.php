@@ -171,10 +171,15 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Utworzono listing image (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['created'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Pominięto (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['skipped'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Błędy (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['errors'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Preferred (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['preferred_count'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Acceptable (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['acceptable_count'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Degraded (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['degraded_count'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Last resort (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['last_resort_count'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Requires better source (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['requires_better_source_count'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Force regenerate (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html(!empty($listing_last_batch['force_regenerate']) ? 'true' : 'false'); ?></strong></li>
         <li><?php esc_html_e('Timestamp ostatniego batcha:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_last_batch['updated_at'] ?? '—')); ?></strong></li>
     </ul>
-    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, candidate_source_image_ids, selected_source_image_id, selected_source_aspect_ratio, selected_source_selection_reason, gallery_images_count, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
+    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, candidate_source_image_ids, selected_source_image_id, selected_source_aspect_ratio, selected_source_selection_reason, listing_quality_tier, listing_quality_score, best_available_source_quality_tier, requires_better_source, gallery_images_count, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
 
     <h2><?php esc_html_e('5. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
