@@ -232,51 +232,8 @@
     });
   };
 
-  var replaceTextContains = function (scope, from, to) {
-    if (!scope) return;
-
-    scope.querySelectorAll('*').forEach(function (el) {
-      if (!el.childNodes || el.childNodes.length !== 1) {
-        return;
-      }
-
-      var node = el.childNodes[0];
-      if (!node || node.nodeType !== Node.TEXT_NODE || !node.textContent) {
-        return;
-      }
-
-      if (node.textContent.indexOf(from) === -1) {
-        return;
-      }
-
-      node.textContent = node.textContent.replace(from, to);
-    });
-  };
-
   var removeCheckoutShippingOptions = function (scope) {
     if (!scope) return;
-
-    scope.querySelectorAll('h1, h2, h3, h4, h5, h6, .wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
-      var title = titleEl.textContent ? titleEl.textContent.trim() : '';
-      if (title !== 'Opcje wysyłki' && title !== 'Shipping options') {
-        return;
-      }
-
-      var shippingContainer = titleEl.closest(
-        '.wc-block-components-checkout-step, .wc-block-checkout__shipping-method-block, .wc-block-checkout__shipping-fields-block, .wc-block-components-address-form, .wc-block-checkout__contact-fields'
-      );
-
-      if (shippingContainer) {
-        shippingContainer.remove();
-        return;
-      }
-
-      var nextElement = titleEl.nextElementSibling;
-      titleEl.remove();
-      if (nextElement) {
-        nextElement.remove();
-      }
-    });
 
     scope.querySelectorAll('.wc-block-components-checkout-step__title, .wc-block-components-title').forEach(function (titleEl) {
       var title = titleEl.textContent ? titleEl.textContent.trim() : '';
@@ -296,7 +253,7 @@
       return;
     }
 
-    var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout, form.checkout, .woocommerce-checkout');
+    var checkoutScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
     if (!checkoutScope) {
       return;
     }
@@ -304,9 +261,6 @@
     replaceExactText(checkoutScope, 'Free shipping', 'Koszt dostawy');
     replaceExactText(checkoutScope, 'BEZPŁATNIE', '0 zł');
     replaceExactText(checkoutScope, 'FREE!', '0 zł');
-    replaceTextContains(checkoutScope, 'Free shipping', 'Koszt dostawy');
-    replaceTextContains(checkoutScope, 'BEZPŁATNIE', '0 zł');
-    replaceTextContains(checkoutScope, 'FREE!', '0 zł');
     removeCheckoutShippingOptions(checkoutScope);
   };
 
@@ -326,16 +280,6 @@
         isEnhancingCartBlock = false;
       });
     });
-
-    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
-    if (!cartObserverScope) {
-      return;
-    }
-
-    cartObserver.observe(cartObserverScope, {
-      childList: true,
-      subtree: true
-    });
   }
 
   if (document.body.classList.contains('woocommerce-checkout') && !document.body.classList.contains('woocommerce-order-received')) {
@@ -352,12 +296,17 @@
       });
     });
 
-    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout, form.checkout, .woocommerce-checkout');
+    var checkoutObserverScope = document.querySelector('.wp-block-woocommerce-checkout, .wc-block-checkout');
     if (!checkoutObserverScope) {
       return;
     }
 
-    checkoutObserver.observe(checkoutObserverScope, {
+    var cartObserverScope = document.querySelector('.wp-block-woocommerce-cart, .wc-block-cart');
+    if (!cartObserverScope) {
+      return;
+    }
+
+    cartObserver.observe(cartObserverScope, {
       childList: true,
       subtree: true
     });
