@@ -91,6 +91,13 @@ function gp_should_use_eur_currency(): bool
         return false;
     }
 
+    // WooCommerce checkout updates payment gateways via AJAX.
+    // Keep the store currency unchanged for all AJAX requests so gateway
+    // availability checks (e.g. PayU requiring PLN) stay consistent.
+    if (wp_doing_ajax()) {
+        return false;
+    }
+
     if (function_exists('is_cart') && is_cart()) {
         return false;
     }
@@ -779,9 +786,9 @@ add_filter('wc_add_to_cart_message_html', '__return_empty_string', 10, 2);
 
 function gp_should_force_classic_checkout(): bool
 {
-    return function_exists('is_checkout')
-        && is_checkout()
-        && !is_wc_endpoint_url('order-received');
+    // PayU GPO supports WooCommerce Blocks checkout. Forcing classic checkout can
+    // break block-based gateway rendering (e.g. separate BLIK/Google Pay methods).
+    return false;
 }
 
 function gpswiss_wc_cart_safe(): ?WC_Cart
@@ -1004,6 +1011,38 @@ add_filter('woocommerce_available_payment_gateways', function (array $gateways):
         'PAYMENT DEBUG: country=' . $country . '; gateways=' . implode(',', $gateway_ids),
         ['source' => 'gpswiss-payu-debug']
     );
+
+    if ($gateways === [] && function_exists('WC') && WC() && WC()->payment_gateways()) {
+        $registered_gateways = (array) WC()->payment_gateways()->payment_gateways();
+
+        foreach ($registered_gateways as $gateway_id => $gateway) {
+            if (!$gateway instanceof WC_Payment_Gateway) {
+                continue;
+            }
+
+            if (stripos((string) $gateway_id, 'payu') === false) {
+                continue;
+            }
+
+            if ((string) $gateway->enabled !== 'yes') {
+                continue;
+            }
+
+            $gateways[$gateway_id] = $gateway;
+
+            wc_get_logger()->warning(
+                'PAYMENT FALLBACK: forced PayU gateway because no methods were available.',
+                [
+                    'source' => 'gpswiss-payu-debug',
+                    'forced_gateway' => $gateway_id,
+                    'currency' => function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : null,
+                    'country' => $country,
+                ]
+            );
+
+            break;
+        }
+    }
 
     return $gateways;
 }, 999);
