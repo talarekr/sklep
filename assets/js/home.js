@@ -29,6 +29,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     });
+
+    if (form) {
+      form.addEventListener('submit', () => {
+        syncActiveMode();
+
+        const actionUrl = form.getAttribute('action');
+        if (!actionUrl) return;
+
+        try {
+          const parsedUrl = new URL(actionUrl, window.location.origin);
+          parsedUrl.searchParams.delete('part_number');
+          parsedUrl.searchParams.delete('s');
+          parsedUrl.searchParams.delete('search_mode');
+          form.setAttribute('action', `${parsedUrl.pathname}${parsedUrl.search}`);
+        } catch (error) {
+          // ignore invalid action URL, keep current form action
+        }
+      });
+    }
+
+    syncActiveMode();
   });
 
   document.querySelectorAll('[data-close-bar]').forEach((button) => {
