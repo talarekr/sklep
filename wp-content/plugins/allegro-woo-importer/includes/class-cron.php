@@ -23,6 +23,12 @@ class Cron
         add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
 
+        if (Plugin::is_safe_mode_enabled()) {
+            self::clear_schedule();
+            $this->logger->warning('Safe mode enabled: cron import schedule cleared.');
+            return;
+        }
+
         $this->schedule_from_settings();
     }
 
@@ -38,6 +44,11 @@ class Cron
 
     public function run_scheduled_import(): void
     {
+        if (Plugin::is_safe_mode_enabled()) {
+            $this->logger->warning('Safe mode enabled: scheduled import skipped.');
+            return;
+        }
+
         $this->logger->info('Cron import started.');
         $this->importer->import_offers();
     }
@@ -55,6 +66,11 @@ class Cron
 
     private function schedule_from_settings(): void
     {
+        if (Plugin::is_safe_mode_enabled()) {
+            self::clear_schedule();
+            return;
+        }
+
         $settings = Plugin::get_settings();
         $interval = $settings['cron_interval'] ?? 'manual';
 

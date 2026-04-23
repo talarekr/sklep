@@ -8,6 +8,11 @@ if (!defined('ABSPATH')) {
 
 class Logger
 {
+    private const MAX_LOG_LINE_BYTES = 4096;
+    private const MAX_CONTEXT_DEPTH = 2;
+    private const MAX_CONTEXT_ITEMS = 20;
+    private const TAIL_READ_BYTES = 65536;
+
     private string $file;
 
     public function __construct()
@@ -38,12 +43,43 @@ class Logger
             return '';
         }
 
-        $content = file($this->file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if ($content === false) {
+        $handle = @fopen($this->file, 'rb');
+        if (!is_resource($handle)) {
             return '';
         }
 
-        $slice = array_slice($content, -abs($lines));
+        $filesize = @filesize($this->file);
+        if (!is_int($filesize) || $filesize <= 0) {
+            fclose($handle);
+            return '';
+        }
+
+        $read_bytes = min($filesize, self::TAIL_READ_BYTES);
+        if (fseek($handle, -$read_bytes, SEEK_END) !== 0) {
+            rewind($handle);
+        }
+
+        $content = stream_get_contents($handle);
+        fclose($handle);
+
+        if (!is_string($content) || $content === '') {
+            return '';
+        }
+
+        $content = ltrim($content, "\r\n");
+        $rows = preg_split('/\r\n|\r|\n/', $content);
+        if (!is_array($rows) || $rows === []) {
+            return '';
+        }
+
+        $rows = array_values(array_filter($rows, static function ($row): bool {
+            return trim((string) $row) !== '';
+        }));
+        if ($rows === []) {
+            return '';
+        }
+
+        $slice = array_slice($rows, -max(1, abs($lines)));
 
         return implode(PHP_EOL, $slice);
     }
@@ -52,9 +88,79 @@ class Logger
     {
         $payload = sprintf('[%s] [%s] %s', gmdate('Y-m-d H:i:s'), $level, $message);
         if (!empty($context)) {
-            $payload .= ' ' . wp_json_encode($context);
+            $context_json = wp_json_encode($this->normalize_context($context));
+            if (is_string($context_json) && $context_json !== '') {
+                $payload .= ' ' . $context_json;
+            }
+        }
+
+        if (strlen($payload) > self::MAX_LOG_LINE_BYTES) {
+            $payload = substr($payload, 0, self::MAX_LOG_LINE_BYTES - 12) . '...[truncated]';
         }
 
         error_log($payload . PHP_EOL, 3, $this->file);
+    }
+
+    private function normalize_context(array $context): array
+    {
+        $normalized = [];
+        $count = 0;
+
+        foreach ($context as $key => $value) {
+            if ($count >= self::MAX_CONTEXT_ITEMS) {
+                $normalized['_truncated'] = 'context_item_limit_reached';
+                break;
+            }
+
+            $normalized[(string) $key] = $this->normalize_value($value, 0);
+            $count++;
+        }
+
+        return $normalized;
+    }
+
+    private function normalize_value($value, int $depth)
+    {
+        if ($depth >= self::MAX_CONTEXT_DEPTH) {
+            return '[depth_limit]';
+        }
+
+        if (is_scalar($value) || $value === null) {
+            $string_value = (string) $value;
+            if (strlen($string_value) > 512) {
+                return substr($string_value, 0, 512) . '...[truncated]';
+            }
+
+            return $value;
+        }
+
+        if ($value instanceof \WP_Error) {
+            return [
+                'error_code' => $value->get_error_code(),
+                'error_message' => $value->get_error_message(),
+            ];
+        }
+
+        if (is_object($value)) {
+            return '[object:' . get_class($value) . ']';
+        }
+
+        if (!is_array($value)) {
+            return '[unsupported_type]';
+        }
+
+        $normalized = [];
+        $count = 0;
+        foreach ($value as $key => $item) {
+            if ($count >= self::MAX_CONTEXT_ITEMS) {
+                $normalized['_truncated'] = 'array_item_limit_reached';
+                break;
+            }
+
+            $normalized[(string) $key] = $this->normalize_value($item, $depth + 1);
+            $count++;
+        }
+
+        return $normalized;
     }
 }
