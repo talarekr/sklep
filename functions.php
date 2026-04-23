@@ -1939,6 +1939,27 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
         return $search;
     }
 
+    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
+    $is_vehicle_model_search = $search_mode === 'vehicle_model' && (is_tax('product_cat') || $query->is_tax('product_cat'));
+
+    if ($is_vehicle_model_search) {
+        $terms = preg_split('/\s+/u', $raw_phrase) ?: [];
+        $terms = array_values(array_filter(array_map(static fn($term) => sanitize_text_field((string) $term), $terms)));
+
+        $title_conditions = [];
+        foreach ($terms as $term) {
+            $term_like = '%' . $wpdb->esc_like($term) . '%';
+            $title_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $term_like);
+        }
+
+        if ($title_conditions === []) {
+            $phrase_like = '%' . $wpdb->esc_like($raw_phrase) . '%';
+            $title_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $phrase_like);
+        }
+
+        return ' AND (' . implode(' AND ', $title_conditions) . ')';
+    }
+
     $terms = preg_split('/\s+/u', $raw_phrase) ?: [];
     $terms = array_values(array_filter(array_map(static fn($term) => sanitize_text_field((string) $term), $terms)));
 
