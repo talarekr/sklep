@@ -10,6 +10,8 @@
  */
 
 defined('ABSPATH') || exit;
+
+$cart = function_exists('gpswiss_wc_cart_safe') ? gpswiss_wc_cart_safe() : null;
 ?>
 <table class="shop_table woocommerce-checkout-review-order-table">
 	<thead>
@@ -22,7 +24,8 @@ defined('ABSPATH') || exit;
 		<?php
 		do_action('woocommerce_review_order_before_cart_contents');
 
-		foreach (WC()->cart->get_cart() as $cart_item_key => $cart_item) {
+		$cart_items = $cart ? $cart->get_cart() : [];
+		foreach ($cart_items as $cart_item_key => $cart_item) {
 			$_product = apply_filters('woocommerce_cart_item_product', $cart_item['data'], $cart_item, $cart_item_key);
 
 			if ($_product && $_product->exists() && $cart_item['quantity'] > 0 && apply_filters('woocommerce_checkout_cart_item_visible', true, $cart_item, $cart_item_key)) {
@@ -41,7 +44,10 @@ defined('ABSPATH') || exit;
 						</div>
 					</td>
 					<td class="product-total">
-						<?php echo wp_kses_post(apply_filters('woocommerce_cart_item_subtotal', WC()->cart->get_product_subtotal($_product, $cart_item['quantity']), $cart_item, $cart_item_key)); ?>
+						<?php
+						$item_subtotal = $cart ? $cart->get_product_subtotal($_product, $cart_item['quantity']) : '';
+						echo wp_kses_post(apply_filters('woocommerce_cart_item_subtotal', $item_subtotal, $cart_item, $cart_item_key));
+						?>
 					</td>
 				</tr>
 				<?php
@@ -62,27 +68,27 @@ defined('ABSPATH') || exit;
 			<td data-title="<?php esc_attr_e('Koszt dostawy', 'gp-clone'); ?>">0 zł</td>
 		</tr>
 
-		<?php foreach (WC()->cart->get_fees() as $fee) : ?>
+		<?php foreach (($cart ? $cart->get_fees() : []) as $fee) : ?>
 			<tr class="fee">
 				<th><?php echo esc_html($fee->name); ?></th>
 				<td><?php wc_cart_totals_fee_html($fee); ?></td>
 			</tr>
 		<?php endforeach; ?>
 
-		<?php if (wc_tax_enabled() && !WC()->cart->display_prices_including_tax()) : ?>
+		<?php if ($cart && wc_tax_enabled() && !$cart->display_prices_including_tax()) : ?>
 			<?php if ('itemized' === get_option('woocommerce_tax_total_display')) : ?>
-				<?php foreach (WC()->cart->get_tax_totals() as $code => $tax) : ?>
+				<?php foreach ($cart->get_tax_totals() as $code => $tax) : ?>
 					<tr class="tax-rate tax-rate-<?php echo esc_attr(sanitize_title($code)); ?>">
 						<th><?php echo esc_html($tax->label); ?></th>
 						<td><?php echo wp_kses_post($tax->formatted_amount); ?></td>
 					</tr>
 				<?php endforeach; ?>
-			<?php else : ?>
-				<tr class="tax-total">
-					<th><?php echo esc_html(WC()->countries->tax_or_vat()); ?></th>
-					<td><?php wc_cart_totals_taxes_total_html(); ?></td>
-				</tr>
-			<?php endif; ?>
+				<?php else : ?>
+					<tr class="tax-total">
+						<th><?php echo esc_html((function_exists('WC') && WC() && WC()->countries) ? WC()->countries->tax_or_vat() : __('VAT', 'woocommerce')); ?></th>
+						<td><?php wc_cart_totals_taxes_total_html(); ?></td>
+					</tr>
+				<?php endif; ?>
 		<?php endif; ?>
 
 		<tr class="order-total">
