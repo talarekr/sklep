@@ -161,7 +161,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('awi_listing_images_inspect_front'); ?>
         <input type="hidden" name="action" value="awi_listing_images_inspect_front">
-        <?php submit_button(__('Diagnostyka ostatniego batcha', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+        <?php submit_button(__('Sprawdź ostatni batch', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
     <ul>
         <li><?php esc_html_e('Produkty w ostatnim batchu:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_last_batch['processed'] ?? 0))); ?></strong></li>
@@ -174,7 +174,7 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Force regenerate (ostatni batch):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html(!empty($listing_last_batch['force_regenerate']) ? 'true' : 'false'); ?></strong></li>
         <li><?php esc_html_e('Timestamp ostatniego batcha:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_last_batch['updated_at'] ?? '—')); ?></strong></li>
     </ul>
-    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, listing_file_exists, listing_attachment_scale_factor, listing_attachment_target_fill_ratio, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
+    <p><em><?php esc_html_e('W logu pojawią się pola: product_id, product_name, permalink, batch_id, rendered_source, helper_selected_image_id, listing_image_id, featured_image_id, candidate_source_image_ids, selected_source_image_id, selected_source_aspect_ratio, selected_source_selection_reason, gallery_images_count, best_available_source_still_extreme, needs_extreme_ratio_fallback, listing_file_exists, listing_attachment_source_width, listing_attachment_source_height, listing_attachment_source_aspect_ratio, listing_attachment_rendered_width, listing_attachment_rendered_height, listing_attachment_scale_factor, listing_attachment_fill_ratio, listing_attachment_target_fill_ratio, listing_attachment_final_fit_mode, listing_attachment_used_crop, listing_attachment_fallback_used, aspect_ratio, is_extreme_aspect_ratio, fit_limited_by.', 'allegro-woo-importer'); ?></em></p>
 
     <h2><?php esc_html_e('5. Historia importów / log', 'allegro-woo-importer'); ?></h2>
     <table class="widefat striped" style="max-width:1000px;">
