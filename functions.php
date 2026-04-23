@@ -1712,6 +1712,12 @@ function gp_normalize_part_number(string $value): string
     return trim($value);
 }
 
+function gp_get_catalog_search_mode(): string
+{
+    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
+    return in_array($search_mode, ['part_number', 'vehicle_model'], true) ? $search_mode : '';
+}
+
 function gp_find_product_id_by_part_number(string $part_number_raw): int
 {
     global $wpdb;
@@ -1764,6 +1770,10 @@ add_action('wp_footer', function (): void {
 
 add_action('pre_get_posts', function (WP_Query $query): void {
     if (is_admin() || !$query->is_main_query() || !class_exists('WooCommerce')) {
+        return;
+    }
+
+    if (gp_get_catalog_search_mode() === 'vehicle_model') {
         return;
     }
 
@@ -1858,6 +1868,10 @@ add_action('template_redirect', function (): void {
         return;
     }
 
+    if (gp_get_catalog_search_mode() === 'vehicle_model') {
+        return;
+    }
+
     if (!is_shop() && !is_tax('product_cat') && !is_post_type_archive('product')) {
         return;
     }
@@ -1882,6 +1896,10 @@ add_action('template_redirect', function (): void {
 }, 20);
 
 add_filter('posts_where', function (string $where, WP_Query $query): string {
+    if (gp_get_catalog_search_mode() === 'vehicle_model') {
+        return $where;
+    }
+
     if (!($query->get('part_number_search_active'))) {
         return $where;
     }
@@ -1939,7 +1957,7 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
         return $search;
     }
 
-    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
+    $search_mode = gp_get_catalog_search_mode();
     $is_vehicle_model_search = $search_mode === 'vehicle_model' && (is_tax('product_cat') || $query->is_tax('product_cat'));
 
     if ($is_vehicle_model_search) {

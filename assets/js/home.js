@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = switcher.closest('.gp-category-search-hero__panel') || switcher.parentElement;
     const form = container ? container.querySelector('[data-category-search-form]') : null;
     const input = form ? form.querySelector('[data-category-search-input]') : null;
+    const searchModeInput = form ? form.querySelector('[data-category-search-mode]') : null;
 
     switcher.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
@@ -12,10 +13,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!input) return;
 
         const inputName = button.getAttribute('data-input-name');
+        const searchMode = button.getAttribute('data-search-mode');
         const placeholder = button.getAttribute('data-placeholder');
 
         if (inputName) {
           input.setAttribute('name', inputName);
+        }
+
+        if (searchModeInput && searchMode) {
+          searchModeInput.setAttribute('value', searchMode);
         }
 
         if (placeholder) {
