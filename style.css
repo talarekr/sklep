@@ -234,7 +234,27 @@ body {
 }
 .gp-profile-dropdown__actions {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+}
+.gp-profile-dropdown__actions .gp-btn {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+.gp-profile-dropdown__actions .gp-btn--primary {
+  border: 1px solid var(--gp-navy);
+}
+.gp-profile-dropdown__actions .gp-btn--outline {
+  border-width: 1px;
 }
 .gp-profile-dropdown__actions .gp-btn {
   width: 100%;
@@ -272,11 +292,18 @@ body {
   background: #f4f7ff;
 }
 .gp-profile-dropdown__links {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
   border-top: 1px solid #eceff4;
   display: grid;
   gap: 6px;
+}
+
+@media (max-width: 767px) {
+  .gp-profile-dropdown__actions .gp-btn {
+    min-height: 46px;
+    padding: 0 14px;
+  }
 }
 .gp-profile-dropdown__links a {
   display: flex;

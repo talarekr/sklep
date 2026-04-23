@@ -697,10 +697,30 @@
 .gp-mini-cart-panel__footer {
   display: grid;
   gap: 10px;
+  margin-top: 2px;
 }
 
 .gp-mini-cart-panel__footer .gp-btn {
   width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+.gp-mini-cart-panel__footer .gp-btn--primary {
+  border: 1px solid #122a66;
+}
+
+.gp-mini-cart-panel__footer .gp-btn--outline {
+  border-width: 1px;
 }
 
 .gp-auth-modal {
@@ -804,6 +824,14 @@
   .gp-auth-modal__side {
     border-left: 1px solid #e7ebf2;
     padding-left: 18px;
+  }
+}
+
+@media (max-width: 767px) {
+  .gp-mini-cart-panel__footer .gp-btn {
+    min-height: 46px;
+    padding: 0 14px;
+    font-size: 15px;
   }
 }
 
