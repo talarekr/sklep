@@ -852,9 +852,8 @@ add_action('wp_enqueue_scripts', function (): void {
 }, 100);
 
 add_action('woocommerce_before_checkout_form', function (): void {
-    if (!function_exists('WC') || !WC()->payment_gateways() || !WC()->customer || !WC()->cart) {
-        return;
-    }
+    gp_checkout_payment_debug_snapshot('before_checkout_form');
+}, 10);
 
     $payment_gateways = WC()->payment_gateways();
     $available_gateways = $payment_gateways->get_available_payment_gateways();
@@ -876,12 +875,13 @@ add_action('woocommerce_before_checkout_form', function (): void {
     $billing_country = WC()->customer->get_billing_country();
     $shipping_country = WC()->customer->get_shipping_country();
 
-    $payu_available = false;
-    foreach ($available_gateway_ids as $gateway_id) {
-        if (stripos((string) $gateway_id, 'payu') !== false) {
-            $payu_available = true;
-            break;
-        }
+add_action('woocommerce_review_order_after_submit', function (): void {
+    gp_checkout_payment_debug_snapshot('review_order_after_submit');
+}, 1);
+
+add_filter('default_checkout_billing_country', function (?string $country): string {
+    if (is_string($country) && $country !== '') {
+        return $country;
     }
 
     wc_get_logger()->info('Diagnostyka checkout payment gateways.', [
@@ -897,20 +897,20 @@ add_action('woocommerce_before_checkout_form', function (): void {
         'force_classic_checkout' => gp_should_force_classic_checkout(),
     ]);
 
-    if ($available_gateways !== []) {
-        return;
+    return 'PL';
+}, 20);
+
+add_filter('default_checkout_shipping_country', function (?string $country): string {
+    if (is_string($country) && $country !== '') {
+        return $country;
     }
 
-    wc_get_logger()->warning('Brak dostępnych metod płatności na checkout.', [
-        'source' => 'gp-checkout',
-        'currency' => get_woocommerce_currency(),
-        'billing_country' => $billing_country,
-        'shipping_country' => $shipping_country,
-        'cart_total' => WC()->cart->get_total('edit'),
-        'customer_logged_in' => is_user_logged_in(),
-        'force_classic_checkout' => gp_should_force_classic_checkout(),
-    ]);
-}, 10);
+    if (function_exists('WC') && WC()->countries) {
+        return WC()->countries->get_base_country();
+    }
+
+    return 'PL';
+}, 20);
 
 
 add_action('wp', function (): void {

@@ -1174,11 +1174,6 @@
   padding: 10px 14px;
 }
 
-.woocommerce-checkout #payment ul.payment_methods:not(:has(input[name="payment_method"])),
-.woocommerce-checkout #payment ul.payment_methods:has(li.woocommerce-notice:only-child:empty) {
-  display: none;
-}
-
 .woocommerce-checkout #payment div.payment_box {
   border-radius: 10px;
   border: 1px solid #d8e3f5;
