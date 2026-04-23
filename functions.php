@@ -36,11 +36,16 @@ function gp_enqueue_fonts(): void
 add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
 
 add_action('wp_enqueue_scripts', function () {
+    $cart_checkout_dependencies = ['jquery'];
+    if (function_exists('is_checkout') && is_checkout()) {
+        $cart_checkout_dependencies[] = 'wc-checkout';
+    }
+
     wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.8');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.4', true);
     wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
     wp_enqueue_script('gp-clone-profile-auth', get_template_directory_uri() . '/assets/js/profile-auth.js', [], '1.0.2', true);
-    wp_enqueue_script('gp-clone-cart-checkout', get_template_directory_uri() . '/assets/js/cart-checkout.js', ['jquery'], '1.0.5', true);
+    wp_enqueue_script('gp-clone-cart-checkout', get_template_directory_uri() . '/assets/js/cart-checkout.js', $cart_checkout_dependencies, '1.0.6', true);
     wp_localize_script('gp-clone-cart-checkout', 'gpCartCheckout', [
         'ajaxUrl' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('gp_cart_checkout_nonce'),
@@ -771,7 +776,6 @@ add_filter('woocommerce_cart_item_name', function (string $product_name, array $
 add_filter('woocommerce_order_button_text', static fn() => 'Przejdź do płatności');
 
 add_filter('wc_add_to_cart_message_html', '__return_empty_string', 10, 2);
-add_filter('wc_add_to_cart_message', '__return_empty_string', 10, 2);
 
 function gp_should_force_classic_checkout(): bool
 {
@@ -938,36 +942,19 @@ add_action('wp_enqueue_scripts', function (): void {
         'wc-blocks-style',
         'wc-block-style',
         'wc-blocks-checkout',
+        'wc-blocks-checkout-events',
+        'wc-blocks-components',
+        'wc-blocks-data-store',
+        'wc-blocks-registry',
+        'wc-blocks-shared-hocs',
         'wc-checkout-block',
+        'wc-checkout-block-frontend',
         'woocommerce-blocks-checkout',
     ];
 
     foreach ($block_assets as $handle) {
         wp_dequeue_style($handle);
-        wp_deregister_style($handle);
         wp_dequeue_script($handle);
-        wp_deregister_script($handle);
-    }
-
-    global $wp_scripts, $wp_styles;
-    if ($wp_scripts instanceof WP_Scripts) {
-        foreach (array_keys($wp_scripts->registered) as $handle) {
-            if (strpos($handle, 'wc-block') === false && strpos($handle, 'woocommerce-block') === false) {
-                continue;
-            }
-            wp_dequeue_script($handle);
-            wp_deregister_script($handle);
-        }
-    }
-
-    if ($wp_styles instanceof WP_Styles) {
-        foreach (array_keys($wp_styles->registered) as $handle) {
-            if (strpos($handle, 'wc-block') === false && strpos($handle, 'woocommerce-block') === false) {
-                continue;
-            }
-            wp_dequeue_style($handle);
-            wp_deregister_style($handle);
-        }
     }
 }, 100);
 
