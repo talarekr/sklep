@@ -373,6 +373,10 @@ class Settings
                     'selected_source_image_id' => 0,
                     'selected_source_aspect_ratio' => 0.0,
                     'selected_source_selection_reason' => '',
+                    'listing_quality_tier' => '',
+                    'listing_quality_score' => 0.0,
+                    'best_available_source_quality_tier' => '',
+                    'requires_better_source' => false,
                     'gallery_images_count' => 0,
                     'listing_file_exists' => false,
                     'listing_attachment_source_width' => 0,
@@ -407,6 +411,10 @@ class Settings
                 'selected_source_image_id' => (int) ($diagnostics['selected_source_image_id'] ?? 0),
                 'selected_source_aspect_ratio' => (float) ($diagnostics['selected_source_aspect_ratio'] ?? 0),
                 'selected_source_selection_reason' => (string) ($diagnostics['selected_source_selection_reason'] ?? ''),
+                'listing_quality_tier' => (string) ($diagnostics['listing_quality_tier'] ?? ''),
+                'listing_quality_score' => (float) ($diagnostics['listing_quality_score'] ?? 0),
+                'best_available_source_quality_tier' => (string) ($diagnostics['best_available_source_quality_tier'] ?? ''),
+                'requires_better_source' => !empty($diagnostics['requires_better_source']),
                 'gallery_images_count' => (int) ($diagnostics['gallery_images_count'] ?? 0),
                 'listing_file_exists' => !empty($diagnostics['listing_file_exists']),
                 'listing_attachment_source_width' => (int) ($diagnostics['listing_attachment_source_width'] ?? 0),
@@ -472,6 +480,11 @@ class Settings
         $batch_skipped = 0;
         $batch_errors = 0;
         $batch_extreme_ratio_products = 0;
+        $batch_preferred_count = 0;
+        $batch_acceptable_count = 0;
+        $batch_degraded_count = 0;
+        $batch_last_resort_count = 0;
+        $batch_requires_better_source_count = 0;
         $processed_product_ids = [];
 
         foreach ($ids as $raw_id) {
@@ -494,6 +507,15 @@ class Settings
                 if ($is_extreme_ratio) {
                     $batch_extreme_ratio_products++;
                 }
+                $snapshot = $this->log_listing_selection_qa_snapshot($product_id, $result);
+                $this->increment_listing_quality_counters(
+                    $snapshot,
+                    $batch_preferred_count,
+                    $batch_acceptable_count,
+                    $batch_degraded_count,
+                    $batch_last_resort_count,
+                    $batch_requires_better_source_count
+                );
                 continue;
             }
 
@@ -506,6 +528,15 @@ class Settings
                     'force_regenerate' => $force_regenerate,
                     'listing_image_id' => (int) ($result['listing_image_id'] ?? 0),
                 ]);
+                $snapshot = $this->log_listing_selection_qa_snapshot($product_id, $result);
+                $this->increment_listing_quality_counters(
+                    $snapshot,
+                    $batch_preferred_count,
+                    $batch_acceptable_count,
+                    $batch_degraded_count,
+                    $batch_last_resort_count,
+                    $batch_requires_better_source_count
+                );
                 continue;
             }
 
@@ -537,8 +568,25 @@ class Settings
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
             'extreme_ratio_products_count' => $batch_extreme_ratio_products,
+            'preferred_count' => $batch_preferred_count,
+            'acceptable_count' => $batch_acceptable_count,
+            'degraded_count' => $batch_degraded_count,
+            'last_resort_count' => $batch_last_resort_count,
+            'requires_better_source_count' => $batch_requires_better_source_count,
             'updated_at' => gmdate('Y-m-d H:i:s'),
         ], false);
+
+        $this->logger->info('Listing image regeneration batch QA summary.', [
+            'processed' => $batch_processed,
+            'created' => $batch_created,
+            'skipped' => $batch_skipped,
+            'errors' => $batch_errors,
+            'preferred_count' => $batch_preferred_count,
+            'acceptable_count' => $batch_acceptable_count,
+            'degraded_count' => $batch_degraded_count,
+            'last_resort_count' => $batch_last_resort_count,
+            'requires_better_source_count' => $batch_requires_better_source_count,
+        ]);
 
         return [
             'processed' => $batch_processed,
@@ -546,12 +594,65 @@ class Settings
             'skipped' => $batch_skipped,
             'errors' => $batch_errors,
             'extreme_ratio_products_count' => $batch_extreme_ratio_products,
+            'preferred_count' => $batch_preferred_count,
+            'acceptable_count' => $batch_acceptable_count,
+            'degraded_count' => $batch_degraded_count,
+            'last_resort_count' => $batch_last_resort_count,
+            'requires_better_source_count' => $batch_requires_better_source_count,
             'next_after_id' => $last_product_id,
             'batch_product_ids' => $processed_product_ids,
             'batch_first_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[0] : 0,
             'batch_last_product_id' => $processed_product_ids !== [] ? (int) $processed_product_ids[count($processed_product_ids) - 1] : 0,
             'done' => false,
         ];
+    }
+
+    private function log_listing_selection_qa_snapshot(int $product_id, array $result): array
+    {
+        $diagnostics = $this->mapper->get_listing_image_diagnostics($product_id);
+
+        $snapshot = [
+            'product_id' => $product_id,
+            'selected_source_image_id' => (int) ($result['selected_source_image_id'] ?? ($diagnostics['selected_source_image_id'] ?? 0)),
+            'selected_source_aspect_ratio' => round((float) ($result['selected_source_aspect_ratio'] ?? ($diagnostics['selected_source_aspect_ratio'] ?? 0.0)), 6),
+            'square_fill_ratio' => round((float) ($result['selected_source_square_fill_ratio'] ?? 0.0), 6),
+            'final_fit_mode' => (string) ($diagnostics['listing_attachment_final_fit_mode'] ?? ''),
+            'used_crop' => !empty($diagnostics['listing_attachment_used_crop']),
+            'fill_ratio' => round((float) ($diagnostics['listing_attachment_fill_ratio'] ?? 0.0), 6),
+            'selection_reason' => (string) ($result['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
+            'listing_quality_tier' => (string) ($result['listing_quality_tier'] ?? ($diagnostics['listing_quality_tier'] ?? '')),
+            'listing_quality_score' => round((float) ($result['listing_quality_score'] ?? ($diagnostics['listing_quality_score'] ?? 0.0)), 6),
+            'best_available_source_quality_tier' => (string) ($result['best_available_source_quality_tier'] ?? ($diagnostics['best_available_source_quality_tier'] ?? '')),
+            'requires_better_source' => !empty($result['requires_better_source']) || !empty($diagnostics['requires_better_source']),
+        ];
+
+        $this->logger->info('Listing source selection QA snapshot.', $snapshot);
+
+        return $snapshot;
+    }
+
+    private function increment_listing_quality_counters(
+        array $snapshot,
+        int &$preferred_count,
+        int &$acceptable_count,
+        int &$degraded_count,
+        int &$last_resort_count,
+        int &$requires_better_source_count
+    ): void {
+        $tier = (string) ($snapshot['listing_quality_tier'] ?? '');
+        if ($tier === 'preferred') {
+            $preferred_count++;
+        } elseif ($tier === 'acceptable') {
+            $acceptable_count++;
+        } elseif ($tier === 'degraded') {
+            $degraded_count++;
+        } elseif ($tier === 'last_resort') {
+            $last_resort_count++;
+        }
+
+        if (!empty($snapshot['requires_better_source'])) {
+            $requires_better_source_count++;
+        }
     }
 
     private function block_heavy_operation(string $operation): bool
