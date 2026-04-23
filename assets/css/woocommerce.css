@@ -863,7 +863,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
+    grid-template-columns: minmax(0, 66%) minmax(240px, 34%);
     gap: 20px;
   }
 }
@@ -980,7 +980,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
+    grid-template-columns: minmax(0, 66%) minmax(240px, 34%);
     gap: 20px;
   }
 }
@@ -1014,7 +1014,7 @@
 
 .woocommerce-checkout form.checkout {
   display: grid;
-  grid-template-columns: minmax(0, 65%) minmax(280px, 35%);
+  grid-template-columns: minmax(0, 67%) minmax(280px, 33%);
   gap: 24px;
   align-items: start;
 }
@@ -1035,6 +1035,19 @@
 }
 .woocommerce-checkout #customer_details {
   grid-column: 1;
+}
+
+
+.woocommerce-checkout #customer_details .col-1,
+.woocommerce-checkout #customer_details .col-2 {
+  float: none;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.woocommerce-checkout #customer_details .col-2 {
+  margin-top: 18px;
 }
 
 .woocommerce-checkout #order_review_heading,
@@ -1158,6 +1171,11 @@
   padding: 10px 14px;
 }
 
+.woocommerce-checkout #payment ul.payment_methods:not(:has(input[name="payment_method"])),
+.woocommerce-checkout #payment ul.payment_methods:has(li.woocommerce-notice:only-child:empty) {
+  display: none;
+}
+
 .woocommerce-checkout #payment div.payment_box {
   border-radius: 10px;
   border: 1px solid #d8e3f5;
@@ -1202,7 +1220,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
+    grid-template-columns: minmax(0, 66%) minmax(240px, 34%);
     gap: 20px;
   }
 }
@@ -1478,7 +1496,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
+    grid-template-columns: minmax(0, 66%) minmax(240px, 34%);
     gap: 20px;
   }
 }
@@ -1491,7 +1509,7 @@
 
 @media (max-width: 1024px) {
   .woocommerce-checkout form.checkout {
-    grid-template-columns: minmax(0, 62%) minmax(240px, 38%);
+    grid-template-columns: minmax(0, 66%) minmax(240px, 34%);
     gap: 20px;
   }
 }
