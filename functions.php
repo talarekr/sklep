@@ -1489,12 +1489,24 @@ function gp_render_product_category_sidebar(): void
         echo '<button type="button" class="gp-cat-filter__more" data-gp-subcategory-more hidden>' . esc_html__('Wyświetl więcej', 'gp-clone') . '</button>';
     }, $current_term_id > 0);
 
-    gp_render_category_filter_section(__('Cena', 'gp-clone'), static function () use ($selected_price_min, $selected_price_max): void {
+    $clear_filters_url = home_url('/kategoria-produktu/motoryzacja/');
+    if (taxonomy_exists('product_cat')) {
+        $motoryzacja_term = get_term_by('slug', sanitize_title('motoryzacja'), 'product_cat');
+        if ($motoryzacja_term instanceof WP_Term) {
+            $motoryzacja_link = get_term_link($motoryzacja_term);
+            if (!is_wp_error($motoryzacja_link) && is_string($motoryzacja_link) && $motoryzacja_link !== '') {
+                $clear_filters_url = $motoryzacja_link;
+            }
+        }
+    }
+
+    gp_render_category_filter_section(__('Cena', 'gp-clone'), static function () use ($selected_price_min, $selected_price_max, $clear_filters_url): void {
         echo '<div class="gp-cat-filter__price-row">';
         echo '<input type="number" min="0" step="1" name="price_min" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena od', 'gp-clone') . '" value="' . esc_attr($selected_price_min) . '">';
         echo '<input type="number" min="0" step="1" name="price_max" class="gp-cat-filter__price-input" placeholder="' . esc_attr__('Cena do', 'gp-clone') . '" value="' . esc_attr($selected_price_max) . '">';
         echo '</div>';
         echo '<button type="submit" class="gp-cat-filter__apply">' . esc_html__('Filtruj', 'gp-clone') . '</button>';
+        echo '<a href="' . esc_url($clear_filters_url) . '" class="gp-cat-filter__apply">' . esc_html__('Wyczyść filtry', 'gp-clone') . '</a>';
     }, true);
 
     echo '</form>';
