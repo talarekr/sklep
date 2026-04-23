@@ -1,7 +1,11 @@
 <?php if (!defined('ABSPATH')) { exit; } ?>
 <?php
 $cart_url = function_exists('wc_get_cart_url') ? wc_get_cart_url() : '#';
-$account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : '#';
+$login_url = home_url('/zaloguj');
+$register_url = home_url('/zarejestruj');
+$favourites_url = home_url('/ulubione');
+$orders_url = function_exists('wc_get_account_endpoint_url') ? wc_get_account_endpoint_url('orders') : home_url('/historia-zamowien');
+$checkout_url = function_exists('wc_get_checkout_url') ? wc_get_checkout_url() : home_url('/zamowienie');
 $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('shop')) : '#';
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $shortcuts = [
@@ -81,20 +85,45 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
                     value="<?php echo esc_attr(get_search_query()); ?>"
                     placeholder="Wyszukiwanie według nazwy części, numeru części, kategorii, modelu samochodu..."
                 >
+                <input type="hidden" name="post_type" value="product">
                 <button type="submit"><?php esc_html_e('Szukaj', 'gp-clone'); ?></button>
             </form>
 
             <div class="gp-main-actions">
-                <a class="gp-main-actions__item" href="<?php echo esc_url($account_url); ?>">
-                    <span class="gp-main-actions__icon" aria-hidden="true">&#128100;</span>
-                    <span><?php esc_html_e('Mój profil', 'gp-clone'); ?></span>
-                </a>
+                <div class="gp-profile-menu" data-gp-profile-menu>
+                    <button
+                        type="button"
+                        class="gp-main-actions__item gp-profile-menu__trigger"
+                        aria-expanded="false"
+                        aria-controls="gp-profile-dropdown"
+                        data-gp-profile-trigger
+                    >
+                        <span class="gp-main-actions__icon" aria-hidden="true">&#128100;</span>
+                        <span><?php esc_html_e('Mój profil', 'gp-clone'); ?></span>
+                    </button>
+                    <div class="gp-profile-dropdown" id="gp-profile-dropdown" data-gp-profile-dropdown hidden>
+                        <div class="gp-profile-dropdown__actions">
+                            <a class="gp-btn gp-btn--primary" href="<?php echo esc_url($login_url); ?>"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></a>
+                            <a class="gp-btn gp-btn--outline" href="<?php echo esc_url($register_url); ?>"><?php esc_html_e('Zarejestruj się', 'gp-clone'); ?></a>
+                        </div>
+                        <div class="gp-profile-dropdown__links">
+                            <a href="<?php echo esc_url($favourites_url); ?>">❤️ <?php esc_html_e('Ulubione', 'gp-clone'); ?></a>
+                            <a href="<?php echo esc_url($orders_url); ?>">🧾 <?php esc_html_e('Historia zamówień', 'gp-clone'); ?></a>
+                        </div>
+                    </div>
+                </div>
 
-                <a class="gp-main-actions__item gp-main-actions__item--cart" href="<?php echo esc_url($cart_url); ?>">
+                <button
+                    type="button"
+                    class="gp-main-actions__item gp-main-actions__item--cart"
+                    data-gp-mini-cart-open
+                    aria-haspopup="dialog"
+                    aria-controls="gp-mini-cart-panel"
+                >
                     <span class="gp-main-actions__icon" aria-hidden="true">&#128722;</span>
                     <span><?php esc_html_e('Koszyk', 'gp-clone'); ?></span>
                     <span class="gp-mini-cart-count"><?php echo $cart_count; ?></span>
-                </a>
+                </button>
             </div>
         </div>
 
@@ -117,6 +146,57 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
         </div>
     </div>
 </header>
+<div class="gp-mini-cart-overlay" data-gp-mini-cart-overlay hidden></div>
+<aside class="gp-mini-cart-panel" id="gp-mini-cart-panel" data-gp-mini-cart-panel hidden>
+    <button type="button" class="gp-mini-cart-panel__close" data-gp-mini-cart-close aria-label="<?php esc_attr_e('Zamknij podgląd koszyka', 'gp-clone'); ?>">×</button>
+    <h3><?php esc_html_e('Koszyk', 'gp-clone'); ?></h3>
+    <div class="gp-mini-cart-panel__content" data-gp-mini-cart-content>
+        <?php if (function_exists('gp_render_mini_cart_content')) { gp_render_mini_cart_content(); } ?>
+    </div>
+    <div class="gp-mini-cart-panel__footer">
+        <a href="<?php echo esc_url($checkout_url); ?>" class="gp-btn gp-btn--primary gp-mini-cart-checkout" data-gp-order-cta><?php esc_html_e('Zamówienie', 'gp-clone'); ?></a>
+        <a href="<?php echo esc_url($cart_url); ?>" class="gp-btn gp-btn--outline"><?php esc_html_e('Przejdź do koszyka', 'gp-clone'); ?></a>
+    </div>
+</aside>
+
+<div class="gp-auth-modal" data-gp-auth-modal hidden>
+    <div class="gp-auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="gp-auth-modal-title">
+        <button type="button" class="gp-auth-modal__close" data-gp-auth-modal-close aria-label="<?php esc_attr_e('Zamknij', 'gp-clone'); ?>">×</button>
+        <div class="gp-auth-modal__grid">
+            <section>
+                <h3 id="gp-auth-modal-title"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></h3>
+                <button type="button" class="gp-auth-social">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+                <form class="gp-auth-form gp-auth-form--compact" method="get" action="<?php echo esc_url(home_url('/zaloguj')); ?>">
+                    <div>
+                        <label for="gp-modal-email"><?php esc_html_e('Adres e-mail', 'gp-clone'); ?></label>
+                        <input id="gp-modal-email" type="email" name="email" required>
+                    </div>
+                    <div>
+                        <label for="gp-modal-password"><?php esc_html_e('Hasło', 'gp-clone'); ?></label>
+                        <div class="gp-password-wrap">
+                            <input id="gp-modal-password" type="password" name="password" required>
+                            <button type="button" class="gp-password-toggle" data-gp-password-toggle="gp-modal-password">👁</button>
+                        </div>
+                    </div>
+                    <div class="gp-auth-row">
+                        <label class="gp-auth-checkbox"><input type="checkbox" name="remember_me"><?php esc_html_e('Zapamiętaj mnie', 'gp-clone'); ?></label>
+                        <a href="#"><?php esc_html_e('Zapomniałeś hasła?', 'gp-clone'); ?></a>
+                    </div>
+                    <button type="submit" class="gp-auth-submit"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></button>
+                </form>
+            </section>
+            <aside class="gp-auth-modal__side">
+                <h4><?php esc_html_e('Nie masz konta?', 'gp-clone'); ?></h4>
+                <a href="<?php echo esc_url(home_url('/zarejestruj')); ?>" class="gp-btn gp-btn--primary"><?php esc_html_e('Zarejestruj się', 'gp-clone'); ?></a>
+                <a href="<?php echo esc_url($checkout_url); ?>" class="gp-btn gp-btn--outline"><?php esc_html_e('Kontynuuj jako gość', 'gp-clone'); ?></a>
+                <ul class="gp-auth-modal__benefits">
+                    <li><?php esc_html_e('Historia zamówień', 'gp-clone'); ?></li>
+                    <li><?php esc_html_e('Uproszczone zwroty', 'gp-clone'); ?></li>
+                </ul>
+            </aside>
+        </div>
+    </div>
+</div>
 
 <?php if (is_front_page()) : ?>
 <section class="gp-hero">

@@ -34,12 +34,20 @@ function gp_enqueue_fonts(): void
 add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
 
 add_action('wp_enqueue_scripts', function () {
-    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.3');
+    wp_enqueue_style('gp-clone-style', get_stylesheet_uri(), ['gp-poppins'], '1.3.4');
     wp_enqueue_script('gp-clone-home', get_template_directory_uri() . '/assets/js/home.js', ['jquery'], '1.3.3', true);
     wp_enqueue_script('gp-clone-language-switcher', get_template_directory_uri() . '/assets/js/language-switcher.js', [], '1.0.0', true);
+    wp_enqueue_script('gp-clone-profile-auth', get_template_directory_uri() . '/assets/js/profile-auth.js', [], '1.0.0', true);
+    wp_enqueue_script('gp-clone-cart-checkout', get_template_directory_uri() . '/assets/js/cart-checkout.js', ['jquery'], '1.0.0', true);
+    wp_localize_script('gp-clone-cart-checkout', 'gpCartCheckout', [
+        'ajaxUrl' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('gp_cart_checkout_nonce'),
+        'checkoutUrl' => function_exists('wc_get_checkout_url') ? wc_get_checkout_url() : home_url('/zamowienie'),
+        'isLoggedIn' => is_user_logged_in(),
+    ]);
 
     if (class_exists('WooCommerce')) {
-        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.3');
+        wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.3.4');
         wp_enqueue_script('wc-cart-fragments');
 
         if (is_product()) {
@@ -269,17 +277,28 @@ add_action('wp_head', function (): void {
 add_filter('woocommerce_show_page_title', '__return_false');
 
 add_action('after_switch_theme', function (): void {
-    if (get_page_by_path('kontakt', OBJECT, 'page') instanceof WP_Post) {
-        return;
-    }
+    $pages_to_create = [
+        ['title' => 'Kontakt', 'slug' => 'kontakt'],
+        ['title' => 'Zaloguj', 'slug' => 'zaloguj'],
+        ['title' => 'Zarejestruj', 'slug' => 'zarejestruj'],
+        ['title' => 'Polityka prywatności', 'slug' => 'polityka-prywatnosci'],
+        ['title' => 'Zwroty', 'slug' => 'zwroty'],
+        ['title' => 'Regulamin', 'slug' => 'regulamin-platnosci'],
+    ];
 
-    wp_insert_post([
-        'post_type' => 'page',
-        'post_status' => 'publish',
-        'post_title' => 'Kontakt',
-        'post_name' => 'kontakt',
-        'post_content' => '',
-    ]);
+    foreach ($pages_to_create as $page) {
+        if (get_page_by_path($page['slug'], OBJECT, 'page') instanceof WP_Post) {
+            continue;
+        }
+
+        wp_insert_post([
+            'post_type' => 'page',
+            'post_status' => 'publish',
+            'post_title' => $page['title'],
+            'post_name' => $page['slug'],
+            'post_content' => '',
+        ]);
+    }
 });
 
 add_action('admin_post_nopriv_gp_contact_form', 'gp_handle_contact_form_submit');
@@ -363,6 +382,173 @@ add_filter('woocommerce_add_to_cart_fragments', function ($fragments) {
 
     return $fragments;
 });
+
+function gp_render_mini_cart_content(): void
+{
+    $cart = function_exists('WC') ? WC()->cart : null;
+
+    if (!$cart || $cart->is_empty()) {
+        echo '<p class="gp-mini-cart-empty">' . esc_html__('Twój koszyk jest pusty.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    echo '<div class="gp-mini-cart-items">';
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'] ?? null;
+        if (!$product || !$product instanceof WC_Product) {
+            continue;
+        }
+
+        $product_url = $product->is_visible() ? $product->get_permalink($cart_item) : '';
+        $name = $product->get_name();
+        $thumbnail = $product->get_image('woocommerce_thumbnail');
+        $quantity = (int) ($cart_item['quantity'] ?? 1);
+        $regular = (float) $product->get_regular_price();
+        $current = (float) $product->get_price();
+
+        echo '<article class="gp-mini-cart-item" data-cart-item-key="' . esc_attr($cart_item_key) . '">';
+        echo '<div class="gp-mini-cart-item__thumb">' . $thumbnail . '</div>';
+        echo '<div class="gp-mini-cart-item__body">';
+        if ($product_url) {
+            echo '<a class="gp-mini-cart-item__name" href="' . esc_url($product_url) . '">' . esc_html($name) . '</a>';
+        } else {
+            echo '<span class="gp-mini-cart-item__name">' . esc_html($name) . '</span>';
+        }
+        echo '<p class="gp-mini-cart-item__price">';
+        if ($regular > 0 && $regular > $current) {
+            echo '<del>' . wp_kses_post(wc_price($regular)) . '</del> ';
+            echo '<ins>' . wp_kses_post(wc_price($current)) . '</ins>';
+        } else {
+            echo '<span>' . wp_kses_post(wc_price($current)) . '</span>';
+        }
+        echo '</p>';
+        echo '<div class="gp-mini-cart-item__actions">';
+        echo '<button type="button" data-gp-mini-cart-qty="-1" aria-label="' . esc_attr__('Zmniejsz ilość', 'gp-clone') . '">−</button>';
+        echo '<span>' . esc_html((string) $quantity) . '</span>';
+        echo '<button type="button" data-gp-mini-cart-qty="1" aria-label="' . esc_attr__('Zwiększ ilość', 'gp-clone') . '">+</button>';
+        echo '<button type="button" class="gp-mini-cart-item__remove" data-gp-mini-cart-remove aria-label="' . esc_attr__('Usuń produkt', 'gp-clone') . '">×</button>';
+        echo '</div>';
+        echo '</div>';
+        echo '</article>';
+    }
+    echo '</div>';
+    echo '<div class="gp-mini-cart-total"><span>' . esc_html__('Suma:', 'gp-clone') . '</span><strong>' . wp_kses_post($cart->get_cart_subtotal()) . '</strong></div>';
+}
+
+function gp_get_mini_cart_payload(): array
+{
+    ob_start();
+    gp_render_mini_cart_content();
+    $html = ob_get_clean();
+
+    return [
+        'contentHtml' => $html,
+        'count' => (int) (function_exists('WC') && WC()->cart ? WC()->cart->get_cart_contents_count() : 0),
+    ];
+}
+
+function gp_ajax_update_mini_cart_quantity(): void
+{
+    check_ajax_referer('gp_cart_checkout_nonce', 'nonce');
+
+    $item_key = sanitize_text_field((string) ($_POST['itemKey'] ?? ''));
+    $delta = (int) ($_POST['delta'] ?? 0);
+    if ($item_key === '' || $delta === 0 || !WC()->cart) {
+        wp_send_json_error(['message' => 'Invalid request'], 400);
+    }
+
+    $cart_item = WC()->cart->get_cart_item($item_key);
+    if (!$cart_item) {
+        wp_send_json_error(['message' => 'Item not found'], 404);
+    }
+
+    $current_qty = (int) ($cart_item['quantity'] ?? 1);
+    $next_qty = max(1, $current_qty + $delta);
+    WC()->cart->set_quantity($item_key, $next_qty, true);
+    WC()->cart->calculate_totals();
+
+    wp_send_json_success(gp_get_mini_cart_payload());
+}
+
+function gp_ajax_remove_mini_cart_item(): void
+{
+    check_ajax_referer('gp_cart_checkout_nonce', 'nonce');
+
+    $item_key = sanitize_text_field((string) ($_POST['itemKey'] ?? ''));
+    if ($item_key === '' || !WC()->cart) {
+        wp_send_json_error(['message' => 'Invalid request'], 400);
+    }
+
+    WC()->cart->remove_cart_item($item_key);
+    WC()->cart->calculate_totals();
+
+    wp_send_json_success(gp_get_mini_cart_payload());
+}
+
+function gp_ajax_get_mini_cart(): void
+{
+    check_ajax_referer('gp_cart_checkout_nonce', 'nonce');
+    wp_send_json_success(gp_get_mini_cart_payload());
+}
+
+add_action('wp_ajax_gp_update_mini_cart_quantity', 'gp_ajax_update_mini_cart_quantity');
+add_action('wp_ajax_nopriv_gp_update_mini_cart_quantity', 'gp_ajax_update_mini_cart_quantity');
+add_action('wp_ajax_gp_remove_mini_cart_item', 'gp_ajax_remove_mini_cart_item');
+add_action('wp_ajax_nopriv_gp_remove_mini_cart_item', 'gp_ajax_remove_mini_cart_item');
+add_action('wp_ajax_gp_get_mini_cart', 'gp_ajax_get_mini_cart');
+add_action('wp_ajax_nopriv_gp_get_mini_cart', 'gp_ajax_get_mini_cart');
+
+add_filter('gettext', function (string $translated, string $text, string $domain): string {
+    if ($domain !== 'woocommerce') {
+        return $translated;
+    }
+
+    if ($text === 'Free shipping') {
+        return 'Dostawa';
+    }
+
+    if ($text === 'FREE!') {
+        return '0 zł';
+    }
+
+    if ($text === 'Estimated total') {
+        return 'Suma';
+    }
+
+    return $translated;
+}, 20, 3);
+
+add_filter('woocommerce_order_button_text', static fn() => 'Przejdź do płatności');
+
+add_filter('the_content', function (string $content): string {
+    if (!function_exists('is_checkout') || !is_checkout() || is_wc_endpoint_url('order-received')) {
+        return $content;
+    }
+
+    if (!class_exists('WooCommerce')) {
+        return $content;
+    }
+
+    $has_checkout_block = strpos($content, 'wp:woocommerce/checkout') !== false;
+    if (!$has_checkout_block) {
+        return $content;
+    }
+
+    return do_shortcode('[woocommerce_checkout]');
+}, 20);
+
+add_action('woocommerce_before_checkout_form', function (): void {
+    if (!function_exists('WC') || !WC()->payment_gateways()) {
+        return;
+    }
+
+    $available_gateways = WC()->payment_gateways()->get_available_payment_gateways();
+    if ($available_gateways !== []) {
+        return;
+    }
+
+    wc_get_logger()->warning('Brak dostępnych metod płatności na checkout.', ['source' => 'gp-checkout']);
+}, 10);
 
 add_action('woocommerce_after_shop_loop_item_title', function () {
     echo '<p class="gp-delivery-note product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
@@ -1139,6 +1325,15 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     }
 }, 25);
 
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (is_admin() || !$query->is_main_query() || !$query->is_search()) {
+        return;
+    }
+
+    $query->set('post_type', 'product');
+    $query->set('posts_per_page', 24);
+}, 30);
+
 add_action('template_redirect', function (): void {
     if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
         return;
@@ -1205,4 +1400,64 @@ add_filter('posts_where', function (string $where, WP_Query $query): string {
     )';
 
     return $where;
+}, 20, 2);
+
+add_filter('posts_search', function (string $search, WP_Query $query): string {
+    if (is_admin() || !$query->is_main_query() || !$query->is_search()) {
+        return $search;
+    }
+
+    $post_type = $query->get('post_type');
+    $is_product_search = $post_type === 'product' || (is_array($post_type) && in_array('product', $post_type, true));
+    if (!$is_product_search) {
+        return $search;
+    }
+
+    global $wpdb;
+
+    $raw_phrase = trim((string) $query->get('s'));
+    if ($raw_phrase === '') {
+        return $search;
+    }
+
+    $terms = preg_split('/\s+/u', $raw_phrase) ?: [];
+    $terms = array_values(array_filter(array_map(static fn($term) => sanitize_text_field((string) $term), $terms)));
+
+    $phrase_like = '%' . $wpdb->esc_like($raw_phrase) . '%';
+    $title_clause = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $phrase_like);
+    $part_meta_clause = $wpdb->prepare(
+        "EXISTS (
+            SELECT 1 FROM {$wpdb->postmeta} pm
+            WHERE pm.post_id = {$wpdb->posts}.ID
+              AND pm.meta_key = '_part_number'
+              AND pm.meta_value LIKE %s
+        )",
+        $phrase_like
+    );
+
+    $term_conditions = [];
+    $term_meta_conditions = [];
+    foreach ($terms as $term) {
+        $term_like = '%' . $wpdb->esc_like($term) . '%';
+        $term_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $term_like);
+        $term_meta_conditions[] = $wpdb->prepare(
+            "EXISTS (
+                SELECT 1 FROM {$wpdb->postmeta} pm2
+                WHERE pm2.post_id = {$wpdb->posts}.ID
+                  AND pm2.meta_key = '_part_number'
+                  AND pm2.meta_value LIKE %s
+            )",
+            $term_like
+        );
+    }
+
+    $title_terms_clause = $term_conditions !== [] ? '(' . implode(' AND ', $term_conditions) . ')' : $title_clause;
+    $meta_terms_clause = $term_meta_conditions !== [] ? '(' . implode(' AND ', $term_meta_conditions) . ')' : $part_meta_clause;
+
+    return " AND (
+        ({$title_clause})
+        OR ({$title_terms_clause})
+        OR ({$part_meta_clause})
+        OR ({$meta_terms_clause})
+    ) ";
 }, 20, 2);
