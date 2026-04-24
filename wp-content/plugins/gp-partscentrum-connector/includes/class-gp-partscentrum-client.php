@@ -7,6 +7,8 @@ if (!defined('ABSPATH')) {
 class GP_Partscentrum_Client
 {
     private const BASE_URL = 'https://partscentrum.jns.pl';
+    private const ADMIN_LOG_OPTION = 'gp_partscentrum_admin_logs';
+    private const ADMIN_LOG_LIMIT = 100;
 
     /** @var array<string, string> */
     private array $cookies = [];
@@ -33,55 +35,69 @@ class GP_Partscentrum_Client
 
     public function login(): bool
     {
+        $diagnostics = $this->run_login_diagnostic();
+
+        return (bool) ($diagnostics['login_success'] ?? false);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function run_login_diagnostic(): array
+    {
         $login = defined('GP_PARTSCENTRUM_LOGIN') ? (string) GP_PARTSCENTRUM_LOGIN : '';
         $password = defined('GP_PARTSCENTRUM_PASSWORD') ? (string) GP_PARTSCENTRUM_PASSWORD : '';
+        $loginUrl = $this->absoluteUrl((string) $this->runtime['login_path']);
+        $diagnostics = [
+            'login_url' => $loginUrl,
+            'login_http_code' => 0,
+            'form_found' => false,
+            'redirect_detected' => false,
+            'user_logged_in' => false,
+            'login_success' => false,
+            'error_reason' => '',
+        ];
 
         if ($login === '' || $password === '') {
             $this->log('error', 'Brak danych logowania GP_PARTSCENTRUM_LOGIN/GP_PARTSCENTRUM_PASSWORD.');
-            return false;
+            $diagnostics['error_reason'] = 'missing_credentials';
+            return $diagnostics;
         }
 
-        $loginUrl = $this->absoluteUrl((string) $this->runtime['login_path']);
         $response = $this->request('GET', $loginUrl);
         if (is_wp_error($response)) {
             $this->log('error', 'Nie udało się pobrać strony logowania.', ['error' => $response->get_error_message()]);
-            $this->log_debug([
-                'login_http_code' => 0,
-                'login_success' => false,
-                'error_reason' => 'login_page_request_failed',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_page_request_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
+        $diagnostics['login_http_code'] = $code;
         $body = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 400 || $body === '') {
             $this->log('error', 'Niepoprawna odpowiedź strony logowania.', ['status' => $code]);
-            $this->log_debug([
-                'login_http_code' => $code,
-                'login_success' => false,
-                'error_reason' => 'invalid_login_page_response',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'invalid_login_page_response';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $this->captureCookies($response);
         $form = $this->extractLoginForm($body, $loginUrl);
         if ($form === null) {
             $this->log('error', 'Nie znaleziono formularza logowania na stronie dostawcy.');
-            $this->log_debug([
-                'login_http_code' => $code,
-                'login_success' => false,
-                'error_reason' => 'login_form_not_found',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_form_not_found';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
+        $diagnostics['form_found'] = true;
 
         $payload = $form['hidden'];
         $payload[$form['username_field']] = $login;
         $payload[$form['password_field']] = $password;
 
         $submitResponse = $this->request('POST', $form['action'], [
+            'redirection' => 0,
             'body' => $payload,
             'headers' => [
                 'Referer' => $loginUrl,
@@ -91,36 +107,42 @@ class GP_Partscentrum_Client
 
         if (is_wp_error($submitResponse)) {
             $this->log('error', 'Błąd podczas wysyłki formularza logowania.', ['error' => $submitResponse->get_error_message()]);
-            $this->log_debug([
-                'login_http_code' => 0,
-                'login_success' => false,
-                'error_reason' => 'login_submit_failed',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_submit_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $this->captureCookies($submitResponse);
         $submitCode = (int) wp_remote_retrieve_response_code($submitResponse);
+        $diagnostics['login_http_code'] = $submitCode;
         $submitBody = (string) wp_remote_retrieve_body($submitResponse);
+        $redirectLocation = (string) wp_remote_retrieve_header($submitResponse, 'location');
+        $diagnostics['redirect_detected'] = $submitCode >= 300 && $submitCode < 400 && $redirectLocation !== '';
 
         if ($submitCode >= 400) {
             $this->log('error', 'Logowanie zwróciło błąd HTTP.', ['status' => $submitCode]);
-            $this->log_debug([
-                'login_http_code' => $submitCode,
-                'login_success' => false,
-                'error_reason' => 'login_http_error',
+            $diagnostics['error_reason'] = 'login_http_error';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        if ($diagnostics['redirect_detected']) {
+            $redirectResponse = $this->request('GET', $this->absoluteUrl($redirectLocation), [
+                'headers' => ['Referer' => $loginUrl],
             ]);
-            return false;
+            if (!is_wp_error($redirectResponse)) {
+                $this->captureCookies($redirectResponse);
+                $submitBody = (string) wp_remote_retrieve_body($redirectResponse);
+            }
         }
 
         $loggedIn = $this->detectAuthenticatedState($submitBody);
-        $this->log_debug([
-            'login_http_code' => $submitCode,
-            'login_success' => $loggedIn,
-            'error_reason' => $loggedIn ? '' : 'auth_markers_missing',
-        ]);
+        $diagnostics['user_logged_in'] = $loggedIn;
+        $diagnostics['login_success'] = $loggedIn;
+        $diagnostics['error_reason'] = $loggedIn ? '' : 'auth_markers_missing';
+        $this->log_debug($diagnostics);
 
-        return $loggedIn;
+        return $diagnostics;
     }
 
     /**
@@ -219,6 +241,87 @@ class GP_Partscentrum_Client
             'success' => true,
             'data' => $parsed,
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function run_search_diagnostic(string $part_number, float $marginPercent = 10.0): array
+    {
+        $partNumber = strtoupper(trim(preg_replace('/[^A-Za-z0-9\-_.\/]/', '', $part_number) ?? ''));
+        $searchUrl = $this->absoluteUrl((string) $this->runtime['search_path']);
+        $method = (string) $this->runtime['search_http_method'];
+        $fieldName = (string) apply_filters('gp_partscentrum_search_field', 'pn');
+        $diagnostics = [
+            'login_url' => $this->absoluteUrl((string) $this->runtime['login_path']),
+            'search_url' => $searchUrl,
+            'search_method' => $method,
+            'search_field_name_used' => $fieldName,
+            'login_success' => false,
+            'search_http_code' => 0,
+            'results_table_found' => false,
+            'parsed_results_count' => 0,
+            'error_reason' => '',
+            'sample_results' => [],
+        ];
+
+        if ($partNumber === '') {
+            $diagnostics['error_reason'] = 'invalid_part_number';
+            return $diagnostics;
+        }
+
+        $loginDiagnostics = $this->run_login_diagnostic();
+        $diagnostics['login_success'] = (bool) ($loginDiagnostics['login_success'] ?? false);
+        if (!$diagnostics['login_success']) {
+            $diagnostics['error_reason'] = (string) ($loginDiagnostics['error_reason'] ?? 'login_failed');
+            return $diagnostics;
+        }
+
+        $args = [
+            'headers' => [
+                'Referer' => $searchUrl,
+            ],
+        ];
+
+        if ($method === 'POST') {
+            $args['body'] = [
+                $fieldName => $partNumber,
+                'pn' => $partNumber,
+                'part_number' => $partNumber,
+                'partNumber' => $partNumber,
+            ];
+        } else {
+            $searchUrl = add_query_arg([$fieldName => $partNumber], $searchUrl);
+            $diagnostics['search_url'] = $searchUrl;
+        }
+
+        $response = $this->request($method, $searchUrl, $args);
+        if (is_wp_error($response)) {
+            $diagnostics['error_reason'] = 'search_request_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        $this->captureCookies($response);
+        $searchCode = (int) wp_remote_retrieve_response_code($response);
+        $diagnostics['search_http_code'] = $searchCode;
+        $contentType = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
+        $body = (string) wp_remote_retrieve_body($response);
+        $parsed = $this->parseSearchResult($body, $contentType, $partNumber);
+
+        if ($parsed === null) {
+            $diagnostics['error_reason'] = 'results_not_found_or_unparsed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        $items = (array) ($parsed['items'] ?? []);
+        $diagnostics['results_table_found'] = true;
+        $diagnostics['parsed_results_count'] = count($items);
+        $diagnostics['sample_results'] = $this->build_sample_results($items, $marginPercent);
+        $this->log_debug($diagnostics);
+
+        return $diagnostics;
     }
 
     /**
@@ -577,11 +680,16 @@ class GP_Partscentrum_Client
     private function log_debug(array $context): void
     {
         $allowed = [
+            'login_url' => (string) ($context['login_url'] ?? ''),
             'login_http_code' => (int) ($context['login_http_code'] ?? 0),
+            'form_found' => (bool) ($context['form_found'] ?? false),
+            'redirect_detected' => (bool) ($context['redirect_detected'] ?? false),
+            'user_logged_in' => (bool) ($context['user_logged_in'] ?? false),
             'login_success' => (bool) ($context['login_success'] ?? false),
             'search_http_code' => (int) ($context['search_http_code'] ?? 0),
             'search_url' => (string) ($context['search_url'] ?? ''),
             'search_method' => (string) ($context['search_method'] ?? ''),
+            'search_field_name_used' => (string) ($context['search_field_name_used'] ?? ''),
             'submitted_part_number' => (string) ($context['submitted_part_number'] ?? ''),
             'results_table_found' => (bool) ($context['results_table_found'] ?? false),
             'parsed_results_count' => (int) ($context['parsed_results_count'] ?? 0),
@@ -604,5 +712,72 @@ class GP_Partscentrum_Client
         unset($redacted['password'], $redacted['login']);
 
         wc_get_logger()->log($level, $message . ' ' . wp_json_encode($redacted), ['source' => 'gp-partscentrum-connector']);
+        $this->store_admin_log($level, $message, $redacted);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public static function get_recent_logs(int $limit = 30): array
+    {
+        $logs = get_option(self::ADMIN_LOG_OPTION, []);
+        if (!is_array($logs)) {
+            return [];
+        }
+
+        return array_slice($logs, 0, max(1, $limit));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $items
+     * @return array<int,array<string,mixed>>
+     */
+    private function build_sample_results(array $items, float $marginPercent): array
+    {
+        $sample = [];
+        foreach (array_slice($items, 0, 3) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $gross = (float) ($row['supplier_price_gross_discounted'] ?? 0);
+            $sample[] = [
+                'name' => (string) ($row['supplier_title'] ?? ''),
+                'pn' => (string) ($row['supplier_part_number'] ?? ''),
+                'gross_discounted' => (float) wc_format_decimal($gross, 2),
+                'price_with_margin' => (float) wc_format_decimal($gross * (1 + ($marginPercent / 100)), 2),
+                'availability' => (string) ($row['availability'] ?? ''),
+            ];
+        }
+
+        return $sample;
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function store_admin_log(string $level, string $message, array $context): void
+    {
+        $logs = get_option(self::ADMIN_LOG_OPTION, []);
+        if (!is_array($logs)) {
+            $logs = [];
+        }
+
+        $logs = array_values($logs);
+        array_unshift($logs, [
+            'timestamp' => current_time('mysql'),
+            'action' => str_contains(strtolower($message), 'diagnostics') ? 'diagnostics' : 'runtime',
+            'status' => $level,
+            'message' => $message,
+            'error' => (string) ($context['error_reason'] ?? $context['error'] ?? ''),
+            'http_code' => (int) ($context['search_http_code'] ?? $context['login_http_code'] ?? 0),
+            'results_count' => (int) ($context['parsed_results_count'] ?? 0),
+        ]);
+
+        if (count($logs) > self::ADMIN_LOG_LIMIT) {
+            $logs = array_slice($logs, 0, self::ADMIN_LOG_LIMIT);
+        }
+
+        update_option(self::ADMIN_LOG_OPTION, $logs, false);
     }
 }
