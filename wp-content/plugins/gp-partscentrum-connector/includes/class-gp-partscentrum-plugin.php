@@ -9,6 +9,9 @@ class GP_Partscentrum_Plugin
     private const PAGE_SLUG = 'nowe-czesci-skoda';
     private const ACTION_SEARCH = 'gp_partscentrum_search';
     private const ACTION_ADD_TO_CART = 'gp_partscentrum_add_to_cart';
+    private const ACTION_ADMIN_LOGIN_TEST = 'gp_partscentrum_admin_login_test';
+    private const ACTION_ADMIN_SEARCH_TEST = 'gp_partscentrum_admin_search_test';
+    private const ADMIN_MENU_SLUG = 'gp-partscentrum-admin';
     private const CACHE_TTL = 600;
     private const RATE_LIMIT = 12;
     private const RATE_WINDOW = 300;
@@ -41,6 +44,9 @@ class GP_Partscentrum_Plugin
 
         add_action('admin_post_nopriv_' . self::ACTION_ADD_TO_CART, [$this, 'handle_add_to_cart']);
         add_action('admin_post_' . self::ACTION_ADD_TO_CART, [$this, 'handle_add_to_cart']);
+        add_action('admin_post_' . self::ACTION_ADMIN_LOGIN_TEST, [$this, 'handle_admin_login_test']);
+        add_action('admin_post_' . self::ACTION_ADMIN_SEARCH_TEST, [$this, 'handle_admin_search_test']);
+        add_action('admin_menu', [$this, 'register_admin_menu']);
 
         add_action('init', [__CLASS__, 'ensure_target_page']);
         add_action('init', [__CLASS__, 'ensure_dynamic_product']);
@@ -154,6 +160,162 @@ class GP_Partscentrum_Plugin
         </section>
         <?php
         return (string) ob_get_clean();
+    }
+
+    public function register_admin_menu(): void
+    {
+        add_submenu_page(
+            'woocommerce',
+            'Partscentrum',
+            'Partscentrum',
+            'manage_options',
+            self::ADMIN_MENU_SLUG,
+            [$this, 'render_admin_page']
+        );
+    }
+
+    public function render_admin_page(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Brak uprawnień.');
+        }
+
+        $flash = $this->load_admin_flash();
+        $configStatus = [
+            'login' => defined('GP_PARTSCENTRUM_LOGIN') && (string) GP_PARTSCENTRUM_LOGIN !== '',
+            'password' => defined('GP_PARTSCENTRUM_PASSWORD') && (string) GP_PARTSCENTRUM_PASSWORD !== '',
+        ];
+        $logs = GP_Partscentrum_Client::get_recent_logs(30);
+        ?>
+        <div class="wrap">
+            <h1>GP Partscentrum Connector — diagnostyka</h1>
+
+            <h2>Status konfiguracji</h2>
+            <table class="widefat striped" style="max-width: 700px;">
+                <tbody>
+                <tr>
+                    <th scope="row">GP_PARTSCENTRUM_LOGIN</th>
+                    <td><?php echo $configStatus['login'] ? 'ustawiony' : 'brak'; ?></td>
+                </tr>
+                <tr>
+                    <th scope="row">GP_PARTSCENTRUM_PASSWORD</th>
+                    <td><?php echo $configStatus['password'] ? 'ustawione' : 'brak'; ?></td>
+                </tr>
+                </tbody>
+            </table>
+
+            <h2>Test logowania</h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="<?php echo esc_attr(self::ACTION_ADMIN_LOGIN_TEST); ?>">
+                <?php wp_nonce_field('gp_partscentrum_admin_login_test', '_gp_admin_nonce'); ?>
+                <?php submit_button('Testuj logowanie', 'secondary', 'submit', false); ?>
+            </form>
+
+            <h2>Test wyszukiwania</h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="<?php echo esc_attr(self::ACTION_ADMIN_SEARCH_TEST); ?>">
+                <?php wp_nonce_field('gp_partscentrum_admin_search_test', '_gp_admin_nonce'); ?>
+                <label for="gp-admin-part-number"><strong>Numer części do testu</strong></label><br>
+                <input type="text" name="part_number" id="gp-admin-part-number" class="regular-text" required maxlength="64" placeholder="np. 5Q0820803E">
+                <?php submit_button('Testuj wyszukiwanie', 'secondary', 'submit', false, ['style' => 'margin-left:8px']); ?>
+            </form>
+
+            <?php if (is_array($flash)): ?>
+                <h2>Wynik ostatniego testu</h2>
+                <table class="widefat striped">
+                    <tbody>
+                    <?php foreach ($flash as $key => $value): ?>
+                        <?php if ($key === 'sample_results' && is_array($value)): ?>
+                            <tr>
+                                <th scope="row">sample_results</th>
+                                <td>
+                                    <?php if ($value === []): ?>
+                                        brak
+                                    <?php else: ?>
+                                        <table class="widefat striped">
+                                            <thead>
+                                            <tr>
+                                                <th>Nazwa</th>
+                                                <th>PN</th>
+                                                <th>Cena brutto po rabacie</th>
+                                                <th>Cena po marży +10%</th>
+                                                <th>Dostępność</th>
+                                            </tr>
+                                            </thead>
+                                            <tbody>
+                                            <?php foreach ($value as $sample): ?>
+                                                <?php if (!is_array($sample)) {
+                                                    continue;
+                                                } ?>
+                                                <tr>
+                                                    <td><?php echo esc_html((string) ($sample['name'] ?? '')); ?></td>
+                                                    <td><?php echo esc_html((string) ($sample['pn'] ?? '')); ?></td>
+                                                    <td><?php echo esc_html((string) wc_price((float) ($sample['gross_discounted'] ?? 0))); ?></td>
+                                                    <td><?php echo esc_html((string) wc_price((float) ($sample['price_with_margin'] ?? 0))); ?></td>
+                                                    <td><?php echo esc_html((string) ($sample['availability'] ?? '')); ?></td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <tr>
+                                <th scope="row"><?php echo esc_html((string) $key); ?></th>
+                                <td>
+                                    <?php
+                                    if (is_bool($value)) {
+                                        echo esc_html($value ? 'true' : 'false');
+                                    } elseif (is_array($value)) {
+                                        $flat = array_filter(array_map(static fn($v): string => is_scalar($v) ? (string) $v : '', $value));
+                                        echo esc_html($flat === [] ? '[]' : implode(', ', $flat));
+                                    } else {
+                                        echo esc_html((string) $value);
+                                    }
+                                    ?>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+
+            <h2>Ostatnie logi</h2>
+            <table class="widefat striped">
+                <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Akcja</th>
+                    <th>Status</th>
+                    <th>Komunikat błędu</th>
+                    <th>HTTP code</th>
+                    <th>Liczba wyników</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php if ($logs === []): ?>
+                    <tr><td colspan="6">Brak logów.</td></tr>
+                <?php else: ?>
+                    <?php foreach ($logs as $log): ?>
+                        <?php if (!is_array($log)) {
+                            continue;
+                        } ?>
+                        <tr>
+                            <td><?php echo esc_html((string) ($log['timestamp'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($log['action'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($log['status'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($log['error'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($log['http_code'] ?? 0)); ?></td>
+                            <td><?php echo esc_html((string) ($log['results_count'] ?? 0)); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php
     }
 
     public function handle_search(): void
@@ -286,6 +448,39 @@ class GP_Partscentrum_Plugin
         wc_add_notice('Dodano nową część Skoda do koszyka.', 'success');
         wp_safe_redirect(wc_get_cart_url());
         exit;
+    }
+
+    public function handle_admin_login_test(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Brak uprawnień.');
+        }
+
+        if (!$this->verify_nonce('_gp_admin_nonce', 'gp_partscentrum_admin_login_test')) {
+            wp_die('Błędny nonce.');
+        }
+
+        $client = new GP_Partscentrum_Client();
+        $result = $client->run_login_diagnostic();
+        $this->store_admin_flash($result);
+        $this->redirect_to_admin_page();
+    }
+
+    public function handle_admin_search_test(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Brak uprawnień.');
+        }
+
+        if (!$this->verify_nonce('_gp_admin_nonce', 'gp_partscentrum_admin_search_test')) {
+            wp_die('Błędny nonce.');
+        }
+
+        $partNumber = $this->sanitize_part_number((string) ($_POST['part_number'] ?? ''));
+        $client = new GP_Partscentrum_Client();
+        $result = $client->run_search_diagnostic($partNumber, self::MARGIN_PERCENT);
+        $this->store_admin_flash($result);
+        $this->redirect_to_admin_page();
     }
 
     public function apply_dynamic_prices(WC_Cart $cart): void
@@ -436,9 +631,38 @@ class GP_Partscentrum_Plugin
         return 'gp_pc_flash_' . md5($this->user_identifier());
     }
 
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function store_admin_flash(array $payload): void
+    {
+        set_transient('gp_pc_admin_flash_' . get_current_user_id(), $payload, 300);
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function load_admin_flash(): ?array
+    {
+        $key = 'gp_pc_admin_flash_' . get_current_user_id();
+        $value = get_transient($key);
+        if (is_array($value)) {
+            delete_transient($key);
+            return $value;
+        }
+
+        return null;
+    }
+
     private function redirect_to_landing(): void
     {
         wp_safe_redirect(home_url('/' . self::PAGE_SLUG . '/'));
+        exit;
+    }
+
+    private function redirect_to_admin_page(): void
+    {
+        wp_safe_redirect(admin_url('admin.php?page=' . self::ADMIN_MENU_SLUG));
         exit;
     }
 }

@@ -7,8 +7,10 @@ if (!defined('ABSPATH')) {
 class GP_Partscentrum_Client
 {
     private const BASE_URL = 'https://partscentrum.jns.pl';
+    private const ADMIN_LOG_OPTION = 'gp_partscentrum_admin_logs';
+    private const ADMIN_LOG_LIMIT = 100;
 
-    /** @var array<string, string> */
+    /** @var array<string, WP_Http_Cookie> */
     private array $cookies = [];
 
     /** @var string[] */
@@ -33,55 +35,70 @@ class GP_Partscentrum_Client
 
     public function login(): bool
     {
+        $diagnostics = $this->run_login_diagnostic();
+
+        return (bool) ($diagnostics['login_success'] ?? false);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function run_login_diagnostic(): array
+    {
         $login = defined('GP_PARTSCENTRUM_LOGIN') ? (string) GP_PARTSCENTRUM_LOGIN : '';
         $password = defined('GP_PARTSCENTRUM_PASSWORD') ? (string) GP_PARTSCENTRUM_PASSWORD : '';
+        $loginUrl = $this->absoluteUrl((string) $this->runtime['login_path']);
+        $diagnostics = [
+            'login_url' => $loginUrl,
+            'login_http_code' => 0,
+            'form_found' => false,
+            'redirect_detected' => false,
+            'user_logged_in' => false,
+            'login_success' => false,
+            'cookies_after_login_count' => 0,
+            'error_reason' => '',
+        ];
 
         if ($login === '' || $password === '') {
             $this->log('error', 'Brak danych logowania GP_PARTSCENTRUM_LOGIN/GP_PARTSCENTRUM_PASSWORD.');
-            return false;
+            $diagnostics['error_reason'] = 'missing_credentials';
+            return $diagnostics;
         }
 
-        $loginUrl = $this->absoluteUrl((string) $this->runtime['login_path']);
         $response = $this->request('GET', $loginUrl);
         if (is_wp_error($response)) {
             $this->log('error', 'Nie udało się pobrać strony logowania.', ['error' => $response->get_error_message()]);
-            $this->log_debug([
-                'login_http_code' => 0,
-                'login_success' => false,
-                'error_reason' => 'login_page_request_failed',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_page_request_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
+        $diagnostics['login_http_code'] = $code;
         $body = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 400 || $body === '') {
             $this->log('error', 'Niepoprawna odpowiedź strony logowania.', ['status' => $code]);
-            $this->log_debug([
-                'login_http_code' => $code,
-                'login_success' => false,
-                'error_reason' => 'invalid_login_page_response',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'invalid_login_page_response';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $this->captureCookies($response);
         $form = $this->extractLoginForm($body, $loginUrl);
         if ($form === null) {
             $this->log('error', 'Nie znaleziono formularza logowania na stronie dostawcy.');
-            $this->log_debug([
-                'login_http_code' => $code,
-                'login_success' => false,
-                'error_reason' => 'login_form_not_found',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_form_not_found';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
+        $diagnostics['form_found'] = true;
 
         $payload = $form['hidden'];
         $payload[$form['username_field']] = $login;
         $payload[$form['password_field']] = $password;
 
         $submitResponse = $this->request('POST', $form['action'], [
+            'redirection' => 0,
             'body' => $payload,
             'headers' => [
                 'Referer' => $loginUrl,
@@ -91,36 +108,43 @@ class GP_Partscentrum_Client
 
         if (is_wp_error($submitResponse)) {
             $this->log('error', 'Błąd podczas wysyłki formularza logowania.', ['error' => $submitResponse->get_error_message()]);
-            $this->log_debug([
-                'login_http_code' => 0,
-                'login_success' => false,
-                'error_reason' => 'login_submit_failed',
-            ]);
-            return false;
+            $diagnostics['error_reason'] = 'login_submit_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
         }
 
         $this->captureCookies($submitResponse);
+        $diagnostics['cookies_after_login_count'] = count($this->cookies);
         $submitCode = (int) wp_remote_retrieve_response_code($submitResponse);
+        $diagnostics['login_http_code'] = $submitCode;
         $submitBody = (string) wp_remote_retrieve_body($submitResponse);
+        $redirectLocation = (string) wp_remote_retrieve_header($submitResponse, 'location');
+        $diagnostics['redirect_detected'] = $submitCode >= 300 && $submitCode < 400 && $redirectLocation !== '';
 
         if ($submitCode >= 400) {
             $this->log('error', 'Logowanie zwróciło błąd HTTP.', ['status' => $submitCode]);
-            $this->log_debug([
-                'login_http_code' => $submitCode,
-                'login_success' => false,
-                'error_reason' => 'login_http_error',
+            $diagnostics['error_reason'] = 'login_http_error';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        if ($diagnostics['redirect_detected']) {
+            $redirectResponse = $this->request('GET', $this->absoluteUrl($redirectLocation), [
+                'headers' => ['Referer' => $loginUrl],
             ]);
-            return false;
+            if (!is_wp_error($redirectResponse)) {
+                $this->captureCookies($redirectResponse);
+                $submitBody = (string) wp_remote_retrieve_body($redirectResponse);
+            }
         }
 
         $loggedIn = $this->detectAuthenticatedState($submitBody);
-        $this->log_debug([
-            'login_http_code' => $submitCode,
-            'login_success' => $loggedIn,
-            'error_reason' => $loggedIn ? '' : 'auth_markers_missing',
-        ]);
+        $diagnostics['user_logged_in'] = $loggedIn;
+        $diagnostics['login_success'] = $loggedIn;
+        $diagnostics['error_reason'] = $loggedIn ? '' : 'auth_markers_missing';
+        $this->log_debug($diagnostics);
 
-        return $loggedIn;
+        return $diagnostics;
     }
 
     /**
@@ -143,34 +167,35 @@ class GP_Partscentrum_Client
             ];
         }
 
-        $searchUrl = $this->absoluteUrl((string) $this->runtime['search_path']);
-        $method = (string) $this->runtime['search_http_method'];
-        $fieldName = (string) apply_filters('gp_partscentrum_search_field', 'pn');
-
-        $args = [
-            'headers' => [
-                'Referer' => $searchUrl,
-            ],
-        ];
-
-        if ($method === 'POST') {
-            $args['body'] = [
-                $fieldName => $partNumber,
-                'pn' => $partNumber,
-                'part_number' => $partNumber,
-                'partNumber' => $partNumber,
-            ];
-        } else {
-            $searchUrl = add_query_arg([$fieldName => $partNumber], $searchUrl);
-        }
-
-        $response = $this->request($method, $searchUrl, $args);
-
-        if (is_wp_error($response)) {
+        $searchRequest = $this->prepare_search_request($partNumber);
+        if (($searchRequest['success'] ?? false) !== true) {
             $this->log_debug([
                 'search_http_code' => 0,
-                'search_url' => $searchUrl,
-                'search_method' => $method,
+                'search_url' => (string) ($searchRequest['request_url'] ?? ''),
+                'search_method' => (string) ($searchRequest['method'] ?? ''),
+                'cookies_used_in_search_count' => count($this->cookies),
+                'submitted_part_number' => $partNumber,
+                'results_table_found' => false,
+                'parsed_results_count' => 0,
+                'error_reason' => (string) ($searchRequest['error_reason'] ?? 'search_form_prepare_failed'),
+            ]);
+            return [
+                'success' => false,
+                'error' => 'Nie udało się połączyć z panelem dostawcy.',
+            ];
+        }
+
+        $responseMeta = $this->request_with_redirects(
+            (string) ($searchRequest['method'] ?? 'POST'),
+            (string) ($searchRequest['request_url'] ?? ''),
+            (array) ($searchRequest['args'] ?? [])
+        );
+        if (is_wp_error($responseMeta['response'] ?? null)) {
+            $this->log_debug([
+                'search_http_code' => 0,
+                'search_url' => (string) ($searchRequest['request_url'] ?? ''),
+                'search_method' => (string) ($searchRequest['method'] ?? ''),
+                'cookies_used_in_search_count' => count($this->cookies),
                 'submitted_part_number' => $partNumber,
                 'results_table_found' => false,
                 'parsed_results_count' => 0,
@@ -182,6 +207,8 @@ class GP_Partscentrum_Client
             ];
         }
 
+        $response = (array) ($responseMeta['response'] ?? []);
+
         $this->captureCookies($response);
         $searchCode = (int) wp_remote_retrieve_response_code($response);
         $contentType = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
@@ -191,8 +218,9 @@ class GP_Partscentrum_Client
         if ($parsed === null) {
             $this->log_debug([
                 'search_http_code' => $searchCode,
-                'search_url' => $searchUrl,
-                'search_method' => $method,
+                'search_url' => (string) ($searchRequest['request_url'] ?? ''),
+                'search_method' => (string) ($searchRequest['method'] ?? ''),
+                'cookies_used_in_search_count' => count($this->cookies),
                 'submitted_part_number' => $partNumber,
                 'results_table_found' => false,
                 'parsed_results_count' => 0,
@@ -207,8 +235,9 @@ class GP_Partscentrum_Client
         $this->lastSearch = $parsed;
         $this->log_debug([
             'search_http_code' => $searchCode,
-            'search_url' => $searchUrl,
-            'search_method' => $method,
+            'search_url' => (string) ($searchRequest['request_url'] ?? ''),
+            'search_method' => (string) ($searchRequest['method'] ?? ''),
+            'cookies_used_in_search_count' => count($this->cookies),
             'submitted_part_number' => $partNumber,
             'results_table_found' => true,
             'parsed_results_count' => count((array) ($parsed['items'] ?? [])),
@@ -219,6 +248,108 @@ class GP_Partscentrum_Client
             'success' => true,
             'data' => $parsed,
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function run_search_diagnostic(string $part_number, float $marginPercent = 10.0): array
+    {
+        $partNumber = strtoupper(trim(preg_replace('/[^A-Za-z0-9\-_.\/]/', '', $part_number) ?? ''));
+        $searchUrl = $this->absoluteUrl((string) $this->runtime['search_path']);
+        $diagnostics = [
+            'login_url' => $this->absoluteUrl((string) $this->runtime['login_path']),
+            'search_url' => $searchUrl,
+            'search_method' => (string) $this->runtime['search_http_method'],
+            'search_field_name_used' => '',
+            'search_form_fields_detected' => [],
+            'search_hidden_fields_detected' => [],
+            'login_success' => false,
+            'search_http_code' => 0,
+            'search_response_length' => 0,
+            'search_contains_lista_produktow' => false,
+            'search_contains_do_koszyka' => false,
+            'search_contains_pn' => false,
+            'search_contains_table' => false,
+            'final_search_url' => $searchUrl,
+            'redirect_count' => 0,
+            'cookies_used_in_search_count' => 0,
+            'cookies_after_login_count' => 0,
+            'results_table_found' => false,
+            'parsed_results_count' => 0,
+            'error_reason' => '',
+            'sample_results' => [],
+            'debug_html_file' => '',
+        ];
+
+        if ($partNumber === '') {
+            $diagnostics['error_reason'] = 'invalid_part_number';
+            return $diagnostics;
+        }
+
+        $loginDiagnostics = $this->run_login_diagnostic();
+        $diagnostics['login_success'] = (bool) ($loginDiagnostics['login_success'] ?? false);
+        $diagnostics['cookies_after_login_count'] = (int) ($loginDiagnostics['cookies_after_login_count'] ?? 0);
+        if (!$diagnostics['login_success']) {
+            $diagnostics['error_reason'] = (string) ($loginDiagnostics['error_reason'] ?? 'login_failed');
+            return $diagnostics;
+        }
+
+        $searchRequest = $this->prepare_search_request($partNumber);
+        if (($searchRequest['success'] ?? false) !== true) {
+            $diagnostics['error_reason'] = (string) ($searchRequest['error_reason'] ?? 'search_form_prepare_failed');
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        $diagnostics['search_method'] = (string) ($searchRequest['method'] ?? $diagnostics['search_method']);
+        $diagnostics['search_url'] = (string) ($searchRequest['request_url'] ?? $searchUrl);
+        $diagnostics['search_field_name_used'] = (string) ($searchRequest['field_name'] ?? '');
+        $diagnostics['search_form_fields_detected'] = (array) ($searchRequest['field_names'] ?? []);
+        $diagnostics['search_hidden_fields_detected'] = (array) ($searchRequest['hidden_field_names'] ?? []);
+        $diagnostics['cookies_used_in_search_count'] = count($this->cookies);
+
+        $responseMeta = $this->request_with_redirects(
+            (string) ($searchRequest['method'] ?? 'POST'),
+            (string) ($searchRequest['request_url'] ?? $searchUrl),
+            (array) ($searchRequest['args'] ?? [])
+        );
+
+        if (is_wp_error($responseMeta['response'] ?? null)) {
+            $diagnostics['error_reason'] = 'search_request_failed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        $response = (array) ($responseMeta['response'] ?? []);
+        $this->captureCookies($response);
+        $diagnostics['search_http_code'] = (int) wp_remote_retrieve_response_code($response);
+        $diagnostics['redirect_count'] = (int) ($responseMeta['redirect_count'] ?? 0) + (int) ($searchRequest['prefetch_redirect_count'] ?? 0);
+        $diagnostics['final_search_url'] = (string) ($responseMeta['final_url'] ?? $diagnostics['search_url']);
+        $contentType = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
+        $body = (string) wp_remote_retrieve_body($response);
+        $diagnostics['search_response_length'] = strlen($body);
+        $bodyLower = strtolower($body);
+        $diagnostics['search_contains_lista_produktow'] = str_contains($bodyLower, 'lista produktów') || str_contains($bodyLower, 'lista produktow');
+        $diagnostics['search_contains_do_koszyka'] = str_contains($bodyLower, 'do koszyka');
+        $diagnostics['search_contains_pn'] = str_contains(strtoupper($body), strtoupper($partNumber));
+        $diagnostics['search_contains_table'] = str_contains($bodyLower, '<table');
+        $diagnostics['debug_html_file'] = $this->save_search_debug_html($body);
+        $parsed = $this->parseSearchResult($body, $contentType, $partNumber);
+
+        if ($parsed === null) {
+            $diagnostics['error_reason'] = $diagnostics['search_contains_table'] ? 'table_not_matching_expected_structure' : 'results_not_found_or_unparsed';
+            $this->log_debug($diagnostics);
+            return $diagnostics;
+        }
+
+        $items = (array) ($parsed['items'] ?? []);
+        $diagnostics['results_table_found'] = true;
+        $diagnostics['parsed_results_count'] = count($items);
+        $diagnostics['sample_results'] = $this->build_sample_results($items, $marginPercent);
+        $this->log_debug($diagnostics);
+
+        return $diagnostics;
     }
 
     /**
@@ -255,10 +386,11 @@ class GP_Partscentrum_Client
             'redirection' => 5,
             'sslverify' => true,
             'headers' => [],
+            'cookies' => [],
         ];
 
         $args = wp_parse_args($args, $defaults);
-        $args['headers']['Cookie'] = $this->buildCookieHeader();
+        $args['cookies'] = array_values($this->cookies);
 
         if (strtoupper($method) === 'POST') {
             return wp_remote_post($url, $args);
@@ -267,44 +399,218 @@ class GP_Partscentrum_Client
         return wp_remote_get($url, $args);
     }
 
-    private function buildCookieHeader(): string
-    {
-        if ($this->cookies === []) {
-            return '';
-        }
-
-        $cookieParts = [];
-        foreach ($this->cookies as $name => $value) {
-            $cookieParts[] = $name . '=' . $value;
-        }
-
-        return implode('; ', $cookieParts);
-    }
-
     /**
      * @param array<string, mixed> $response
      */
     private function captureCookies(array $response): void
     {
         $setCookie = wp_remote_retrieve_header($response, 'set-cookie');
-        if (empty($setCookie)) {
-            return;
+        if (!empty($setCookie)) {
+            $headers = is_array($setCookie) ? $setCookie : [$setCookie];
+            foreach ($headers as $headerLine) {
+                $this->setCookieHeaders[] = (string) $headerLine;
+            }
         }
 
-        $headers = is_array($setCookie) ? $setCookie : [$setCookie];
-        foreach ($headers as $headerLine) {
-            $this->setCookieHeaders[] = (string) $headerLine;
-            $pair = explode(';', (string) $headerLine)[0] ?? '';
-            if (!str_contains($pair, '=')) {
+        $cookies = wp_remote_retrieve_cookies($response);
+        foreach ($cookies as $cookie) {
+            if (!$cookie instanceof WP_Http_Cookie || $cookie->name === '') {
                 continue;
             }
-            [$name, $value] = array_pad(explode('=', $pair, 2), 2, '');
-            $name = trim((string) $name);
-            if ($name === '') {
-                continue;
-            }
-            $this->cookies[$name] = trim((string) $value);
+            $this->cookies[$cookie->name] = $cookie;
         }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function prepare_search_request(string $partNumber): array
+    {
+        $searchUrl = $this->absoluteUrl((string) $this->runtime['search_path']);
+        $prefetch = $this->request_with_redirects('GET', $searchUrl, [
+            'headers' => ['Referer' => $searchUrl],
+        ]);
+        if (is_wp_error($prefetch['response'] ?? null)) {
+            return [
+                'success' => false,
+                'error_reason' => 'search_form_page_request_failed',
+            ];
+        }
+
+        $response = (array) ($prefetch['response'] ?? []);
+        $this->captureCookies($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        $form = $this->extractSearchForm($body, (string) ($prefetch['final_url'] ?? $searchUrl));
+        $method = strtoupper((string) ($form['method'] ?? $this->runtime['search_http_method']));
+        $fieldName = (string) ($form['part_field'] ?? apply_filters('gp_partscentrum_search_field', 'pn'));
+        $requestUrl = (string) ($form['action'] ?? $searchUrl);
+
+        $payload = (array) ($form['hidden'] ?? []);
+        $payload[$fieldName] = $partNumber;
+        $payload['pn'] = $partNumber;
+        $payload['part_number'] = $partNumber;
+        $payload['partNumber'] = $partNumber;
+
+        $args = [
+            'headers' => [
+                'Referer' => (string) ($prefetch['final_url'] ?? $searchUrl),
+            ],
+            'cookies' => array_values($this->cookies),
+        ];
+
+        if ($method === 'POST') {
+            $args['body'] = $payload;
+        } else {
+            $requestUrl = add_query_arg($payload, $requestUrl);
+        }
+
+        return [
+            'success' => true,
+            'method' => $method,
+            'request_url' => $requestUrl,
+            'field_name' => $fieldName,
+            'field_names' => (array) ($form['field_names'] ?? []),
+            'hidden_field_names' => array_keys((array) ($form['hidden'] ?? [])),
+            'args' => $args,
+            'prefetch_redirect_count' => (int) ($prefetch['redirect_count'] ?? 0),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $args
+     * @return array{response:array<string,mixed>|WP_Error,redirect_count:int,final_url:string}
+     */
+    private function request_with_redirects(string $method, string $url, array $args = []): array
+    {
+        $currentUrl = $url;
+        $redirectCount = 0;
+        $currentMethod = strtoupper($method);
+        $currentArgs = $args;
+
+        for ($i = 0; $i < 6; $i++) {
+            $currentArgs['redirection'] = 0;
+            $response = $this->request($currentMethod, $currentUrl, $currentArgs);
+            if (is_wp_error($response)) {
+                return [
+                    'response' => $response,
+                    'redirect_count' => $redirectCount,
+                    'final_url' => $currentUrl,
+                ];
+            }
+
+            $this->captureCookies($response);
+            $code = (int) wp_remote_retrieve_response_code($response);
+            $location = (string) wp_remote_retrieve_header($response, 'location');
+            if ($code >= 300 && $code < 400 && $location !== '') {
+                $redirectCount++;
+                $currentUrl = $this->absoluteUrl($location);
+                $currentMethod = 'GET';
+                $currentArgs = [
+                    'headers' => [
+                        'Referer' => $url,
+                    ],
+                ];
+                continue;
+            }
+
+            return [
+                'response' => $response,
+                'redirect_count' => $redirectCount,
+                'final_url' => $currentUrl,
+            ];
+        }
+
+        return [
+            'response' => new WP_Error('too_many_redirects', 'Zbyt wiele przekierowań.'),
+            'redirect_count' => $redirectCount,
+            'final_url' => $currentUrl,
+        ];
+    }
+
+    /**
+     * @return array{action:string,method:string,part_field:string,hidden:array<string,string>,field_names:array<int,string>}|null
+     */
+    private function extractSearchForm(string $html, string $fallbackAction): ?array
+    {
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
+        $xpath = new DOMXPath($dom);
+        $forms = $xpath->query('//form');
+        if (!$forms instanceof DOMNodeList || $forms->length === 0) {
+            return null;
+        }
+
+        foreach ($forms as $form) {
+            if (!$form instanceof DOMElement) {
+                continue;
+            }
+
+            $inputs = $xpath->query('.//input[@name]', $form);
+            if (!$inputs instanceof DOMNodeList || $inputs->length === 0) {
+                continue;
+            }
+
+            $fieldNames = [];
+            $hidden = [];
+            $partField = '';
+            foreach ($inputs as $input) {
+                if (!$input instanceof DOMElement) {
+                    continue;
+                }
+                $name = (string) ($input->getAttribute('name') ?? '');
+                if ($name === '') {
+                    continue;
+                }
+                $fieldNames[] = $name;
+                $type = strtolower((string) ($input->getAttribute('type') ?? 'text'));
+                if ($type === 'hidden') {
+                    $hidden[$name] = (string) ($input->getAttribute('value') ?? '');
+                }
+                if ($partField === '' && in_array($type, ['text', 'search'], true)) {
+                    $partField = $name;
+                }
+                if ($partField === '' && (str_contains(strtolower($name), 'pn') || str_contains(strtolower($name), 'part'))) {
+                    $partField = $name;
+                }
+            }
+
+            if ($partField === '') {
+                continue;
+            }
+
+            $action = (string) ($form->getAttribute('action') ?? '');
+            $method = strtoupper((string) ($form->getAttribute('method') ?: 'POST'));
+
+            return [
+                'action' => $action !== '' ? $this->absoluteUrl($action) : $fallbackAction,
+                'method' => $method,
+                'part_field' => $partField,
+                'hidden' => $hidden,
+                'field_names' => array_values(array_unique($fieldNames)),
+            ];
+        }
+
+        return null;
+    }
+
+    private function save_search_debug_html(string $html): string
+    {
+        $uploads = wp_upload_dir();
+        if (!empty($uploads['error'])) {
+            return '';
+        }
+
+        $baseDir = (string) ($uploads['basedir'] ?? '');
+        $baseUrl = (string) ($uploads['baseurl'] ?? '');
+        if ($baseDir === '' || $baseUrl === '') {
+            return '';
+        }
+
+        wp_mkdir_p($baseDir);
+        $filePath = trailingslashit($baseDir) . 'partscentrum-search-debug.html';
+        file_put_contents($filePath, $html);
+
+        return trailingslashit($baseUrl) . 'partscentrum-search-debug.html';
     }
 
     /**
@@ -577,11 +883,27 @@ class GP_Partscentrum_Client
     private function log_debug(array $context): void
     {
         $allowed = [
+            'login_url' => (string) ($context['login_url'] ?? ''),
             'login_http_code' => (int) ($context['login_http_code'] ?? 0),
+            'form_found' => (bool) ($context['form_found'] ?? false),
+            'redirect_detected' => (bool) ($context['redirect_detected'] ?? false),
+            'user_logged_in' => (bool) ($context['user_logged_in'] ?? false),
             'login_success' => (bool) ($context['login_success'] ?? false),
+            'cookies_after_login_count' => (int) ($context['cookies_after_login_count'] ?? 0),
             'search_http_code' => (int) ($context['search_http_code'] ?? 0),
+            'search_response_length' => (int) ($context['search_response_length'] ?? 0),
+            'search_contains_lista_produktow' => (bool) ($context['search_contains_lista_produktow'] ?? false),
+            'search_contains_do_koszyka' => (bool) ($context['search_contains_do_koszyka'] ?? false),
+            'search_contains_pn' => (bool) ($context['search_contains_pn'] ?? false),
+            'search_contains_table' => (bool) ($context['search_contains_table'] ?? false),
             'search_url' => (string) ($context['search_url'] ?? ''),
+            'final_search_url' => (string) ($context['final_search_url'] ?? ''),
+            'redirect_count' => (int) ($context['redirect_count'] ?? 0),
             'search_method' => (string) ($context['search_method'] ?? ''),
+            'search_field_name_used' => (string) ($context['search_field_name_used'] ?? ''),
+            'cookies_used_in_search_count' => (int) ($context['cookies_used_in_search_count'] ?? 0),
+            'search_form_fields_detected' => array_values(array_map('sanitize_key', (array) ($context['search_form_fields_detected'] ?? []))),
+            'search_hidden_fields_detected' => array_values(array_map('sanitize_key', (array) ($context['search_hidden_fields_detected'] ?? []))),
             'submitted_part_number' => (string) ($context['submitted_part_number'] ?? ''),
             'results_table_found' => (bool) ($context['results_table_found'] ?? false),
             'parsed_results_count' => (int) ($context['parsed_results_count'] ?? 0),
@@ -604,5 +926,72 @@ class GP_Partscentrum_Client
         unset($redacted['password'], $redacted['login']);
 
         wc_get_logger()->log($level, $message . ' ' . wp_json_encode($redacted), ['source' => 'gp-partscentrum-connector']);
+        $this->store_admin_log($level, $message, $redacted);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public static function get_recent_logs(int $limit = 30): array
+    {
+        $logs = get_option(self::ADMIN_LOG_OPTION, []);
+        if (!is_array($logs)) {
+            return [];
+        }
+
+        return array_slice($logs, 0, max(1, $limit));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $items
+     * @return array<int,array<string,mixed>>
+     */
+    private function build_sample_results(array $items, float $marginPercent): array
+    {
+        $sample = [];
+        foreach (array_slice($items, 0, 3) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $gross = (float) ($row['supplier_price_gross_discounted'] ?? 0);
+            $sample[] = [
+                'name' => (string) ($row['supplier_title'] ?? ''),
+                'pn' => (string) ($row['supplier_part_number'] ?? ''),
+                'gross_discounted' => (float) wc_format_decimal($gross, 2),
+                'price_with_margin' => (float) wc_format_decimal($gross * (1 + ($marginPercent / 100)), 2),
+                'availability' => (string) ($row['availability'] ?? ''),
+            ];
+        }
+
+        return $sample;
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function store_admin_log(string $level, string $message, array $context): void
+    {
+        $logs = get_option(self::ADMIN_LOG_OPTION, []);
+        if (!is_array($logs)) {
+            $logs = [];
+        }
+
+        $logs = array_values($logs);
+        array_unshift($logs, [
+            'timestamp' => current_time('mysql'),
+            'action' => str_contains(strtolower($message), 'diagnostics') ? 'diagnostics' : 'runtime',
+            'status' => $level,
+            'message' => $message,
+            'error' => (string) ($context['error_reason'] ?? $context['error'] ?? ''),
+            'http_code' => (int) ($context['search_http_code'] ?? $context['login_http_code'] ?? 0),
+            'results_count' => (int) ($context['parsed_results_count'] ?? 0),
+        ]);
+
+        if (count($logs) > self::ADMIN_LOG_LIMIT) {
+            $logs = array_slice($logs, 0, self::ADMIN_LOG_LIMIT);
+        }
+
+        update_option(self::ADMIN_LOG_OPTION, $logs, false);
     }
 }
