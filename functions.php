@@ -1206,6 +1206,86 @@ function gp_is_technical_product_category(WP_Term $term): bool
     return in_array(mb_strtolower(wp_strip_all_tags((string) $term->name)), $technical_names, true);
 }
 
+function gp_get_menu_product_categories(): array
+{
+    if (!taxonomy_exists('product_cat')) {
+        return [];
+    }
+
+    $motoryzacja_term = get_term_by('slug', sanitize_title('motoryzacja'), 'product_cat');
+    if (!$motoryzacja_term instanceof WP_Term) {
+        $motoryzacja_term = get_term_by('name', 'Motoryzacja', 'product_cat');
+    }
+
+    if (!$motoryzacja_term instanceof WP_Term) {
+        return [];
+    }
+
+    $terms_by_parent = [];
+    $all_terms = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => false,
+        'orderby' => 'name',
+        'order' => 'ASC',
+        'fields' => 'all',
+    ]);
+
+    if (is_array($all_terms)) {
+        foreach ($all_terms as $term) {
+            if (!$term instanceof WP_Term) {
+                continue;
+            }
+
+            $parent_id = (int) $term->parent;
+            if (!isset($terms_by_parent[$parent_id])) {
+                $terms_by_parent[$parent_id] = [];
+            }
+
+            $terms_by_parent[$parent_id][] = $term;
+        }
+    }
+
+    $excluded_slugs = [
+        'bez-kategorii',
+        'uncategorized',
+    ];
+
+    $queue = [(int) $motoryzacja_term->term_id];
+    $visited = [];
+    $resolved_terms = [];
+
+    while ($queue !== []) {
+        $parent_id = array_shift($queue);
+        if (isset($visited[$parent_id])) {
+            continue;
+        }
+
+        $visited[$parent_id] = true;
+        $children = $terms_by_parent[$parent_id] ?? [];
+
+        foreach ($children as $child) {
+            if (!$child instanceof WP_Term) {
+                continue;
+            }
+
+            if (in_array(sanitize_title($child->slug), $excluded_slugs, true)) {
+                continue;
+            }
+
+            if (gp_is_technical_product_category($child)) {
+                $queue[] = (int) $child->term_id;
+                continue;
+            }
+
+            if ((int) $child->count > 0) {
+                $resolved_terms[(int) $child->term_id] = $child;
+            }
+        }
+    }
+
+    return array_values($resolved_terms);
+}
+
 function gp_get_user_facing_category(?WP_Term $current_term): ?WP_Term
 {
     if (!$current_term instanceof WP_Term) {
@@ -1426,7 +1506,7 @@ function gp_render_product_category_sidebar(): void
 
     $active_category = gp_get_user_facing_category($current_term);
     $active_category_id = $active_category instanceof WP_Term ? (int) $active_category->term_id : 0;
-    $category_terms = gp_get_user_facing_root_categories();
+    $category_terms = gp_get_menu_product_categories();
     $subcategories = $active_category_id > 0 ? gp_get_product_cat_children($active_category_id) : [];
     $subcategories_map = gp_build_subcategory_map($category_terms);
     $selected_brand_slug = isset($_GET['brand']) ? sanitize_title((string) wp_unslash($_GET['brand'])) : '';
