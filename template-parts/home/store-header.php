@@ -346,11 +346,59 @@ if (taxonomy_exists('product_cat')) {
 </div>
 
 <?php if (is_front_page()) : ?>
-<section class="gp-hero">
+<?php
+$hero_slides = [
+    [
+        'title' => 'Kupuj u nas nawet <span>10%</span> taniej',
+        'image' => 'https://images.unsplash.com/photo-1486006920555-c77dcf18193c?auto=format&fit=crop&w=1920&q=80',
+        'alt' => 'Promocyjny baner sklepu Global Parts',
+    ],
+    [
+        'title' => 'Silniki, skrzynie i części <span>od ręki</span>',
+        'image' => 'https://images.unsplash.com/photo-1530046339160-ce3e530c7d2f?auto=format&fit=crop&w=1920&q=80',
+        'alt' => 'Magazyn części samochodowych gotowych do wysyłki',
+    ],
+    [
+        'title' => 'Sprawdzone części z <span>gwarancją</span>',
+        'image' => 'https://images.unsplash.com/photo-1619642751034-765dfdf7c58e?auto=format&fit=crop&w=1920&q=80',
+        'alt' => 'Mechanik przy naprawie auta i doborze części',
+    ],
+];
+?>
+<section class="gp-hero" data-gp-hero-slider data-autoplay-ms="5500">
+    <div class="gp-hero__slides" data-gp-hero-track>
+        <?php foreach ($hero_slides as $index => $slide) : ?>
+            <article
+                class="gp-hero__slide<?php echo $index === 0 ? ' is-active' : ''; ?>"
+                data-gp-hero-slide
+                aria-hidden="<?php echo $index === 0 ? 'false' : 'true'; ?>"
+            >
+                <img
+                    src="<?php echo esc_url($slide['image']); ?>"
+                    alt="<?php echo esc_attr($slide['alt']); ?>"
+                    width="1920"
+                    height="700"
+                    <?php if ($index === 0) : ?>
+                        loading="eager"
+                        fetchpriority="high"
+                    <?php else : ?>
+                        loading="lazy"
+                        fetchpriority="low"
+                    <?php endif; ?>
+                    decoding="async"
+                >
+                <div class="gp-hero__overlay"></div>
+                <div class="gp-hero__title-template" data-gp-hero-slide-title hidden><?php echo wp_kses_post($slide['title']); ?></div>
+            </article>
+        <?php endforeach; ?>
+    </div>
     <div class="gp-container gp-hero__content">
-        <div class="gp-hero-promo">
-            <h2>Kupuj u nas nawet <span>10%</span> taniej</h2>
+        <div class="gp-hero-promo" data-gp-hero-content>
+            <h2 data-gp-hero-title><?php echo wp_kses_post($hero_slides[0]['title']); ?></h2>
         </div>
     </div>
+    <button type="button" class="gp-hero__arrow gp-hero__arrow--prev" data-gp-hero-prev aria-label="<?php esc_attr_e('Poprzedni baner', 'gp-clone'); ?>">&#8249;</button>
+    <button type="button" class="gp-hero__arrow gp-hero__arrow--next" data-gp-hero-next aria-label="<?php esc_attr_e('Następny baner', 'gp-clone'); ?>">&#8250;</button>
+    <div class="gp-hero__dots" data-gp-hero-dots aria-label="<?php esc_attr_e('Wybór slajdu banera', 'gp-clone'); ?>"></div>
 </section>
 <?php endif; ?>
