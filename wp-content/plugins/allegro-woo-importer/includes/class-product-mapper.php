@@ -646,11 +646,11 @@ class ProductMapper
         $sync_mode = $settings['sync_mode'] ?? 'create_update';
 
         if ($existing_id && $sync_mode === 'create_only') {
-            return ['result' => 'skipped', 'product_id' => $existing_id];
+            return ['result' => 'skipped', 'reason' => 'sync_mode_create_only_existing_product', 'product_id' => $existing_id];
         }
 
         if (!$existing_id && $sync_mode === 'update_only') {
-            return ['result' => 'skipped'];
+            return ['result' => 'skipped', 'reason' => 'sync_mode_update_only_missing_product'];
         }
 
         $product = $existing_id ? wc_get_product($existing_id) : new \WC_Product_Simple();
@@ -680,7 +680,15 @@ class ProductMapper
 
         $sku = $this->extract_sku($offer);
         if (!empty($sku)) {
-            $product->set_sku($sku);
+            try {
+                $product->set_sku($sku);
+            } catch (\Throwable $throwable) {
+                return [
+                    'result' => 'error',
+                    'error' => 'invalid_or_duplicate_sku',
+                    'reason' => $throwable->getMessage(),
+                ];
+            }
         }
 
         $product->set_catalog_visibility('visible');
@@ -689,7 +697,15 @@ class ProductMapper
 
         $this->apply_stock_state($product, $publication_status, $stock_available);
 
-        $product_id = $product->save();
+        try {
+            $product_id = $product->save();
+        } catch (\Throwable $throwable) {
+            return [
+                'result' => 'error',
+                'error' => 'product_save_exception',
+                'reason' => $throwable->getMessage(),
+            ];
+        }
 
         if (!$product_id) {
             return ['result' => 'error', 'error' => 'save_failed'];
@@ -697,7 +713,7 @@ class ProductMapper
 
         $this->assign_category($product_id, $offer);
         $this->map_attributes($product, $offer);
-        $this->sync_product_images($product, $offer, $offer_id);
+        $this->sync_product_images($product, $offer, $offer_id, !$existing_id);
         $this->logger->info('Saving product after image sync.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
@@ -1278,7 +1294,7 @@ class ProductMapper
         return '';
     }
 
-    private function sync_product_images(WC_Product $product, array $offer, string $offer_id): void
+    private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
         $images_raw = $offer['images'] ?? [];
         $images = is_array($images_raw) ? $images_raw : [];
@@ -1428,11 +1444,31 @@ class ProductMapper
         ]);
 
         $listing_image_result = $this->ensure_listing_image_for_product($product_id, true);
+        $listing_status = sanitize_key((string) ($listing_image_result['status'] ?? 'unknown'));
+        $listing_diagnostics = $this->get_listing_image_diagnostics($product_id);
         $this->logger->info('Listing image generation after import.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
             'result' => $listing_image_result,
         ]);
+
+        if ($is_new_product) {
+            $this->logger->info('New Allegro product listing image pipeline summary.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'images_fetched_count' => count($image_urls),
+                'featured_image_id' => $featured_id,
+                'gallery_image_ids' => $gallery_only,
+                'listing_image_status' => $listing_status,
+                'listing_image_id' => (int) ($listing_image_result['listing_image_id'] ?? 0),
+                'listing_source_image_id' => (int) ($listing_image_result['selected_source_image_id'] ?? 0),
+                'listing_selection_reason' => (string) ($listing_image_result['selected_source_selection_reason'] ?? ''),
+                'listing_quality_tier' => (string) ($listing_image_result['listing_quality_tier'] ?? ''),
+                'listing_quality_score' => round((float) ($listing_image_result['listing_quality_score'] ?? 0.0), 6),
+                'helper_selected_image_id' => (int) ($listing_diagnostics['helper_selected_image_id'] ?? 0),
+                'rendered_source' => (string) ($listing_diagnostics['rendered_source'] ?? ''),
+            ]);
+        }
     }
 
     /**

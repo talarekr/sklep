@@ -39,9 +39,11 @@ class Importer
         $processed = 0;
         $created = 0;
         $updated = 0;
+        $skipped = 0;
         $errors = 0;
         $fetched_from_api = 0;
         $total_count_from_api = null;
+        $last_processed_offer_id = '';
 
         $this->logger->info('Import batch start (checkpoint resume).', [
             'offset' => $offset,
@@ -49,6 +51,13 @@ class Importer
             'page_token' => $page_token,
             'resume_offer_index' => $resume_offer_index,
             'batch_limit' => self::BATCH_LIMIT,
+            'soft_runtime_limit_seconds' => self::SOFT_RUNTIME_LIMIT_SECONDS,
+            'checkpoint_state' => $checkpoint,
+            'cycle_state' => $this->load_cycle_state(),
+            'active_seen_count' => count($this->load_active_seen_offer_ids()),
+            'safe_mode_enabled' => Plugin::is_safe_mode_enabled(),
+            'php_max_execution_time' => (int) ini_get('max_execution_time'),
+            'php_memory_limit' => (string) ini_get('memory_limit'),
         ]);
 
         if ($this->is_cycle_start($offset, $page_no, $resume_offer_index)) {
@@ -68,7 +77,7 @@ class Importer
                 'error' => $page->get_error_message(),
             ]);
 
-            return $this->finalize_summary($processed, $created, $updated, $errors, $fetched_from_api, $total_count_from_api);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
         }
 
         $offers = $page['offers'] ?? [];
@@ -80,7 +89,7 @@ class Importer
                 'page_token' => $page_token,
             ]);
 
-            return $this->finalize_summary($processed, $created, $updated, $errors, $fetched_from_api, $total_count_from_api);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
         }
 
         $batch_size = count($offers);
@@ -96,7 +105,27 @@ class Importer
             'reported_total_count' => $total_count_from_api,
         ]);
 
-        $start_index = min($resume_offer_index, $batch_size);
+        if ($resume_offer_index >= $batch_size) {
+            $this->logger->warning('Invalid resume_offer_index detected; resetting to 0 for current batch.', [
+                'offset' => $offset,
+                'batch_limit' => self::BATCH_LIMIT,
+                'offers_count' => $batch_size,
+                'invalid_resume_offer_index' => $resume_offer_index,
+            ]);
+
+            $resume_offer_index = 0;
+            $this->save_checkpoint([
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'page_token' => $page_token,
+                'offer_index' => 0,
+                'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
+                'total_count' => $total_count_from_api,
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ]);
+        }
+
+        $start_index = $resume_offer_index;
 
         for ($index = $start_index; $index < $batch_size; $index++) {
             if (function_exists('set_time_limit')) {
@@ -106,9 +135,24 @@ class Importer
             $offer_basic = $offers[$index] ?? [];
             $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
             if ($offer_id === '') {
+                $skipped++;
+                $this->logger->warning('Skipping offer from list due to missing id.', [
+                    'page_no' => $page_no,
+                    'offset' => $offset,
+                    'index' => $index,
+                ]);
                 continue;
             }
+
+            $last_processed_offer_id = $offer_id;
             $this->remember_active_offer_id($offer_id);
+            $this->logger->info('Importing Allegro offer.', [
+                'offer_id' => $offer_id,
+                'page_no' => $page_no,
+                'offset' => $offset,
+                'index' => $index,
+                'batch_size' => $batch_size,
+            ]);
 
             $details = $this->client->get_offer_details($offer_id);
             if (is_wp_error($details)) {
@@ -128,6 +172,13 @@ class Importer
                 $created++;
             } elseif (($result['result'] ?? '') === 'updated') {
                 $updated++;
+            } elseif (($result['result'] ?? '') === 'skipped') {
+                $skipped++;
+                $this->logger->warning('Offer skipped during product upsert.', [
+                    'offer_id' => $offer_id,
+                    'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
+                    'product_id' => (int) ($result['product_id'] ?? 0),
+                ]);
             } elseif (($result['result'] ?? '') === 'error') {
                 $errors++;
                 $this->mark_cycle_state_error('product_upsert_failed');
@@ -156,8 +207,30 @@ class Importer
                     'processed_in_run' => $processed,
                 ]);
 
-                return $this->finalize_summary($processed, $created, $updated, $errors, $fetched_from_api, $total_count_from_api);
+                return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
             }
+        }
+
+        if ($processed === 0 && $batch_size > 0) {
+            $this->save_checkpoint([
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'page_token' => $page_token,
+                'offer_index' => 0,
+                'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
+                'total_count' => $total_count_from_api,
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ]);
+
+            $this->logger->warning('Batch returned offers but processed_in_run is 0; keeping checkpoint on current offset.', [
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'offers_count' => $batch_size,
+                'processed_in_run' => $processed,
+                'skipped_in_run' => $skipped,
+            ]);
+
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
         }
 
         $next_page_token = $this->extract_next_page_token($page);
@@ -192,6 +265,8 @@ class Importer
                 'next_page_token' => $next_page_token,
                 'processed_in_run' => $processed,
                 'batch_size' => $batch_size,
+                'skipped_in_run' => $skipped,
+                'last_processed_offer_id' => $last_processed_offer_id,
             ]);
         } else {
             $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status'], $total_count_from_api);
@@ -203,22 +278,35 @@ class Importer
                 'processed_in_run' => $processed,
                 'reported_total_count' => $total_count_from_api,
                 'deactivated_missing_active_offers' => $deactivated_count,
+                'skipped_in_run' => $skipped,
+                'last_processed_offer_id' => $last_processed_offer_id,
             ]);
         }
 
-        return $this->finalize_summary($processed, $created, $updated, $errors, $fetched_from_api, $total_count_from_api);
+        return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
     }
 
-    private function finalize_summary(int $processed, int $created, int $updated, int $errors, int $fetched_from_api, ?int $total_count_from_api): array
+    private function finalize_summary(
+        int $processed,
+        int $created,
+        int $updated,
+        int $skipped,
+        int $errors,
+        int $fetched_from_api,
+        ?int $total_count_from_api,
+        string $last_processed_offer_id
+    ): array
     {
         $summary = [
             'date' => gmdate('Y-m-d H:i:s'),
             'offers' => $processed,
             'created' => $created,
             'updated' => $updated,
+            'skipped' => $skipped,
             'errors' => $errors,
             'fetched_from_api' => $fetched_from_api,
             'reported_total_count' => $total_count_from_api,
+            'last_processed_offer_id' => $last_processed_offer_id,
         ];
 
         Plugin::update_settings([

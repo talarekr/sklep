@@ -40,9 +40,41 @@ class AllegroClient
             $query['page.id'] = sanitize_text_field($page_token);
         }
 
-        return $this->request('GET', '/sale/offers', [
+        $this->logger->info('Fetching Allegro offers list.', [
+            'status' => $status,
+            'offset' => (int) $query['offset'],
+            'limit' => (int) $query['limit'],
+            'page_token' => (string) ($query['page.id'] ?? ''),
+        ]);
+
+        $response = $this->request('GET', '/sale/offers', [
             'query' => $query,
         ]);
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $offers = is_array($response['offers'] ?? null) ? (array) $response['offers'] : [];
+        $this->logger->info('Fetched Allegro offers list response.', [
+            'offers_count' => count($offers),
+            'total_count_candidates' => [
+                'totalCount' => $response['totalCount'] ?? null,
+                'total_count' => $response['total_count'] ?? null,
+                'count_total' => $response['count']['total'] ?? null,
+                'pagination_totalCount' => $response['pagination']['totalCount'] ?? null,
+                'searchMeta_totalCount' => $response['searchMeta']['totalCount'] ?? null,
+            ],
+            'next_page_candidates' => [
+                'nextPageToken' => $response['nextPageToken'] ?? null,
+                'next_page_token' => $response['next_page_token'] ?? null,
+                'page_next' => $response['page']['next'] ?? null,
+                'pagination_next' => $response['pagination']['next'] ?? null,
+                'links_next' => $response['links']['next'] ?? null,
+            ],
+        ]);
+
+        return $response;
     }
 
     public function get_offer_details(string $offer_id)
