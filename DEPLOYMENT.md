@@ -34,6 +34,11 @@
   allegro-woo-importer.php
   includes/
   templates/
+
+/wp-content/plugins/gp-partscentrum-connector/
+  gp-partscentrum-connector.php
+  includes/
+  TECHNICAL_ANALYSIS.md
 ```
 
 ## 3) Instalacja WordPress + WooCommerce
@@ -52,6 +57,17 @@
 1. Spakuj wtyczkę do ZIP (lub użyj gotowego ZIP z `dist/`).
 2. W panelu WP: Wtyczki → Dodaj nową → Wyślij wtyczkę.
 3. Aktywuj **Allegro Woo Importer**.
+
+## 5a) Instalacja wtyczki GP Partscentrum Connector
+1. Spakuj wtyczkę do ZIP (lub użyj gotowego ZIP z `dist/`).
+2. W panelu WP: Wtyczki → Dodaj nową → Wyślij wtyczkę.
+3. Aktywuj **GP Partscentrum Connector**.
+4. W `wp-config.php` dodaj dane logowania dostawcy:
+
+```php
+define('GP_PARTSCENTRUM_LOGIN', 'TU_LOGIN');
+define('GP_PARTSCENTRUM_PASSWORD', 'TU_HASLO');
+```
 
 ## 6) Konfiguracja Allegro API (OAuth)
 1. Utwórz aplikację w Allegro Developer.
@@ -107,6 +123,7 @@
 Jeśli środowisko pozwala, paczki są generowane do:
 - `dist/global-parts-clone-theme.zip`
 - `dist/allegro-woo-importer.zip`
+- `dist/gp-partscentrum-connector.zip`
 
 
 ## 12) Budowanie ZIP lokalnie (bez commitowania artefaktów)
@@ -119,6 +136,7 @@ Uruchom w katalogu repo:
 Skrypt wygeneruje lokalnie:
 - `dist/global-parts-clone-theme.zip`
 - `dist/allegro-woo-importer.zip`
+- `dist/gp-partscentrum-connector.zip`
 
 Katalog `dist/` i pliki archiwów są ignorowane przez `.gitignore`.
 
