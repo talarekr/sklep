@@ -126,21 +126,28 @@ class GP_Partscentrum_Plugin
                 <div class="gp-partscentrum__result">
                     <?php if (!empty($result['error'])): ?>
                         <p class="gp-partscentrum__error"><?php echo esc_html((string) $result['error']); ?></p>
-                    <?php elseif (!empty($result['data']) && is_array($result['data'])): ?>
-                        <?php $data = $result['data']; ?>
-                        <h2><?php echo esc_html((string) ($data['supplier_title'] ?? 'Nowa część Skoda')); ?></h2>
-                        <ul>
-                            <li><strong>Numer części:</strong> <?php echo esc_html((string) ($data['supplier_part_number'] ?? '')); ?></li>
-                            <li><strong>Dostępność:</strong> <?php echo esc_html((string) ($data['availability'] ?? 'unknown')); ?></li>
-                            <li><strong>Cena:</strong> <?php echo wp_kses_post(wc_price((float) ($data['final_price'] ?? 0))); ?></li>
-                        </ul>
+                    <?php elseif (!empty($result['items']) && is_array($result['items'])): ?>
+                        <h2>Wyniki wyszukiwania</h2>
+                        <?php foreach ($result['items'] as $item): ?>
+                            <?php if (!is_array($item)) {
+                                continue;
+                            } ?>
+                            <article class="gp-partscentrum__item">
+                                <h3><?php echo esc_html((string) ($item['supplier_title'] ?? 'Nowa część Skoda')); ?></h3>
+                                <ul>
+                                    <li><strong>Numer części:</strong> <?php echo esc_html((string) ($item['supplier_part_number'] ?? '')); ?></li>
+                                    <li><strong>Dostępność:</strong> <?php echo esc_html((string) ($item['availability'] ?? '- / -')); ?></li>
+                                    <li><strong>Cena:</strong> <?php echo wp_kses_post(wc_price((float) ($item['final_price'] ?? 0))); ?></li>
+                                </ul>
 
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                            <input type="hidden" name="action" value="<?php echo esc_attr(self::ACTION_ADD_TO_CART); ?>">
-                            <?php wp_nonce_field('gp_partscentrum_add_to_cart_nonce', '_gp_nonce'); ?>
-                            <input type="hidden" name="payload" value="<?php echo esc_attr(wp_json_encode($data)); ?>">
-                            <button type="submit">Dodaj do koszyka</button>
-                        </form>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                    <input type="hidden" name="action" value="<?php echo esc_attr(self::ACTION_ADD_TO_CART); ?>">
+                                    <?php wp_nonce_field('gp_partscentrum_add_to_cart_nonce', '_gp_nonce'); ?>
+                                    <input type="hidden" name="payload" value="<?php echo esc_attr(wp_json_encode($item)); ?>">
+                                    <button type="submit">Dodaj do koszyka</button>
+                                </form>
+                            </article>
+                        <?php endforeach; ?>
                     <?php endif; ?>
                 </div>
             <?php endif; ?>
@@ -170,7 +177,7 @@ class GP_Partscentrum_Plugin
         $cacheKey = 'gp_pc_' . md5($partNumber);
         $cached = get_transient($cacheKey);
         if (is_array($cached)) {
-            $this->store_flash_result(['data' => $cached]);
+            $this->store_flash_result($cached);
             $this->redirect_to_landing();
         }
 
@@ -187,25 +194,45 @@ class GP_Partscentrum_Plugin
         }
 
         $data = is_array($result['data'] ?? null) ? $result['data'] : [];
-        $supplierPrice = (float) ($data['supplier_price'] ?? 0);
-        $finalPrice = $this->calculate_final_price($supplierPrice);
+        $items = [];
+
+        foreach ((array) ($data['items'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $supplierPriceGrossDiscounted = (float) ($row['supplier_price_gross_discounted'] ?? 0);
+            if ($supplierPriceGrossDiscounted <= 0) {
+                continue;
+            }
+
+            $items[] = [
+                'source' => 'partscentrum',
+                'type' => 'new_skoda_part',
+                'supplier_part_number' => (string) ($row['supplier_part_number'] ?? $partNumber),
+                'supplier_title' => (string) ($row['supplier_title'] ?? ('Nowa część Skoda ' . $partNumber)),
+                'supplier_price_gross_discounted' => $supplierPriceGrossDiscounted,
+                'availability' => (string) ($row['availability'] ?? '- / -'),
+                'supplier_product_id' => (string) ($row['supplier_product_id'] ?? ''),
+                'margin_percent' => self::MARGIN_PERCENT,
+                'final_price' => $this->calculate_final_price($supplierPriceGrossDiscounted),
+                'checked_at' => (string) ($row['checked_at'] ?? gmdate('c')),
+            ];
+        }
+
+        if ($items === []) {
+            $this->store_flash_result(['error' => 'Nie znaleziono wyników dla podanego numeru części.']);
+            $this->redirect_to_landing();
+        }
 
         $payload = [
-            'source' => 'partscentrum',
-            'type' => 'new_skoda_part',
-            'supplier_part_number' => (string) ($data['supplier_part_number'] ?? $partNumber),
-            'supplier_title' => (string) ($data['supplier_title'] ?? ('Nowa część Skoda ' . $partNumber)),
-            'supplier_price' => $supplierPrice,
-            'availability' => (string) ($data['availability'] ?? 'unknown'),
-            'supplier_product_id' => (string) ($data['supplier_product_id'] ?? ''),
-            'margin_percent' => self::MARGIN_PERCENT,
-            'final_price' => $finalPrice,
-            'checked_at' => (string) ($data['checked_at'] ?? gmdate('c')),
+            'submitted_part_number' => $partNumber,
+            'items' => $items,
         ];
 
         set_transient($cacheKey, $payload, self::CACHE_TTL);
 
-        $this->store_flash_result(['data' => $payload]);
+        $this->store_flash_result($payload);
         $this->redirect_to_landing();
     }
 
@@ -241,11 +268,11 @@ class GP_Partscentrum_Plugin
             'type' => 'new_skoda_part',
             'supplier_part_number' => sanitize_text_field((string) ($payload['supplier_part_number'] ?? '')),
             'supplier_title' => sanitize_text_field((string) ($payload['supplier_title'] ?? 'Nowa część Skoda')),
-            'supplier_price' => wc_format_decimal((float) ($payload['supplier_price'] ?? 0), 2),
+            'supplier_price_gross_discounted' => wc_format_decimal((float) ($payload['supplier_price_gross_discounted'] ?? 0), 2),
             'margin_percent' => self::MARGIN_PERCENT,
             'final_price' => wc_format_decimal((float) ($payload['final_price'] ?? 0), 2),
             'checked_at' => sanitize_text_field((string) ($payload['checked_at'] ?? gmdate('c'))),
-            'availability' => sanitize_text_field((string) ($payload['availability'] ?? 'unknown')),
+            'availability' => sanitize_text_field((string) ($payload['availability'] ?? '- / -')),
             'supplier_product_id' => sanitize_text_field((string) ($payload['supplier_product_id'] ?? '')),
             'unique_key' => md5(wp_json_encode($payload) . '|' . microtime(true)),
         ];
@@ -297,7 +324,7 @@ class GP_Partscentrum_Plugin
         $itemData[] = ['name' => 'Źródło', 'value' => 'partscentrum'];
         $itemData[] = ['name' => 'Typ', 'value' => 'Nowa część Skoda'];
         $itemData[] = ['name' => 'Numer części', 'value' => (string) ($meta['supplier_part_number'] ?? '')];
-        $itemData[] = ['name' => 'Cena dostawcy', 'value' => wc_price((float) ($meta['supplier_price'] ?? 0))];
+        $itemData[] = ['name' => 'Cena dostawcy (brutto po rabacie)', 'value' => wc_price((float) ($meta['supplier_price_gross_discounted'] ?? 0))];
         $itemData[] = ['name' => 'Marża', 'value' => (string) self::MARGIN_PERCENT . '%'];
         $itemData[] = ['name' => 'Sprawdzono', 'value' => (string) ($meta['checked_at'] ?? '')];
 
@@ -318,7 +345,7 @@ class GP_Partscentrum_Plugin
         $item->add_meta_data('type', 'Nowa część Skoda', true);
         $item->add_meta_data('supplier_part_number', (string) ($meta['supplier_part_number'] ?? ''), true);
         $item->add_meta_data('supplier_title', (string) ($meta['supplier_title'] ?? ''), true);
-        $item->add_meta_data('supplier_price', (string) ($meta['supplier_price'] ?? ''), true);
+        $item->add_meta_data('supplier_price_gross_discounted', (string) ($meta['supplier_price_gross_discounted'] ?? ''), true);
         $item->add_meta_data('margin_percent', (string) self::MARGIN_PERCENT, true);
         $item->add_meta_data('final_price', (string) ($meta['final_price'] ?? ''), true);
         $item->add_meta_data('checked_at', (string) ($meta['checked_at'] ?? ''), true);

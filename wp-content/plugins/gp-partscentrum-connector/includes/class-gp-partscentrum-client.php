@@ -26,8 +26,8 @@ class GP_Partscentrum_Client
     {
         $this->runtime = [
             'login_path' => apply_filters('gp_partscentrum_login_path', '/login'),
-            'search_path' => apply_filters('gp_partscentrum_search_path', '/'),
-            'search_http_method' => strtoupper((string) apply_filters('gp_partscentrum_search_method', 'GET')),
+            'search_path' => apply_filters('gp_partscentrum_search_path', '/user/search'),
+            'search_http_method' => strtoupper((string) apply_filters('gp_partscentrum_search_method', 'POST')),
         ];
     }
 
@@ -45,6 +45,11 @@ class GP_Partscentrum_Client
         $response = $this->request('GET', $loginUrl);
         if (is_wp_error($response)) {
             $this->log('error', 'Nie udało się pobrać strony logowania.', ['error' => $response->get_error_message()]);
+            $this->log_debug([
+                'login_http_code' => 0,
+                'login_success' => false,
+                'error_reason' => 'login_page_request_failed',
+            ]);
             return false;
         }
 
@@ -52,6 +57,11 @@ class GP_Partscentrum_Client
         $body = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 400 || $body === '') {
             $this->log('error', 'Niepoprawna odpowiedź strony logowania.', ['status' => $code]);
+            $this->log_debug([
+                'login_http_code' => $code,
+                'login_success' => false,
+                'error_reason' => 'invalid_login_page_response',
+            ]);
             return false;
         }
 
@@ -59,6 +69,11 @@ class GP_Partscentrum_Client
         $form = $this->extractLoginForm($body, $loginUrl);
         if ($form === null) {
             $this->log('error', 'Nie znaleziono formularza logowania na stronie dostawcy.');
+            $this->log_debug([
+                'login_http_code' => $code,
+                'login_success' => false,
+                'error_reason' => 'login_form_not_found',
+            ]);
             return false;
         }
 
@@ -76,6 +91,11 @@ class GP_Partscentrum_Client
 
         if (is_wp_error($submitResponse)) {
             $this->log('error', 'Błąd podczas wysyłki formularza logowania.', ['error' => $submitResponse->get_error_message()]);
+            $this->log_debug([
+                'login_http_code' => 0,
+                'login_success' => false,
+                'error_reason' => 'login_submit_failed',
+            ]);
             return false;
         }
 
@@ -85,15 +105,22 @@ class GP_Partscentrum_Client
 
         if ($submitCode >= 400) {
             $this->log('error', 'Logowanie zwróciło błąd HTTP.', ['status' => $submitCode]);
+            $this->log_debug([
+                'login_http_code' => $submitCode,
+                'login_success' => false,
+                'error_reason' => 'login_http_error',
+            ]);
             return false;
         }
 
         $loggedIn = $this->detectAuthenticatedState($submitBody);
-        if (!$loggedIn) {
-            $this->log('warning', 'Logowanie mogło się nie udać — brak jednoznacznych markerów sesji.');
-        }
+        $this->log_debug([
+            'login_http_code' => $submitCode,
+            'login_success' => $loggedIn,
+            'error_reason' => $loggedIn ? '' : 'auth_markers_missing',
+        ]);
 
-        return true;
+        return $loggedIn;
     }
 
     /**
@@ -109,7 +136,7 @@ class GP_Partscentrum_Client
             ];
         }
 
-        if (!empty($this->lastSearch) && ($this->lastSearch['part_number'] ?? '') === $partNumber) {
+        if (!empty($this->lastSearch) && ($this->lastSearch['submitted_part_number'] ?? '') === $partNumber) {
             return [
                 'success' => true,
                 'data' => $this->lastSearch,
@@ -118,7 +145,7 @@ class GP_Partscentrum_Client
 
         $searchUrl = $this->absoluteUrl((string) $this->runtime['search_path']);
         $method = (string) $this->runtime['search_http_method'];
-        $fieldName = (string) apply_filters('gp_partscentrum_search_field', 'part_number');
+        $fieldName = (string) apply_filters('gp_partscentrum_search_field', 'pn');
 
         $args = [
             'headers' => [
@@ -127,14 +154,28 @@ class GP_Partscentrum_Client
         ];
 
         if ($method === 'POST') {
-            $args['body'] = [$fieldName => $partNumber];
+            $args['body'] = [
+                $fieldName => $partNumber,
+                'pn' => $partNumber,
+                'part_number' => $partNumber,
+                'partNumber' => $partNumber,
+            ];
         } else {
-            $searchUrl = add_query_arg([$fieldName => rawurlencode($partNumber)], $searchUrl);
+            $searchUrl = add_query_arg([$fieldName => $partNumber], $searchUrl);
         }
 
         $response = $this->request($method, $searchUrl, $args);
 
         if (is_wp_error($response)) {
+            $this->log_debug([
+                'search_http_code' => 0,
+                'search_url' => $searchUrl,
+                'search_method' => $method,
+                'submitted_part_number' => $partNumber,
+                'results_table_found' => false,
+                'parsed_results_count' => 0,
+                'error_reason' => 'search_request_failed',
+            ]);
             return [
                 'success' => false,
                 'error' => 'Nie udało się połączyć z panelem dostawcy.',
@@ -142,11 +183,21 @@ class GP_Partscentrum_Client
         }
 
         $this->captureCookies($response);
+        $searchCode = (int) wp_remote_retrieve_response_code($response);
         $contentType = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
         $body = (string) wp_remote_retrieve_body($response);
 
         $parsed = $this->parseSearchResult($body, $contentType, $partNumber);
         if ($parsed === null) {
+            $this->log_debug([
+                'search_http_code' => $searchCode,
+                'search_url' => $searchUrl,
+                'search_method' => $method,
+                'submitted_part_number' => $partNumber,
+                'results_table_found' => false,
+                'parsed_results_count' => 0,
+                'error_reason' => 'results_not_found_or_unparsed',
+            ]);
             return [
                 'success' => false,
                 'error' => 'Brak wyników lub nieobsługiwany format odpowiedzi dostawcy.',
@@ -154,6 +205,15 @@ class GP_Partscentrum_Client
         }
 
         $this->lastSearch = $parsed;
+        $this->log_debug([
+            'search_http_code' => $searchCode,
+            'search_url' => $searchUrl,
+            'search_method' => $method,
+            'submitted_part_number' => $partNumber,
+            'results_table_found' => true,
+            'parsed_results_count' => count((array) ($parsed['items'] ?? [])),
+            'error_reason' => '',
+        ]);
 
         return [
             'success' => true,
@@ -341,89 +401,194 @@ class GP_Partscentrum_Client
      */
     private function parseSearchResult(string $body, string $contentType, string $partNumber): ?array
     {
-        $supplierData = [
-            'supplier_part_number' => $partNumber,
-            'supplier_title' => '',
-            'supplier_price' => 0.0,
-            'availability' => 'unknown',
-            'supplier_product_id' => '',
-            'checked_at' => gmdate('c'),
-            'raw_type' => '',
-        ];
-
         if (str_contains($contentType, 'application/json')) {
             $decoded = json_decode($body, true);
             if (!is_array($decoded)) {
                 return null;
             }
-            $supplierData['raw_type'] = 'json';
-            $supplierData['supplier_title'] = (string) ($decoded['name'] ?? $decoded['title'] ?? '');
-            $supplierData['supplier_part_number'] = (string) ($decoded['part_number'] ?? $decoded['partNumber'] ?? $partNumber);
-            $supplierData['supplier_product_id'] = (string) ($decoded['id'] ?? '');
-            $supplierData['availability'] = strtolower((string) ($decoded['availability'] ?? $decoded['stock'] ?? 'unknown'));
-            $supplierData['supplier_price'] = (float) ($decoded['price'] ?? 0);
-
-            return $supplierData;
+            return $this->parseJsonResult($decoded, $partNumber);
         }
 
         $dom = new DOMDocument();
         @$dom->loadHTML($body);
         $xpath = new DOMXPath($dom);
-        $supplierData['raw_type'] = 'html';
+        return $this->parseHtmlResult($xpath, $partNumber);
+    }
 
-        $row = $xpath->query("//tr[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" . strtolower($partNumber) . "')]")->item(0);
-        if ($row instanceof DOMNode) {
-            $rowText = trim((string) $row->textContent);
-            $supplierData['supplier_title'] = $this->extractTitleFromRowText($rowText, $partNumber);
-            $supplierData['supplier_price'] = $this->extractPriceFromText($rowText);
-            $supplierData['availability'] = $this->extractAvailabilityFromText($rowText);
+    /**
+     * @param array<string,mixed> $decoded
+     * @return array<string,mixed>|null
+     */
+    private function parseJsonResult(array $decoded, string $partNumber): ?array
+    {
+        $items = [];
+        $rows = $decoded['data'] ?? $decoded['items'] ?? $decoded;
 
-            return $supplierData;
+        if (isset($rows['part_number']) || isset($rows['partNumber'])) {
+            $rows = [$rows];
+        }
+        if (!is_array($rows)) {
+            return null;
         }
 
-        if (str_contains(strtolower($body), strtolower($partNumber))) {
-            $supplierData['supplier_title'] = 'Część ' . $partNumber;
-            $supplierData['supplier_price'] = $this->extractPriceFromText($body);
-            $supplierData['availability'] = $this->extractAvailabilityFromText($body);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $pn = (string) ($row['part_number'] ?? $row['partNumber'] ?? $partNumber);
+            $grossDiscounted = (float) ($row['your_price_gross'] ?? $row['yourPriceGross'] ?? $row['price_gross_discounted'] ?? 0);
+            if ($grossDiscounted <= 0) {
+                continue;
+            }
+            $items[] = [
+                'supplier_part_number' => $pn,
+                'supplier_title' => (string) ($row['name'] ?? $row['title'] ?? ('Część ' . $pn)),
+                'supplier_price_gross_discounted' => $grossDiscounted,
+                'availability' => (string) ($row['availability'] ?? $row['stock'] ?? '- / -'),
+                'supplier_product_id' => (string) ($row['id'] ?? ''),
+                'checked_at' => gmdate('c'),
+            ];
+        }
 
-            return $supplierData;
+        if ($items === []) {
+            return null;
+        }
+
+        return [
+            'submitted_part_number' => $partNumber,
+            'raw_type' => 'json',
+            'items' => $items,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function parseHtmlResult(DOMXPath $xpath, string $partNumber): ?array
+    {
+        $table = $this->findSearchTable($xpath);
+        if (!$table instanceof DOMElement) {
+            return null;
+        }
+
+        $rows = $xpath->query('.//tr[td]', $table);
+        if (!$rows instanceof DOMNodeList || $rows->length === 0) {
+            return null;
+        }
+
+        $items = [];
+        foreach ($rows as $row) {
+            if (!$row instanceof DOMElement) {
+                continue;
+            }
+            $cells = $xpath->query('./td', $row);
+            if (!$cells instanceof DOMNodeList || $cells->length < 7) {
+                continue;
+            }
+
+            $item = $this->mapHtmlRowToItem($cells, $partNumber);
+            if ($item === null) {
+                continue;
+            }
+            $items[] = $item;
+        }
+
+        if ($items === []) {
+            return null;
+        }
+
+        return [
+            'submitted_part_number' => $partNumber,
+            'raw_type' => 'html',
+            'items' => $items,
+        ];
+    }
+
+    private function findSearchTable(DOMXPath $xpath): ?DOMElement
+    {
+        $tables = $xpath->query('//table');
+        if (!$tables instanceof DOMNodeList || $tables->length === 0) {
+            return null;
+        }
+
+        foreach ($tables as $table) {
+            if (!$table instanceof DOMElement) {
+                continue;
+            }
+            $header = strtolower($this->normalizeText((string) ($xpath->query('.//thead', $table)->item(0)?->textContent ?? $table->textContent)));
+            if (
+                str_contains($header, 'twoja cena brutto') &&
+                str_contains($header, 'pn') &&
+                str_contains($header, 'nazwa')
+            ) {
+                return $table;
+            }
         }
 
         return null;
     }
 
-    private function extractPriceFromText(string $text): float
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function mapHtmlRowToItem(DOMNodeList $cells, string $partNumber): ?array
     {
-        if (preg_match('/([0-9]{1,6}(?:[\s\.]?[0-9]{3})*(?:[\,\.][0-9]{2})?)\s*(?:zł|pln)?/iu', $text, $matches) === 1) {
-            $raw = str_replace([' ', '.'], ['', ''], (string) $matches[1]);
-            $raw = str_replace(',', '.', $raw);
-            return (float) $raw;
+        $supplierPartNumber = $this->normalizeText((string) ($cells->item(1)?->textContent ?? ''));
+        if ($supplierPartNumber === '') {
+            return null;
         }
 
-        return 0.0;
+        if (!str_contains(strtoupper($supplierPartNumber), strtoupper($partNumber))) {
+            return null;
+        }
+
+        $grossDiscounted = $this->parseMoney($this->normalizeText((string) ($cells->item(5)?->textContent ?? '')));
+        if ($grossDiscounted <= 0) {
+            return null;
+        }
+
+        return [
+            'supplier_title' => $this->normalizeText((string) ($cells->item(0)?->textContent ?? '')),
+            'supplier_part_number' => $supplierPartNumber,
+            'supplier_price_gross_discounted' => $grossDiscounted,
+            'availability' => $this->normalizeText((string) ($cells->item(6)?->textContent ?? '- / -')),
+            'supplier_product_id' => '',
+            'checked_at' => gmdate('c'),
+        ];
     }
 
-    private function extractAvailabilityFromText(string $text): string
+    private function parseMoney(string $value): float
     {
-        $lower = strtolower($text);
-        if (str_contains($lower, 'dostęp') || str_contains($lower, 'na stanie') || str_contains($lower, 'available')) {
-            return 'available';
-        }
-        if (str_contains($lower, 'brak') || str_contains($lower, 'niedostęp')) {
-            return 'unavailable';
+        if (preg_match('/([0-9]+(?:[.,][0-9]{1,2})?)/', str_replace(' ', '', $value), $matches) !== 1) {
+            return 0.0;
         }
 
-        return 'unknown';
+        return (float) str_replace(',', '.', (string) $matches[1]);
     }
 
-    private function extractTitleFromRowText(string $text, string $partNumber): string
+    private function normalizeText(string $value): string
     {
-        $clean = trim(preg_replace('/\s+/', ' ', str_ireplace($partNumber, '', $text)) ?? '');
-        if ($clean !== '') {
-            return $clean;
-        }
+        return trim((string) preg_replace('/\s+/u', ' ', html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    }
 
-        return 'Nowa część Skoda ' . $partNumber;
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function log_debug(array $context): void
+    {
+        $allowed = [
+            'login_http_code' => (int) ($context['login_http_code'] ?? 0),
+            'login_success' => (bool) ($context['login_success'] ?? false),
+            'search_http_code' => (int) ($context['search_http_code'] ?? 0),
+            'search_url' => (string) ($context['search_url'] ?? ''),
+            'search_method' => (string) ($context['search_method'] ?? ''),
+            'submitted_part_number' => (string) ($context['submitted_part_number'] ?? ''),
+            'results_table_found' => (bool) ($context['results_table_found'] ?? false),
+            'parsed_results_count' => (int) ($context['parsed_results_count'] ?? 0),
+            'error_reason' => (string) ($context['error_reason'] ?? ''),
+        ];
+
+        $this->log('debug', 'Partscentrum flow diagnostics.', $allowed);
     }
 
     /**
