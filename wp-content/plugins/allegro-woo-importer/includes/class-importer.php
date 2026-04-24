@@ -105,7 +105,27 @@ class Importer
             'reported_total_count' => $total_count_from_api,
         ]);
 
-        $start_index = min($resume_offer_index, $batch_size);
+        if ($resume_offer_index >= $batch_size) {
+            $this->logger->warning('Invalid resume_offer_index detected; resetting to 0 for current batch.', [
+                'offset' => $offset,
+                'batch_limit' => self::BATCH_LIMIT,
+                'offers_count' => $batch_size,
+                'invalid_resume_offer_index' => $resume_offer_index,
+            ]);
+
+            $resume_offer_index = 0;
+            $this->save_checkpoint([
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'page_token' => $page_token,
+                'offer_index' => 0,
+                'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
+                'total_count' => $total_count_from_api,
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ]);
+        }
+
+        $start_index = $resume_offer_index;
 
         for ($index = $start_index; $index < $batch_size; $index++) {
             if (function_exists('set_time_limit')) {
@@ -189,6 +209,28 @@ class Importer
 
                 return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
             }
+        }
+
+        if ($processed === 0 && $batch_size > 0) {
+            $this->save_checkpoint([
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'page_token' => $page_token,
+                'offer_index' => 0,
+                'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
+                'total_count' => $total_count_from_api,
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ]);
+
+            $this->logger->warning('Batch returned offers but processed_in_run is 0; keeping checkpoint on current offset.', [
+                'offset' => $offset,
+                'page_no' => $page_no,
+                'offers_count' => $batch_size,
+                'processed_in_run' => $processed,
+                'skipped_in_run' => $skipped,
+            ]);
+
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
         }
 
         $next_page_token = $this->extract_next_page_token($page);
