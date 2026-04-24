@@ -10,7 +10,7 @@ class GP_Partscentrum_Client
     private const ADMIN_LOG_OPTION = 'gp_partscentrum_admin_logs';
     private const ADMIN_LOG_LIMIT = 100;
 
-    /** @var array<string, string> */
+    /** @var array<string, WP_Http_Cookie> */
     private array $cookies = [];
 
     /** @var string[] */
@@ -113,6 +113,7 @@ class GP_Partscentrum_Client
         }
 
         $this->captureCookies($submitResponse);
+        $diagnostics['cookies_after_login_count'] = count($this->cookies);
         $submitCode = (int) wp_remote_retrieve_response_code($submitResponse);
         $diagnostics['login_http_code'] = $submitCode;
         $submitBody = (string) wp_remote_retrieve_body($submitResponse);
@@ -173,6 +174,7 @@ class GP_Partscentrum_Client
             'headers' => [
                 'Referer' => $searchUrl,
             ],
+            'cookies' => array_values($this->cookies),
         ];
 
         if ($method === 'POST') {
@@ -193,6 +195,7 @@ class GP_Partscentrum_Client
                 'search_http_code' => 0,
                 'search_url' => $searchUrl,
                 'search_method' => $method,
+                'cookies_used_in_search_count' => count($this->cookies),
                 'submitted_part_number' => $partNumber,
                 'results_table_found' => false,
                 'parsed_results_count' => 0,
@@ -215,6 +218,7 @@ class GP_Partscentrum_Client
                 'search_http_code' => $searchCode,
                 'search_url' => $searchUrl,
                 'search_method' => $method,
+                'cookies_used_in_search_count' => count($this->cookies),
                 'submitted_part_number' => $partNumber,
                 'results_table_found' => false,
                 'parsed_results_count' => 0,
@@ -231,6 +235,7 @@ class GP_Partscentrum_Client
             'search_http_code' => $searchCode,
             'search_url' => $searchUrl,
             'search_method' => $method,
+            'cookies_used_in_search_count' => count($this->cookies),
             'submitted_part_number' => $partNumber,
             'results_table_found' => true,
             'parsed_results_count' => count((array) ($parsed['items'] ?? [])),
@@ -358,10 +363,11 @@ class GP_Partscentrum_Client
             'redirection' => 5,
             'sslverify' => true,
             'headers' => [],
+            'cookies' => [],
         ];
 
         $args = wp_parse_args($args, $defaults);
-        $args['headers']['Cookie'] = $this->buildCookieHeader();
+        $args['cookies'] = array_values($this->cookies);
 
         if (strtoupper($method) === 'POST') {
             return wp_remote_post($url, $args);
@@ -370,43 +376,25 @@ class GP_Partscentrum_Client
         return wp_remote_get($url, $args);
     }
 
-    private function buildCookieHeader(): string
-    {
-        if ($this->cookies === []) {
-            return '';
-        }
-
-        $cookieParts = [];
-        foreach ($this->cookies as $name => $value) {
-            $cookieParts[] = $name . '=' . $value;
-        }
-
-        return implode('; ', $cookieParts);
-    }
-
     /**
      * @param array<string, mixed> $response
      */
     private function captureCookies(array $response): void
     {
         $setCookie = wp_remote_retrieve_header($response, 'set-cookie');
-        if (empty($setCookie)) {
-            return;
+        if (!empty($setCookie)) {
+            $headers = is_array($setCookie) ? $setCookie : [$setCookie];
+            foreach ($headers as $headerLine) {
+                $this->setCookieHeaders[] = (string) $headerLine;
+            }
         }
 
-        $headers = is_array($setCookie) ? $setCookie : [$setCookie];
-        foreach ($headers as $headerLine) {
-            $this->setCookieHeaders[] = (string) $headerLine;
-            $pair = explode(';', (string) $headerLine)[0] ?? '';
-            if (!str_contains($pair, '=')) {
+        $cookies = wp_remote_retrieve_cookies($response);
+        foreach ($cookies as $cookie) {
+            if (!$cookie instanceof WP_Http_Cookie || $cookie->name === '') {
                 continue;
             }
-            [$name, $value] = array_pad(explode('=', $pair, 2), 2, '');
-            $name = trim((string) $name);
-            if ($name === '') {
-                continue;
-            }
-            $this->cookies[$name] = trim((string) $value);
+            $this->cookies[$cookie->name] = $cookie;
         }
     }
 
@@ -686,6 +674,7 @@ class GP_Partscentrum_Client
             'redirect_detected' => (bool) ($context['redirect_detected'] ?? false),
             'user_logged_in' => (bool) ($context['user_logged_in'] ?? false),
             'login_success' => (bool) ($context['login_success'] ?? false),
+            'cookies_after_login_count' => (int) ($context['cookies_after_login_count'] ?? 0),
             'search_http_code' => (int) ($context['search_http_code'] ?? 0),
             'search_url' => (string) ($context['search_url'] ?? ''),
             'search_method' => (string) ($context['search_method'] ?? ''),
