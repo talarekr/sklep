@@ -12,8 +12,16 @@ $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('sh
 $cart_count = absint((function_exists('WC') && WC()->cart) ? WC()->cart->get_cart_contents_count() : 0);
 $is_logged_in = is_user_logged_in();
 $shortcuts = [
-    ['label' => 'Silniki', 'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines']],
-    ['label' => 'Skrzynia biegów', 'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission']],
+    [
+        'label' => 'Silniki',
+        'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/motoryzacja/czesci-samochodowe/silniki-i-osprzet/silniki-kompletne/',
+    ],
+    [
+        'label' => 'Skrzynia biegów',
+        'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/motoryzacja/czesci-samochodowe/uklad-napedowy/skrzynie-biegow/kompletne-skrzynie/',
+    ],
     ['label' => 'Filtry DPF', 'slugs' => ['filtry-czastek-stalych-dpf-fap']],
     ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
     ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'wyposazenie-wnetrza-samochodu', 'interior']],
@@ -285,7 +293,8 @@ if (taxonomy_exists('product_cat')) {
             </div>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
                 <?php foreach ($shortcuts as $shortcut) : ?>
-                    <a href="<?php echo esc_url($resolve_category_url($shortcut['slugs'], $shortcut['label'])); ?>"><?php echo esc_html($shortcut['label']); ?></a>
+                    <?php $shortcut_url = $shortcut['url'] ?? $resolve_category_url($shortcut['slugs'], $shortcut['label']); ?>
+                    <a href="<?php echo esc_url($shortcut_url); ?>"><?php echo esc_html($shortcut['label']); ?></a>
                 <?php endforeach; ?>
             </nav>
             <div class="gp-phone">
