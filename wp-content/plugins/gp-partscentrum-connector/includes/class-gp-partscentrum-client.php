@@ -55,7 +55,6 @@ class GP_Partscentrum_Client
             'redirect_detected' => false,
             'user_logged_in' => false,
             'login_success' => false,
-            'cookies_after_login_count' => 0,
             'error_reason' => '',
         ];
 
@@ -265,7 +264,6 @@ class GP_Partscentrum_Client
             'search_field_name_used' => $fieldName,
             'login_success' => false,
             'search_http_code' => 0,
-            'cookies_used_in_search_count' => 0,
             'results_table_found' => false,
             'parsed_results_count' => 0,
             'error_reason' => '',
@@ -288,9 +286,7 @@ class GP_Partscentrum_Client
             'headers' => [
                 'Referer' => $searchUrl,
             ],
-            'cookies' => array_values($this->cookies),
         ];
-        $diagnostics['cookies_used_in_search_count'] = count($this->cookies);
 
         if ($method === 'POST') {
             $args['body'] = [
@@ -683,7 +679,6 @@ class GP_Partscentrum_Client
             'search_url' => (string) ($context['search_url'] ?? ''),
             'search_method' => (string) ($context['search_method'] ?? ''),
             'search_field_name_used' => (string) ($context['search_field_name_used'] ?? ''),
-            'cookies_used_in_search_count' => (int) ($context['cookies_used_in_search_count'] ?? 0),
             'submitted_part_number' => (string) ($context['submitted_part_number'] ?? ''),
             'results_table_found' => (bool) ($context['results_table_found'] ?? false),
             'parsed_results_count' => (int) ($context['parsed_results_count'] ?? 0),
