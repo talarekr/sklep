@@ -9,6 +9,10 @@ if (!defined('ABSPATH')) {
 class AllegroClient
 {
     private const ACCEPT_HEADER = 'application/vnd.allegro.public.v1+json';
+    private const MAX_RETRY_ATTEMPTS = 4;
+    private const RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
+    private const MIN_RETRY_DELAY_SECONDS = 1;
+    private const MAX_RETRY_DELAY_SECONDS = 20;
 
     private AllegroAuth $auth;
     private Logger $logger;
@@ -28,7 +32,6 @@ class AllegroClient
     public function get_offers(string $status = 'ACTIVE', int $offset = 0, int $limit = 100, string $page_token = '')
     {
         $query = [
-            'offset' => max(0, $offset),
             'limit' => min(100, max(1, $limit)),
         ];
 
@@ -38,11 +41,13 @@ class AllegroClient
 
         if ($page_token !== '') {
             $query['page.id'] = sanitize_text_field($page_token);
+        } else {
+            $query['offset'] = max(0, $offset);
         }
 
         $this->logger->info('Fetching Allegro offers list.', [
             'status' => $status,
-            'offset' => (int) $query['offset'],
+            'offset' => (int) ($query['offset'] ?? 0),
             'limit' => (int) $query['limit'],
             'page_token' => (string) ($query['page.id'] ?? ''),
         ]);
@@ -273,19 +278,74 @@ class AllegroClient
             return $response;
         }
 
-        $status = (int) wp_remote_retrieve_response_code($response);
-        $raw = wp_remote_retrieve_body($response);
-        $data = json_decode($raw, true);
+        for ($attempt = 1; $attempt <= self::MAX_RETRY_ATTEMPTS; $attempt++) {
+            $status = (int) wp_remote_retrieve_response_code($response);
+            $raw = wp_remote_retrieve_body($response);
+            $data = json_decode($raw, true);
 
-        if ($status < 200 || $status > 299) {
-            $this->logger->error('Allegro API returned non-success status.', ['path' => $path, 'status' => $status, 'body' => $raw]);
-            return new \WP_Error('awi_api_error', __('Allegro API zwróciło błąd.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+            if ($status >= 200 && $status <= 299) {
+                if (!is_array($data)) {
+                    return new \WP_Error('awi_api_invalid_json', __('Nieprawidłowa odpowiedź JSON z Allegro API.', 'allegro-woo-importer'));
+                }
+
+                return $data;
+            }
+
+            $is_retryable = in_array($status, self::RETRYABLE_STATUS_CODES, true);
+            $has_next_attempt = $attempt < self::MAX_RETRY_ATTEMPTS;
+            if (!$is_retryable || !$has_next_attempt) {
+                $this->logger->error('Allegro API returned non-success status.', [
+                    'path' => $path,
+                    'status' => $status,
+                    'attempt' => $attempt,
+                    'max_attempts' => self::MAX_RETRY_ATTEMPTS,
+                    'body' => $raw,
+                ]);
+
+                return new \WP_Error('awi_api_error', __('Allegro API zwróciło błąd.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+            }
+
+            $retry_after_header = wp_remote_retrieve_header($response, 'retry-after');
+            $retry_after_seconds = $this->calculate_retry_delay_seconds($retry_after_header, $attempt);
+            $this->logger->warning('Retrying Allegro API request after retryable status.', [
+                'path' => $path,
+                'status' => $status,
+                'attempt' => $attempt,
+                'max_attempts' => self::MAX_RETRY_ATTEMPTS,
+                'retry_after_seconds' => $retry_after_seconds,
+                'retry_after_header' => is_string($retry_after_header) ? $retry_after_header : '',
+            ]);
+
+            if ($retry_after_seconds > 0) {
+                sleep($retry_after_seconds);
+            }
+
+            $response = wp_remote_request($url, $request_args);
+            if (is_wp_error($response)) {
+                $this->logger->error('Allegro API request retry failed.', [
+                    'path' => $path,
+                    'attempt' => $attempt + 1,
+                    'error' => $response->get_error_message(),
+                ]);
+
+                return $response;
+            }
         }
 
-        if (!is_array($data)) {
-            return new \WP_Error('awi_api_invalid_json', __('Nieprawidłowa odpowiedź JSON z Allegro API.', 'allegro-woo-importer'));
+        return new \WP_Error('awi_api_unexpected_state', __('Nieoczekiwany stan klienta Allegro API.', 'allegro-woo-importer'));
+    }
+
+    private function calculate_retry_delay_seconds($retry_after_header, int $attempt): int
+    {
+        $retry_after_seconds = 0;
+        if (is_numeric($retry_after_header)) {
+            $retry_after_seconds = (int) $retry_after_header;
         }
 
-        return $data;
+        if ($retry_after_seconds <= 0) {
+            $retry_after_seconds = (int) pow(2, max(0, $attempt - 1));
+        }
+
+        return max(self::MIN_RETRY_DELAY_SECONDS, min(self::MAX_RETRY_DELAY_SECONDS, $retry_after_seconds));
     }
 }
