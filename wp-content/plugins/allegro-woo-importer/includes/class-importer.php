@@ -543,6 +543,11 @@ class Importer
                     'offer_id' => $offer_id,
                     'current_offset' => $offset,
                 ]);
+                $this->logger->info('CHECK', [
+                    'mode' => 'missing_import',
+                    'offer_id' => $offer_id,
+                    'current_offset' => $offset,
+                ]);
 
                 $existing_product_id = $this->mapper->find_existing_product_id_for_offer($offer_basic);
                 if ($existing_product_id > 0) {
@@ -550,6 +555,13 @@ class Importer
                     $this->logger->info('MISSING_IMPORT_OFFER_SKIP already_exists', [
                         'offer_id' => $offer_id,
                         'product_id' => $existing_product_id,
+                    ]);
+                    $this->logger->info('SKIP', [
+                        'mode' => 'missing_import',
+                        'offer_id' => $offer_id,
+                        'product_id' => $existing_product_id,
+                        'reason' => 'already_exists_offer_or_sku',
+                        'source' => 'basic_check',
                     ]);
                     continue;
                 }
@@ -573,8 +585,26 @@ class Importer
                         'product_id' => $existing_from_details,
                         'source' => 'details_check',
                     ]);
+                    $this->logger->info('SKIP', [
+                        'mode' => 'missing_import',
+                        'offer_id' => $offer_id,
+                        'product_id' => $existing_from_details,
+                        'reason' => 'already_exists_offer_or_sku',
+                        'source' => 'details_check',
+                    ]);
                     continue;
                 }
+
+                $details_images = $details['images'] ?? [];
+                $details_images_count = is_array($details_images) ? count($details_images) : 0;
+                $product_set_count = is_array($details['productSet'] ?? null) ? count((array) $details['productSet']) : 0;
+                $this->logger->info('MISSING_IMPORT_DETAILS_PAYLOAD', [
+                    'offer_id' => $offer_id,
+                    'top_level_images_count' => $details_images_count,
+                    'has_top_level_images_array' => is_array($details_images),
+                    'product_set_count' => $product_set_count,
+                    'details_keys' => is_array($details) ? array_keys($details) : [],
+                ]);
 
                 $result = $this->mapper->upsert_product($details, [
                     'sync_mode' => 'create_only',
@@ -588,6 +618,11 @@ class Importer
                         'offer_id' => $offer_id,
                         'product_id' => (int) ($result['product_id'] ?? 0),
                     ]);
+                    $this->logger->info('IMPORTED', [
+                        'mode' => 'missing_import',
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                    ]);
                     continue;
                 }
 
@@ -596,6 +631,13 @@ class Importer
                     $this->logger->info('MISSING_IMPORT_OFFER_SKIP already_exists', [
                         'offer_id' => $offer_id,
                         'product_id' => (int) ($result['product_id'] ?? 0),
+                        'source' => 'upsert_guard',
+                    ]);
+                    $this->logger->info('SKIP', [
+                        'mode' => 'missing_import',
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                        'reason' => 'already_exists_offer_or_sku',
                         'source' => 'upsert_guard',
                     ]);
                     continue;
@@ -645,9 +687,11 @@ class Importer
                 'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
             ];
             $this->logger->info('MISSING_IMPORT_BATCH_DONE', $summary);
+            $this->logger->info('BATCH_DONE', ['mode' => 'missing_import'] + $summary);
 
             if (!$has_more) {
                 $this->logger->info('MISSING_IMPORT_COMPLETED', $checkpoint);
+                $this->logger->info('COMPLETED', ['mode' => 'missing_import'] + $checkpoint);
             }
 
             return $checkpoint;
