@@ -69,15 +69,33 @@ class Cron
 
     public function schedule_missing_import_batch(): void
     {
-        if (function_exists('as_has_scheduled_action') && function_exists('as_schedule_single_action')) {
-            if (!as_has_scheduled_action(Plugin::MISSING_IMPORT_CRON_HOOK)) {
+        $action_scheduler_scheduled = false;
+        if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_single_action')) {
+            // as_has_scheduled_action() can return the currently running action inside callback context.
+            // Here we care only about queued future runs, so use as_next_scheduled_action().
+            $next_action_timestamp = as_next_scheduled_action(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+            if ((int) $next_action_timestamp <= 0) {
                 as_schedule_single_action(time() + 2, Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+                $action_scheduler_scheduled = true;
+                $this->logger->info('MISSING_IMPORT_BATCH_ENQUEUED', [
+                    'runner' => 'action_scheduler',
+                    'delay_seconds' => 2,
+                ]);
+            } else {
+                $this->logger->info('MISSING_IMPORT_BATCH_ALREADY_QUEUED', [
+                    'runner' => 'action_scheduler',
+                    'next_run_at' => gmdate('Y-m-d H:i:s', (int) $next_action_timestamp),
+                    'next_run_timestamp' => (int) $next_action_timestamp,
+                ]);
             }
-            return;
         }
 
-        if (!wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK)) {
+        if (!$action_scheduler_scheduled && !wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK)) {
             wp_schedule_single_event(time() + 5, Plugin::MISSING_IMPORT_CRON_HOOK);
+            $this->logger->info('MISSING_IMPORT_BATCH_ENQUEUED', [
+                'runner' => 'wp_cron_fallback',
+                'delay_seconds' => 5,
+            ]);
         }
     }
 
