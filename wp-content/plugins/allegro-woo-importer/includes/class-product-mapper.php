@@ -1413,12 +1413,27 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
+        $raw_images = $this->collect_raw_images_from_offer_payload($offer);
+        $raw_images_count = count($raw_images);
+        $first_image_raw = $raw_images_count > 0 ? $raw_images[0] : null;
+        $image_urls = $this->extract_image_urls_from_raw_images($raw_images);
+        $images_count = count($image_urls);
+        $first_image_url = $images_count > 0 ? (string) $image_urls[0] : '';
+        $this->logger->info('IMAGE_SYNC_INPUT', [
+            'offer_id' => $offer_id,
+            'images_count' => $raw_images_count,
+            'first_image_raw' => is_scalar($first_image_raw) || $first_image_raw === null ? $first_image_raw : wp_json_encode($first_image_raw),
+            'extracted_first_url' => $first_image_url,
+            'extracted_urls_count' => $images_count,
+        ]);
+
         if (defined('AWI_SKIP_IMAGES') && AWI_SKIP_IMAGES) {
+            $this->logger->warning('IMAGE_SYNC_SKIPPED', [
+                'offer_id' => $offer_id,
+                'reason' => 'awi_skip_images_constant_enabled',
+            ]);
             return;
         }
-
-        $images_raw = $offer['images'] ?? [];
-        $images = is_array($images_raw) ? $images_raw : [];
 
         $product_id = $product->get_id();
         if ($product_id <= 0) {
@@ -1429,27 +1444,12 @@ class ProductMapper
         $this->logger->info('Starting product image sync.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'images_found' => count($images),
+            'images_found' => $images_count,
+            'raw_images_found' => $raw_images_count,
+            'first_image_url' => $first_image_url,
+            'has_top_level_images_array' => is_array($offer['images'] ?? null),
+            'product_set_count' => is_array($offer['productSet'] ?? null) ? count((array) $offer['productSet']) : 0,
         ]);
-
-        $image_urls = [];
-        foreach ($images as $image) {
-            $url = '';
-            if (is_array($image)) {
-                $url = (string) ($image['url'] ?? '');
-            } elseif (is_string($image)) {
-                $url = $image;
-            }
-
-            $url = trim($url);
-            if ($url === '') {
-                continue;
-            }
-
-            $image_urls[] = $url;
-        }
-
-        $image_urls = array_values(array_unique($image_urls));
 
         $this->logger->info('Normalized image URLs count.', [
             'offer_id' => $offer_id,
@@ -1477,6 +1477,13 @@ class ProductMapper
                 'images_total' => count($image_urls),
                 'url' => $url,
             ]);
+            $this->logger->info('IMAGE_DOWNLOAD_START', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
+                'image_url' => $url,
+            ]);
             $this->persist_last_image_checkpoint([
                 'stage' => 'before_attachment_lookup',
                 'offer_id' => $offer_id,
@@ -1489,12 +1496,30 @@ class ProductMapper
             if ($existing_attachment_id > 0) {
                 $this->logger->info('Reusing existing attachment for image URL.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => $existing_attachment_id]);
                 $this->logger->info('Sideload/reuse result attachment ID.', ['offer_id' => $offer_id, 'product_id' => $product_id, 'url' => $url, 'attachment_id' => (int) $existing_attachment_id, 'source' => 'reuse']);
+                $this->logger->info('IMAGE_DOWNLOAD_DONE', [
+                    'offer_id' => $offer_id,
+                    'product_id' => $product_id,
+                    'image_index' => $image_no,
+                    'images_total' => count($image_urls),
+                    'image_url' => $url,
+                    'attachment_id' => (int) $existing_attachment_id,
+                    'source' => 'reuse',
+                ]);
                 $gallery_ids[] = $existing_attachment_id;
                 continue;
             }
 
             $attachment_id = $this->sideload_image_attachment($url, $product_id, $offer_id);
             if (is_wp_error($attachment_id)) {
+                $this->logger->error('IMAGE_DOWNLOAD_FAILED', [
+                    'offer_id' => $offer_id,
+                    'product_id' => $product_id,
+                    'image_index' => $image_no,
+                    'images_total' => count($image_urls),
+                    'image_url' => $url,
+                    'error_reason' => $attachment_id->get_error_message(),
+                    'error_code' => $attachment_id->get_error_code(),
+                ]);
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
                     'product_id' => $product_id,
@@ -1513,6 +1538,15 @@ class ProductMapper
                 'image_index' => $image_no,
                 'images_total' => count($image_urls),
                 'url' => $url,
+                'attachment_id' => (int) $attachment_id,
+                'source' => 'sideload',
+            ]);
+            $this->logger->info('IMAGE_DOWNLOAD_DONE', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_index' => $image_no,
+                'images_total' => count($image_urls),
+                'image_url' => $url,
                 'attachment_id' => (int) $attachment_id,
                 'source' => 'sideload',
             ]);
@@ -1563,6 +1597,22 @@ class ProductMapper
             'featured_attachment_id' => $featured_id,
             'gallery_count' => count($gallery_only),
         ]);
+        $this->logger->info('IMAGE_ATTACH_RESULT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'attachment_id' => $featured_id,
+            'set_as_featured' => true,
+            'added_to_gallery' => false,
+        ]);
+        foreach ($gallery_only as $gallery_attachment_id) {
+            $this->logger->info('IMAGE_ATTACH_RESULT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'attachment_id' => (int) $gallery_attachment_id,
+                'set_as_featured' => false,
+                'added_to_gallery' => true,
+            ]);
+        }
 
         $listing_image_result = $this->ensure_listing_image_for_product($product_id, true);
         $listing_status = sanitize_key((string) ($listing_image_result['status'] ?? 'unknown'));
@@ -1622,6 +1672,13 @@ class ProductMapper
             ]);
         }
         if (is_wp_error($tmp_file)) {
+            $this->logger->error('IMAGE_DOWNLOAD_FAILED', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_url' => $image_url,
+                'error_reason' => $tmp_file->get_error_message(),
+                'error_code' => $tmp_file->get_error_code(),
+            ]);
             return $tmp_file;
         }
 
@@ -1677,6 +1734,89 @@ class ProductMapper
         }
 
         return (int) $attachment_id;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function collect_raw_images_from_offer_payload(array $offer): array
+    {
+        $raw_images = [];
+
+        if (is_array($offer['images'] ?? null)) {
+            $raw_images = array_merge($raw_images, (array) $offer['images']);
+        }
+
+        $product_set = $offer['productSet'] ?? [];
+        if (is_array($product_set)) {
+            foreach ($product_set as $product_set_item) {
+                if (!is_array($product_set_item)) {
+                    continue;
+                }
+
+                if (is_array($product_set_item['product']['images'] ?? null)) {
+                    $raw_images = array_merge($raw_images, (array) $product_set_item['product']['images']);
+                }
+
+                if (is_array($product_set_item['images'] ?? null)) {
+                    $raw_images = array_merge($raw_images, (array) $product_set_item['images']);
+                }
+            }
+        }
+
+        return $raw_images;
+    }
+
+    /**
+     * @param array<int, mixed> $raw_images
+     * @return string[]
+     */
+    private function extract_image_urls_from_raw_images(array $raw_images): array
+    {
+        $image_urls = [];
+        foreach ($raw_images as $image) {
+            $url = $this->extract_image_url_from_image_item($image);
+            $url = trim($url);
+            if ($url === '') {
+                continue;
+            }
+
+            $image_urls[] = $url;
+        }
+
+        return array_values(array_unique($image_urls));
+    }
+
+    private function extract_image_url_from_image_item($image): string
+    {
+        if (is_string($image)) {
+            return $image;
+        }
+
+        if (!is_array($image)) {
+            return '';
+        }
+
+        foreach (['url', 'src', 'source', 'href'] as $candidate_key) {
+            if (!empty($image[$candidate_key]) && is_string($image[$candidate_key])) {
+                return (string) $image[$candidate_key];
+            }
+        }
+
+        foreach ($image as $value) {
+            if (is_string($value) && preg_match('#^https?://#i', $value)) {
+                return $value;
+            }
+
+            if (is_array($value)) {
+                $nested_url = $this->extract_image_url_from_image_item($value);
+                if ($nested_url !== '') {
+                    return $nested_url;
+                }
+            }
+        }
+
+        return '';
     }
 
     private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file, string $offer_id = '', int $product_id = 0): string
