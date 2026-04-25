@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 
 class ProductMapper
 {
+    private const IMAGE_HTTP_SLOW_REQUEST_SECONDS = 8;
     private const IMAGE_HTTP_TIMEOUT_SECONDS = 20;
     private const IMAGE_HTTP_REDIRECTION_LIMIT = 3;
     private const MAX_IMAGE_FILE_SIZE_BYTES = 12582912; // 12 MB
@@ -643,6 +644,7 @@ class ProductMapper
         if ($offer_id === '') {
             return ['result' => 'skipped', 'error' => 'missing_offer_id'];
         }
+        $this->logger->info('PRODUCT_MAP_START', ['offer_id' => $offer_id]);
 
         $existing_id = $this->find_product_id_by_offer_id($offer_id);
         $sync_mode = $settings['sync_mode'] ?? 'create_update';
@@ -671,6 +673,12 @@ class ProductMapper
         if (!empty($missing_fields)) {
             $this->logger->warning('Offer mapping used fallback values.', ['offer_id' => $offer_id, 'missing_fields' => $missing_fields]);
         }
+        $this->logger->info('PRODUCT_MAP_DONE', [
+            'offer_id' => $offer_id,
+            'has_price' => $price !== null,
+            'has_images' => !empty($offer['images']) && is_array($offer['images']),
+            'existing_product_id' => (int) $existing_id,
+        ]);
 
         $product->set_name($title);
         $product->set_description($description);
@@ -699,30 +707,89 @@ class ProductMapper
 
         $this->apply_stock_state($product, $publication_status, $stock_available);
 
+        $this->logger->info('PRODUCT_SAVE_START', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product->get_id(),
+            'phase' => 'initial',
+        ]);
         try {
             $product_id = $product->save();
         } catch (\Throwable $throwable) {
             return [
                 'result' => 'error',
                 'error' => 'product_save_exception',
+                'stage' => 'product_save_initial',
                 'reason' => $throwable->getMessage(),
             ];
         }
 
         if (!$product_id) {
-            return ['result' => 'error', 'error' => 'save_failed'];
+            return ['result' => 'error', 'error' => 'save_failed', 'stage' => 'product_save_initial'];
         }
+        $this->logger->info('PRODUCT_SAVE_DONE', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product_id,
+            'phase' => 'initial',
+        ]);
 
-        $this->assign_category($product_id, $offer);
-        $this->map_attributes($product, $offer);
-        $this->sync_product_images($product, $offer, $offer_id, !$existing_id);
+        try {
+            $this->assign_category($product_id, $offer);
+            $this->map_attributes($product, $offer);
+        } catch (\Throwable $throwable) {
+            return [
+                'result' => 'error',
+                'error' => 'product_mapping_exception',
+                'stage' => 'assign_category_or_attributes',
+                'reason' => $throwable->getMessage(),
+                'product_id' => (int) $product_id,
+            ];
+        }
+        $this->logger->info('IMAGE_SYNC_START', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product_id,
+        ]);
+        try {
+            $this->sync_product_images($product, $offer, $offer_id, !$existing_id);
+        } catch (\Throwable $throwable) {
+            return [
+                'result' => 'error',
+                'error' => 'image_sync_exception',
+                'stage' => 'sync_product_images',
+                'reason' => $throwable->getMessage(),
+                'product_id' => (int) $product_id,
+            ];
+        }
+        $this->logger->info('IMAGE_SYNC_DONE', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product_id,
+        ]);
         $this->logger->info('Saving product after image sync.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
             'image_id_before_save' => (int) $product->get_image_id(),
             'gallery_ids_before_save' => array_map('intval', $product->get_gallery_image_ids()),
         ]);
-        $product->save();
+        $this->logger->info('PRODUCT_SAVE_START', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product_id,
+            'phase' => 'final_after_images',
+        ]);
+        try {
+            $product->save();
+        } catch (\Throwable $throwable) {
+            return [
+                'result' => 'error',
+                'error' => 'product_save_exception',
+                'stage' => 'product_save_final',
+                'reason' => $throwable->getMessage(),
+                'product_id' => (int) $product_id,
+            ];
+        }
+        $this->logger->info('PRODUCT_SAVE_DONE', [
+            'offer_id' => $offer_id,
+            'product_id' => (int) $product_id,
+            'phase' => 'final_after_images',
+        ]);
 
         $part_number_result = $this->extract_part_number($offer);
         $existing_part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
@@ -1378,7 +1445,7 @@ class ProductMapper
                 continue;
             }
 
-            $attachment_id = $this->sideload_image_attachment($url, $product_id);
+            $attachment_id = $this->sideload_image_attachment($url, $product_id, $offer_id);
             if (is_wp_error($attachment_id)) {
                 $this->logger->error('Image sideload failed.', [
                     'offer_id' => $offer_id,
@@ -1480,7 +1547,7 @@ class ProductMapper
     /**
      * @return int|\WP_Error
      */
-    private function sideload_image_attachment(string $image_url, int $product_id)
+    private function sideload_image_attachment(string $image_url, int $product_id, string $offer_id = '')
     {
         $download_started_at = microtime(true);
         $tmp_file = download_url($image_url, self::IMAGE_HTTP_TIMEOUT_SECONDS);
@@ -1493,9 +1560,19 @@ class ProductMapper
             'elapsed_time' => $download_elapsed,
             'http_code' => 0,
             'error_reason' => is_wp_error($tmp_file) ? $tmp_file->get_error_message() : '',
-            'offer_id' => '',
+            'offer_id' => $offer_id,
             'product_id' => $product_id,
+            'image_url' => $image_url,
         ]);
+        if ($download_elapsed >= self::IMAGE_HTTP_SLOW_REQUEST_SECONDS) {
+            $this->logger->warning('Image HTTP request slow.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_url' => $image_url,
+                'elapsed_time' => $download_elapsed,
+                'slow_threshold_seconds' => self::IMAGE_HTTP_SLOW_REQUEST_SECONDS,
+            ]);
+        }
         if (is_wp_error($tmp_file)) {
             return $tmp_file;
         }
@@ -1518,7 +1595,7 @@ class ProductMapper
             return new \WP_Error('image_skipped_heavy', $skip_reason);
         }
 
-        $filename = $this->build_sideload_filename_from_url_and_headers($image_url, $tmp_file);
+        $filename = $this->build_sideload_filename_from_url_and_headers($image_url, $tmp_file, $offer_id, $product_id);
         $file_array = [
             'name' => $filename,
             'tmp_name' => $tmp_file,
@@ -1554,7 +1631,7 @@ class ProductMapper
         return (int) $attachment_id;
     }
 
-    private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file): string
+    private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file, string $offer_id = '', int $product_id = 0): string
     {
         $path = (string) parse_url($url, PHP_URL_PATH);
         $base = sanitize_file_name((string) basename($path));
@@ -1571,7 +1648,7 @@ class ProductMapper
 
         $extension = strtolower((string) pathinfo($base, PATHINFO_EXTENSION));
         if ($extension === '') {
-            $mime = $this->detect_mime_from_headers($url);
+            $mime = $this->detect_mime_from_headers($url, $offer_id, $product_id);
             if ($mime !== '') {
                 $extension = $this->map_mime_to_extension($mime);
             }
@@ -1588,7 +1665,7 @@ class ProductMapper
         return sanitize_file_name($name_without_ext . '.' . $extension);
     }
 
-    private function detect_mime_from_headers(string $url): string
+    private function detect_mime_from_headers(string $url, string $offer_id = '', int $product_id = 0): string
     {
         $head_started_at = microtime(true);
         $response = wp_safe_remote_head($url, [
@@ -1605,9 +1682,20 @@ class ProductMapper
             'elapsed_time' => $head_elapsed,
             'http_code' => $head_code,
             'error_reason' => is_wp_error($response) ? $response->get_error_message() : (($head_code >= 400) ? 'http_status_non_success' : ''),
-            'offer_id' => '',
-            'product_id' => 0,
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'image_url' => $url,
         ]);
+        if ($head_elapsed >= self::IMAGE_HTTP_SLOW_REQUEST_SECONDS) {
+            $this->logger->warning('Image HTTP request slow.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_url' => $url,
+                'elapsed_time' => $head_elapsed,
+                'slow_threshold_seconds' => self::IMAGE_HTTP_SLOW_REQUEST_SECONDS,
+                'request_method' => 'HEAD',
+            ]);
+        }
 
         if (is_wp_error($response) || $head_code >= 400) {
             $get_started_at = microtime(true);
@@ -1626,9 +1714,20 @@ class ProductMapper
                 'elapsed_time' => $get_elapsed,
                 'http_code' => $get_code,
                 'error_reason' => is_wp_error($response) ? $response->get_error_message() : (($get_code >= 400) ? 'http_status_non_success' : ''),
-                'offer_id' => '',
-                'product_id' => 0,
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'image_url' => $url,
             ]);
+            if ($get_elapsed >= self::IMAGE_HTTP_SLOW_REQUEST_SECONDS) {
+                $this->logger->warning('Image HTTP request slow.', [
+                    'offer_id' => $offer_id,
+                    'product_id' => $product_id,
+                    'image_url' => $url,
+                    'elapsed_time' => $get_elapsed,
+                    'slow_threshold_seconds' => self::IMAGE_HTTP_SLOW_REQUEST_SECONDS,
+                    'request_method' => 'GET',
+                ]);
+            }
         }
 
         if (is_wp_error($response)) {
