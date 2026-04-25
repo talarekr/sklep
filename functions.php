@@ -1651,7 +1651,11 @@ function gp_get_product_part_number($product): string
     $part_number = sanitize_text_field((string) get_post_meta($product_id, '_part_number', true));
     $resolved_part_number = $part_number === '' ? 'Brak' : $part_number;
 
-    if (!isset($logged_product_ids[$product_id]) && class_exists('AWI\Logger')) {
+    if (
+        !isset($logged_product_ids[$product_id])
+        && class_exists('AWI\Logger')
+        && AWI\Logger::is_debug_enabled()
+    ) {
         $logged_product_ids[$product_id] = true;
         $logger = new AWI\Logger();
         $logger->info('Frontend part number read from product meta.', [
@@ -1659,6 +1663,7 @@ function gp_get_product_part_number($product): string
             'meta_key' => '_part_number',
             'raw_meta_value' => $part_number,
             'resolved_value' => $resolved_part_number,
+            'source' => 'frontend_part_number_meta',
         ]);
     }
 
