@@ -13,6 +13,9 @@ class Logger
     private const MAX_CONTEXT_ITEMS = 12;
     private const MAX_ARRAY_SAMPLE_ITEMS = 5;
     private const TAIL_READ_BYTES = 65536;
+    private const LOG_THROTTLE_TRANSIENT_PREFIX = 'awi_log_throttle_';
+    private const OAUTH_EXISTING_TOKEN_LOG_LIMIT_PER_MINUTE = 6;
+    private const FRONTEND_PART_NUMBER_LOG_LIMIT_PER_MINUTE = 2;
 
     private string $file;
 
@@ -36,6 +39,19 @@ class Logger
     public function error(string $message, array $context = []): void
     {
         $this->write('ERROR', $message, $context);
+    }
+
+    public static function is_debug_enabled(): bool
+    {
+        if (defined('AWI_DEBUG_LOG')) {
+            return (bool) AWI_DEBUG_LOG;
+        }
+
+        if (defined('WP_DEBUG')) {
+            return (bool) WP_DEBUG;
+        }
+
+        return false;
     }
 
     public function read_tail(int $lines = 80): string
@@ -87,6 +103,11 @@ class Logger
 
     private function write(string $level, string $message, array $context): void
     {
+        $context = $this->enrich_runtime_context($context);
+        if ($this->should_skip_log($level, $message, $context)) {
+            return;
+        }
+
         $payload = sprintf('[%s] [%s] %s', gmdate('Y-m-d H:i:s'), $level, $message);
         if (!empty($context)) {
             $context_json = wp_json_encode($this->normalize_context($context));
@@ -100,6 +121,95 @@ class Logger
         }
 
         error_log($payload . PHP_EOL, 3, $this->file);
+    }
+
+    private function should_skip_log(string $level, string $message, array $context): bool
+    {
+        if ($message === 'Frontend part number read from product meta.' && !self::is_debug_enabled()) {
+            return true;
+        }
+
+        if ($message === 'OAuth using existing token.') {
+            return $this->is_rate_limited($level, $message, self::OAUTH_EXISTING_TOKEN_LOG_LIMIT_PER_MINUTE, 60, $context['source'] ?? '');
+        }
+
+        if ($message === 'Frontend part number read from product meta.') {
+            return $this->is_rate_limited($level, $message, self::FRONTEND_PART_NUMBER_LOG_LIMIT_PER_MINUTE, 60, $context['source'] ?? '');
+        }
+
+        return false;
+    }
+
+    private function enrich_runtime_context(array $context): array
+    {
+        if (!isset($context['request_id'])) {
+            $context['request_id'] = $this->resolve_request_id();
+        }
+
+        if (!isset($context['pid'])) {
+            $pid = function_exists('getmypid') ? getmypid() : 0;
+            $context['pid'] = is_int($pid) ? $pid : 0;
+        }
+
+        if (!isset($context['source'])) {
+            $context['source'] = $this->resolve_request_source();
+        }
+
+        return $context;
+    }
+
+    private function resolve_request_id(): string
+    {
+        static $request_id = null;
+        if (is_string($request_id) && $request_id !== '') {
+            return $request_id;
+        }
+
+        $header_id = isset($_SERVER['HTTP_X_REQUEST_ID']) ? sanitize_text_field((string) wp_unslash($_SERVER['HTTP_X_REQUEST_ID'])) : '';
+        if ($header_id !== '') {
+            $request_id = $header_id;
+            return $request_id;
+        }
+
+        $request_id = function_exists('wp_generate_uuid4') ? (string) wp_generate_uuid4() : uniqid('awi_', true);
+        return $request_id;
+    }
+
+    private function resolve_request_source(): string
+    {
+        if (defined('WP_CLI') && WP_CLI) {
+            return 'wp_cli';
+        }
+
+        if (function_exists('wp_doing_cron') && wp_doing_cron()) {
+            return 'cron';
+        }
+
+        if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+            return 'ajax';
+        }
+
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? (string) wp_unslash($_SERVER['REQUEST_URI']) : '';
+        if (strpos($request_uri, 'admin-post.php') !== false) {
+            return 'admin-post';
+        }
+
+        if (function_exists('is_admin') && is_admin()) {
+            return 'admin';
+        }
+
+        return 'frontend';
+    }
+
+    private function is_rate_limited(string $level, string $message, int $limit, int $window_seconds, string $source): bool
+    {
+        $bucket = gmdate('YmdHi');
+        $key = self::LOG_THROTTLE_TRANSIENT_PREFIX . md5($level . '|' . $message . '|' . $source . '|' . $bucket);
+        $count = (int) get_transient($key);
+        $count++;
+        set_transient($key, $count, $window_seconds);
+
+        return $count > $limit;
     }
 
     private function normalize_context(array $context): array

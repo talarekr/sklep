@@ -135,7 +135,10 @@ class AllegroAuth
 
         $expires_at = $this->extract_token_expiration_timestamp($settings);
         if (!$this->should_refresh_access_token($expires_at)) {
-            $this->logger->info('OAuth using existing token.', ['expires_at' => $this->extract_token_expiration_display_value($settings)]);
+            $this->logger->info('OAuth using existing token.', [
+                'expires_at' => $this->extract_token_expiration_display_value($settings),
+                'source' => 'oauth_get_valid_access_token',
+            ]);
             return $access_token;
         }
 
