@@ -1413,6 +1413,12 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
+        $this->logger->info('IMAGE_SYNC_BUILD_INFO', [
+            'build_marker' => 'awi-image-sync-build-2026-04-25-v2',
+            'file' => __FILE__,
+            'plugin_version' => defined('AWI_VERSION') ? (string) AWI_VERSION : 'undefined',
+        ]);
+
         $raw_images_preview = [];
         if (is_array($offer['images'] ?? null)) {
             $raw_images_preview = (array) $offer['images'];
