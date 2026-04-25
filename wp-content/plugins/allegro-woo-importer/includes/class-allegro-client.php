@@ -9,6 +9,8 @@ if (!defined('ABSPATH')) {
 class AllegroClient
 {
     private const ACCEPT_HEADER = 'application/vnd.allegro.public.v1+json';
+    private const API_REQUEST_TIMEOUT_SECONDS = 20;
+    private const API_REQUEST_REDIRECTION_LIMIT = 3;
     private const MAX_RETRY_ATTEMPTS = 4;
     private const RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
     private const MIN_RETRY_DELAY_SECONDS = 1;
