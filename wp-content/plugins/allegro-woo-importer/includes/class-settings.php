@@ -12,6 +12,7 @@ class Settings
     private const LISTING_IMAGES_LAST_BATCH_OPTION_KEY = 'awi_listing_images_last_batch';
     private const MANUAL_IMPORT_REQUEST_LOCK_OPTION_KEY = 'awi_manual_import_request_lock';
     private const MANUAL_IMPORT_REQUEST_LOCK_TTL_SECONDS = 180;
+    private const IMPORT_LOCK_OPTION_KEY = 'awi_import_lock';
 
     private AllegroAuth $auth;
     private Importer $importer;
@@ -33,6 +34,7 @@ class Settings
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
+        add_action('admin_post_awi_clear_import_lock', [$this, 'handle_clear_import_lock']);
         add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
         add_action('admin_post_awi_listing_images_regenerate_batch', [$this, 'handle_listing_images_regenerate_batch']);
         add_action('admin_post_awi_listing_images_inspect_front', [$this, 'handle_listing_images_inspect_front']);
@@ -206,6 +208,33 @@ class Settings
         exit;
     }
 
+    public function handle_clear_import_lock(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_clear_import_lock');
+
+        $existing_lock = get_option(self::IMPORT_LOCK_OPTION_KEY, []);
+        $had_lock = is_array($existing_lock) && $existing_lock !== [];
+        delete_option(self::IMPORT_LOCK_OPTION_KEY);
+
+        $this->logger->warning('CLEAR_IMPORT_LOCK', [
+            'lock_option_key' => self::IMPORT_LOCK_OPTION_KEY,
+            'previous_lock' => $existing_lock,
+            'had_lock' => $had_lock,
+            'trigger' => 'admin_action_clear_import_lock',
+        ]);
+
+        wp_safe_redirect(add_query_arg([
+            'page' => 'awi-settings',
+            'awi_clear_import_lock_done' => '1',
+            'awi_clear_import_lock_had_lock' => $had_lock ? '1' : '0',
+        ], admin_url('admin.php')));
+        exit;
+    }
+
     public function render_page(): void
     {
         if (!current_user_can('manage_woocommerce')) {
@@ -238,6 +267,18 @@ class Settings
                     (int) ($_GET['awi_restore_restored'] ?? 0),
                     (int) ($_GET['awi_restore_errors'] ?? 0)
                 ),
+                'updated'
+            );
+        }
+
+        if (isset($_GET['awi_clear_import_lock_done'])) {
+            $had_lock = !empty($_GET['awi_clear_import_lock_had_lock']);
+            add_settings_error(
+                'awi_messages',
+                'awi_clear_import_lock_done',
+                $had_lock
+                    ? __('Importer lock został usunięty.', 'allegro-woo-importer')
+                    : __('Nie znaleziono aktywnego import locka do usunięcia.', 'allegro-woo-importer'),
                 'updated'
             );
         }
@@ -288,6 +329,7 @@ class Settings
         if (!is_array($listing_last_batch)) {
             $listing_last_batch = [];
         }
+        $import_lock_status = $this->get_import_lock_status();
 
         $log_tail = $this->logger->read_tail(80);
 
@@ -798,5 +840,30 @@ class Settings
             'expected_lock' => $lock,
             'existing_lock' => $existing,
         ]);
+    }
+
+    private function get_import_lock_status(): array
+    {
+        $now = time();
+        $existing = get_option(self::IMPORT_LOCK_OPTION_KEY, []);
+        $is_array_lock = is_array($existing);
+        $expires_at = $is_array_lock ? (int) ($existing['expires_at'] ?? 0) : 0;
+        $has_lock = $is_array_lock && $existing !== [];
+        $is_stale = $has_lock && $expires_at > 0 && $expires_at <= $now;
+        $is_active = $has_lock && $expires_at > $now;
+
+        return [
+            'option_key' => self::IMPORT_LOCK_OPTION_KEY,
+            'now_ts' => $now,
+            'now_gmt' => gmdate('Y-m-d H:i:s', $now),
+            'has_lock' => $has_lock,
+            'is_active' => $is_active,
+            'is_stale' => $is_stale,
+            'locked_at' => $is_array_lock ? sanitize_text_field((string) ($existing['locked_at'] ?? '')) : '',
+            'expires_at_ts' => $expires_at,
+            'expires_at_gmt' => $expires_at > 0 ? gmdate('Y-m-d H:i:s', $expires_at) : '',
+            'seconds_to_expiry' => $expires_at > 0 ? ($expires_at - $now) : 0,
+            'lock_payload' => $is_array_lock ? $existing : [],
+        ];
     }
 }
