@@ -9,6 +9,10 @@ if (!defined('ABSPATH')) {
 class AllegroAuth
 {
     private const TOKEN_REFRESH_LEEWAY_SECONDS = 300;
+    private const AUTH_HTTP_TIMEOUT_SECONDS = 20;
+    private const AUTH_HTTP_REDIRECTION_LIMIT = 3;
+    private const AUTH_MAX_RETRY_ATTEMPTS = 3;
+    private const AUTH_RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
 
     private Logger $logger;
 
@@ -171,29 +175,101 @@ class AllegroAuth
 
         $credentials = base64_encode($settings['client_id'] . ':' . $settings['client_secret']);
 
-        $response = wp_remote_post($base . '/auth/oauth/token', [
-            'timeout' => 30,
+        $url = $base . '/auth/oauth/token';
+        $args = [
+            'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+            'redirection' => self::AUTH_HTTP_REDIRECTION_LIMIT,
             'headers' => [
                 'Authorization' => 'Basic ' . $credentials,
                 'Content-Type' => 'application/x-www-form-urlencoded',
             ],
             'body' => $body,
-        ]);
+        ];
+        $request_started_at = microtime(true);
+        $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
+            $this->logger->error('OAuth token request failed before response.', [
+                'request_type' => 'allegro_api',
+                'endpoint' => '/auth/oauth/token',
+                'host' => (string) parse_url($url, PHP_URL_HOST),
+                'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
+                'http_code' => 0,
+                'error_reason' => $response->get_error_message(),
+            ]);
             return $response;
         }
 
-        $status = (int) wp_remote_retrieve_response_code($response);
-        $raw = wp_remote_retrieve_body($response);
-        $data = json_decode($raw, true);
+        for ($attempt = 1; $attempt <= self::AUTH_MAX_RETRY_ATTEMPTS; $attempt++) {
+            $status = (int) wp_remote_retrieve_response_code($response);
+            $raw = wp_remote_retrieve_body($response);
+            $data = json_decode($raw, true);
+            $elapsed_time = round(max(0, microtime(true) - $request_started_at), 3);
 
-        if ($status < 200 || $status > 299 || !is_array($data)) {
-            $this->logger->error('Allegro token endpoint returned invalid response.', ['status' => $status, 'body' => $raw]);
-            return new \WP_Error('awi_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+            if ($status >= 200 && $status <= 299 && is_array($data)) {
+                $this->logger->info('OAuth token request completed.', [
+                    'request_type' => 'allegro_api',
+                    'endpoint' => '/auth/oauth/token',
+                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                    'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                    'elapsed_time' => $elapsed_time,
+                    'http_code' => $status,
+                    'error_reason' => '',
+                    'attempt' => $attempt,
+                ]);
+                return $data;
+            }
+
+            $is_retryable = in_array($status, self::AUTH_RETRYABLE_STATUS_CODES, true);
+            $has_next_attempt = $attempt < self::AUTH_MAX_RETRY_ATTEMPTS;
+            if (!$is_retryable || !$has_next_attempt) {
+                $this->logger->error('Allegro token endpoint returned invalid response.', [
+                    'request_type' => 'allegro_api',
+                    'endpoint' => '/auth/oauth/token',
+                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                    'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                    'elapsed_time' => $elapsed_time,
+                    'http_code' => $status,
+                    'error_reason' => !is_array($data) ? 'invalid_json' : 'http_status_non_success',
+                    'attempt' => $attempt,
+                    'body' => $raw,
+                ]);
+                return new \WP_Error('awi_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+            }
+
+            $sleep_seconds = (int) pow(2, max(0, $attempt - 1));
+            $sleep_seconds = max(1, min(10, $sleep_seconds));
+            $this->logger->warning('Retrying OAuth token request after retryable response.', [
+                'request_type' => 'allegro_api',
+                'endpoint' => '/auth/oauth/token',
+                'host' => (string) parse_url($url, PHP_URL_HOST),
+                'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                'elapsed_time' => $elapsed_time,
+                'http_code' => $status,
+                'error_reason' => 'retryable_http_status',
+                'attempt' => $attempt,
+                'retry_after_seconds' => $sleep_seconds,
+            ]);
+
+            sleep($sleep_seconds);
+            $response = wp_remote_post($url, $args);
+            if (is_wp_error($response)) {
+                $this->logger->error('OAuth token request retry failed before response.', [
+                    'request_type' => 'allegro_api',
+                    'endpoint' => '/auth/oauth/token',
+                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                    'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                    'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
+                    'http_code' => 0,
+                    'error_reason' => $response->get_error_message(),
+                    'attempt' => $attempt + 1,
+                ]);
+                return $response;
+            }
         }
 
-        return $data;
+        return new \WP_Error('awi_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'allegro-woo-importer'));
     }
 
     private function persist_token_response(array $token_data): void
