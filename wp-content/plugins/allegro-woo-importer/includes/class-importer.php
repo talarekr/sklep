@@ -11,8 +11,10 @@ class Importer
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
-    private const BATCH_LIMIT = 40;
-    private const SOFT_RUNTIME_LIMIT_SECONDS = 20;
+    private const BATCH_LIMIT = 100;
+    private const MAX_EXECUTION_TIME_SECONDS = 900;
+    private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
+    private const RECONCILIATION_SAFETY_LOCK = true;
 
     private AllegroClient $client;
     private ProductMapper $mapper;
@@ -27,6 +29,7 @@ class Importer
 
     public function import_offers(): array
     {
+        $this->ensure_runtime_limits();
         $settings = Plugin::get_settings();
         $started_at = microtime(true);
 
@@ -51,6 +54,7 @@ class Importer
             'page_token' => $page_token,
             'resume_offer_index' => $resume_offer_index,
             'batch_limit' => self::BATCH_LIMIT,
+            'max_execution_time_target' => self::MAX_EXECUTION_TIME_SECONDS,
             'soft_runtime_limit_seconds' => self::SOFT_RUNTIME_LIMIT_SECONDS,
             'checkpoint_state' => $checkpoint,
             'cycle_state' => $this->load_cycle_state(),
@@ -77,7 +81,7 @@ class Importer
                 'error' => $page->get_error_message(),
             ]);
 
-            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
         }
 
         $offers = $page['offers'] ?? [];
@@ -90,7 +94,7 @@ class Importer
                 'fetched' => 0,
             ]);
 
-            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
         }
 
         $batch_size = count($offers);
@@ -131,7 +135,7 @@ class Importer
 
         for ($index = $start_index; $index < $batch_size; $index++) {
             if (function_exists('set_time_limit')) {
-                @set_time_limit(20);
+                @set_time_limit(self::MAX_EXECUTION_TIME_SECONDS);
             }
 
             $offer_basic = $offers[$index] ?? [];
@@ -217,7 +221,7 @@ class Importer
                     'processed_in_run' => $processed,
                 ]);
 
-                return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
+                return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
             }
         }
 
@@ -240,7 +244,7 @@ class Importer
                 'skipped_in_run' => $skipped,
             ]);
 
-            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
         }
 
         $next_page_token = $this->extract_next_page_token($page);
@@ -273,9 +277,16 @@ class Importer
                 'next_offset' => $next_offset,
                 'next_page_no' => $next_page_no,
                 'next_page_token' => $next_page_token,
+                'current_offset' => $offset,
+                'current_page_no' => $page_no,
+                'current_page_token' => $page_token,
                 'processed_in_run' => $processed,
+                'created_in_run' => $created,
+                'updated_in_run' => $updated,
                 'batch_size' => $batch_size,
                 'skipped_in_run' => $skipped,
+                'errors_in_run' => $errors,
+                'elapsed_time' => round(microtime(true) - $started_at, 3),
                 'last_processed_offer_id' => $last_processed_offer_id,
             ]);
         } else {
@@ -288,12 +299,16 @@ class Importer
                 'processed_in_run' => $processed,
                 'reported_total_count' => $total_count_from_api,
                 'deactivated_missing_active_offers' => $deactivated_count,
+                'created_in_run' => $created,
+                'updated_in_run' => $updated,
                 'skipped_in_run' => $skipped,
+                'errors_in_run' => $errors,
+                'elapsed_time' => round(microtime(true) - $started_at, 3),
                 'last_processed_offer_id' => $last_processed_offer_id,
             ]);
         }
 
-        return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
+        return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
     }
 
     private function finalize_summary(
@@ -304,9 +319,11 @@ class Importer
         int $errors,
         int $fetched_from_api,
         ?int $total_count_from_api,
-        string $last_processed_offer_id
+        string $last_processed_offer_id,
+        ?float $started_at = null
     ): array
     {
+        $elapsed_time = $started_at !== null ? round(max(0, microtime(true) - $started_at), 3) : null;
         $summary = [
             'date' => gmdate('Y-m-d H:i:s'),
             'offers' => $processed,
@@ -317,6 +334,7 @@ class Importer
             'fetched_from_api' => $fetched_from_api,
             'reported_total_count' => $total_count_from_api,
             'last_processed_offer_id' => $last_processed_offer_id,
+            'elapsed_time' => $elapsed_time,
         ];
 
         Plugin::update_settings([
@@ -331,6 +349,17 @@ class Importer
         $this->logger->info('Import finished.', $summary);
 
         return $summary;
+    }
+
+    private function ensure_runtime_limits(): void
+    {
+        if (function_exists('ini_set')) {
+            @ini_set('max_execution_time', (string) self::MAX_EXECUTION_TIME_SECONDS);
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(self::MAX_EXECUTION_TIME_SECONDS);
+        }
     }
 
     private function load_checkpoint(): array
@@ -505,6 +534,13 @@ class Importer
 
     private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api): int
     {
+        if (self::RECONCILIATION_SAFETY_LOCK) {
+            $this->logger->warning('Reconciliation safety lock is enabled; destructive product state changes are blocked.', [
+                'inactive_status_requested' => $inactive_status,
+            ]);
+            return 0;
+        }
+
         $settings = Plugin::get_settings();
         $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
 

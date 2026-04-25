@@ -11,6 +11,8 @@ if (!defined('ABSPATH')) {
 
 class ProductMapper
 {
+    private const IMAGE_HTTP_TIMEOUT_SECONDS = 20;
+    private const IMAGE_HTTP_REDIRECTION_LIMIT = 3;
     private const MAX_IMAGE_FILE_SIZE_BYTES = 12582912; // 12 MB
     private const MAX_IMAGE_TOTAL_PIXELS = 24000000; // 24 MP
     private const IMPORT_ALLOWED_SUBSIZES = ['thumbnail'];
@@ -1476,7 +1478,20 @@ class ProductMapper
      */
     private function sideload_image_attachment(string $image_url, int $product_id)
     {
-        $tmp_file = download_url($image_url, 30);
+        $download_started_at = microtime(true);
+        $tmp_file = download_url($image_url, self::IMAGE_HTTP_TIMEOUT_SECONDS);
+        $download_elapsed = round(max(0, microtime(true) - $download_started_at), 3);
+        $this->logger->info('Image HTTP request completed.', [
+            'request_type' => 'image_download',
+            'endpoint' => $this->sanitize_http_endpoint_for_logs($image_url),
+            'host' => (string) parse_url($image_url, PHP_URL_HOST),
+            'timeout' => self::IMAGE_HTTP_TIMEOUT_SECONDS,
+            'elapsed_time' => $download_elapsed,
+            'http_code' => 0,
+            'error_reason' => is_wp_error($tmp_file) ? $tmp_file->get_error_message() : '',
+            'offer_id' => '',
+            'product_id' => $product_id,
+        ]);
         if (is_wp_error($tmp_file)) {
             return $tmp_file;
         }
@@ -1571,12 +1586,44 @@ class ProductMapper
 
     private function detect_mime_from_headers(string $url): string
     {
-        $response = wp_safe_remote_head($url, ['timeout' => 10, 'redirection' => 5]);
-        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) >= 400) {
+        $head_started_at = microtime(true);
+        $response = wp_safe_remote_head($url, [
+            'timeout' => self::IMAGE_HTTP_TIMEOUT_SECONDS,
+            'redirection' => self::IMAGE_HTTP_REDIRECTION_LIMIT,
+        ]);
+        $head_elapsed = round(max(0, microtime(true) - $head_started_at), 3);
+        $head_code = is_wp_error($response) ? 0 : (int) wp_remote_retrieve_response_code($response);
+        $this->logger->info('Image HTTP request completed.', [
+            'request_type' => 'image_download',
+            'endpoint' => $this->sanitize_http_endpoint_for_logs($url),
+            'host' => (string) parse_url($url, PHP_URL_HOST),
+            'timeout' => self::IMAGE_HTTP_TIMEOUT_SECONDS,
+            'elapsed_time' => $head_elapsed,
+            'http_code' => $head_code,
+            'error_reason' => is_wp_error($response) ? $response->get_error_message() : (($head_code >= 400) ? 'http_status_non_success' : ''),
+            'offer_id' => '',
+            'product_id' => 0,
+        ]);
+
+        if (is_wp_error($response) || $head_code >= 400) {
+            $get_started_at = microtime(true);
             $response = wp_safe_remote_get($url, [
-                'timeout' => 10,
-                'redirection' => 5,
+                'timeout' => self::IMAGE_HTTP_TIMEOUT_SECONDS,
+                'redirection' => self::IMAGE_HTTP_REDIRECTION_LIMIT,
                 'headers' => ['Range' => 'bytes=0-0'],
+            ]);
+            $get_elapsed = round(max(0, microtime(true) - $get_started_at), 3);
+            $get_code = is_wp_error($response) ? 0 : (int) wp_remote_retrieve_response_code($response);
+            $this->logger->info('Image HTTP request completed.', [
+                'request_type' => 'image_download',
+                'endpoint' => $this->sanitize_http_endpoint_for_logs($url),
+                'host' => (string) parse_url($url, PHP_URL_HOST),
+                'timeout' => self::IMAGE_HTTP_TIMEOUT_SECONDS,
+                'elapsed_time' => $get_elapsed,
+                'http_code' => $get_code,
+                'error_reason' => is_wp_error($response) ? $response->get_error_message() : (($get_code >= 400) ? 'http_status_non_success' : ''),
+                'offer_id' => '',
+                'product_id' => 0,
             ]);
         }
 
@@ -1591,6 +1638,16 @@ class ProductMapper
 
         $parts = explode(';', $content_type);
         return strtolower(trim((string) ($parts[0] ?? '')));
+    }
+
+    private function sanitize_http_endpoint_for_logs(string $url): string
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if ($path === '') {
+            return '/';
+        }
+
+        return $path;
     }
 
     private function map_mime_to_extension(string $mime): string

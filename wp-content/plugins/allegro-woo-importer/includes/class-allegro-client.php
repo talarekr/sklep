@@ -54,6 +54,11 @@ class AllegroClient
 
         $response = $this->request('GET', '/sale/offers', [
             'query' => $query,
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => '',
+                'product_id' => 0,
+            ],
         ]);
 
         if (is_wp_error($response)) {
@@ -87,7 +92,13 @@ class AllegroClient
         $path = '/sale/product-offers/' . rawurlencode($offer_id);
         $this->logger->info('Fetching Allegro offer details.', ['offer_id' => $offer_id, 'endpoint' => $path]);
 
-        $details = $this->request('GET', $path);
+        $details = $this->request('GET', $path, [
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => $offer_id,
+                'product_id' => 0,
+            ],
+        ]);
         if (is_wp_error($details)) {
             return $details;
         }
@@ -260,13 +271,16 @@ class AllegroClient
 
         $request_args = [
             'method' => strtoupper($method),
-            'timeout' => 45,
+            'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
+            'redirection' => self::API_REQUEST_REDIRECTION_LIMIT,
             'headers' => [
                 'Authorization' => 'Bearer ' . $token,
                 'Accept' => self::ACCEPT_HEADER,
                 'Content-Type' => 'application/json',
             ],
         ];
+        $request_context = is_array($args['log_context'] ?? null) ? $args['log_context'] : [];
+        $request_started_at = microtime(true);
 
         if (!empty($args['body'])) {
             $request_args['body'] = wp_json_encode($args['body']);
@@ -274,7 +288,18 @@ class AllegroClient
 
         $response = wp_remote_request($url, $request_args);
         if (is_wp_error($response)) {
-            $this->logger->error('Allegro API request failed.', ['path' => $path, 'error' => $response->get_error_message()]);
+            $this->logger->error('Allegro HTTP request failed before response.', [
+                'request_type' => 'allegro_api',
+                'method' => strtoupper($method),
+                'endpoint' => $path,
+                'host' => (string) parse_url($url, PHP_URL_HOST),
+                'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
+                'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
+                'http_code' => 0,
+                'error_reason' => $response->get_error_message(),
+                'offer_id' => (string) ($request_context['offer_id'] ?? ''),
+                'product_id' => (int) ($request_context['product_id'] ?? 0),
+            ]);
             return $response;
         }
 
