@@ -118,61 +118,70 @@ class Settings
             exit;
         }
 
+        $redirect = add_query_arg(['page' => 'awi-settings'], admin_url('admin.php'));
+
         try {
             $token = $this->auth->get_valid_access_token();
             if (is_wp_error($token)) {
                 $this->logger->error('Manual import blocked: missing valid Allegro token.', ['error' => $token->get_error_message()]);
                 $this->store_admin_notice('error', __('Najpierw połącz wtyczkę z Allegro (brak ważnego access tokena).', 'allegro-woo-importer'));
-                wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
-                exit;
-            }
+                $redirect = add_query_arg(['page' => 'awi-settings'], admin_url('admin.php'));
+            } else {
+                $raw_override_offset = isset($_POST['awi_start_offset']) ? trim((string) wp_unslash($_POST['awi_start_offset'])) : '';
+                $raw_override_page = isset($_POST['awi_start_page']) ? trim((string) wp_unslash($_POST['awi_start_page'])) : '';
+                $raw_override_index = isset($_POST['awi_start_offer_index']) ? trim((string) wp_unslash($_POST['awi_start_offer_index'])) : '';
 
-            $raw_override_offset = isset($_POST['awi_start_offset']) ? trim((string) wp_unslash($_POST['awi_start_offset'])) : '';
-            $raw_override_page = isset($_POST['awi_start_page']) ? trim((string) wp_unslash($_POST['awi_start_page'])) : '';
-            $raw_override_index = isset($_POST['awi_start_offer_index']) ? trim((string) wp_unslash($_POST['awi_start_offer_index'])) : '';
+                $override_offset = $raw_override_offset !== '' ? max(0, (int) $raw_override_offset) : null;
+                $override_page = $raw_override_page !== '' ? max(1, (int) $raw_override_page) : null;
+                $override_index = $raw_override_index !== '' ? max(0, (int) $raw_override_index) : 0;
 
-            $override_offset = $raw_override_offset !== '' ? max(0, (int) $raw_override_offset) : null;
-            $override_page = $raw_override_page !== '' ? max(1, (int) $raw_override_page) : null;
-            $override_index = $raw_override_index !== '' ? max(0, (int) $raw_override_index) : 0;
+                $resume_override = [];
+                if ($override_offset !== null || $override_page !== null || $raw_override_index !== '') {
+                    $resume_override = [
+                        'offset' => $override_offset,
+                        'page_no' => $override_page,
+                        'offer_index' => $override_index,
+                    ];
 
-            $resume_override = [];
-            if ($override_offset !== null || $override_page !== null || $raw_override_index !== '') {
-                $resume_override = [
-                    'offset' => $override_offset,
-                    'page_no' => $override_page,
-                    'offer_index' => $override_index,
-                ];
-
-                if (function_exists('awi_log')) {
-                    awi_log('MANUAL_RESUME_OVERRIDE', [
+                    if (function_exists('awi_log')) {
+                        awi_log('MANUAL_RESUME_OVERRIDE', [
+                            'offset' => $override_offset,
+                            'page' => $override_page,
+                            'index' => $override_index,
+                        ]);
+                    }
+                    $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
                         'offset' => $override_offset,
                         'page' => $override_page,
                         'index' => $override_index,
+                        'trigger' => 'admin_manual_import',
                     ]);
                 }
-                $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
-                    'offset' => $override_offset,
-                    'page' => $override_page,
-                    'index' => $override_index,
-                    'trigger' => 'admin_manual_import',
-                ]);
+
+                $summary = $this->importer->import_offers($resume_override);
+
+                $redirect = add_query_arg([
+                    'page' => 'awi-settings',
+                    'awi_import_done' => '1',
+                    'awi_created' => (int) ($summary['created'] ?? 0),
+                    'awi_updated' => (int) ($summary['updated'] ?? 0),
+                    'awi_errors' => (int) ($summary['errors'] ?? 0),
+                ], admin_url('admin.php'));
             }
-
-            $summary = $this->importer->import_offers($resume_override);
-
-            $redirect = add_query_arg([
-                'page' => 'awi-settings',
-                'awi_import_done' => '1',
-                'awi_created' => (int) ($summary['created'] ?? 0),
-                'awi_updated' => (int) ($summary['updated'] ?? 0),
-                'awi_errors' => (int) ($summary['errors'] ?? 0),
-            ], admin_url('admin.php'));
-
-            wp_safe_redirect($redirect);
-            exit;
+        } catch (\Throwable $exception) {
+            $this->logger->error('Manual import request failed with unhandled exception.', [
+                'message' => $exception->getMessage(),
+            ]);
+            $this->store_admin_notice(
+                'error',
+                __('Import zakończony błędem. Sprawdź logi wtyczki i spróbuj ponownie.', 'allegro-woo-importer')
+            );
         } finally {
             $this->release_manual_import_request_lock($request_lock);
         }
+
+        wp_safe_redirect($redirect);
+        exit;
     }
 
     public function handle_restore_active_offers(): void
@@ -799,6 +808,7 @@ class Settings
     private function acquire_manual_import_request_lock(): ?array
     {
         $lock = [
+            'request_id' => wp_generate_uuid4(),
             'locked_at' => gmdate('Y-m-d H:i:s'),
             'expires_at' => time() + self::MANUAL_IMPORT_REQUEST_LOCK_TTL_SECONDS,
             'user_id' => get_current_user_id(),
@@ -831,7 +841,10 @@ class Settings
     private function release_manual_import_request_lock(array $lock): void
     {
         $existing = get_option(self::MANUAL_IMPORT_REQUEST_LOCK_OPTION_KEY, []);
-        if ($existing === $lock) {
+        $existing_request_id = is_array($existing) ? (string) ($existing['request_id'] ?? '') : '';
+        $request_id = (string) ($lock['request_id'] ?? '');
+
+        if ($request_id !== '' && $existing_request_id === $request_id) {
             delete_option(self::MANUAL_IMPORT_REQUEST_LOCK_OPTION_KEY);
             return;
         }
