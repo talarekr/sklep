@@ -1443,6 +1443,19 @@ class ProductMapper
             'first_image_extracted_url' => $first_image_url_extracted,
         ]);
 
+        if (defined('AWI_SKIP_IMAGES') && AWI_SKIP_IMAGES) {
+            return;
+        }
+        $first_image_raw = $raw_images_preview[0] ?? null;
+        $first_image_url_extracted = $this->extract_single_image_url_from_payload_item($first_image_raw);
+        $this->logger->info('IMAGE_SYNC_START_INPUT', [
+            'offer_id' => $offer_id,
+            'images_count' => count($raw_images_preview),
+            'first_image_raw' => $first_image_raw,
+            'first_image_raw_type' => gettype($first_image_raw),
+            'first_image_extracted_url' => $first_image_url_extracted,
+        ]);
+
         $product_id = $product->get_id();
         if ($product_id <= 0) {
             $this->logger->error('Cannot sync images for unsaved product.', ['offer_id' => $offer_id]);
