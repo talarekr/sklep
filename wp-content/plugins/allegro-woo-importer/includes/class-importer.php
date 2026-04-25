@@ -83,10 +83,11 @@ class Importer
         $offers = $page['offers'] ?? [];
         if (!is_array($offers) || $offers === []) {
             $this->reset_checkpoint();
-            $this->logger->info('Offers batch is empty, checkpoint reset.', [
+            $this->logger->info('IMPORT OFFSET: page empty, checkpoint reset.', [
                 'page_no' => $page_no,
                 'offset' => $offset,
                 'page_token' => $page_token,
+                'fetched' => 0,
             ]);
 
             return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id);
@@ -96,10 +97,11 @@ class Importer
         $fetched_from_api = $batch_size;
         $total_count_from_api = $this->extract_total_count($page, $total_count_from_api);
 
-        $this->logger->info('Fetched Allegro offers batch.', [
+        $this->logger->info('IMPORT OFFSET: fetched offers batch.', [
             'page_no' => $page_no,
             'offset' => $offset,
             'page_token' => $page_token,
+            'fetched' => $batch_size,
             'batch_size' => $batch_size,
             'resume_offer_index' => $resume_offer_index,
             'reported_total_count' => $total_count_from_api,
@@ -176,9 +178,17 @@ class Importer
                 $skipped++;
                 $this->logger->warning('Offer skipped during product upsert.', [
                     'offer_id' => $offer_id,
+                    'skip_existing' => !empty($result['product_id']),
                     'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
                     'product_id' => (int) ($result['product_id'] ?? 0),
                 ]);
+                if (!empty($result['product_id'])) {
+                    $this->logger->info('SKIP EXISTING: offer already mapped to product.', [
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) $result['product_id'],
+                        'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
+                    ]);
+                }
             } elseif (($result['result'] ?? '') === 'error') {
                 $errors++;
                 $this->mark_cycle_state_error('product_upsert_failed');
@@ -389,8 +399,11 @@ class Importer
         $candidates = [
             $page['nextPageToken'] ?? null,
             $page['next_page_token'] ?? null,
+            $page['page']['id'] ?? null,
             $page['page']['next'] ?? null,
+            $page['pagination']['nextPageToken'] ?? null,
             $page['pagination']['next'] ?? null,
+            $page['searchMeta']['nextPageToken'] ?? null,
             $page['links']['next'] ?? null,
         ];
 
@@ -418,7 +431,11 @@ class Importer
             return $offset < $total_count_from_api;
         }
 
-        return $batch_size === $limit;
+        if ($batch_size <= 0) {
+            return false;
+        }
+
+        return true;
     }
 
     private function determine_cycle_completion_reason(
@@ -437,9 +454,9 @@ class Importer
                 : 'offset_reached_or_exceeded_total_count';
         }
 
-        return $batch_size === self::BATCH_LIMIT
-            ? 'fallback_batch_equals_limit'
-            : 'fallback_batch_below_limit';
+        return $batch_size > 0
+            ? 'fallback_continue_until_empty_batch'
+            : 'fallback_empty_batch';
     }
 
     private function is_cycle_start(int $offset, int $page_no, int $resume_offer_index): bool
