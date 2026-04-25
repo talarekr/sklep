@@ -21,6 +21,7 @@ class Cron
     {
         add_filter('cron_schedules', [$this, 'register_intervals']);
         add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import']);
+        add_action(Plugin::MISSING_IMPORT_CRON_HOOK, [$this, 'run_missing_import_batch']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
 
         if (Plugin::is_safe_mode_enabled()) {
@@ -51,6 +52,46 @@ class Cron
 
         $this->logger->info('Cron import started.');
         $this->importer->import_offers();
+    }
+
+    public function run_missing_import_batch(): void
+    {
+        if (Plugin::is_safe_mode_enabled()) {
+            $this->logger->warning('Safe mode enabled: missing import batch skipped.');
+            return;
+        }
+
+        $state = $this->importer->run_missing_import_batch();
+        if (($state['status'] ?? '') === 'running') {
+            $this->schedule_missing_import_batch();
+        }
+    }
+
+    public function schedule_missing_import_batch(): void
+    {
+        if (function_exists('as_has_scheduled_action') && function_exists('as_schedule_single_action')) {
+            if (!as_has_scheduled_action(Plugin::MISSING_IMPORT_CRON_HOOK)) {
+                as_schedule_single_action(time() + 2, Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+            }
+            return;
+        }
+
+        if (!wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK)) {
+            wp_schedule_single_event(time() + 5, Plugin::MISSING_IMPORT_CRON_HOOK);
+        }
+    }
+
+    public function clear_missing_import_schedule(): void
+    {
+        if (function_exists('as_unschedule_all_actions')) {
+            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+        }
+
+        $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
+        while ($timestamp) {
+            wp_unschedule_event($timestamp, Plugin::MISSING_IMPORT_CRON_HOOK);
+            $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
+        }
     }
 
     public function reschedule_if_needed($old_value, $new_value): void
@@ -107,5 +148,14 @@ class Cron
     public static function on_deactivation(): void
     {
         self::clear_schedule();
+        if (function_exists('as_unschedule_all_actions')) {
+            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+        }
+
+        $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
+        while ($timestamp) {
+            wp_unschedule_event($timestamp, Plugin::MISSING_IMPORT_CRON_HOOK);
+            $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
+        }
     }
 }

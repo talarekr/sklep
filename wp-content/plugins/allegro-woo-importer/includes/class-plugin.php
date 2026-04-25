@@ -11,6 +11,7 @@ final class Plugin
     public const OPTION_KEY = 'awi_settings';
     public const HISTORY_OPTION_KEY = 'awi_import_history';
     public const CRON_HOOK = 'awi_run_scheduled_import';
+    public const MISSING_IMPORT_CRON_HOOK = 'awi_run_missing_import_batch';
     public const SAFE_MODE_OPTION_KEY = 'awi_safe_mode_enabled';
 
     private static ?self $instance = null;
