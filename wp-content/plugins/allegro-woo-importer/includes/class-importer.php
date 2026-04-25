@@ -11,9 +11,6 @@ class Importer
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
-    private const IMPORT_LOCK_OPTION_KEY = 'awi_import_runtime_lock';
-    private const IMPORT_LOCK_TTL_SECONDS = 1200;
-    private const IMPORT_LOCK_TTL = self::IMPORT_LOCK_TTL_SECONDS;
     private const BATCH_LIMIT = 5;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
@@ -40,7 +37,7 @@ class Importer
             $this->logger->warning('Import skipped: another import process is already running.', [
                 'lock_context' => $lock_context,
                 'lock_option_key' => self::IMPORT_LOCK_OPTION_KEY,
-                'lock_ttl_seconds' => self::IMPORT_LOCK_TTL,
+                'lock_ttl_seconds' => self::IMPORT_LOCK_TTL_SECONDS,
             ]);
 
             return [
@@ -452,7 +449,7 @@ class Importer
     {
         $payload = $lock_context + [
             'locked_at' => gmdate('Y-m-d H:i:s'),
-            'expires_at' => time() + self::IMPORT_LOCK_TTL,
+            'expires_at' => time() + self::IMPORT_LOCK_TTL_SECONDS,
         ];
 
         if (add_option(self::IMPORT_LOCK_OPTION_KEY, $payload, '', false)) {
