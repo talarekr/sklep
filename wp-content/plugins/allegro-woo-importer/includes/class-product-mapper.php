@@ -1413,6 +1413,12 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
+        $this->logger->info('IMAGE_SYNC_BUILD_INFO', [
+            'build_marker' => 'awi-image-sync-build-2026-04-25-v2',
+            'file' => __FILE__,
+            'plugin_version' => defined('AWI_VERSION') ? (string) AWI_VERSION : 'undefined',
+        ]);
+
         $raw_images_preview = [];
         if (is_array($offer['images'] ?? null)) {
             $raw_images_preview = (array) $offer['images'];
@@ -1442,18 +1448,11 @@ class ProductMapper
             'first_image_raw_type' => gettype($first_image_raw),
             'first_image_extracted_url' => $first_image_url_extracted,
         ]);
-
-        if (defined('AWI_SKIP_IMAGES') && AWI_SKIP_IMAGES) {
-            return;
-        }
-        $first_image_raw = $raw_images_preview[0] ?? null;
-        $first_image_url_extracted = $this->extract_single_image_url_from_payload_item($first_image_raw);
-        $this->logger->info('IMAGE_SYNC_START_INPUT', [
+        $this->logger->info('IMAGE_SYNC_AFTER_START_INPUT', [
             'offer_id' => $offer_id,
-            'images_count' => count($raw_images_preview),
-            'first_image_raw' => $first_image_raw,
-            'first_image_raw_type' => gettype($first_image_raw),
-            'first_image_extracted_url' => $first_image_url_extracted,
+            'product_id' => (int) $product->get_id(),
+            'is_new_product' => (bool) $is_new_product,
+            'awi_skip_images_flag' => defined('AWI_SKIP_IMAGES') ? (bool) AWI_SKIP_IMAGES : false,
         ]);
 
         $product_id = $product->get_id();
@@ -1470,6 +1469,18 @@ class ProductMapper
         $image_urls = $this->extract_image_urls_from_offer_payload($offer);
         $images_count = count($image_urls);
         $first_image_url = $images_count > 0 ? (string) $image_urls[0] : '';
+        $this->logger->info('IMAGE_SYNC_AFTER_NORMALIZE_URLS', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'normalized_images_count' => $images_count,
+            'first_normalized_url' => $first_image_url,
+        ]);
+        $this->logger->info('IMAGE_SYNC_BEFORE_EARLY_RETURNS', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'normalized_images_count' => $images_count,
+            'first_normalized_url' => $first_image_url,
+        ]);
         $this->logger->info('IMAGE_SYNC_INPUT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
@@ -1508,6 +1519,13 @@ class ProductMapper
             ]);
             return;
         }
+
+        $this->logger->info('IMAGE_SYNC_BEFORE_DOWNLOAD_LOOP', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'normalized_images_count' => count($image_urls),
+            'first_normalized_url' => (string) ($image_urls[0] ?? ''),
+        ]);
 
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/file.php';
