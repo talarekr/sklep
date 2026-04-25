@@ -1109,13 +1109,43 @@ class ProductMapper
     private function assign_category(int $product_id, array $offer): void
     {
         $allegro_category_id = sanitize_text_field((string) ($offer['category']['id'] ?? ''));
+        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'assign_category_enter',
+            'allegro_category_id' => $allegro_category_id,
+        ]);
         if ($allegro_category_id === '') {
+            $this->logger->warning('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'assign_category_skipped_missing_allegro_category_id',
+            ]);
             return;
         }
 
         $allegro_category_name = sanitize_text_field((string) ($offer['category']['name'] ?? ''));
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'extract_category_path_start',
+            'allegro_category_id' => $allegro_category_id,
+        ]);
         $category_path = $this->extract_allegro_category_path($offer, $allegro_category_id, $allegro_category_name);
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'extract_category_path_done',
+            'path_nodes_count' => count($category_path),
+        ]);
         if ($category_path === []) {
+            $this->logger->warning('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'assign_category_skipped_empty_path',
+                'allegro_category_id' => $allegro_category_id,
+            ]);
             return;
         }
 
@@ -1140,6 +1170,12 @@ class ProductMapper
 
         if ($leaf_term_id > 0) {
             wp_set_post_terms($product_id, [$leaf_term_id], 'product_cat', false);
+            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'wp_set_post_terms_done',
+                'leaf_term_id' => $leaf_term_id,
+            ]);
         }
 
         foreach ($category_path as $node) {
@@ -1148,12 +1184,30 @@ class ProductMapper
                 continue;
             }
 
+            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'sync_category_subtree_start',
+                'node_id' => $node_id,
+            ]);
             $this->sync_allegro_category_subtree($node_id);
+            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'sync_category_subtree_done',
+                'node_id' => $node_id,
+            ]);
         }
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'assign_category_done',
+        ]);
     }
 
     private function extract_allegro_category_path(array $offer, string $category_id, string $fallback_name): array
     {
+        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
         $raw_path = $offer['category']['path'] ?? null;
         if (is_array($raw_path) && $raw_path !== []) {
             $mapped = [];
@@ -1170,7 +1224,19 @@ class ProductMapper
             }
         }
 
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'checkpoint' => 'category_path_api_fetch_start',
+            'category_id' => $category_id,
+        ]);
         $path = $this->client->get_category_path($category_id);
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'checkpoint' => 'category_path_api_fetch_done',
+            'category_id' => $category_id,
+            'is_error' => is_wp_error($path),
+            'nodes_count' => is_array($path) ? count($path) : 0,
+        ]);
         if (is_wp_error($path)) {
             $this->logger->warning('Failed to fetch Allegro category path; using fallback category node.', [
                 'category_id' => $category_id,
@@ -1263,7 +1329,19 @@ class ProductMapper
             return;
         }
 
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'checkpoint' => 'category_children_api_fetch_start',
+            'allegro_category_id' => $allegro_category_id,
+            'depth' => $depth,
+        ]);
         $children = $this->client->get_category_children($allegro_category_id);
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'checkpoint' => 'category_children_api_fetch_done',
+            'allegro_category_id' => $allegro_category_id,
+            'depth' => $depth,
+            'is_error' => is_wp_error($children),
+            'children_count' => is_array($children) ? count($children) : 0,
+        ]);
         if (is_wp_error($children)) {
             $this->logger->warning('Failed to sync Allegro category descendants.', [
                 'allegro_category_id' => $allegro_category_id,
