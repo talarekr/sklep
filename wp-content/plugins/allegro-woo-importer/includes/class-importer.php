@@ -12,7 +12,9 @@ class Importer
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
     private const IMPORT_LOCK_OPTION_KEY = 'awi_import_lock';
+    private const MISSING_IMPORT_CHECKPOINT_OPTION_KEY = 'awi_missing_import_checkpoint';
     private const BATCH_LIMIT = 5;
+    private const MISSING_IMPORT_BATCH_LIMIT = 15;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
     private const IMPORT_LOCK_TTL_SECONDS = self::MAX_EXECUTION_TIME_SECONDS + 60;
@@ -409,6 +411,261 @@ class Importer
         }
     }
 
+    public function start_missing_import(): array
+    {
+        $checkpoint = $this->get_missing_import_checkpoint();
+        $checkpoint['status'] = 'running';
+        $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+        $this->save_missing_import_checkpoint($checkpoint);
+        $this->logger->info('MISSING_IMPORT_START', $checkpoint);
+
+        return $checkpoint;
+    }
+
+    public function continue_missing_import(): array
+    {
+        $checkpoint = $this->get_missing_import_checkpoint();
+        if (($checkpoint['status'] ?? '') === 'completed') {
+            $checkpoint['status'] = 'running';
+            $checkpoint['current_offset'] = 0;
+        } else {
+            $checkpoint['status'] = 'running';
+        }
+
+        $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+        $this->save_missing_import_checkpoint($checkpoint);
+
+        return $checkpoint;
+    }
+
+    public function pause_missing_import(): array
+    {
+        $checkpoint = $this->get_missing_import_checkpoint();
+        if (($checkpoint['status'] ?? '') === 'running') {
+            $checkpoint['status'] = 'paused';
+            $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+            $this->save_missing_import_checkpoint($checkpoint);
+        }
+
+        return $checkpoint;
+    }
+
+    public function reset_missing_import_checkpoint(): array
+    {
+        delete_option(self::MISSING_IMPORT_CHECKPOINT_OPTION_KEY);
+        return $this->get_missing_import_checkpoint();
+    }
+
+    public function get_missing_import_checkpoint(): array
+    {
+        $checkpoint = get_option(self::MISSING_IMPORT_CHECKPOINT_OPTION_KEY, []);
+        if (!is_array($checkpoint)) {
+            $checkpoint = [];
+        }
+
+        return [
+            'status' => in_array((string) ($checkpoint['status'] ?? 'paused'), ['running', 'completed', 'failed', 'paused'], true)
+                ? (string) ($checkpoint['status'] ?? 'paused')
+                : 'paused',
+            'current_offset' => max(0, (int) ($checkpoint['current_offset'] ?? 0)),
+            'total_checked' => max(0, (int) ($checkpoint['total_checked'] ?? 0)),
+            'existing_skipped' => max(0, (int) ($checkpoint['existing_skipped'] ?? 0)),
+            'missing_imported' => max(0, (int) ($checkpoint['missing_imported'] ?? 0)),
+            'errors' => max(0, (int) ($checkpoint['errors'] ?? 0)),
+            'last_checked_offer_id' => sanitize_text_field((string) ($checkpoint['last_checked_offer_id'] ?? '')),
+            'last_imported_offer_id' => sanitize_text_field((string) ($checkpoint['last_imported_offer_id'] ?? '')),
+            'total_count' => isset($checkpoint['total_count']) && is_numeric($checkpoint['total_count']) ? max(0, (int) $checkpoint['total_count']) : null,
+            'updated_at' => sanitize_text_field((string) ($checkpoint['updated_at'] ?? '')),
+        ];
+    }
+
+    public function run_missing_import_batch(): array
+    {
+        $checkpoint = $this->get_missing_import_checkpoint();
+        if (($checkpoint['status'] ?? '') !== 'running') {
+            return $checkpoint;
+        }
+
+        $started_at = microtime(true);
+        $lock_context = $this->build_lock_context();
+        $lock_context['mode'] = 'missing_import';
+        if (!$this->acquire_import_lock($lock_context)) {
+            $checkpoint['status'] = 'failed';
+            $checkpoint['errors'] = (int) ($checkpoint['errors'] ?? 0) + 1;
+            $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+            $this->save_missing_import_checkpoint($checkpoint);
+            return $checkpoint;
+        }
+
+        try {
+            $offset = (int) ($checkpoint['current_offset'] ?? 0);
+            $page = $this->client->get_offers('ACTIVE', $offset, self::MISSING_IMPORT_BATCH_LIMIT, '');
+            if (is_wp_error($page)) {
+                $checkpoint['status'] = 'failed';
+                $checkpoint['errors'] = (int) ($checkpoint['errors'] ?? 0) + 1;
+                $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+                $this->save_missing_import_checkpoint($checkpoint);
+                $this->logger->error('MISSING_IMPORT_BATCH_DONE', [
+                    'current_offset' => $offset,
+                    'errors_in_batch' => 1,
+                    'error' => $page->get_error_message(),
+                ]);
+                return $checkpoint;
+            }
+
+            $offers = is_array($page['offers'] ?? null) ? $page['offers'] : [];
+            $total_count = $this->extract_total_count($page, isset($checkpoint['total_count']) && is_numeric($checkpoint['total_count']) ? (int) $checkpoint['total_count'] : null);
+            $batch_size = count($offers);
+            $checked_in_batch = 0;
+            $existing_skipped_in_batch = 0;
+            $missing_imported_in_batch = 0;
+            $errors_in_batch = 0;
+            $last_checked_offer_id = '';
+            $last_imported_offer_id = (string) ($checkpoint['last_imported_offer_id'] ?? '');
+
+            $this->logger->info('MISSING_IMPORT_BATCH_START', [
+                'current_offset' => $offset,
+                'batch_size' => self::MISSING_IMPORT_BATCH_LIMIT,
+                'fetched' => $batch_size,
+                'total_count' => $total_count,
+            ]);
+
+            foreach ($offers as $offer_basic) {
+                $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
+                if ($offer_id === '') {
+                    $errors_in_batch++;
+                    continue;
+                }
+
+                $checked_in_batch++;
+                $last_checked_offer_id = $offer_id;
+                $this->logger->info('MISSING_IMPORT_OFFER_CHECK', [
+                    'offer_id' => $offer_id,
+                    'current_offset' => $offset,
+                ]);
+
+                $existing_product_id = $this->mapper->find_existing_product_id_for_offer($offer_basic);
+                if ($existing_product_id > 0) {
+                    $existing_skipped_in_batch++;
+                    $this->logger->info('MISSING_IMPORT_OFFER_SKIP already_exists', [
+                        'offer_id' => $offer_id,
+                        'product_id' => $existing_product_id,
+                    ]);
+                    continue;
+                }
+
+                $details = $this->client->get_offer_details($offer_id);
+                if (is_wp_error($details)) {
+                    $errors_in_batch++;
+                    $this->logger->error('MISSING_IMPORT_OFFER_FAILED', [
+                        'offer_id' => $offer_id,
+                        'stage' => 'get_offer_details',
+                        'error' => $details->get_error_message(),
+                    ]);
+                    continue;
+                }
+
+                $existing_from_details = $this->mapper->find_existing_product_id_for_offer($details);
+                if ($existing_from_details > 0) {
+                    $existing_skipped_in_batch++;
+                    $this->logger->info('MISSING_IMPORT_OFFER_SKIP already_exists', [
+                        'offer_id' => $offer_id,
+                        'product_id' => $existing_from_details,
+                        'source' => 'details_check',
+                    ]);
+                    continue;
+                }
+
+                $result = $this->mapper->upsert_product($details, [
+                    'sync_mode' => 'create_only',
+                    'inactive_product_status' => 'draft',
+                ]);
+
+                if (($result['result'] ?? '') === 'created') {
+                    $missing_imported_in_batch++;
+                    $last_imported_offer_id = $offer_id;
+                    $this->logger->info('MISSING_IMPORT_OFFER_IMPORTED', [
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                    ]);
+                    continue;
+                }
+
+                if (($result['result'] ?? '') === 'skipped' && !empty($result['product_id'])) {
+                    $existing_skipped_in_batch++;
+                    $this->logger->info('MISSING_IMPORT_OFFER_SKIP already_exists', [
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                        'source' => 'upsert_guard',
+                    ]);
+                    continue;
+                }
+
+                $errors_in_batch++;
+                $this->logger->error('MISSING_IMPORT_OFFER_FAILED', [
+                    'offer_id' => $offer_id,
+                    'result' => (string) ($result['result'] ?? 'unknown'),
+                    'error' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown_error'),
+                    'stage' => (string) ($result['stage'] ?? 'product_upsert'),
+                ]);
+            }
+
+            $next_offset = $offset + $batch_size;
+            $has_more = $batch_size > 0 && (
+                $total_count === null
+                || $next_offset < $total_count
+            );
+
+            $checkpoint['current_offset'] = $has_more ? $next_offset : $next_offset;
+            $checkpoint['total_checked'] = (int) ($checkpoint['total_checked'] ?? 0) + $checked_in_batch;
+            $checkpoint['existing_skipped'] = (int) ($checkpoint['existing_skipped'] ?? 0) + $existing_skipped_in_batch;
+            $checkpoint['missing_imported'] = (int) ($checkpoint['missing_imported'] ?? 0) + $missing_imported_in_batch;
+            $checkpoint['errors'] = (int) ($checkpoint['errors'] ?? 0) + $errors_in_batch;
+            $checkpoint['last_checked_offer_id'] = $last_checked_offer_id;
+            $checkpoint['last_imported_offer_id'] = $last_imported_offer_id;
+            $checkpoint['total_count'] = $total_count;
+            $checkpoint['status'] = $has_more ? 'running' : 'completed';
+            $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+            $this->save_missing_import_checkpoint($checkpoint);
+
+            $summary = [
+                'current_offset' => $offset,
+                'next_offset' => $next_offset,
+                'batch_size' => self::MISSING_IMPORT_BATCH_LIMIT,
+                'checked_in_batch' => $checked_in_batch,
+                'existing_skipped_in_batch' => $existing_skipped_in_batch,
+                'missing_imported_in_batch' => $missing_imported_in_batch,
+                'errors_in_batch' => $errors_in_batch,
+                'total_checked' => $checkpoint['total_checked'],
+                'existing_skipped' => $checkpoint['existing_skipped'],
+                'missing_imported' => $checkpoint['missing_imported'],
+                'errors' => $checkpoint['errors'],
+                'total_count' => $checkpoint['total_count'],
+                'last_checked_offer_id' => $checkpoint['last_checked_offer_id'],
+                'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
+            ];
+            $this->logger->info('MISSING_IMPORT_BATCH_DONE', $summary);
+
+            if (!$has_more) {
+                $this->logger->info('MISSING_IMPORT_COMPLETED', $checkpoint);
+            }
+
+            return $checkpoint;
+        } catch (\Throwable $throwable) {
+            $checkpoint['status'] = 'failed';
+            $checkpoint['errors'] = (int) ($checkpoint['errors'] ?? 0) + 1;
+            $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+            $this->save_missing_import_checkpoint($checkpoint);
+            $this->logger->error('MISSING_IMPORT_OFFER_FAILED', [
+                'stage' => 'unexpected_exception',
+                'error' => $throwable->getMessage(),
+            ]);
+            return $checkpoint;
+        } finally {
+            $this->release_import_lock($lock_context);
+        }
+    }
+
     private function finalize_summary(
         int $processed,
         int $created,
@@ -547,6 +804,11 @@ class Importer
             'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
             'total_count' => isset($checkpoint['total_count']) && is_numeric($checkpoint['total_count']) ? (int) $checkpoint['total_count'] : null,
         ]);
+    }
+
+    private function save_missing_import_checkpoint(array $checkpoint): void
+    {
+        update_option(self::MISSING_IMPORT_CHECKPOINT_OPTION_KEY, $checkpoint, false);
     }
 
     private function calculate_page_no_from_offset(int $offset): int

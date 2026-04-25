@@ -34,6 +34,10 @@ class Settings
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
+        add_action('admin_post_awi_missing_import_start', [$this, 'handle_missing_import_start']);
+        add_action('admin_post_awi_missing_import_continue', [$this, 'handle_missing_import_continue']);
+        add_action('admin_post_awi_missing_import_pause', [$this, 'handle_missing_import_pause']);
+        add_action('admin_post_awi_missing_import_reset', [$this, 'handle_missing_import_reset']);
         add_action('admin_post_awi_clear_import_lock', [$this, 'handle_clear_import_lock']);
         add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
         add_action('admin_post_awi_listing_images_regenerate_batch', [$this, 'handle_listing_images_regenerate_batch']);
@@ -182,6 +186,26 @@ class Settings
 
         wp_safe_redirect($redirect);
         exit;
+    }
+
+    public function handle_missing_import_start(): void
+    {
+        $this->handle_missing_import_action('awi_missing_import_start', 'start');
+    }
+
+    public function handle_missing_import_continue(): void
+    {
+        $this->handle_missing_import_action('awi_missing_import_continue', 'continue');
+    }
+
+    public function handle_missing_import_pause(): void
+    {
+        $this->handle_missing_import_action('awi_missing_import_pause', 'pause');
+    }
+
+    public function handle_missing_import_reset(): void
+    {
+        $this->handle_missing_import_action('awi_missing_import_reset', 'reset');
     }
 
     public function handle_restore_active_offers(): void
@@ -339,10 +363,49 @@ class Settings
             $listing_last_batch = [];
         }
         $import_lock_status = $this->get_import_lock_status();
+        $missing_import_checkpoint = $this->importer->get_missing_import_checkpoint();
 
         $log_tail = $this->logger->read_tail(80);
 
         include AWI_PLUGIN_DIR . 'templates/admin-page.php';
+    }
+
+    private function handle_missing_import_action(string $nonce_action, string $operation): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer($nonce_action);
+        if ($this->block_heavy_operation('missing_import_' . $operation)) {
+            return;
+        }
+
+        if ($operation !== 'pause' && $operation !== 'reset') {
+            $token = $this->auth->get_valid_access_token();
+            if (is_wp_error($token)) {
+                $this->store_admin_notice('error', __('Najpierw połącz wtyczkę z Allegro (brak ważnego access tokena).', 'allegro-woo-importer'));
+                wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+                exit;
+            }
+        }
+
+        if ($operation === 'start') {
+            $this->importer->start_missing_import();
+            $this->cron->schedule_missing_import_batch();
+        } elseif ($operation === 'continue') {
+            $this->importer->continue_missing_import();
+            $this->cron->schedule_missing_import_batch();
+        } elseif ($operation === 'pause') {
+            $this->importer->pause_missing_import();
+            $this->cron->clear_missing_import_schedule();
+        } else {
+            $this->importer->reset_missing_import_checkpoint();
+            $this->cron->clear_missing_import_schedule();
+        }
+
+        wp_safe_redirect(add_query_arg(['page' => 'awi-settings'], admin_url('admin.php')));
+        exit;
     }
 
     public function handle_listing_images_regenerate_batch(): void

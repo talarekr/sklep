@@ -7,6 +7,7 @@
  * @var array  $listing_regen_checkpoint
  * @var array  $listing_last_batch
  * @var array  $import_lock_status
+ * @var array  $missing_import_checkpoint
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -136,6 +137,39 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <input type="hidden" name="action" value="awi_restore_active_offers">
         <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
+
+    <h3><?php esc_html_e('Import missing Allegro offers', 'allegro-woo-importer'); ?></h3>
+    <p><?php esc_html_e('Tryb skanuje aktywne oferty Allegro batchami i importuje wyłącznie brakujące produkty.', 'allegro-woo-importer'); ?></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+        <?php wp_nonce_field('awi_missing_import_start'); ?>
+        <input type="hidden" name="action" value="awi_missing_import_start">
+        <?php submit_button(__('Start import missing', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+        <?php wp_nonce_field('awi_missing_import_continue'); ?>
+        <input type="hidden" name="action" value="awi_missing_import_continue">
+        <?php submit_button(__('Continue import missing', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+        <?php wp_nonce_field('awi_missing_import_pause'); ?>
+        <input type="hidden" name="action" value="awi_missing_import_pause">
+        <?php submit_button(__('Stop/Pause', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
+        <?php wp_nonce_field('awi_missing_import_reset'); ?>
+        <input type="hidden" name="action" value="awi_missing_import_reset">
+        <?php submit_button(__('Reset missing import checkpoint', 'allegro-woo-importer'), 'delete', 'submit', false); ?>
+    </form>
+    <ul>
+        <li><?php esc_html_e('Status:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($missing_import_checkpoint['status'] ?? 'paused')); ?></strong></li>
+        <li><?php esc_html_e('Offset / Total:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['current_offset'] ?? 0))); ?> / <?php echo esc_html(isset($missing_import_checkpoint['total_count']) && $missing_import_checkpoint['total_count'] !== null ? (string) ((int) $missing_import_checkpoint['total_count']) : '—'); ?></strong></li>
+        <li><?php esc_html_e('Total checked:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['total_checked'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Skipped existing:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['existing_skipped'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Imported missing:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['missing_imported'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Errors:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['errors'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Last checked offer_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($missing_import_checkpoint['last_checked_offer_id'] ?? '') !== '' ? $missing_import_checkpoint['last_checked_offer_id'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Last imported offer_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($missing_import_checkpoint['last_imported_offer_id'] ?? '') !== '' ? $missing_import_checkpoint['last_imported_offer_id'] : '—')); ?></strong></li>
+    </ul>
 
     <h3><?php esc_html_e('Status głównego import locka', 'allegro-woo-importer'); ?></h3>
     <ul>
