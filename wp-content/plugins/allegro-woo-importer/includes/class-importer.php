@@ -71,7 +71,9 @@ class Importer
             $has_override_offer_index = array_key_exists('offer_index', $resume_override) && $resume_override['offer_index'] !== null;
             if ($has_override_offset || $has_override_page || $has_override_offer_index) {
                 $offset = $has_override_offset ? max(0, (int) $resume_override['offset']) : $offset;
-                $page_no = $has_override_page ? max(1, (int) $resume_override['page_no']) : $page_no;
+                $page_no = $has_override_page
+                    ? max(1, (int) $resume_override['page_no'])
+                    : ($has_override_offset ? $this->calculate_page_no_from_offset($offset) : $page_no);
                 $resume_offer_index = $has_override_offer_index ? max(0, (int) $resume_override['offer_index']) : $resume_offer_index;
                 $page_token = '';
 
@@ -228,46 +230,71 @@ class Importer
                 'batch_size' => $batch_size,
             ]);
 
-            $details = $this->client->get_offer_details($offer_id);
-            if (is_wp_error($details)) {
-                $errors++;
-                $this->mark_cycle_state_error('offer_details_fetch_failed');
-                $this->logger->error('Failed to fetch offer details.', [
+            try {
+                $details = $this->client->get_offer_details($offer_id);
+                if (is_wp_error($details)) {
+                    $errors++;
+                    $this->mark_cycle_state_error('offer_details_fetch_failed');
+                    $this->logger->error('OFFER_IMPORT_FAILED', [
+                        'offer_id' => $offer_id,
+                        'stage' => 'get_offer_details',
+                        'error' => $details->get_error_message(),
+                    ]);
+                    continue;
+                }
+                $this->logger->info('OFFER_DETAILS_FETCHED', [
                     'offer_id' => $offer_id,
-                    'error' => $details->get_error_message(),
+                    'details_keys' => is_array($details) ? array_keys($details) : [],
                 ]);
-                continue;
-            }
 
-            $result = $this->mapper->upsert_product($details, $settings);
-            $processed++;
+                $result = $this->mapper->upsert_product($details, $settings);
+                $processed++;
 
-            if (($result['result'] ?? '') === 'created') {
-                $created++;
-            } elseif (($result['result'] ?? '') === 'updated') {
-                $updated++;
-            } elseif (($result['result'] ?? '') === 'skipped') {
-                $skipped++;
-                $this->logger->warning('Offer skipped during product upsert.', [
+                if (($result['result'] ?? '') === 'created') {
+                    $created++;
+                } elseif (($result['result'] ?? '') === 'updated') {
+                    $updated++;
+                } elseif (($result['result'] ?? '') === 'skipped') {
+                    $skipped++;
+                    $this->logger->warning('Offer skipped during product upsert.', [
+                        'offer_id' => $offer_id,
+                        'skip_existing' => !empty($result['product_id']),
+                        'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                    ]);
+                    if (!empty($result['product_id'])) {
+                        $this->logger->info('SKIP EXISTING: offer already mapped to product.', [
+                            'offer_id' => $offer_id,
+                            'product_id' => (int) $result['product_id'],
+                            'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
+                        ]);
+                    }
+                } elseif (($result['result'] ?? '') === 'error') {
+                    $errors++;
+                    $this->mark_cycle_state_error('product_upsert_failed');
+                    $this->logger->error('OFFER_IMPORT_FAILED', [
+                        'offer_id' => $offer_id,
+                        'stage' => (string) ($result['stage'] ?? 'product_upsert'),
+                        'error' => (string) ($result['error'] ?? 'unknown_error'),
+                        'reason' => (string) ($result['reason'] ?? ''),
+                    ]);
+                    continue;
+                }
+
+                $this->logger->info('OFFER_IMPORT_DONE', [
                     'offer_id' => $offer_id,
-                    'skip_existing' => !empty($result['product_id']),
-                    'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
+                    'result' => (string) ($result['result'] ?? 'unknown'),
                     'product_id' => (int) ($result['product_id'] ?? 0),
                 ]);
-                if (!empty($result['product_id'])) {
-                    $this->logger->info('SKIP EXISTING: offer already mapped to product.', [
-                        'offer_id' => $offer_id,
-                        'product_id' => (int) $result['product_id'],
-                        'skip_reason' => (string) ($result['error'] ?? $result['reason'] ?? 'unknown'),
-                    ]);
-                }
-            } elseif (($result['result'] ?? '') === 'error') {
+            } catch (\Throwable $throwable) {
                 $errors++;
-                $this->mark_cycle_state_error('product_upsert_failed');
-                $this->logger->error('Product upsert failed.', [
+                $this->mark_cycle_state_error('offer_import_unhandled_exception');
+                $this->logger->error('OFFER_IMPORT_FAILED', [
                     'offer_id' => $offer_id,
-                    'error' => (string) ($result['error'] ?? 'unknown_error'),
+                    'stage' => 'unexpected_exception',
+                    'error' => $throwable->getMessage(),
                 ]);
+                continue;
             }
 
             if ($this->should_stop_for_runtime($started_at)) {
@@ -520,6 +547,11 @@ class Importer
             'total_processed' => (int) ($checkpoint['total_processed'] ?? 0),
             'total_count' => isset($checkpoint['total_count']) && is_numeric($checkpoint['total_count']) ? (int) $checkpoint['total_count'] : null,
         ]);
+    }
+
+    private function calculate_page_no_from_offset(int $offset): int
+    {
+        return max(1, (int) floor(max(0, $offset) / self::BATCH_LIMIT) + 1);
     }
 
     private function reset_checkpoint(): void
