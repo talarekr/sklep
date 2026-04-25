@@ -122,6 +122,12 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('awi_manual_import'); ?>
         <input type="hidden" name="action" value="awi_manual_import">
+        <label for="awi-start-offset"><?php esc_html_e('Start offset:', 'allegro-woo-importer'); ?></label>
+        <input id="awi-start-offset" type="number" min="0" name="awi_start_offset" placeholder="np. 5100" style="width:110px; margin-right:10px;">
+        <label for="awi-start-page"><?php esc_html_e('Start page:', 'allegro-woo-importer'); ?></label>
+        <input id="awi-start-page" type="number" min="1" name="awi_start_page" placeholder="np. 171" style="width:100px; margin-right:10px;">
+        <label for="awi-start-offer-index"><?php esc_html_e('Start index:', 'allegro-woo-importer'); ?></label>
+        <input id="awi-start-offer-index" type="number" min="0" name="awi_start_offer_index" value="0" style="width:90px; margin-right:12px;">
         <?php submit_button(__('Importuj teraz', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">

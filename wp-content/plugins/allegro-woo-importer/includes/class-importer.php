@@ -11,7 +11,7 @@ class Importer
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
-    private const BATCH_LIMIT = 100;
+    private const BATCH_LIMIT = 30;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
     private const RECONCILIATION_SAFETY_LOCK = true;
@@ -27,7 +27,7 @@ class Importer
         $this->logger = $logger;
     }
 
-    public function import_offers(): array
+    public function import_offers(array $resume_override = []): array
     {
         $this->ensure_runtime_limits();
         $settings = Plugin::get_settings();
@@ -38,6 +38,29 @@ class Importer
         $page_no = max(1, (int) ($checkpoint['page_no'] ?? 1));
         $page_token = (string) ($checkpoint['page_token'] ?? '');
         $resume_offer_index = max(0, (int) ($checkpoint['offer_index'] ?? 0));
+
+        $has_override_offset = array_key_exists('offset', $resume_override) && $resume_override['offset'] !== null;
+        $has_override_page = array_key_exists('page_no', $resume_override) && $resume_override['page_no'] !== null;
+        $has_override_offer_index = array_key_exists('offer_index', $resume_override) && $resume_override['offer_index'] !== null;
+        if ($has_override_offset || $has_override_page || $has_override_offer_index) {
+            $offset = $has_override_offset ? max(0, (int) $resume_override['offset']) : $offset;
+            $page_no = $has_override_page ? max(1, (int) $resume_override['page_no']) : $page_no;
+            $resume_offer_index = $has_override_offer_index ? max(0, (int) $resume_override['offer_index']) : $resume_offer_index;
+            $page_token = '';
+
+            if (function_exists('awi_log')) {
+                awi_log('MANUAL_RESUME_OVERRIDE', [
+                    'offset' => $offset,
+                    'page' => $page_no,
+                    'index' => $resume_offer_index,
+                ]);
+            }
+            $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
+                'offset' => $offset,
+                'page' => $page_no,
+                'index' => $resume_offer_index,
+            ]);
+        }
 
         $processed = 0;
         $created = 0;
@@ -134,6 +157,24 @@ class Importer
         $start_index = $resume_offer_index;
 
         for ($index = $start_index; $index < $batch_size; $index++) {
+            if ($index > $start_index) {
+                usleep(200000); // 0.2s
+            }
+
+            if (memory_get_usage(true) > 256 * 1024 * 1024) {
+                if (function_exists('awi_log')) {
+                    awi_log('MEMORY_LIMIT_APPROACHING', []);
+                }
+                $this->logger->warning('MEMORY_LIMIT_APPROACHING', [
+                    'memory_usage_bytes' => memory_get_usage(true),
+                    'memory_threshold_bytes' => 256 * 1024 * 1024,
+                    'offset' => $offset,
+                    'page_no' => $page_no,
+                    'offer_index' => $index,
+                ]);
+                return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
+            }
+
             if (function_exists('set_time_limit')) {
                 @set_time_limit(self::MAX_EXECUTION_TIME_SECONDS);
             }
