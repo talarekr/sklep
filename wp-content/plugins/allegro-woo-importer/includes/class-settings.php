@@ -114,7 +114,38 @@ class Settings
             exit;
         }
 
-        $summary = $this->importer->import_offers();
+        $raw_override_offset = isset($_POST['awi_start_offset']) ? trim((string) wp_unslash($_POST['awi_start_offset'])) : '';
+        $raw_override_page = isset($_POST['awi_start_page']) ? trim((string) wp_unslash($_POST['awi_start_page'])) : '';
+        $raw_override_index = isset($_POST['awi_start_offer_index']) ? trim((string) wp_unslash($_POST['awi_start_offer_index'])) : '';
+
+        $override_offset = $raw_override_offset !== '' ? max(0, (int) $raw_override_offset) : null;
+        $override_page = $raw_override_page !== '' ? max(1, (int) $raw_override_page) : null;
+        $override_index = $raw_override_index !== '' ? max(0, (int) $raw_override_index) : 0;
+
+        $resume_override = [];
+        if ($override_offset !== null || $override_page !== null || $raw_override_index !== '') {
+            $resume_override = [
+                'offset' => $override_offset,
+                'page_no' => $override_page,
+                'offer_index' => $override_index,
+            ];
+
+            if (function_exists('awi_log')) {
+                awi_log('MANUAL_RESUME_OVERRIDE', [
+                    'offset' => $override_offset,
+                    'page' => $override_page,
+                    'index' => $override_index,
+                ]);
+            }
+            $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
+                'offset' => $override_offset,
+                'page' => $override_page,
+                'index' => $override_index,
+                'trigger' => 'admin_manual_import',
+            ]);
+        }
+
+        $summary = $this->importer->import_offers($resume_override);
 
         $redirect = add_query_arg([
             'page' => 'awi-settings',
