@@ -1413,6 +1413,36 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
+        $raw_images_preview = [];
+        if (is_array($offer['images'] ?? null)) {
+            $raw_images_preview = (array) $offer['images'];
+        } elseif (is_array($offer['productSet'] ?? null)) {
+            foreach ((array) $offer['productSet'] as $product_set_item) {
+                if (!is_array($product_set_item)) {
+                    continue;
+                }
+
+                if (is_array($product_set_item['product']['images'] ?? null)) {
+                    $raw_images_preview = (array) $product_set_item['product']['images'];
+                    break;
+                }
+
+                if (is_array($product_set_item['images'] ?? null)) {
+                    $raw_images_preview = (array) $product_set_item['images'];
+                    break;
+                }
+            }
+        }
+        $first_image_raw = $raw_images_preview[0] ?? null;
+        $first_image_url_extracted = $this->extract_single_image_url_from_payload_item($first_image_raw);
+        $this->logger->info('IMAGE_SYNC_START_INPUT', [
+            'offer_id' => $offer_id,
+            'images_count' => count($raw_images_preview),
+            'first_image_raw' => $first_image_raw,
+            'first_image_raw_type' => gettype($first_image_raw),
+            'first_image_extracted_url' => $first_image_url_extracted,
+        ]);
+
         if (defined('AWI_SKIP_IMAGES') && AWI_SKIP_IMAGES) {
             return;
         }
@@ -1756,13 +1786,7 @@ class ProductMapper
 
         $image_urls = [];
         foreach ($raw_images as $image) {
-            $url = '';
-            if (is_array($image)) {
-                $url = (string) ($image['url'] ?? '');
-            } elseif (is_string($image)) {
-                $url = $image;
-            }
-
+            $url = $this->extract_single_image_url_from_payload_item($image);
             $url = trim($url);
             if ($url === '') {
                 continue;
@@ -1772,6 +1796,51 @@ class ProductMapper
         }
 
         return array_values(array_unique($image_urls));
+    }
+
+    /**
+     * @param mixed $image
+     */
+    private function extract_single_image_url_from_payload_item($image): string
+    {
+        if (is_string($image)) {
+            return trim($image);
+        }
+
+        if (!is_array($image)) {
+            return '';
+        }
+
+        $candidate_paths = [
+            ['url'],
+            ['src'],
+            ['source', 'url'],
+            ['source', 'src'],
+            ['original', 'url'],
+            ['original', 'src'],
+            ['sizes', 'original', 'url'],
+            ['sizes', 'large', 'url'],
+            ['standard', 'url'],
+            ['secure_url'],
+            ['href'],
+        ];
+
+        foreach ($candidate_paths as $path) {
+            $value = $image;
+            foreach ($path as $segment) {
+                if (!is_array($value) || !array_key_exists($segment, $value)) {
+                    $value = null;
+                    break;
+                }
+                $value = $value[$segment];
+            }
+
+            if (is_string($value) && trim($value) !== '') {
+                return trim($value);
+            }
+        }
+
+        return '';
     }
 
     private function build_sideload_filename_from_url_and_headers(string $url, string $tmp_file, string $offer_id = '', int $product_id = 0): string
