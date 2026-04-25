@@ -6,6 +6,7 @@
  * @var string $callback_uri
  * @var array  $listing_regen_checkpoint
  * @var array  $listing_last_batch
+ * @var array  $import_lock_status
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -134,6 +135,23 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php wp_nonce_field('awi_restore_active_offers'); ?>
         <input type="hidden" name="action" value="awi_restore_active_offers">
         <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+
+    <h3><?php esc_html_e('Status głównego import locka', 'allegro-woo-importer'); ?></h3>
+    <ul>
+        <li><?php esc_html_e('Lock option key:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($import_lock_status['option_key'] ?? 'awi_import_lock')); ?></strong></li>
+        <li><?php esc_html_e('Lock obecny:', 'allegro-woo-importer'); ?> <strong><?php echo !empty($import_lock_status['has_lock']) ? 'true' : 'false'; ?></strong></li>
+        <li><?php esc_html_e('Status:', 'allegro-woo-importer'); ?> <strong><?php echo !empty($import_lock_status['is_active']) ? esc_html__('active', 'allegro-woo-importer') : (!empty($import_lock_status['is_stale']) ? esc_html__('stale', 'allegro-woo-importer') : esc_html__('none', 'allegro-woo-importer')); ?></strong></li>
+        <li><?php esc_html_e('Locked at (GMT):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($import_lock_status['locked_at'] ?? '') !== '' ? $import_lock_status['locked_at'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Expires at (GMT):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($import_lock_status['expires_at_gmt'] ?? '') !== '' ? $import_lock_status['expires_at_gmt'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Expires at (timestamp):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($import_lock_status['expires_at_ts'] ?? 0))); ?></strong></li>
+        <li><?php esc_html_e('Now (GMT):', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($import_lock_status['now_gmt'] ?? '—')); ?></strong></li>
+        <li><?php esc_html_e('Sekundy do wygaśnięcia:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($import_lock_status['seconds_to_expiry'] ?? 0))); ?></strong></li>
+    </ul>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+        <?php wp_nonce_field('awi_clear_import_lock'); ?>
+        <input type="hidden" name="action" value="awi_clear_import_lock">
+        <?php submit_button(__('Clear importer lock', 'allegro-woo-importer'), 'delete', 'submit', false); ?>
     </form>
 
     <h2><?php esc_html_e('3. Regeneracja zdjęć listingowych (lokalny batch)', 'allegro-woo-importer'); ?></h2>
