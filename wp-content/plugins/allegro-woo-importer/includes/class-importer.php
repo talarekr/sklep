@@ -30,46 +30,71 @@ class Importer
     public function import_offers(array $resume_override = []): array
     {
         $this->ensure_runtime_limits();
-        $settings = Plugin::get_settings();
         $started_at = microtime(true);
+        $lock_context = $this->build_lock_context();
+        $lock_acquired = $this->acquire_import_lock($lock_context);
+        if (!$lock_acquired) {
+            $this->logger->warning('Import skipped: another import process is already running.', [
+                'lock_context' => $lock_context,
+                'lock_option_key' => self::IMPORT_LOCK_OPTION_KEY,
+                'lock_ttl_seconds' => self::IMPORT_LOCK_TTL_SECONDS,
+            ]);
 
-        $checkpoint = $this->load_checkpoint();
-        $offset = (int) ($checkpoint['offset'] ?? 0);
-        $page_no = max(1, (int) ($checkpoint['page_no'] ?? 1));
-        $page_token = (string) ($checkpoint['page_token'] ?? '');
-        $resume_offer_index = max(0, (int) ($checkpoint['offer_index'] ?? 0));
+            return [
+                'date' => gmdate('Y-m-d H:i:s'),
+                'offers' => 0,
+                'created' => 0,
+                'updated' => 0,
+                'skipped' => 0,
+                'errors' => 0,
+                'fetched_from_api' => 0,
+                'reported_total_count' => null,
+                'last_processed_offer_id' => '',
+                'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
+                'skipped_due_to_lock' => true,
+            ];
+        }
 
-        $has_override_offset = array_key_exists('offset', $resume_override) && $resume_override['offset'] !== null;
-        $has_override_page = array_key_exists('page_no', $resume_override) && $resume_override['page_no'] !== null;
-        $has_override_offer_index = array_key_exists('offer_index', $resume_override) && $resume_override['offer_index'] !== null;
-        if ($has_override_offset || $has_override_page || $has_override_offer_index) {
-            $offset = $has_override_offset ? max(0, (int) $resume_override['offset']) : $offset;
-            $page_no = $has_override_page ? max(1, (int) $resume_override['page_no']) : $page_no;
-            $resume_offer_index = $has_override_offer_index ? max(0, (int) $resume_override['offer_index']) : $resume_offer_index;
-            $page_token = '';
+        try {
+            $settings = Plugin::get_settings();
 
-            if (function_exists('awi_log')) {
-                awi_log('MANUAL_RESUME_OVERRIDE', [
+            $checkpoint = $this->load_checkpoint();
+            $offset = (int) ($checkpoint['offset'] ?? 0);
+            $page_no = max(1, (int) ($checkpoint['page_no'] ?? 1));
+            $page_token = (string) ($checkpoint['page_token'] ?? '');
+            $resume_offer_index = max(0, (int) ($checkpoint['offer_index'] ?? 0));
+
+            $has_override_offset = array_key_exists('offset', $resume_override) && $resume_override['offset'] !== null;
+            $has_override_page = array_key_exists('page_no', $resume_override) && $resume_override['page_no'] !== null;
+            $has_override_offer_index = array_key_exists('offer_index', $resume_override) && $resume_override['offer_index'] !== null;
+            if ($has_override_offset || $has_override_page || $has_override_offer_index) {
+                $offset = $has_override_offset ? max(0, (int) $resume_override['offset']) : $offset;
+                $page_no = $has_override_page ? max(1, (int) $resume_override['page_no']) : $page_no;
+                $resume_offer_index = $has_override_offer_index ? max(0, (int) $resume_override['offer_index']) : $resume_offer_index;
+                $page_token = '';
+
+                if (function_exists('awi_log')) {
+                    awi_log('MANUAL_RESUME_OVERRIDE', [
+                        'offset' => $offset,
+                        'page' => $page_no,
+                        'index' => $resume_offer_index,
+                    ]);
+                }
+                $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
                     'offset' => $offset,
                     'page' => $page_no,
                     'index' => $resume_offer_index,
                 ]);
             }
-            $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
-                'offset' => $offset,
-                'page' => $page_no,
-                'index' => $resume_offer_index,
-            ]);
-        }
 
-        $processed = 0;
-        $created = 0;
-        $updated = 0;
-        $skipped = 0;
-        $errors = 0;
-        $fetched_from_api = 0;
-        $total_count_from_api = null;
-        $last_processed_offer_id = '';
+            $processed = 0;
+            $created = 0;
+            $updated = 0;
+            $skipped = 0;
+            $errors = 0;
+            $fetched_from_api = 0;
+            $total_count_from_api = null;
+            $last_processed_offer_id = '';
 
         $this->logger->info('Import batch start (checkpoint resume).', [
             'offset' => $offset,
@@ -349,7 +374,10 @@ class Importer
             ]);
         }
 
-        return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
+            return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
+        } finally {
+            $this->release_import_lock($lock_context);
+        }
     }
 
     private function finalize_summary(
@@ -401,6 +429,63 @@ class Importer
         if (function_exists('set_time_limit')) {
             @set_time_limit(self::MAX_EXECUTION_TIME_SECONDS);
         }
+    }
+
+    private function build_lock_context(): array
+    {
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field((string) wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        $action = isset($_REQUEST['action']) ? sanitize_text_field((string) wp_unslash($_REQUEST['action'])) : '';
+        $context = function_exists('wp_doing_cron') && wp_doing_cron() ? 'cron' : 'admin';
+
+        return [
+            'context' => $context,
+            'action' => $action,
+            'request_uri' => $request_uri,
+            'timestamp' => time(),
+        ];
+    }
+
+    private function acquire_import_lock(array $lock_context): bool
+    {
+        $payload = $lock_context + [
+            'locked_at' => gmdate('Y-m-d H:i:s'),
+            'expires_at' => time() + self::IMPORT_LOCK_TTL_SECONDS,
+        ];
+
+        if (add_option(self::IMPORT_LOCK_OPTION_KEY, $payload, '', false)) {
+            return true;
+        }
+
+        $existing = get_option(self::IMPORT_LOCK_OPTION_KEY, []);
+        $existing_expires_at = is_array($existing) ? (int) ($existing['expires_at'] ?? 0) : 0;
+        if ($existing_expires_at > 0 && $existing_expires_at < time()) {
+            delete_option(self::IMPORT_LOCK_OPTION_KEY);
+            if (add_option(self::IMPORT_LOCK_OPTION_KEY, $payload, '', false)) {
+                $this->logger->warning('Recovered stale import lock before new batch run.', [
+                    'existing_lock' => $existing,
+                    'new_lock' => $payload,
+                ]);
+                return true;
+            }
+        }
+
+        $this->logger->warning('Import lock already active; batch run rejected.', [
+            'existing_lock' => $existing,
+            'incoming_lock' => $payload,
+        ]);
+
+        return false;
+    }
+
+    private function release_import_lock(array $lock_context): void
+    {
+        $existing = get_option(self::IMPORT_LOCK_OPTION_KEY, []);
+        delete_option(self::IMPORT_LOCK_OPTION_KEY);
+
+        $this->logger->info('Import lock released.', [
+            'released_by' => $lock_context,
+            'previous_lock' => $existing,
+        ]);
     }
 
     private function load_checkpoint(): array
