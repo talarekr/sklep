@@ -13,8 +13,6 @@ class AllegroClient
     private const RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
     private const MIN_RETRY_DELAY_SECONDS = 1;
     private const MAX_RETRY_DELAY_SECONDS = 20;
-    private const API_REQUEST_TIMEOUT_SECONDS = 20;
-    private const API_REQUEST_REDIRECTION_LIMIT = 3;
 
     private AllegroAuth $auth;
     private Logger $logger;
@@ -309,25 +307,11 @@ class AllegroClient
             $status = (int) wp_remote_retrieve_response_code($response);
             $raw = wp_remote_retrieve_body($response);
             $data = json_decode($raw, true);
-            $elapsed_time = round(max(0, microtime(true) - $request_started_at), 3);
 
             if ($status >= 200 && $status <= 299) {
                 if (!is_array($data)) {
                     return new \WP_Error('awi_api_invalid_json', __('Nieprawidłowa odpowiedź JSON z Allegro API.', 'allegro-woo-importer'));
                 }
-
-                $this->logger->info('Allegro API request completed.', [
-                    'request_type' => 'allegro_api',
-                    'endpoint' => $path,
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
-                    'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
-                    'elapsed_time' => $elapsed_time,
-                    'http_code' => $status,
-                    'error_reason' => '',
-                    'offer_id' => (string) ($request_context['offer_id'] ?? ''),
-                    'product_id' => (int) ($request_context['product_id'] ?? 0),
-                    'attempt' => $attempt,
-                ]);
 
                 return $data;
             }
@@ -336,15 +320,6 @@ class AllegroClient
             $has_next_attempt = $attempt < self::MAX_RETRY_ATTEMPTS;
             if (!$is_retryable || !$has_next_attempt) {
                 $this->logger->error('Allegro API returned non-success status.', [
-                    'request_type' => 'allegro_api',
-                    'endpoint' => $path,
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
-                    'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
-                    'elapsed_time' => $elapsed_time,
-                    'http_code' => $status,
-                    'error_reason' => 'http_status_non_success',
-                    'offer_id' => (string) ($request_context['offer_id'] ?? ''),
-                    'product_id' => (int) ($request_context['product_id'] ?? 0),
                     'path' => $path,
                     'status' => $status,
                     'attempt' => $attempt,
@@ -358,15 +333,6 @@ class AllegroClient
             $retry_after_header = wp_remote_retrieve_header($response, 'retry-after');
             $retry_after_seconds = $this->calculate_retry_delay_seconds($retry_after_header, $attempt);
             $this->logger->warning('Retrying Allegro API request after retryable status.', [
-                'request_type' => 'allegro_api',
-                'endpoint' => $path,
-                'host' => (string) parse_url($url, PHP_URL_HOST),
-                'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
-                'elapsed_time' => $elapsed_time,
-                'http_code' => $status,
-                'error_reason' => 'retryable_http_status',
-                'offer_id' => (string) ($request_context['offer_id'] ?? ''),
-                'product_id' => (int) ($request_context['product_id'] ?? 0),
                 'path' => $path,
                 'status' => $status,
                 'attempt' => $attempt,
@@ -382,15 +348,6 @@ class AllegroClient
             $response = wp_remote_request($url, $request_args);
             if (is_wp_error($response)) {
                 $this->logger->error('Allegro API request retry failed.', [
-                    'request_type' => 'allegro_api',
-                    'endpoint' => $path,
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
-                    'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
-                    'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
-                    'http_code' => 0,
-                    'error_reason' => $response->get_error_message(),
-                    'offer_id' => (string) ($request_context['offer_id'] ?? ''),
-                    'product_id' => (int) ($request_context['product_id'] ?? 0),
                     'path' => $path,
                     'attempt' => $attempt + 1,
                     'error' => $response->get_error_message(),
