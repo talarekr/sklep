@@ -732,34 +732,9 @@ class ProductMapper
             'phase' => 'initial',
         ]);
 
-        $this->logger->info('POST_SAVE_GAP_CHECKPOINT', [
-            'offer_id' => $offer_id,
-            'product_id' => (int) $product_id,
-            'checkpoint' => 'before_assign_category',
-        ]);
         try {
-            $this->logger->info('POST_SAVE_GAP_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => (int) $product_id,
-                'checkpoint' => 'assign_category_start',
-            ]);
             $this->assign_category($product_id, $offer);
-            $this->logger->info('POST_SAVE_GAP_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => (int) $product_id,
-                'checkpoint' => 'assign_category_done',
-            ]);
-            $this->logger->info('POST_SAVE_GAP_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => (int) $product_id,
-                'checkpoint' => 'map_attributes_start',
-            ]);
             $this->map_attributes($product, $offer);
-            $this->logger->info('POST_SAVE_GAP_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => (int) $product_id,
-                'checkpoint' => 'map_attributes_done',
-            ]);
         } catch (\Throwable $throwable) {
             return [
                 'result' => 'error',
