@@ -52,8 +52,10 @@ class ProductMapper
     private AllegroClient $client;
     private Logger $logger;
     private array $image_import_context = [];
-    /** @var array<string, true> */
-    private array $synced_category_subtrees = [];
+    /** @var array<string, array<int, array{id: string, name: string}>> */
+    private array $category_path_cache = [];
+    /** @var array<string, int> */
+    private array $category_term_id_cache = [];
 
     public function __construct(AllegroClient $client, Logger $logger)
     {
@@ -1113,7 +1115,7 @@ class ProductMapper
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'checkpoint' => 'assign_category_enter',
+            'checkpoint' => 'assign_category_start',
             'allegro_category_id' => $allegro_category_id,
         ]);
         if ($allegro_category_id === '') {
@@ -1129,14 +1131,14 @@ class ProductMapper
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'checkpoint' => 'extract_category_path_start',
+            'checkpoint' => 'get_category_path_start',
             'allegro_category_id' => $allegro_category_id,
         ]);
         $category_path = $this->extract_allegro_category_path($offer, $allegro_category_id, $allegro_category_name);
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'checkpoint' => 'extract_category_path_done',
+            'checkpoint' => 'get_category_path_done',
             'path_nodes_count' => count($category_path),
         ]);
         if ($category_path === []) {
@@ -1151,6 +1153,12 @@ class ProductMapper
 
         $parent_term_id = 0;
         $leaf_term_id = 0;
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'create_or_update_terms_for_path_start',
+            'path_nodes_count' => count($category_path),
+        ]);
 
         foreach ($category_path as $node) {
             $node_id = sanitize_text_field((string) ($node['id'] ?? ''));
@@ -1167,35 +1175,26 @@ class ProductMapper
             $parent_term_id = $term_id;
             $leaf_term_id = $term_id;
         }
+        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'checkpoint' => 'create_or_update_terms_for_path_done',
+            'leaf_term_id' => $leaf_term_id,
+        ]);
 
         if ($leaf_term_id > 0) {
+            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'checkpoint' => 'wp_set_post_terms_start',
+                'leaf_term_id' => $leaf_term_id,
+            ]);
             wp_set_post_terms($product_id, [$leaf_term_id], 'product_cat', false);
             $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
                 'checkpoint' => 'wp_set_post_terms_done',
                 'leaf_term_id' => $leaf_term_id,
-            ]);
-        }
-
-        foreach ($category_path as $node) {
-            $node_id = sanitize_text_field((string) ($node['id'] ?? ''));
-            if ($node_id === '') {
-                continue;
-            }
-
-            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => $product_id,
-                'checkpoint' => 'sync_category_subtree_start',
-                'node_id' => $node_id,
-            ]);
-            $this->sync_allegro_category_subtree($node_id);
-            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => $product_id,
-                'checkpoint' => 'sync_category_subtree_done',
-                'node_id' => $node_id,
             ]);
         }
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
@@ -1207,6 +1206,10 @@ class ProductMapper
 
     private function extract_allegro_category_path(array $offer, string $category_id, string $fallback_name): array
     {
+        if (isset($this->category_path_cache[$category_id])) {
+            return $this->category_path_cache[$category_id];
+        }
+
         $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
         $raw_path = $offer['category']['path'] ?? null;
         if (is_array($raw_path) && $raw_path !== []) {
@@ -1220,6 +1223,7 @@ class ProductMapper
             }
 
             if ($mapped !== []) {
+                $this->category_path_cache[$category_id] = $mapped;
                 return $mapped;
             }
         }
@@ -1244,19 +1248,28 @@ class ProductMapper
             ]);
 
             $name = $fallback_name !== '' ? $fallback_name : $category_id;
-            return [['id' => $category_id, 'name' => $name]];
+            $fallback_path = [['id' => $category_id, 'name' => $name]];
+            $this->category_path_cache[$category_id] = $fallback_path;
+            return $fallback_path;
         }
 
         if (is_array($path) && $path !== []) {
+            $this->category_path_cache[$category_id] = $path;
             return $path;
         }
 
         $name = $fallback_name !== '' ? $fallback_name : $category_id;
-        return [['id' => $category_id, 'name' => $name]];
+        $fallback_path = [['id' => $category_id, 'name' => $name]];
+        $this->category_path_cache[$category_id] = $fallback_path;
+        return $fallback_path;
     }
 
     private function find_or_create_category_term(string $allegro_category_id, string $name, int $parent_term_id): int
     {
+        if (isset($this->category_term_id_cache[$allegro_category_id])) {
+            return $this->category_term_id_cache[$allegro_category_id];
+        }
+
         $existing = get_terms([
             'taxonomy' => 'product_cat',
             'hide_empty' => false,
@@ -1284,6 +1297,7 @@ class ProductMapper
             }
 
             update_term_meta($term->term_id, '_allegro_category_id', $allegro_category_id);
+            $this->category_term_id_cache[$allegro_category_id] = (int) $term->term_id;
             return (int) $term->term_id;
         }
 
@@ -1292,6 +1306,7 @@ class ProductMapper
             $term_id = is_array($term) ? (int) $term['term_id'] : (int) $term;
             if ($term_id > 0) {
                 update_term_meta($term_id, '_allegro_category_id', $allegro_category_id);
+                $this->category_term_id_cache[$allegro_category_id] = $term_id;
                 return $term_id;
             }
         }
@@ -1313,94 +1328,10 @@ class ProductMapper
         $term_id = (int) ($created['term_id'] ?? 0);
         if ($term_id > 0) {
             update_term_meta($term_id, '_allegro_category_id', $allegro_category_id);
+            $this->category_term_id_cache[$allegro_category_id] = $term_id;
         }
 
         return $term_id;
-    }
-
-    private function sync_allegro_category_subtree(string $allegro_category_id, int $depth = 0): void
-    {
-        if ($allegro_category_id === '' || $depth > 8) {
-            return;
-        }
-
-        $cache_key = $allegro_category_id . '|' . $depth;
-        if (isset($this->synced_category_subtrees[$cache_key])) {
-            return;
-        }
-
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'checkpoint' => 'category_children_api_fetch_start',
-            'allegro_category_id' => $allegro_category_id,
-            'depth' => $depth,
-        ]);
-        $children = $this->client->get_category_children($allegro_category_id);
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'checkpoint' => 'category_children_api_fetch_done',
-            'allegro_category_id' => $allegro_category_id,
-            'depth' => $depth,
-            'is_error' => is_wp_error($children),
-            'children_count' => is_array($children) ? count($children) : 0,
-        ]);
-        if (is_wp_error($children)) {
-            $this->logger->warning('Failed to sync Allegro category descendants.', [
-                'allegro_category_id' => $allegro_category_id,
-                'depth' => $depth,
-                'error' => $children->get_error_message(),
-            ]);
-            return;
-        }
-
-        if (!is_array($children) || $children === []) {
-            $this->synced_category_subtrees[$cache_key] = true;
-            return;
-        }
-
-        $parent_term_id = $this->find_category_term_id_by_allegro_id($allegro_category_id);
-        if ($parent_term_id <= 0) {
-            $this->synced_category_subtrees[$cache_key] = true;
-            return;
-        }
-
-        foreach ($children as $child) {
-            $child_id = sanitize_text_field((string) ($child['id'] ?? ''));
-            $child_name = sanitize_text_field((string) ($child['name'] ?? ''));
-            if ($child_id === '' || $child_name === '') {
-                continue;
-            }
-
-            $child_term_id = $this->find_or_create_category_term($child_id, $child_name, $parent_term_id);
-            if ($child_term_id <= 0) {
-                continue;
-            }
-
-            $this->sync_allegro_category_subtree($child_id, $depth + 1);
-        }
-
-        $this->synced_category_subtrees[$cache_key] = true;
-    }
-
-    private function find_category_term_id_by_allegro_id(string $allegro_category_id): int
-    {
-        $terms = get_terms([
-            'taxonomy' => 'product_cat',
-            'hide_empty' => false,
-            'number' => 1,
-            'fields' => 'ids',
-            'meta_query' => [
-                [
-                    'key' => '_allegro_category_id',
-                    'value' => $allegro_category_id,
-                    'compare' => '=',
-                ],
-            ],
-        ]);
-
-        if (!is_array($terms) || empty($terms[0])) {
-            return 0;
-        }
-
-        return (int) $terms[0];
     }
 
     private function map_attributes(WC_Product $product, array $offer): void
