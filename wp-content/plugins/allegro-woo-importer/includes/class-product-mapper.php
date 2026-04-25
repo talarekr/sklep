@@ -1298,6 +1298,10 @@ class ProductMapper
 
     private function sync_product_images(WC_Product $product, array $offer, string $offer_id, bool $is_new_product = false): void
     {
+        if (defined('AWI_SKIP_IMAGES') && AWI_SKIP_IMAGES) {
+            return;
+        }
+
         $images_raw = $offer['images'] ?? [];
         $images = is_array($images_raw) ? $images_raw : [];
 

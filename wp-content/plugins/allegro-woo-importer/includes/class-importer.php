@@ -11,7 +11,7 @@ class Importer
     private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
     private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
-    private const BATCH_LIMIT = 15;
+    private const BATCH_LIMIT = 30;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
     private const RECONCILIATION_SAFETY_LOCK = true;
