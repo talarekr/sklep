@@ -353,9 +353,33 @@ function gp_google_oauth_log(string $event, array $context = []): void
     error_log('GP Google OAuth: ' . wp_json_encode($payload));
 }
 
+function gp_parse_oauth_enabled_option($raw_value): bool
+{
+    if (is_bool($raw_value)) {
+        return $raw_value;
+    }
+
+    if (is_numeric($raw_value)) {
+        return ((int) $raw_value) === 1;
+    }
+
+    if (is_string($raw_value)) {
+        $normalized = strtolower(trim($raw_value));
+
+        if (in_array($normalized, ['', '0', 'false', 'off', 'no', 'disabled'], true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    return (bool) $raw_value;
+}
+
 function gp_get_google_oauth_settings(): array
 {
-    $enabled = get_option('gp_google_oauth_enabled', '1') === '1';
+    $enabled_option_value = get_option('gp_google_oauth_enabled', '1');
+    $enabled = gp_parse_oauth_enabled_option($enabled_option_value);
     $client_id = trim((string) get_option('gp_google_client_id', ''));
     $client_secret = trim((string) get_option('gp_google_client_secret', ''));
 
@@ -375,22 +399,43 @@ function gp_get_google_oauth_settings(): array
 
     return [
         'enabled' => $enabled,
+        'enabled_source_value' => $enabled_option_value,
         'client_id' => $client_id,
         'client_secret' => $client_secret,
         'redirect_uri' => $redirect_uri,
     ];
 }
 
+function gp_get_google_oauth_unavailability_reasons(array $settings): array
+{
+    $reasons = [];
+
+    if (empty($settings['enabled'])) {
+        $reasons[] = 'oauth_disabled';
+    }
+
+    if (($settings['client_id'] ?? '') === '') {
+        $reasons[] = 'missing_client_id';
+    }
+
+    if (($settings['client_secret'] ?? '') === '') {
+        $reasons[] = 'missing_client_secret';
+    }
+
+    return $reasons;
+}
+
 function gp_is_google_oauth_available(): bool
 {
     $settings = gp_get_google_oauth_settings();
-    $available = $settings['enabled'] && $settings['client_id'] !== '' && $settings['client_secret'] !== '';
+    $reasons = gp_get_google_oauth_unavailability_reasons($settings);
+    $available = $reasons === [];
 
     if (!$available) {
         gp_google_oauth_log('oauth_unavailable', [
-            'enabled' => $settings['enabled'],
-            'missing_client_id' => $settings['client_id'] === '',
-            'missing_client_secret' => $settings['client_secret'] === '',
+            'enabled' => (bool) $settings['enabled'],
+            'enabled_source_value' => $settings['enabled_source_value'],
+            'reasons' => $reasons,
             'expected_redirect_uri' => $settings['redirect_uri'],
             'site_host' => wp_parse_url(home_url('/'), PHP_URL_HOST),
         ]);
@@ -493,16 +538,12 @@ function gp_handle_google_oauth_request(): void
     }
 
     $settings = gp_get_google_oauth_settings();
-    if (!$settings['enabled']) {
-        gp_google_oauth_log('oauth_disabled', ['action' => $action]);
-        gp_auth_redirect_with_notice('/zaloguj', 'google_auth_not_configured');
-    }
-
-    if ($settings['client_id'] === '' || $settings['client_secret'] === '') {
-        gp_google_oauth_log('oauth_missing_credentials', [
+    $reasons = gp_get_google_oauth_unavailability_reasons($settings);
+    if ($reasons !== []) {
+        gp_google_oauth_log('oauth_request_rejected', [
             'action' => $action,
-            'missing_client_id' => $settings['client_id'] === '',
-            'missing_client_secret' => $settings['client_secret'] === '',
+            'reasons' => $reasons,
+            'enabled_source_value' => $settings['enabled_source_value'],
         ]);
         gp_auth_redirect_with_notice('/zaloguj', 'google_auth_not_configured');
     }
@@ -652,6 +693,39 @@ function gp_handle_google_oauth_request(): void
 }
 
 add_action('init', 'gp_handle_google_oauth_request', 5);
+
+function gp_render_google_oauth_admin_notice(): void
+{
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    $settings = gp_get_google_oauth_settings();
+    $reasons = gp_get_google_oauth_unavailability_reasons($settings);
+    if ($reasons === []) {
+        return;
+    }
+
+    $labels = [
+        'oauth_disabled' => __('OAuth disabled (gp_google_oauth_enabled).', 'gp-clone'),
+        'missing_client_id' => __('Brak Google client_id (gp_google_client_id).', 'gp-clone'),
+        'missing_client_secret' => __('Brak Google client_secret (gp_google_client_secret).', 'gp-clone'),
+    ];
+
+    $reason_descriptions = [];
+    foreach ($reasons as $reason) {
+        $reason_descriptions[] = $labels[$reason] ?? $reason;
+    }
+
+    $message = sprintf(
+        __('Google OAuth jest niedostępny — przycisk logowania/rejestracji Google jest ukryty. Powód: %s Redirect URI: %s', 'gp-clone'),
+        implode(' ', $reason_descriptions),
+        $settings['redirect_uri']
+    );
+
+    printf('<div class="notice notice-warning"><p>%s</p></div>', esc_html($message));
+}
+add_action('admin_notices', 'gp_render_google_oauth_admin_notice');
 
 function gp_get_auth_notice(string $type): array
 {
