@@ -343,6 +343,62 @@ add_action('init', function (): void {
 
 
 
+function gp_google_oauth_log(string $event, array $context = []): void
+{
+    $payload = [
+        'event' => $event,
+        'context' => $context,
+    ];
+
+    error_log('GP Google OAuth: ' . wp_json_encode($payload));
+}
+
+function gp_get_google_oauth_settings(): array
+{
+    $enabled = get_option('gp_google_oauth_enabled', '1') === '1';
+    $client_id = trim((string) get_option('gp_google_client_id', ''));
+    $client_secret = trim((string) get_option('gp_google_client_secret', ''));
+
+    if (defined('GP_GOOGLE_CLIENT_ID') && is_string(GP_GOOGLE_CLIENT_ID) && GP_GOOGLE_CLIENT_ID !== '') {
+        $client_id = GP_GOOGLE_CLIENT_ID;
+    }
+
+    if (defined('GP_GOOGLE_CLIENT_SECRET') && is_string(GP_GOOGLE_CLIENT_SECRET) && GP_GOOGLE_CLIENT_SECRET !== '') {
+        $client_secret = GP_GOOGLE_CLIENT_SECRET;
+    }
+
+    if (defined('GP_GOOGLE_OAUTH_ENABLED')) {
+        $enabled = (bool) GP_GOOGLE_OAUTH_ENABLED;
+    }
+
+    $redirect_uri = add_query_arg('gp_google_oauth', 'callback', home_url('/'));
+
+    return [
+        'enabled' => $enabled,
+        'client_id' => $client_id,
+        'client_secret' => $client_secret,
+        'redirect_uri' => $redirect_uri,
+    ];
+}
+
+function gp_is_google_oauth_available(): bool
+{
+    $settings = gp_get_google_oauth_settings();
+    $available = $settings['enabled'] && $settings['client_id'] !== '' && $settings['client_secret'] !== '';
+
+    if (!$available) {
+        gp_google_oauth_log('oauth_unavailable', [
+            'enabled' => $settings['enabled'],
+            'missing_client_id' => $settings['client_id'] === '',
+            'missing_client_secret' => $settings['client_secret'] === '',
+            'expected_redirect_uri' => $settings['redirect_uri'],
+            'site_host' => wp_parse_url(home_url('/'), PHP_URL_HOST),
+        ]);
+    }
+
+    return $available;
+}
+
 function gp_get_google_auth_url(string $context = 'login'): string
 {
     $context = $context === 'register' ? 'register' : 'login';
@@ -352,13 +408,250 @@ function gp_get_google_auth_url(string $context = 'login'): string
         return esc_url_raw($url_from_filter);
     }
 
-    $option_url = get_option('gp_google_auth_url', '');
-    if (is_string($option_url) && $option_url !== '') {
-        return esc_url_raw($option_url);
+    if (!gp_is_google_oauth_available()) {
+        return '';
     }
 
-    return '';
+    return esc_url_raw(add_query_arg([
+        'gp_google_oauth' => 'start',
+        'gp_oauth_context' => $context,
+    ], home_url('/')));
 }
+
+function gp_google_oauth_exchange_code_for_token(array $settings, string $code)
+{
+    $response = wp_remote_post('https://oauth2.googleapis.com/token', [
+        'timeout' => 20,
+        'body' => [
+            'code' => $code,
+            'client_id' => $settings['client_id'],
+            'client_secret' => $settings['client_secret'],
+            'redirect_uri' => $settings['redirect_uri'],
+            'grant_type' => 'authorization_code',
+        ],
+    ]);
+
+    if (is_wp_error($response)) {
+        gp_google_oauth_log('token_exchange_wp_error', [
+            'error' => $response->get_error_message(),
+        ]);
+        return new WP_Error('google_token_exchange_failed', __('Nie udało się połączyć z Google OAuth.', 'gp-clone'));
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if ($status !== 200 || !is_array($data) || empty($data['access_token'])) {
+        gp_google_oauth_log('token_exchange_http_error', [
+            'status' => $status,
+            'response' => is_array($data) ? $data : $body,
+            'redirect_uri' => $settings['redirect_uri'],
+        ]);
+        return new WP_Error('google_token_exchange_failed', __('Błąd autoryzacji Google. Sprawdź konfigurację OAuth.', 'gp-clone'));
+    }
+
+    return $data['access_token'];
+}
+
+function gp_google_oauth_fetch_user(string $access_token)
+{
+    $response = wp_remote_get('https://openidconnect.googleapis.com/v1/userinfo', [
+        'timeout' => 20,
+        'headers' => [
+            'Authorization' => 'Bearer ' . $access_token,
+        ],
+    ]);
+
+    if (is_wp_error($response)) {
+        gp_google_oauth_log('userinfo_wp_error', [
+            'error' => $response->get_error_message(),
+        ]);
+        return new WP_Error('google_userinfo_failed', __('Nie udało się pobrać danych użytkownika Google.', 'gp-clone'));
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if ($status !== 200 || !is_array($data) || empty($data['email'])) {
+        gp_google_oauth_log('userinfo_http_error', [
+            'status' => $status,
+            'response' => is_array($data) ? $data : $body,
+        ]);
+        return new WP_Error('google_userinfo_failed', __('Nie udało się odczytać adresu e-mail z konta Google.', 'gp-clone'));
+    }
+
+    return $data;
+}
+
+function gp_handle_google_oauth_request(): void
+{
+    $action = isset($_GET['gp_google_oauth']) ? sanitize_key(wp_unslash((string) $_GET['gp_google_oauth'])) : '';
+    if (!in_array($action, ['start', 'callback'], true)) {
+        return;
+    }
+
+    $settings = gp_get_google_oauth_settings();
+    if (!$settings['enabled']) {
+        gp_google_oauth_log('oauth_disabled', ['action' => $action]);
+        gp_auth_redirect_with_notice('/zaloguj', 'google_auth_not_configured');
+    }
+
+    if ($settings['client_id'] === '' || $settings['client_secret'] === '') {
+        gp_google_oauth_log('oauth_missing_credentials', [
+            'action' => $action,
+            'missing_client_id' => $settings['client_id'] === '',
+            'missing_client_secret' => $settings['client_secret'] === '',
+        ]);
+        gp_auth_redirect_with_notice('/zaloguj', 'google_auth_not_configured');
+    }
+
+    if ($action === 'start') {
+        $context = isset($_GET['gp_oauth_context']) ? sanitize_key(wp_unslash((string) $_GET['gp_oauth_context'])) : 'login';
+        $context = $context === 'register' ? 'register' : 'login';
+
+        $state_payload = [
+            'token' => wp_generate_password(32, false, false),
+            'context' => $context,
+            'created_at' => time(),
+        ];
+        set_transient('gp_google_oauth_state_' . $state_payload['token'], $state_payload, 10 * MINUTE_IN_SECONDS);
+
+        $authorization_url = add_query_arg([
+            'response_type' => 'code',
+            'client_id' => $settings['client_id'],
+            'redirect_uri' => $settings['redirect_uri'],
+            'scope' => 'openid email profile',
+            'state' => $state_payload['token'],
+            'access_type' => 'online',
+            'prompt' => 'select_account',
+        ], 'https://accounts.google.com/o/oauth2/v2/auth');
+
+        gp_google_oauth_log('oauth_start_redirect', [
+            'context' => $context,
+            'redirect_uri' => $settings['redirect_uri'],
+        ]);
+        wp_safe_redirect($authorization_url);
+        exit;
+    }
+
+    $state = isset($_GET['state']) ? sanitize_text_field(wp_unslash((string) $_GET['state'])) : '';
+    $code = isset($_GET['code']) ? sanitize_text_field(wp_unslash((string) $_GET['code'])) : '';
+    $error = isset($_GET['error']) ? sanitize_text_field(wp_unslash((string) $_GET['error'])) : '';
+
+    if ($error !== '') {
+        gp_google_oauth_log('oauth_callback_error', ['error' => $error]);
+        gp_auth_redirect_with_notice('/zaloguj', 'login_failed');
+    }
+
+    $state_payload = $state !== '' ? get_transient('gp_google_oauth_state_' . $state) : false;
+    if (!is_array($state_payload)) {
+        gp_google_oauth_log('invalid_state', ['state' => $state]);
+        gp_auth_redirect_with_notice('/zaloguj', 'login_failed');
+    }
+
+    delete_transient('gp_google_oauth_state_' . $state);
+    $context = ($state_payload['context'] ?? 'login') === 'register' ? 'register' : 'login';
+
+    if ($code === '') {
+        gp_google_oauth_log('missing_callback_code', ['context' => $context]);
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $access_token = gp_google_oauth_exchange_code_for_token($settings, $code);
+    if ($access_token instanceof WP_Error) {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $google_user = gp_google_oauth_fetch_user($access_token);
+    if ($google_user instanceof WP_Error) {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $email = sanitize_email((string) ($google_user['email'] ?? ''));
+    if ($email === '' || !is_email($email)) {
+        gp_google_oauth_log('invalid_google_email', ['raw_email' => $google_user['email'] ?? '']);
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $existing_user = get_user_by('email', $email);
+    if ($context === 'login' && !$existing_user) {
+        gp_google_oauth_log('login_user_not_found', ['email' => $email]);
+        gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+    }
+
+    $user_id = $existing_user ? (int) $existing_user->ID : 0;
+    if ($user_id <= 0) {
+        $base_login = sanitize_user(strstr($email, '@', true) ?: $email, true);
+        if ($base_login === '') {
+            $base_login = 'google_user';
+        }
+
+        $candidate_login = $base_login;
+        $suffix = 1;
+        while (username_exists($candidate_login)) {
+            $suffix++;
+            $candidate_login = $base_login . $suffix;
+        }
+
+        $random_password = wp_generate_password(24, true, true);
+        if (function_exists('wc_create_new_customer')) {
+            $new_user_id = wc_create_new_customer($email, $candidate_login, $random_password, [
+                'first_name' => sanitize_text_field((string) ($google_user['given_name'] ?? '')),
+                'last_name' => sanitize_text_field((string) ($google_user['family_name'] ?? '')),
+            ]);
+        } else {
+            $new_user_id = wp_create_user($candidate_login, $random_password, $email);
+        }
+
+        if ($new_user_id instanceof WP_Error) {
+            gp_google_oauth_log('user_create_failed', [
+                'email' => $email,
+                'error' => $new_user_id->get_error_message(),
+            ]);
+            gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+        }
+
+        $user_id = (int) $new_user_id;
+        wp_update_user([
+            'ID' => $user_id,
+            'first_name' => sanitize_text_field((string) ($google_user['given_name'] ?? '')),
+            'last_name' => sanitize_text_field((string) ($google_user['family_name'] ?? '')),
+            'display_name' => sanitize_text_field((string) ($google_user['name'] ?? $email)),
+        ]);
+
+        gp_google_oauth_log('user_created_from_google', [
+            'user_id' => $user_id,
+            'email' => $email,
+            'context' => $context,
+        ]);
+    } else {
+        gp_google_oauth_log('user_linked_by_email', [
+            'user_id' => $user_id,
+            'email' => $email,
+            'context' => $context,
+        ]);
+    }
+
+    update_user_meta($user_id, 'gp_google_sub', sanitize_text_field((string) ($google_user['sub'] ?? '')));
+    update_user_meta($user_id, 'gp_google_email_verified', !empty($google_user['email_verified']) ? '1' : '0');
+    update_user_meta($user_id, 'gp_google_picture', esc_url_raw((string) ($google_user['picture'] ?? '')));
+
+    wp_set_current_user($user_id);
+    wp_set_auth_cookie($user_id, true);
+
+    $redirect = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/moj-profil');
+    gp_google_oauth_log('oauth_login_success', [
+        'user_id' => $user_id,
+        'context' => $context,
+        'redirect' => $redirect,
+    ]);
+    wp_safe_redirect($redirect);
+    exit;
+}
+
+add_action('init', 'gp_handle_google_oauth_request', 5);
 
 function gp_get_auth_notice(string $type): array
 {
