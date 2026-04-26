@@ -301,6 +301,31 @@ add_action('wp_head', function (): void {
 
 add_filter('woocommerce_show_page_title', '__return_false');
 
+function gp_get_public_privacy_policy_url(): string
+{
+    $privacy_page_id = (int) get_option('wp_page_for_privacy_policy', 0);
+    if ($privacy_page_id > 0) {
+        $privacy_page = get_post($privacy_page_id);
+        if ($privacy_page instanceof WP_Post && $privacy_page->post_status === 'publish') {
+            $privacy_url = get_permalink($privacy_page_id);
+            if (is_string($privacy_url) && $privacy_url !== '') {
+                return $privacy_url;
+            }
+        }
+    }
+
+    $fallback_page = get_page_by_path('polityka-prywatnosci', OBJECT, 'page');
+    if ($fallback_page instanceof WP_Post && $fallback_page->post_status === 'publish') {
+        $fallback_url = get_permalink($fallback_page->ID);
+        if (is_string($fallback_url) && $fallback_url !== '') {
+            return $fallback_url;
+        }
+    }
+
+    error_log('GP Footer: Privacy policy page missing or not published. Fallback URL used.');
+    return home_url('/polityka-prywatnosci/');
+}
+
 function gp_get_required_pages(): array
 {
     return [
@@ -382,17 +407,45 @@ function gp_get_google_oauth_settings(): array
     $enabled = gp_parse_oauth_enabled_option($enabled_option_value);
     $client_id = trim((string) get_option('gp_google_client_id', ''));
     $client_secret = trim((string) get_option('gp_google_client_secret', ''));
+    $enabled_source = 'option:gp_google_oauth_enabled';
+    $client_id_source = 'option:gp_google_client_id';
+    $client_secret_source = 'option:gp_google_client_secret';
 
     if (defined('GP_GOOGLE_CLIENT_ID') && is_string(GP_GOOGLE_CLIENT_ID) && GP_GOOGLE_CLIENT_ID !== '') {
-        $client_id = GP_GOOGLE_CLIENT_ID;
+        $client_id = trim(GP_GOOGLE_CLIENT_ID);
+        $client_id_source = 'constant:GP_GOOGLE_CLIENT_ID';
     }
 
     if (defined('GP_GOOGLE_CLIENT_SECRET') && is_string(GP_GOOGLE_CLIENT_SECRET) && GP_GOOGLE_CLIENT_SECRET !== '') {
-        $client_secret = GP_GOOGLE_CLIENT_SECRET;
+        $client_secret = trim(GP_GOOGLE_CLIENT_SECRET);
+        $client_secret_source = 'constant:GP_GOOGLE_CLIENT_SECRET';
+    }
+
+    if ($client_id === '') {
+        $env_client_id = getenv('GP_GOOGLE_CLIENT_ID');
+        if (is_string($env_client_id) && trim($env_client_id) !== '') {
+            $client_id = trim($env_client_id);
+            $client_id_source = 'env:GP_GOOGLE_CLIENT_ID';
+        }
+    }
+
+    if ($client_secret === '') {
+        $env_client_secret = getenv('GP_GOOGLE_CLIENT_SECRET');
+        if (is_string($env_client_secret) && trim($env_client_secret) !== '') {
+            $client_secret = trim($env_client_secret);
+            $client_secret_source = 'env:GP_GOOGLE_CLIENT_SECRET';
+        }
     }
 
     if (defined('GP_GOOGLE_OAUTH_ENABLED')) {
-        $enabled = (bool) GP_GOOGLE_OAUTH_ENABLED;
+        $enabled = gp_parse_oauth_enabled_option(GP_GOOGLE_OAUTH_ENABLED);
+        $enabled_source = 'constant:GP_GOOGLE_OAUTH_ENABLED';
+    }
+
+    $env_oauth_enabled = getenv('GP_GOOGLE_OAUTH_ENABLED');
+    if (is_string($env_oauth_enabled) && trim($env_oauth_enabled) !== '') {
+        $enabled = gp_parse_oauth_enabled_option($env_oauth_enabled);
+        $enabled_source = 'env:GP_GOOGLE_OAUTH_ENABLED';
     }
 
     $redirect_uri = add_query_arg('gp_google_oauth', 'callback', home_url('/'));
@@ -400,8 +453,11 @@ function gp_get_google_oauth_settings(): array
     return [
         'enabled' => $enabled,
         'enabled_source_value' => $enabled_option_value,
+        'enabled_source' => $enabled_source,
         'client_id' => $client_id,
+        'client_id_source' => $client_id_source,
         'client_secret' => $client_secret,
+        'client_secret_source' => $client_secret_source,
         'redirect_uri' => $redirect_uri,
     ];
 }
@@ -435,6 +491,11 @@ function gp_is_google_oauth_available(): bool
         gp_google_oauth_log('oauth_unavailable', [
             'enabled' => (bool) $settings['enabled'],
             'enabled_source_value' => $settings['enabled_source_value'],
+            'enabled_source' => $settings['enabled_source'],
+            'client_id_source' => $settings['client_id_source'],
+            'client_secret_source' => $settings['client_secret_source'],
+            'has_client_id' => ($settings['client_id'] ?? '') !== '',
+            'has_client_secret' => ($settings['client_secret'] ?? '') !== '',
             'reasons' => $reasons,
             'expected_redirect_uri' => $settings['redirect_uri'],
             'site_host' => wp_parse_url(home_url('/'), PHP_URL_HOST),
@@ -718,9 +779,12 @@ function gp_render_google_oauth_admin_notice(): void
     }
 
     $message = sprintf(
-        __('Google OAuth jest niedostępny — przycisk logowania/rejestracji Google jest ukryty. Powód: %s Redirect URI: %s', 'gp-clone'),
+        __('Google OAuth jest niedostępny — przycisk logowania/rejestracji Google jest ukryty. Powód: %s Redirect URI: %s Źródła konfiguracji — enabled: %s, client_id: %s, client_secret: %s', 'gp-clone'),
         implode(' ', $reason_descriptions),
-        $settings['redirect_uri']
+        $settings['redirect_uri'],
+        $settings['enabled_source'],
+        $settings['client_id_source'],
+        $settings['client_secret_source']
     );
 
     printf('<div class="notice notice-warning"><p>%s</p></div>', esc_html($message));
