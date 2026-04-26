@@ -7,127 +7,129 @@ get_header();
 <main class="gp-woo-layout">
     <div class="gp-container">
         <article class="gp-privacy-policy">
-            <h1>POLITYKA PRYWATNOŚCI</h1>
+            <h1>Polityka Prywatności</h1>
 
             <h2>1. Informacje ogólne</h2>
-            <p>Niniejsza Polityka Prywatności określa zasady przetwarzania danych osobowych oraz wykorzystywania plików cookies w związku z korzystaniem ze sklepu internetowego.</p>
-            <p>Administratorem danych osobowych jest:</p>
-            <p>
-                GREGOR swiss GRZEGORZ PACIOREK<br>
-                ul. Milanowska 137<br>
-                08-460 Sobolew<br>
-                NIP: 8262157853<br>
-                REGON: 368948917
-            </p>
-            <p>Kontakt z administratorem:<br>📧 biuro@gpswiss.pl</p>
+            <p>Niniejsza Polityka Prywatności określa zasady przetwarzania danych osobowych oraz wykorzystywania plików cookies w związku z korzystaniem ze strony internetowej https://gpswiss.pl/.</p>
+            <p>Administratorem danych osobowych jest właściciel serwisu GPSwiss.pl (dalej: „Administrator”).</p>
+            <p>W sprawach związanych z przetwarzaniem danych osobowych można kontaktować się poprzez adres e-mail podany w regulaminie: <a href="https://gpswiss.pl/regulamin-platnosci/">https://gpswiss.pl/regulamin-platnosci/</a>.</p>
 
-            <h2>2. Podstawa prawna przetwarzania danych</h2>
-            <p>Dane osobowe są przetwarzane zgodnie z:</p>
+            <hr>
+
+            <h2>2. Zakres przetwarzanych danych</h2>
+            <p>W zależności od sposobu korzystania z serwisu przetwarzane mogą być następujące dane:</p>
             <ul>
-                <li>Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/679 (RODO)</li>
-                <li>ustawą o świadczeniu usług drogą elektroniczną</li>
-                <li>ustawą Prawo telekomunikacyjne</li>
-            </ul>
-            <p>Podstawy przetwarzania danych:</p>
-            <ul>
-                <li>art. 6 ust. 1 lit. b RODO – realizacja umowy (zamówienia)</li>
-                <li>art. 6 ust. 1 lit. c RODO – obowiązki prawne (np. księgowość)</li>
-                <li>art. 6 ust. 1 lit. f RODO – uzasadniony interes (np. kontakt, zabezpieczenie sklepu)</li>
-                <li>art. 6 ust. 1 lit. a RODO – zgoda (np. marketing)</li>
+                <li>imię i nazwisko,</li>
+                <li>adres e-mail,</li>
+                <li>numer telefonu,</li>
+                <li>adres dostawy,</li>
+                <li>dane do faktury,</li>
+                <li>adres IP,</li>
+                <li>dane dotyczące zamówień,</li>
+                <li>dane konta użytkownika,</li>
+                <li>dane pozyskane z logowania przez Google (jeśli użytkownik skorzysta z tej opcji).</li>
             </ul>
 
-            <h2>3. Zakres przetwarzanych danych</h2>
-            <p>Możemy przetwarzać następujące dane:</p>
-            <ul>
-                <li>imię i nazwisko</li>
-                <li>nazwa firmy (opcjonalnie)</li>
-                <li>adres zamieszkania lub dostawy</li>
-                <li>adres e-mail</li>
-                <li>numer telefonu</li>
-                <li>NIP (dla faktury)</li>
-                <li>adres IP</li>
-                <li>dane dotyczące zamówień</li>
-            </ul>
+            <hr>
 
-            <h2>4. Cele przetwarzania danych</h2>
+            <h2>3. Cele przetwarzania danych</h2>
             <p>Dane osobowe przetwarzane są w celu:</p>
             <ul>
-                <li>realizacji zamówień</li>
-                <li>obsługi konta użytkownika</li>
-                <li>obsługi płatności</li>
-                <li>dostawy zamówień</li>
-                <li>obsługi reklamacji i zwrotów</li>
-                <li>kontaktu z klientem</li>
-                <li>prowadzenia księgowości</li>
-                <li>marketingu (jeśli wyrażono zgodę)</li>
+                <li>realizacji zamówień i obsługi klienta,</li>
+                <li>prowadzenia konta użytkownika,</li>
+                <li>obsługi płatności,</li>
+                <li>kontaktu z użytkownikiem,</li>
+                <li>realizacji obowiązków prawnych (np. podatkowych),</li>
+                <li>zapewnienia bezpieczeństwa serwisu,</li>
+                <li>prowadzenia statystyk,</li>
+                <li>integracji z platformą Allegro (w zakresie realizacji sprzedaży),</li>
+                <li>umożliwienia logowania przez Google (OAuth).</li>
             </ul>
 
-            <h2>5. Odbiorcy danych</h2>
-            <p>Dane mogą być przekazywane podmiotom współpracującym z administratorem, takim jak:</p>
+            <hr>
+
+            <h2>4. Logowanie przez Google</h2>
+            <p>Serwis umożliwia logowanie oraz rejestrację za pomocą konta Google.</p>
+            <p>W przypadku skorzystania z tej funkcji mogą być pobierane następujące dane:</p>
             <ul>
-                <li>firmy kurierskie</li>
-                <li>operatorzy płatności (np. PayU, Przelewy24, PayPal, BLIK)</li>
-                <li>dostawcy usług IT i hostingowych</li>
-                <li>biuro rachunkowe</li>
+                <li>adres e-mail,</li>
+                <li>identyfikator konta Google (sub),</li>
+                <li>imię i nazwisko (jeśli dostępne),</li>
+                <li>zdjęcie profilowe (opcjonalnie),</li>
+                <li>informacja o weryfikacji adresu e-mail.</li>
             </ul>
-            <p>Dane nie są sprzedawane osobom trzecim.</p>
-
-            <h2>6. Okres przechowywania danych</h2>
-            <p>Dane przechowywane są:</p>
+            <p>Dane te są wykorzystywane wyłącznie w celu:</p>
             <ul>
-                <li>przez czas trwania umowy oraz realizacji zamówienia</li>
-                <li>przez okres wymagany przepisami prawa (np. podatkowego – 5 lat)</li>
-                <li>do momentu cofnięcia zgody (w przypadku marketingu)</li>
+                <li>utworzenia konta użytkownika,</li>
+                <li>logowania użytkownika,</li>
+                <li>powiązania konta Google z kontem w serwisie.</li>
             </ul>
 
-            <h2>7. Prawa użytkownika</h2>
-            <p>Masz prawo do:</p>
+            <hr>
+
+            <h2>5. Udostępnianie danych</h2>
+            <p>Dane mogą być przekazywane podmiotom trzecim wyłącznie w zakresie niezbędnym do realizacji usług:</p>
             <ul>
-                <li>dostępu do swoich danych</li>
-                <li>ich sprostowania</li>
-                <li>usunięcia („prawo do bycia zapomnianym”)</li>
-                <li>ograniczenia przetwarzania</li>
-                <li>przenoszenia danych</li>
-                <li>wniesienia sprzeciwu</li>
-                <li>cofnięcia zgody</li>
+                <li>operatorom płatności,</li>
+                <li>firmom kurierskim i logistycznym,</li>
+                <li>dostawcom usług hostingowych,</li>
+                <li>dostawcom narzędzi analitycznych,</li>
+                <li>platformie Allegro (w zakresie realizacji zamówień),</li>
+                <li>Google (w przypadku korzystania z logowania Google).</li>
             </ul>
-            <p>W celu realizacji swoich praw skontaktuj się:<br>📧 biuro@gpswiss.pl</p>
-            <p>Masz również prawo złożyć skargę do Prezesa UODO.</p>
 
-            <h2>8. Pliki cookies</h2>
+            <hr>
+
+            <h2>6. Pliki cookies</h2>
             <p>Strona wykorzystuje pliki cookies w celu:</p>
             <ul>
-                <li>prawidłowego działania sklepu</li>
-                <li>utrzymania sesji użytkownika</li>
-                <li>analizy ruchu na stronie</li>
-                <li>działań marketingowych</li>
+                <li>prawidłowego działania serwisu,</li>
+                <li>utrzymania sesji użytkownika,</li>
+                <li>obsługi logowania,</li>
+                <li>zapamiętywania preferencji,</li>
+                <li>analizy ruchu na stronie.</li>
             </ul>
-            <p>Rodzaje cookies:</p>
-            <ul>
-                <li>niezbędne – wymagane do działania sklepu</li>
-                <li>analityczne – np. Google Analytics</li>
-                <li>marketingowe – np. remarketing</li>
-            </ul>
-            <p>Użytkownik może zarządzać cookies w ustawieniach przeglądarki.</p>
+            <p>Użytkownik może w każdej chwili zmienić ustawienia cookies w swojej przeglądarce.</p>
 
-            <h2>9. Dobrowolność podania danych</h2>
-            <p>Podanie danych jest dobrowolne, ale niezbędne do:</p>
+            <hr>
+
+            <h2>7. Okres przechowywania danych</h2>
+            <p>Dane osobowe przechowywane są przez okres:</p>
             <ul>
-                <li>złożenia zamówienia</li>
-                <li>założenia konta</li>
-                <li>kontaktu</li>
+                <li>trwania umowy (konto użytkownika),</li>
+                <li>wymagany przepisami prawa (np. księgowość),</li>
+                <li>do momentu wycofania zgody (jeśli dotyczy),</li>
+                <li>niezbędny do realizacji celów przetwarzania.</li>
             </ul>
 
-            <h2>10. Zabezpieczenie danych</h2>
-            <p>Administrator stosuje odpowiednie środki techniczne i organizacyjne, aby chronić dane przed:</p>
+            <hr>
+
+            <h2>8. Prawa użytkownika</h2>
+            <p>Użytkownik ma prawo do:</p>
             <ul>
-                <li>nieuprawnionym dostępem</li>
-                <li>utratą</li>
-                <li>zniszczeniem</li>
+                <li>dostępu do swoich danych,</li>
+                <li>ich sprostowania,</li>
+                <li>usunięcia („prawo do bycia zapomnianym”),</li>
+                <li>ograniczenia przetwarzania,</li>
+                <li>przenoszenia danych,</li>
+                <li>wniesienia sprzeciwu,</li>
+                <li>złożenia skargi do Prezesa UODO.</li>
             </ul>
 
-            <h2>11. Zmiany polityki prywatności</h2>
-            <p>Administrator zastrzega sobie prawo do wprowadzania zmian w Polityce Prywatności. Aktualna wersja zawsze znajduje się na stronie sklepu.</p>
+            <hr>
+
+            <h2>9. Zabezpieczenia danych</h2>
+            <p>Administrator stosuje odpowiednie środki techniczne i organizacyjne w celu ochrony danych osobowych przed ich utratą, nieuprawnionym dostępem lub ujawnieniem.</p>
+
+            <hr>
+
+            <h2>10. Zmiany polityki prywatności</h2>
+            <p>Polityka prywatności może być aktualizowana. Nowa wersja będzie publikowana na tej stronie.</p>
+
+            <hr>
+
+            <h2>11. Postanowienia końcowe</h2>
+            <p>Korzystanie z serwisu oznacza akceptację niniejszej Polityki Prywatności.</p>
         </article>
     </div>
 </main>
