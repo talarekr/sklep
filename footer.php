@@ -1,4 +1,10 @@
-<?php if (!defined('ABSPATH')) { exit; } ?>
+<?php
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+$privacy_policy_url = gp_get_public_privacy_policy_url();
+?>
 <footer class="gp-footer">
     <div class="gp-container">
         <div class="gp-footer__cols">
@@ -8,7 +14,7 @@
                     <li><a href="<?php echo esc_url(home_url('/zwroty')); ?>">Zwroty</a></li>
                     <li><a href="<?php echo esc_url(home_url('/kontakt')); ?>">Kontakt</a></li>
                     <li><a href="<?php echo esc_url(home_url('/regulamin-platnosci')); ?>">Regulamin</a></li>
-                    <li><a href="<?php echo esc_url(home_url('/polityka-prywatnosci')); ?>">Polityka prywatności</a></li>
+                    <li><a href="<?php echo esc_url($privacy_policy_url); ?>">Polityka prywatności</a></li>
                 </ul>
             </div>
             <div>

@@ -301,6 +301,31 @@ add_action('wp_head', function (): void {
 
 add_filter('woocommerce_show_page_title', '__return_false');
 
+function gp_get_public_privacy_policy_url(): string
+{
+    $privacy_page_id = (int) get_option('wp_page_for_privacy_policy', 0);
+    if ($privacy_page_id > 0) {
+        $privacy_page = get_post($privacy_page_id);
+        if ($privacy_page instanceof WP_Post && $privacy_page->post_status === 'publish') {
+            $privacy_url = get_permalink($privacy_page_id);
+            if (is_string($privacy_url) && $privacy_url !== '') {
+                return $privacy_url;
+            }
+        }
+    }
+
+    $fallback_page = get_page_by_path('polityka-prywatnosci', OBJECT, 'page');
+    if ($fallback_page instanceof WP_Post && $fallback_page->post_status === 'publish') {
+        $fallback_url = get_permalink($fallback_page->ID);
+        if (is_string($fallback_url) && $fallback_url !== '') {
+            return $fallback_url;
+        }
+    }
+
+    error_log('GP Footer: Privacy policy page missing or not published. Fallback URL used.');
+    return home_url('/polityka-prywatnosci/');
+}
+
 function gp_get_required_pages(): array
 {
     return [
