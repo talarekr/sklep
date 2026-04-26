@@ -353,41 +353,11 @@ function gp_google_oauth_log(string $event, array $context = []): void
     error_log('GP Google OAuth: ' . wp_json_encode($payload));
 }
 
-function gp_normalize_bool_option($value, bool $default = true): bool
-{
-    if ($value === null || $value === '') {
-        return $default;
-    }
-
-    if (is_bool($value)) {
-        return $value;
-    }
-
-    $normalized = strtolower(trim((string) $value));
-    if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
-        return true;
-    }
-
-    if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
-        return false;
-    }
-
-    return $default;
-}
-
 function gp_get_google_oauth_settings(): array
 {
-    $enabled = gp_normalize_bool_option(get_option('gp_google_oauth_enabled', '1'), true);
+    $enabled = get_option('gp_google_oauth_enabled', '1') === '1';
     $client_id = trim((string) get_option('gp_google_client_id', ''));
     $client_secret = trim((string) get_option('gp_google_client_secret', ''));
-
-    if ($client_id === '') {
-        $client_id = trim((string) get_option('google_client_id', ''));
-    }
-
-    if ($client_secret === '') {
-        $client_secret = trim((string) get_option('google_client_secret', ''));
-    }
 
     if (defined('GP_GOOGLE_CLIENT_ID') && is_string(GP_GOOGLE_CLIENT_ID) && GP_GOOGLE_CLIENT_ID !== '') {
         $client_id = GP_GOOGLE_CLIENT_ID;
@@ -403,14 +373,12 @@ function gp_get_google_oauth_settings(): array
 
     $redirect_uri = add_query_arg('gp_google_oauth', 'callback', home_url('/'));
 
-    $settings = [
+    return [
         'enabled' => $enabled,
         'client_id' => $client_id,
         'client_secret' => $client_secret,
         'redirect_uri' => $redirect_uri,
     ];
-
-    return apply_filters('gp_google_oauth_settings', $settings);
 }
 
 function gp_is_google_oauth_available(): bool
@@ -438,11 +406,6 @@ function gp_get_google_auth_url(string $context = 'login'): string
     $url_from_filter = apply_filters('gp_google_auth_url', '', $context);
     if (is_string($url_from_filter) && $url_from_filter !== '') {
         return esc_url_raw($url_from_filter);
-    }
-
-    $option_url = trim((string) get_option('gp_google_auth_url', ''));
-    if ($option_url !== '') {
-        return esc_url_raw($option_url);
     }
 
     if (!gp_is_google_oauth_available()) {
@@ -689,43 +652,6 @@ function gp_handle_google_oauth_request(): void
 }
 
 add_action('init', 'gp_handle_google_oauth_request', 5);
-
-function gp_render_google_oauth_admin_notice(): void
-{
-    if (!current_user_can('manage_options')) {
-        return;
-    }
-
-    $legacy_url = trim((string) get_option('gp_google_auth_url', ''));
-    if ($legacy_url !== '') {
-        return;
-    }
-
-    $settings = gp_get_google_oauth_settings();
-    if ($settings['enabled'] && $settings['client_id'] !== '' && $settings['client_secret'] !== '') {
-        return;
-    }
-
-    $reasons = [];
-    if (!$settings['enabled']) {
-        $reasons[] = __('OAuth disabled', 'gp-clone');
-    }
-    if ($settings['client_id'] === '') {
-        $reasons[] = __('missing client_id', 'gp-clone');
-    }
-    if ($settings['client_secret'] === '') {
-        $reasons[] = __('missing client_secret', 'gp-clone');
-    }
-
-    echo '<div class="notice notice-warning"><p>';
-    echo esc_html__('Google OAuth is not fully configured for login/register button.', 'gp-clone');
-    echo ' ';
-    echo esc_html__('Reason:', 'gp-clone') . ' ' . esc_html(implode(', ', $reasons)) . '. ';
-    echo esc_html__('Expected redirect URI:', 'gp-clone') . ' ' . esc_html((string) $settings['redirect_uri']);
-    echo '</p></div>';
-}
-
-add_action('admin_notices', 'gp_render_google_oauth_admin_notice');
 
 function gp_get_auth_notice(string $type): array
 {
