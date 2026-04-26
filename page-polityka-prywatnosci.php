@@ -12,7 +12,7 @@ get_header();
             <h2>1. Informacje ogólne</h2>
             <p>Niniejsza Polityka Prywatności określa zasady przetwarzania danych osobowych oraz wykorzystywania plików cookies w związku z korzystaniem ze strony internetowej https://gpswiss.pl/.</p>
             <p>Administratorem danych osobowych jest właściciel serwisu GPSwiss.pl (dalej: „Administrator”).</p>
-            <p>W sprawach związanych z przetwarzaniem danych osobowych można kontaktować się poprzez adres e-mail podany w regulaminie: <a href="https://gpswiss.pl/regulamin-platnosci/">https://gpswiss.pl/regulamin-platnosci/</a>.</p>
+            <p>W sprawach związanych z przetwarzaniem danych osobowych można kontaktować się poprzez adres e-mail podany w regulaminie: <a href="https://gpswiss.pl/regulamin-platnosci/">https://gpswiss.pl/regulamin-platnosci/</a></p>
 
             <hr>
 
