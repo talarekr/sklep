@@ -76,6 +76,16 @@ final class Plugin
         $this->cron->hooks();
         $this->auth->hooks();
         $this->cli->register();
+        add_action('woocommerce_product_set_stock_status', [$this, 'handle_woo_stock_status_change'], 10, 3);
+    }
+
+    public function handle_woo_stock_status_change($product_id, $status, $product): void
+    {
+        if ((string) $status !== 'outofstock') {
+            return;
+        }
+
+        $this->importer->sync_woo_sold_out_to_allegro((int) $product_id);
     }
 
     public function woocommerce_missing_notice(): void
@@ -99,6 +109,9 @@ final class Plugin
             'cron_interval' => 'manual',
             'offer_status' => 'ACTIVE',
             'reconciliation_enabled' => false,
+            'destructive_sync_enabled' => false,
+            'destructive_sync_dry_run' => true,
+            'destructive_sync_max_changes' => 10,
             'access_token' => '',
             'refresh_token' => '',
             'expires_at' => '',

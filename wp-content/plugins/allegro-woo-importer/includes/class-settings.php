@@ -98,6 +98,9 @@ class Settings
             'cron_interval' => in_array(($input['cron_interval'] ?? 'manual'), ['manual', 'awi_15_minutes', 'hourly', 'daily'], true) ? $input['cron_interval'] : 'manual',
             'offer_status' => sanitize_text_field($input['offer_status'] ?? 'ACTIVE'),
             'reconciliation_enabled' => !empty($input['reconciliation_enabled']),
+            'destructive_sync_enabled' => !empty($input['destructive_sync_enabled']),
+            'destructive_sync_dry_run' => !empty($input['destructive_sync_dry_run']),
+            'destructive_sync_max_changes' => max(1, min(100, (int) ($input['destructive_sync_max_changes'] ?? 10))),
         ];
 
         return array_merge($current, $clean);
