@@ -18,11 +18,8 @@ get_header();
 
             <?php if ($google_auth_url !== '') : ?>
                 <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></a>
-            <?php else : ?>
-                <button type="button" class="gp-auth-social" aria-label="Kontynuuj z Google" data-gp-disabled-google data-gp-feedback="<?php echo esc_attr__('Logowanie Google jest obecnie niedostępne. Użyj e-maila i hasła.', 'gp-clone'); ?>">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+                <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
             <?php endif; ?>
-
-            <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
 
             <div>
                 <label for="gp-login-email"><?php esc_html_e('Adres e-mail', 'gp-clone'); ?></label>
