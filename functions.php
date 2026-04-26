@@ -353,12 +353,20 @@ function gp_ensure_required_pages(): void
             'post_content' => '',
         ]);
     }
+
+    $privacy_page = get_page_by_path('polityka-prywatnosci', OBJECT, 'page');
+    if ($privacy_page instanceof WP_Post && $privacy_page->post_status === 'publish') {
+        update_option('wp_page_for_privacy_policy', (int) $privacy_page->ID, false);
+    }
 }
 
 add_action('after_switch_theme', 'gp_ensure_required_pages');
 
 add_action('init', function (): void {
-    if (get_option('gp_required_pages_ensured') === '1') {
+    $privacy_page = get_page_by_path('polityka-prywatnosci', OBJECT, 'page');
+    $privacy_page_exists = $privacy_page instanceof WP_Post && $privacy_page->post_status === 'publish';
+
+    if (get_option('gp_required_pages_ensured') === '1' && $privacy_page_exists) {
         return;
     }
 
