@@ -148,6 +148,42 @@ class AllegroClient
         return '';
     }
 
+    public function get_offer_status_snapshot(string $offer_id)
+    {
+        $details = $this->get_offer_details($offer_id);
+        if (is_wp_error($details)) {
+            return $details;
+        }
+
+        return [
+            'publication_status' => strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE')),
+            'stock_available' => isset($details['stock']['available']) && is_numeric($details['stock']['available'])
+                ? max(0, (int) $details['stock']['available'])
+                : null,
+        ];
+    }
+
+    public function set_offer_stock_to_zero(string $offer_id)
+    {
+        $offer_id = sanitize_text_field($offer_id);
+        if ($offer_id === '') {
+            return new \WP_Error('awi_missing_offer_id', __('Brak offer_id Allegro.', 'allegro-woo-importer'));
+        }
+
+        return $this->request('PATCH', '/sale/product-offers/' . rawurlencode($offer_id), [
+            'body' => [
+                'stock' => [
+                    'available' => 0,
+                ],
+            ],
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => $offer_id,
+                'product_id' => 0,
+            ],
+        ]);
+    }
+
     public function get_category_details(string $category_id)
     {
         $category_id = sanitize_text_field($category_id);

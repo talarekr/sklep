@@ -13,12 +13,12 @@ class Importer
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
     private const IMPORT_LOCK_OPTION_KEY = 'awi_import_lock';
     private const MISSING_IMPORT_CHECKPOINT_OPTION_KEY = 'awi_missing_import_checkpoint';
-    private const BATCH_LIMIT = 5;
-    private const MISSING_IMPORT_BATCH_LIMIT = 15;
+    private const BATCH_LIMIT = 50;
+    private const MISSING_IMPORT_BATCH_LIMIT = 50;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
     private const IMPORT_LOCK_TTL_SECONDS = self::MAX_EXECUTION_TIME_SECONDS + 60;
-    private const RECONCILIATION_SAFETY_LOCK = true;
+    private const OFFER_STATUS_SYNC_BATCH_SIZE = 50;
 
     private AllegroClient $client;
     private ProductMapper $mapper;
@@ -102,7 +102,7 @@ class Importer
             $total_count_from_api = null;
             $last_processed_offer_id = '';
 
-        $this->logger->info('Import batch start (checkpoint resume).', [
+        $this->logger->info('SYNC_START', [
             'offset' => $offset,
             'page_no' => $page_no,
             'page_token' => $page_token,
@@ -254,8 +254,20 @@ class Importer
 
                 if (($result['result'] ?? '') === 'created') {
                     $created++;
+                    $this->logger->info('SYNC_NEW_OFFER_IMPORTED', [
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                        'action' => 'import',
+                        'reason' => 'offer_not_found_in_woo',
+                    ]);
                 } elseif (($result['result'] ?? '') === 'updated') {
                     $updated++;
+                    $this->logger->info('SYNC_EXISTING_OFFER_UPDATED', [
+                        'offer_id' => $offer_id,
+                        'product_id' => (int) ($result['product_id'] ?? 0),
+                        'action' => 'update',
+                        'reason' => 'offer_found_in_woo',
+                    ]);
                 } elseif (($result['result'] ?? '') === 'skipped') {
                     $skipped++;
                     $this->logger->warning('Offer skipped during product upsert.', [
@@ -387,7 +399,7 @@ class Importer
                 'last_processed_offer_id' => $last_processed_offer_id,
             ]);
         } else {
-            $deactivated_count = $this->sync_missing_active_offers_to_hidden((string) $settings['inactive_product_status'], $total_count_from_api);
+            $deactivated_count = $this->sync_linked_products_by_offer_id((string) $settings['inactive_product_status']);
             $this->reset_checkpoint();
             $this->reset_active_seen_offer_ids();
             $this->clear_cycle_state();
@@ -395,7 +407,7 @@ class Importer
                 'last_offset' => $next_offset,
                 'processed_in_run' => $processed,
                 'reported_total_count' => $total_count_from_api,
-                'deactivated_missing_active_offers' => $deactivated_count,
+                'sync_allegro_missing_or_ended_count' => $deactivated_count,
                 'created_in_run' => $created,
                 'updated_in_run' => $updated,
                 'skipped_in_run' => $skipped,
@@ -710,6 +722,59 @@ class Importer
         }
     }
 
+    public function sync_woo_sold_out_to_allegro(int $product_id): void
+    {
+        $product_id = max(0, $product_id);
+        if ($product_id <= 0) {
+            return;
+        }
+
+        $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+        if ($offer_id === '') {
+            return;
+        }
+
+        $status = $this->client->get_offer_status_snapshot($offer_id);
+        if (is_wp_error($status)) {
+            $this->logger->error('SYNC_ERROR', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'action' => 'woo_sold_out_fetch_offer_status',
+                'reason' => $status->get_error_message(),
+            ]);
+            return;
+        }
+
+        $publication_status = strtoupper((string) ($status['publication_status'] ?? 'INACTIVE'));
+        if ($publication_status !== 'ACTIVE') {
+            $this->logger->info('SYNC_WOO_SOLD_OUT_PUSHED_TO_ALLEGRO', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'action' => 'skip',
+                'reason' => 'offer_already_not_active',
+            ]);
+            return;
+        }
+
+        $response = $this->client->set_offer_stock_to_zero($offer_id);
+        if (is_wp_error($response)) {
+            $this->logger->error('SYNC_ERROR', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'action' => 'woo_sold_out_set_offer_stock_zero',
+                'reason' => $response->get_error_message(),
+            ]);
+            return;
+        }
+
+        $this->logger->info('SYNC_WOO_SOLD_OUT_PUSHED_TO_ALLEGRO', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'action' => 'set_offer_stock_zero',
+            'reason' => 'woo_stock_reached_zero',
+        ]);
+    }
+
     private function finalize_summary(
         int $processed,
         int $created,
@@ -745,7 +810,15 @@ class Importer
         ]);
 
         Plugin::add_history($summary);
-        $this->logger->info('Import finished.', $summary);
+        if ($errors > 0) {
+            $this->logger->error('SYNC_ERROR', [
+                'action' => 'sync_summary',
+                'reason' => 'run_finished_with_errors',
+                'errors' => $errors,
+                'last_processed_offer_id' => $last_processed_offer_id,
+            ]);
+        }
+        $this->logger->info('SYNC_DONE', $summary);
 
         return $summary;
     }
@@ -998,184 +1071,120 @@ class Importer
         update_option(self::ACTIVE_SEEN_OFFERS_OPTION_KEY, array_keys($seen), false);
     }
 
-    private function sync_missing_active_offers_to_hidden(string $inactive_status, ?int $total_count_from_api): int
+    private function sync_linked_products_by_offer_id(string $inactive_status): int
     {
-        if (self::RECONCILIATION_SAFETY_LOCK) {
-            $this->logger->warning('Reconciliation safety lock is enabled; destructive product state changes are blocked.', [
-                'inactive_status_requested' => $inactive_status,
-            ]);
-            return 0;
-        }
-
         $settings = Plugin::get_settings();
         $inactive_status = in_array($inactive_status, ['draft', 'private'], true) ? $inactive_status : 'draft';
+        $destructive_enabled = !empty($settings['destructive_sync_enabled']);
+        $dry_run = !empty($settings['destructive_sync_dry_run']);
+        $max_changes = max(1, (int) ($settings['destructive_sync_max_changes'] ?? 10));
 
-        if (empty($settings['reconciliation_enabled'])) {
-            $this->logger->info('Skipping reconciliation because feature flag is disabled.', [
-                'reconciliation_enabled' => false,
+        $changes = 0;
+        $page = 1;
+
+        do {
+            $query = new \WP_Query([
+                'post_type' => 'product',
+                'post_status' => 'any',
+                'fields' => 'ids',
+                'posts_per_page' => self::OFFER_STATUS_SYNC_BATCH_SIZE,
+                'paged' => $page,
+                'meta_query' => [
+                    [
+                        'key' => '_allegro_offer_id',
+                        'compare' => 'EXISTS',
+                    ],
+                ],
             ]);
-            return 0;
+
+            $product_ids = array_map('intval', (array) $query->posts);
+            foreach ($product_ids as $product_id) {
+                if ($changes >= $max_changes) {
+                    break 2;
+                }
+
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                if ($offer_id === '') {
+                    continue;
+                }
+
+                $details = $this->client->get_offer_details($offer_id);
+                if (is_wp_error($details)) {
+                    $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : 'api_error';
+                    if ($reason !== 'offer_missing') {
+                        $this->logger->error('SYNC_ERROR', [
+                            'offer_id' => $offer_id,
+                            'product_id' => $product_id,
+                            'action' => 'fetch_offer_status',
+                            'reason' => $details->get_error_message(),
+                        ]);
+                        continue;
+                    }
+
+                    $this->apply_inactive_offer_state($product_id, $offer_id, $inactive_status, $dry_run, $destructive_enabled, $changes, 'offer_missing');
+                    continue;
+                }
+
+                $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
+                $stock_available = isset($details['stock']['available']) && is_numeric($details['stock']['available'])
+                    ? max(0, (int) $details['stock']['available'])
+                    : null;
+
+                if ($publication_status !== 'ACTIVE' || $stock_available === 0) {
+                    $reason = $publication_status !== 'ACTIVE'
+                        ? 'publication_' . strtolower($publication_status)
+                        : 'stock_zero';
+                    $this->apply_inactive_offer_state($product_id, $offer_id, $inactive_status, $dry_run, $destructive_enabled, $changes, $reason);
+                }
+            }
+
+            $page++;
+            wp_reset_postdata();
+        } while ($page <= (int) $query->max_num_pages);
+
+        return $changes;
+    }
+
+    private function apply_inactive_offer_state(
+        int $product_id,
+        string $offer_id,
+        string $inactive_status,
+        bool $dry_run,
+        bool $destructive_enabled,
+        int &$changes,
+        string $reason
+    ): void {
+        $product = wc_get_product($product_id);
+        if (!$product instanceof \WC_Product) {
+            return;
         }
 
-        if (!$this->can_run_reconciliation($total_count_from_api)) {
-            $this->logger->warning('Skipping reconciliation because sync cycle is not confirmed as complete.', [
-                'cycle_state' => $this->load_cycle_state(),
-                'reported_total_count' => $total_count_from_api,
+        if (!$destructive_enabled || $dry_run) {
+            $this->logger->warning('SYNC_ALLEGRO_MISSING_OR_ENDED', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'action' => 'dry_run_skip_destructive',
+                'reason' => $reason,
+                'destructive_sync_enabled' => $destructive_enabled,
+                'dry_run' => $dry_run,
             ]);
-            return 0;
+            return;
         }
 
-        $seen_offer_ids = array_keys($this->load_active_seen_offer_ids());
-        $seen_count = count($seen_offer_ids);
-        $proposed_to_hide = $this->count_products_missing_seen_offers($seen_offer_ids);
-        $evaluation = $this->evaluate_reconciliation_readiness($settings, $total_count_from_api, $seen_count);
-        $this->logger->info('Reconciliation diagnostics.', [
-            'reconciliation_enabled' => !empty($settings['reconciliation_enabled']),
-            'reconciliation_allowed' => $evaluation['allowed'],
-            'reason' => $evaluation['reason'],
-            'total_active_offers_seen' => $seen_count,
-            'expected_total_count' => $total_count_from_api,
-            'products_proposed_for_hide' => $proposed_to_hide,
-            'offer_status_filter' => (string) ($settings['offer_status'] ?? ''),
-            'cycle_state' => $this->load_cycle_state(),
+        $product->set_manage_stock(true);
+        $product->set_stock_quantity(0);
+        $product->set_stock_status('outofstock');
+        $product->set_status($inactive_status);
+        $product->save();
+
+        $changes++;
+        $this->logger->info('SYNC_ALLEGRO_MISSING_OR_ENDED', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'action' => 'set_outofstock_and_hide',
+            'reason' => $reason,
+            'status_after' => $inactive_status,
         ]);
-
-        if (!$evaluation['allowed']) {
-            $this->logger->warning('Reconciliation blocked. Products will not be changed.', [
-                'reason' => $evaluation['reason'],
-            ]);
-            return 0;
-        }
-
-        $processed = 0;
-        $page = 1;
-
-        do {
-            $query = new \WP_Query([
-                'post_type' => 'product',
-                'post_status' => 'any',
-                'fields' => 'ids',
-                'posts_per_page' => 100,
-                'paged' => $page,
-                'meta_query' => [
-                    [
-                        'key' => '_allegro_offer_id',
-                        'compare' => 'EXISTS',
-                    ],
-                ],
-            ]);
-
-            $product_ids = array_map('intval', (array) $query->posts);
-            foreach ($product_ids as $product_id) {
-                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
-                if ($offer_id === '' || in_array($offer_id, $seen_offer_ids, true)) {
-                    continue;
-                }
-
-                $product = wc_get_product($product_id);
-                if (!$product instanceof \WC_Product) {
-                    continue;
-                }
-
-                $status_before = (string) $product->get_status();
-                $stock_before = $product->get_stock_quantity();
-                $stock_status_before = (string) $product->get_stock_status();
-
-                $product->set_manage_stock(true);
-                $product->set_stock_quantity(0);
-                $product->set_stock_status('outofstock');
-                $product->set_status($inactive_status);
-                $product->save();
-
-                $processed++;
-                $this->logger->info('Product marked as outofstock during reconciliation.', [
-                    'product_id' => $product_id,
-                    'offer_id' => $offer_id,
-                    'reason' => 'reconciliation_missing_offer_after_full_sync',
-                    'status_before' => $status_before,
-                    'status_after' => $inactive_status,
-                    'stock_before' => $stock_before,
-                    'stock_status_before' => $stock_status_before,
-                ]);
-            }
-
-            $page++;
-            wp_reset_postdata();
-        } while ($page <= (int) $query->max_num_pages);
-
-        return $processed;
-    }
-
-    private function count_products_missing_seen_offers(array $seen_offer_ids): int
-    {
-        $seen_offer_ids = array_values(array_filter(array_map(static function ($offer_id): string {
-            return sanitize_text_field((string) $offer_id);
-        }, $seen_offer_ids), static function (string $offer_id): bool {
-            return $offer_id !== '';
-        }));
-
-        $total_missing = 0;
-        $page = 1;
-
-        do {
-            $query = new \WP_Query([
-                'post_type' => 'product',
-                'post_status' => 'any',
-                'fields' => 'ids',
-                'posts_per_page' => 200,
-                'paged' => $page,
-                'meta_query' => [
-                    [
-                        'key' => '_allegro_offer_id',
-                        'compare' => 'EXISTS',
-                    ],
-                ],
-            ]);
-
-            $product_ids = array_map('intval', (array) $query->posts);
-            foreach ($product_ids as $product_id) {
-                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
-                if ($offer_id === '' || in_array($offer_id, $seen_offer_ids, true)) {
-                    continue;
-                }
-
-                $total_missing++;
-            }
-
-            $page++;
-            wp_reset_postdata();
-        } while ($page <= (int) $query->max_num_pages);
-
-        return $total_missing;
-    }
-
-    private function evaluate_reconciliation_readiness(array $settings, ?int $total_count_from_api, int $seen_count): array
-    {
-        if (empty($settings['reconciliation_enabled'])) {
-            return [
-                'allowed' => false,
-                'reason' => 'feature_flag_disabled',
-            ];
-        }
-
-        if ($total_count_from_api === null) {
-            return [
-                'allowed' => false,
-                'reason' => 'total_count_unavailable',
-            ];
-        }
-
-        if ($seen_count > $total_count_from_api) {
-            return [
-                'allowed' => false,
-                'reason' => 'seen_count_exceeds_reported_total',
-            ];
-        }
-
-        return [
-            'allowed' => true,
-            'reason' => 'ready',
-        ];
     }
 
     public function restore_active_offers_to_instock(): array

@@ -8,6 +8,8 @@ if (!defined('ABSPATH')) {
 
 class Cron
 {
+    private const ACTION_SCHEDULER_GROUP = 'awi';
+
     private Importer $importer;
     private Logger $logger;
 
@@ -138,13 +140,25 @@ class Cron
             return;
         }
 
+        if ($this->schedule_main_import_with_action_scheduler($interval)) {
+            return;
+        }
+
         if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
             wp_schedule_event(time() + 60, $interval, Plugin::CRON_HOOK);
+            $this->logger->warning('BACKGROUND_SYNC_SCHEDULED_WITH_WP_CRON_FALLBACK', [
+                'hook' => Plugin::CRON_HOOK,
+                'interval' => $interval,
+            ]);
         }
     }
 
     public static function clear_schedule(): void
     {
+        if (function_exists('as_unschedule_all_actions')) {
+            as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+        }
+
         $timestamp = wp_next_scheduled(Plugin::CRON_HOOK);
         while ($timestamp) {
             wp_unschedule_event($timestamp, Plugin::CRON_HOOK);
@@ -154,10 +168,19 @@ class Cron
 
     public static function on_activation(): void
     {
-        if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
-            $settings = Plugin::get_settings();
-            $interval = $settings['cron_interval'] ?? 'manual';
-            if ($interval !== 'manual') {
+        $settings = Plugin::get_settings();
+        $interval = $settings['cron_interval'] ?? 'manual';
+        if ($interval !== 'manual') {
+            $interval_seconds = wp_get_schedules()[$interval]['interval'] ?? 0;
+            if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_recurring_action') && $interval_seconds > 0) {
+                $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                if ($next_action_timestamp <= 0) {
+                    as_schedule_recurring_action(time() + 60, (int) $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                    return;
+                }
+            }
+
+            if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
                 wp_schedule_event(time() + 60, $interval, Plugin::CRON_HOOK);
             }
         }
@@ -175,5 +198,38 @@ class Cron
             wp_unschedule_event($timestamp, Plugin::MISSING_IMPORT_CRON_HOOK);
             $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
         }
+    }
+
+    private function schedule_main_import_with_action_scheduler(string $interval): bool
+    {
+        if (!function_exists('as_next_scheduled_action') || !function_exists('as_schedule_recurring_action')) {
+            return false;
+        }
+
+        $schedules = wp_get_schedules();
+        $interval_seconds = (int) ($schedules[$interval]['interval'] ?? 0);
+        if ($interval_seconds <= 0) {
+            return false;
+        }
+
+        $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+        if ($next_action_timestamp <= 0) {
+            as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+            $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
+                'runner' => 'action_scheduler',
+                'hook' => Plugin::CRON_HOOK,
+                'interval' => $interval,
+                'interval_seconds' => $interval_seconds,
+            ]);
+        } else {
+            $this->logger->info('BACKGROUND_SYNC_ALREADY_SCHEDULED', [
+                'runner' => 'action_scheduler',
+                'hook' => Plugin::CRON_HOOK,
+                'next_run_at' => gmdate('Y-m-d H:i:s', $next_action_timestamp),
+                'next_run_timestamp' => $next_action_timestamp,
+            ]);
+        }
+
+        return true;
     }
 }
