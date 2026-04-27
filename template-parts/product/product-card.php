@@ -53,6 +53,6 @@ $product_image_id = class_exists('\\AWI\\Plugin') ? \AWI\Plugin::get_listing_ima
     <p class="gp-product__price product-price">
         <span class="gp-product__current price"><?php echo wp_kses_post(wc_price($product->get_price())); ?></span>
     </p>
-    <div class="gp-product__delivery product-shipping shipping">Darmowa dostawa: 23–24 kwi</div>
-    <div class="gp-product__delivery-note product-shipping-note shipping-note">Jeśli zapłacisz do 14:00</div>
+    <div class="gp-product__delivery product-shipping shipping"><?php echo esc_html(gp_get_delivery_text()); ?></div>
+    <div class="gp-product__delivery-note product-shipping-note shipping-note"><?php echo esc_html(gp_get_delivery_cutoff_text()); ?></div>
 </article>

@@ -34,6 +34,36 @@ function gp_enqueue_fonts(): void
 }
 add_action('wp_enqueue_scripts', 'gp_enqueue_fonts');
 
+
+function gp_get_delivery_estimate(): array
+{
+    $timezone = wp_timezone();
+    $now = new DateTimeImmutable('now', $timezone);
+    $cutoff = $now->setTime(13, 30, 0);
+    $days_to_add = $now <= $cutoff ? 1 : 2;
+    $delivery_date = $now->modify(sprintf('+%d day', $days_to_add));
+
+    return [
+        'date' => $delivery_date,
+        'date_label' => wp_date('j M', $delivery_date->getTimestamp(), $timezone),
+        'cutoff_label' => '13:30',
+    ];
+}
+
+function gp_get_delivery_text(string $prefix = 'Darmowa dostawa'): string
+{
+    $estimate = gp_get_delivery_estimate();
+
+    return sprintf('%s: %s', $prefix, (string) $estimate['date_label']);
+}
+
+function gp_get_delivery_cutoff_text(): string
+{
+    $estimate = gp_get_delivery_estimate();
+
+    return sprintf('Jeśli zapłacisz do %s', (string) $estimate['cutoff_label']);
+}
+
 add_action('wp_enqueue_scripts', function () {
     $cart_checkout_dependencies = ['jquery'];
     if (function_exists('is_checkout') && is_checkout()) {
@@ -1634,12 +1664,25 @@ add_filter('woocommerce_coupons_enabled', function (bool $enabled): bool {
 
 
 add_action('woocommerce_after_shop_loop_item_title', function () {
-    echo '<p class="gp-delivery-note product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
+    echo '<p class="gp-delivery-note product-shipping">' . esc_html(gp_get_delivery_text()) . '</p><p class="gp-delivery-note product-shipping-sub">' . esc_html(gp_get_delivery_cutoff_text()) . '</p>';
 }, 15);
 
 add_action('woocommerce_single_product_summary', function () {
-    echo '<p class="gp-delivery-note gp-delivery-note--single product-shipping">Darmowa dostawa: 23–24 kwi</p><p class="gp-delivery-note gp-delivery-note--single product-shipping-sub">Jeśli zapłacisz do 14:00</p>';
+    echo '<p class="gp-delivery-note gp-delivery-note--single product-shipping">' . esc_html(gp_get_delivery_text()) . '</p><p class="gp-delivery-note gp-delivery-note--single product-shipping-sub">' . esc_html(gp_get_delivery_cutoff_text()) . '</p>';
 }, 26);
+
+
+add_action('template_redirect', function (): void {
+    if (
+        (function_exists('is_product') && is_product())
+        || (function_exists('is_shop') && is_shop())
+        || (function_exists('is_product_taxonomy') && is_product_taxonomy())
+    ) {
+        if (!defined('DONOTCACHEPAGE')) {
+            define('DONOTCACHEPAGE', true);
+        }
+    }
+}, 1);
 
 add_filter('woocommerce_get_breadcrumb', function (array $crumbs): array {
     if (!is_product()) {
@@ -2261,7 +2304,7 @@ function gp_clone_demo_popular_products(): array
             'price' => '7 999,00 zł',
             'old_price' => '9 399,00 zł',
             'discount' => '-15%',
-            'delivery' => 'Darmowa dostawa: 22–23 kwi jeśli zapłacisz do 14:00',
+            'delivery' => gp_get_delivery_text() . ' ' . mb_strtolower(gp_get_delivery_cutoff_text()),
         ],
         [
             'image' => 'https://images.unsplash.com/photo-1635774855536-972e8f261024?auto=format&fit=crop&w=600&q=80',
@@ -2270,7 +2313,7 @@ function gp_clone_demo_popular_products(): array
             'price' => '5 490,00 zł',
             'old_price' => '5 699,00 zł',
             'discount' => '-4%',
-            'delivery' => 'Dostawa: 22 kwi jeśli zapłacisz do 14:00',
+            'delivery' => gp_get_delivery_text('Dostawa') . ' ' . mb_strtolower(gp_get_delivery_cutoff_text()),
         ],
         [
             'image' => 'https://images.unsplash.com/photo-1615906655593-ad0386982a0f?auto=format&fit=crop&w=600&q=80',
@@ -2279,7 +2322,7 @@ function gp_clone_demo_popular_products(): array
             'price' => '3 199,00 zł',
             'old_price' => '',
             'discount' => '',
-            'delivery' => 'Darmowa dostawa: 22–23 kwi jeśli zapłacisz do 14:00',
+            'delivery' => gp_get_delivery_text() . ' ' . mb_strtolower(gp_get_delivery_cutoff_text()),
         ],
         [
             'image' => 'https://images.unsplash.com/photo-1558537348-c0f8e733989d?auto=format&fit=crop&w=600&q=80',
@@ -2288,7 +2331,7 @@ function gp_clone_demo_popular_products(): array
             'price' => '1 249,00 zł',
             'old_price' => '1 499,00 zł',
             'discount' => '-17%',
-            'delivery' => 'Dostawa: 22 kwi jeśli zapłacisz do 14:00',
+            'delivery' => gp_get_delivery_text('Dostawa') . ' ' . mb_strtolower(gp_get_delivery_cutoff_text()),
         ],
     ];
 }
