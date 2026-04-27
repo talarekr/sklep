@@ -1106,8 +1106,7 @@ body.home .gp-part-search-box {
 }
 .gp-hero {
   position: relative;
-  min-height: clamp(280px, 36vw, 700px);
-  overflow: hidden;
+  min-height: clamp(200px, 30vw, 580px);
   background: #0f1420;
 }
 .gp-hero__slides {
@@ -1140,7 +1139,7 @@ body.home .gp-part-search-box {
 .gp-hero__content {
   position: relative;
   z-index: 2;
-  min-height: clamp(280px, 36vw, 700px);
+  min-height: clamp(200px, 30vw, 580px);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 24px;
