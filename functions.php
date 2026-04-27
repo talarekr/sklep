@@ -2729,16 +2729,39 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
 /**
  * Customer returns workflow for WooCommerce My Account.
  */
+const GP_ADD_RETURN_ENDPOINT = 'add-return';
+const GP_ADD_RETURN_REWRITE_VERSION = '1';
+
+function gp_log_add_return_debug(string $message, array $context = []): void
+{
+    $payload = $context !== [] ? wp_json_encode($context) : '';
+    error_log('[gp-add-return] ' . $message . ($payload !== '' ? ' ' . $payload : ''));
+}
+
 add_action('init', function (): void {
     if (!function_exists('add_rewrite_endpoint')) {
         return;
     }
 
-    add_rewrite_endpoint('add-return', EP_ROOT | EP_PAGES);
+    add_rewrite_endpoint(GP_ADD_RETURN_ENDPOINT, EP_ROOT | EP_PAGES);
+
+    $saved_version = (string) get_option('gp_add_return_rewrite_version', '');
+    if ($saved_version !== GP_ADD_RETURN_REWRITE_VERSION) {
+        flush_rewrite_rules(false);
+        update_option('gp_add_return_rewrite_version', GP_ADD_RETURN_REWRITE_VERSION, false);
+        gp_log_add_return_debug('Flushed rewrite rules for add-return endpoint.', [
+            'rewrite_version' => GP_ADD_RETURN_REWRITE_VERSION,
+        ]);
+    }
 });
 
 add_filter('query_vars', function (array $vars): array {
-    $vars[] = 'add-return';
+    $vars[] = GP_ADD_RETURN_ENDPOINT;
+    return $vars;
+});
+
+add_filter('woocommerce_get_query_vars', function (array $vars): array {
+    $vars[GP_ADD_RETURN_ENDPOINT] = GP_ADD_RETURN_ENDPOINT;
     return $vars;
 });
 
@@ -2748,7 +2771,7 @@ add_filter('woocommerce_my_account_my_orders_actions', function (array $actions,
     }
 
     $actions['gp_add_return'] = [
-        'url' => wc_get_account_endpoint_url('add-return') . $order->get_id() . '/',
+        'url' => wc_get_account_endpoint_url(GP_ADD_RETURN_ENDPOINT) . $order->get_id() . '/',
         'name' => __('Dodaj zwrot', 'gp-clone'),
     ];
 
@@ -2847,17 +2870,40 @@ function gp_get_existing_active_return_for_order(int $order_id): int
     return isset($query->posts[0]) ? (int) $query->posts[0] : 0;
 }
 
-add_action('woocommerce_account_add-return_endpoint', function (): void {
+function gp_render_add_return_endpoint(): void
+{
+    $query_value = get_query_var(GP_ADD_RETURN_ENDPOINT);
+    $order_id = absint($query_value);
+    $current_user_id = get_current_user_id();
+
+    gp_log_add_return_debug('Endpoint callback invoked.', [
+        'endpoint' => GP_ADD_RETURN_ENDPOINT,
+        'query_value' => $query_value,
+        'order_id' => $order_id,
+        'is_logged_in' => is_user_logged_in(),
+        'current_user_id' => $current_user_id,
+    ]);
+
+    echo '<!-- add-return-endpoint-loaded -->';
+
     if (!is_user_logged_in()) {
         echo '<p>' . esc_html__('Musisz się zalogować, aby zgłosić zwrot.', 'gp-clone') . '</p>';
         return;
     }
 
-    $order_id = absint(get_query_var('add-return'));
     $order = $order_id > 0 ? wc_get_order($order_id) : null;
-    $current_user_id = get_current_user_id();
+    $order_exists = $order instanceof WC_Order;
+    $order_owner_id = $order_exists ? (int) $order->get_user_id() : 0;
+    $order_status = $order_exists ? (string) $order->get_status() : 'missing';
 
-    if (!$order instanceof WC_Order || (int) $order->get_user_id() !== $current_user_id) {
+    gp_log_add_return_debug('Order validation details.', [
+        'order_exists' => $order_exists,
+        'order_owner_id' => $order_owner_id,
+        'current_user_id' => $current_user_id,
+        'order_status' => $order_status,
+    ]);
+
+    if (!$order_exists || $order_owner_id !== $current_user_id) {
         echo '<p>' . esc_html__('Nie znaleziono zamówienia lub nie masz do niego dostępu.', 'gp-clone') . '</p>';
         return;
     }
@@ -2952,7 +2998,10 @@ add_action('woocommerce_account_add-return_endpoint', function (): void {
         </p>
     </form>
     <?php
-});
+}
+
+add_action('woocommerce_account_add-return_endpoint', 'gp_render_add_return_endpoint');
+add_action('woocommerce_account_add_return_endpoint', 'gp_render_add_return_endpoint');
 
 add_action('template_redirect', function (): void {
     if (!is_user_logged_in() || !isset($_POST['gp_action']) || wp_unslash((string) $_POST['gp_action']) !== 'submit_return') {
@@ -3303,15 +3352,12 @@ add_action('save_post_gp_return_request', function (int $post_id): void {
 
 function gp_build_simple_pdf(array $lines): string
 {
-    $content = "BT\n/F1 11 Tf\n50 790 Td\n";
-    foreach ($lines as $index => $line) {
-        if ($index > 0) {
-            $content .= "T*\n";
-        }
-
+    $content = "BT\n/F1 11 Tf\n50 792 Td\n14 TL\n";
+    foreach ($lines as $line) {
         $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', (string) $line);
         $escaped = str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], (string) $ascii);
         $content .= '(' . $escaped . ") Tj\n";
+        $content .= "T*\n";
     }
     $content .= "ET";
 
@@ -3345,6 +3391,14 @@ function gp_get_return_pdf_html(int $return_id): string
 {
     $post = get_post($return_id);
     $items = get_post_meta($return_id, '_gp_return_items', true);
+    $order_number = (string) get_post_meta($return_id, '_gp_return_order_number', true);
+    $created_at_raw = (string) get_post_meta($return_id, '_gp_return_created_at', true);
+    $created_at = $created_at_raw !== '' ? mysql2date('d.m.Y H:i', $created_at_raw) : '';
+    $customer_name = (string) get_post_meta($return_id, '_gp_return_customer_name', true);
+    $customer_email = (string) get_post_meta($return_id, '_gp_return_customer_email', true);
+    $customer_phone = (string) get_post_meta($return_id, '_gp_return_customer_phone', true);
+    $customer_address = (string) get_post_meta($return_id, '_gp_return_customer_address', true);
+    $bank_account = (string) get_post_meta($return_id, '_gp_return_bank_account', true);
     ob_start();
     ?>
     <!doctype html>
@@ -3352,50 +3406,110 @@ function gp_get_return_pdf_html(int $return_id): string
     <head>
         <meta charset="utf-8">
         <style>
-            body { font-family: DejaVu Sans, Arial, sans-serif; color:#111; font-size:12px; }
-            h1 { font-size: 20px; margin: 0 0 12px; }
-            .meta { margin-bottom: 14px; }
-            .meta p { margin: 3px 0; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { border: 1px solid #bbb; padding: 6px; text-align: left; }
-            th { background: #f2f2f2; }
-            .signature { margin-top: 28px; }
+            @page { size: A4 portrait; margin: 20mm; }
+            body { font-family: DejaVu Sans, Arial, sans-serif; color: #111; font-size: 11pt; line-height: 1.4; margin: 0; }
+            h1 { margin: 0 0 12mm; font-size: 20pt; text-align: center; }
+            h2 { margin: 0 0 3mm; font-size: 12pt; }
+            p { margin: 0 0 2mm; }
+            .section { margin-bottom: 8mm; }
+            .meta-table, .items-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+            .meta-table td { width: 50%; vertical-align: top; padding: 3mm; border: 1px solid #bbb; }
+            .items-table th, .items-table td { border: 1px solid #999; padding: 3mm; vertical-align: top; text-align: left; }
+            .items-table th { background: #efefef; }
+            .text-right { text-align: right; }
+            .signature { margin-top: 14mm; }
+            .signature-line { margin-top: 14mm; border-top: 1px solid #111; width: 70mm; }
         </style>
     </head>
     <body>
     <h1>Formularz zwrotu</h1>
-    <div class="meta">
-        <p><strong>Dane sklepu:</strong> GREGOR swiss GRZEGORZ PACIOREK, ul. Milanowska 137, 08-460 Sobolew</p>
-        <p><strong>Numer zgłoszenia:</strong> <?php echo esc_html((string) ($post instanceof WP_Post ? $post->ID : $return_id)); ?></p>
-        <p><strong>Numer zamówienia:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_order_number', true)); ?></p>
-        <p><strong>Data zgłoszenia:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_created_at', true)); ?></p>
-        <p><strong>Klient:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_name', true)); ?></p>
-        <p><strong>E-mail:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_email', true)); ?></p>
-        <p><strong>Telefon:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_phone', true)); ?></p>
-        <p><strong>Adres:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_address', true)); ?></p>
-        <p><strong>Numer konta bankowego:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_bank_account', true)); ?></p>
+    <div class="section">
+        <table class="meta-table">
+            <tr>
+                <td>
+                    <h2>Dane sklepu</h2>
+                    <p>GREGOR swiss GRZEGORZ PACIOREK</p>
+                    <p>ul. Milanowska 137</p>
+                    <p>08-460 Sobolew</p>
+                    <p>NIP: 8262193568</p>
+                </td>
+                <td>
+                    <h2>Dane klienta</h2>
+                    <p><strong>Imię i nazwisko:</strong> <?php echo esc_html($customer_name); ?></p>
+                    <p><strong>E-mail:</strong> <?php echo esc_html($customer_email); ?></p>
+                    <p><strong>Telefon:</strong> <?php echo esc_html($customer_phone); ?></p>
+                    <p><strong>Adres:</strong> <?php echo esc_html($customer_address); ?></p>
+                </td>
+            </tr>
+        </table>
     </div>
-    <table>
+    <div class="section">
+        <p><strong>Numer zamówienia:</strong> <?php echo esc_html($order_number); ?></p>
+        <p><strong>Numer zgłoszenia zwrotu:</strong> <?php echo esc_html((string) ($post instanceof WP_Post ? $post->ID : $return_id)); ?></p>
+        <p><strong>Data zgłoszenia:</strong> <?php echo esc_html($created_at); ?></p>
+    </div>
+    <table class="items-table section">
         <thead>
         <tr>
             <th>Produkt</th>
-            <th>Ilość</th>
+            <th class="text-right">Ilość</th>
         </tr>
         </thead>
         <tbody>
-        <?php if (is_array($items)) : foreach ($items as $item) : ?>
+        <?php if (is_array($items) && $items !== []) : foreach ($items as $item) : ?>
+                <tr>
+                    <td><?php echo esc_html((string) ($item['name'] ?? '')); ?></td>
+                    <td class="text-right"><?php echo esc_html((string) ((int) ($item['qty'] ?? 0))); ?></td>
+                </tr>
+            <?php endforeach; else : ?>
             <tr>
-                <td><?php echo esc_html((string) ($item['name'] ?? '')); ?></td>
-                <td><?php echo esc_html((string) ((int) ($item['qty'] ?? 0))); ?></td>
+                <td colspan="2">Brak pozycji w zgłoszeniu.</td>
             </tr>
-        <?php endforeach; endif; ?>
+        <?php endif; ?>
         </tbody>
     </table>
-    <p class="signature">Podpis klienta: ________________________________</p>
+    <div class="section">
+        <p><strong>Numer konta bankowego do zwrotu środków:</strong> <?php echo esc_html($bank_account); ?></p>
+    </div>
+    <div class="signature">
+        <p>Podpis klienta:</p>
+        <div class="signature-line"></div>
+    </div>
     </body>
     </html>
     <?php
     return (string) ob_get_clean();
+}
+
+function gp_get_dompdf_instance(): ?\Dompdf\Dompdf
+{
+    if (!class_exists('\Dompdf\Dompdf')) {
+        $autoload_candidates = [
+            ABSPATH . 'vendor/autoload.php',
+            WP_CONTENT_DIR . '/vendor/autoload.php',
+            get_stylesheet_directory() . '/vendor/autoload.php',
+            get_template_directory() . '/vendor/autoload.php',
+        ];
+
+        foreach ($autoload_candidates as $autoload_path) {
+            if (is_readable($autoload_path)) {
+                require_once $autoload_path;
+                if (class_exists('\Dompdf\Dompdf')) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!class_exists('\Dompdf\Dompdf')) {
+        return null;
+    }
+
+    return new \Dompdf\Dompdf([
+        'isRemoteEnabled' => false,
+        'defaultFont' => 'DejaVu Sans',
+        'isHtml5ParserEnabled' => true,
+    ]);
 }
 
 add_action('template_redirect', function (): void {
@@ -3421,8 +3535,8 @@ add_action('template_redirect', function (): void {
 
     $html = gp_get_return_pdf_html($return_id);
     $pdf = '';
-    if (class_exists('\Dompdf\Dompdf')) {
-        $dompdf = new \Dompdf\Dompdf(['isRemoteEnabled' => false]);
+    $dompdf = gp_get_dompdf_instance();
+    if ($dompdf instanceof \Dompdf\Dompdf) {
         $dompdf->loadHtml($html, 'UTF-8');
         $dompdf->setPaper('A4', 'portrait');
         $dompdf->render();
@@ -3435,7 +3549,7 @@ add_action('template_redirect', function (): void {
             'Numer zamowienia: ' . (string) get_post_meta($return_id, '_gp_return_order_number', true),
             'Data zgloszenia: ' . (string) get_post_meta($return_id, '_gp_return_created_at', true),
             'Klient: ' . (string) get_post_meta($return_id, '_gp_return_customer_name', true),
-            'Produkty i ilosci znajduja sie w panelu zamowienia.',
+            'Brak biblioteki Dompdf - wygenerowano awaryjny dokument tekstowy.',
         ];
         $pdf = gp_build_simple_pdf($lines);
     }
