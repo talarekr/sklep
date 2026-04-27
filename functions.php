@@ -304,14 +304,26 @@ add_filter('woocommerce_show_page_title', '__return_false');
 function gp_get_privacy_policy_fallback_html(): string
 {
     return <<<'HTML'
-<h2>1. Informacje ogólne</h2>
-<p>Niniejsza Polityka Prywatności określa zasady przetwarzania danych osobowych oraz wykorzystywania plików cookies w związku z korzystaniem ze strony internetowej https://gpswiss.pl/.</p>
-<p>Administratorem danych osobowych jest właściciel serwisu GPSwiss.pl (dalej: „Administrator”).</p>
-<p>W sprawach związanych z przetwarzaniem danych osobowych można kontaktować się poprzez adres e-mail podany w regulaminie: <a href="https://gpswiss.pl/regulamin-platnosci/">https://gpswiss.pl/regulamin-platnosci/</a></p>
+<h2>1. Administrator danych</h2>
+<p>Administratorem danych osobowych jest:</p>
+<p>
+    GREGOR swiss GRZEGORZ PACIOREK<br>
+    ul. Milanowska 137<br>
+    08-460 Sobolew<br>
+    NIP: 8262157853<br>
+    REGON: 368948917
+</p>
+<p>(dalej: „Administrator”)</p>
+<p>W sprawach związanych z przetwarzaniem danych osobowych można kontaktować się pod adresem: [tu wpisz adres e-mail kontaktowy]</p>
 
 <hr>
 
-<h2>2. Zakres przetwarzanych danych</h2>
+<h2>2. Informacje ogólne</h2>
+<p>Niniejsza Polityka Prywatności określa zasady przetwarzania danych osobowych oraz wykorzystywania plików cookies w związku z korzystaniem ze strony internetowej https://gpswiss.pl/.</p>
+
+<hr>
+
+<h2>3. Zakres przetwarzanych danych</h2>
 <p>W zależności od sposobu korzystania z serwisu przetwarzane mogą być następujące dane:</p>
 <ul>
     <li>imię i nazwisko,</li>
@@ -327,7 +339,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>3. Cele przetwarzania danych</h2>
+<h2>4. Cele przetwarzania danych</h2>
 <p>Dane osobowe przetwarzane są w celu:</p>
 <ul>
     <li>realizacji zamówień i obsługi klienta,</li>
@@ -343,7 +355,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>4. Logowanie przez Google</h2>
+<h2>5. Logowanie przez Google</h2>
 <p>Serwis umożliwia logowanie oraz rejestrację za pomocą konta Google.</p>
 <p>W przypadku skorzystania z tej funkcji mogą być pobierane następujące dane:</p>
 <ul>
@@ -362,7 +374,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>5. Udostępnianie danych</h2>
+<h2>6. Udostępnianie danych</h2>
 <p>Dane mogą być przekazywane podmiotom trzecim wyłącznie w zakresie niezbędnym do realizacji usług:</p>
 <ul>
     <li>operatorom płatności,</li>
@@ -375,7 +387,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>6. Pliki cookies</h2>
+<h2>7. Pliki cookies</h2>
 <p>Strona wykorzystuje pliki cookies w celu:</p>
 <ul>
     <li>prawidłowego działania serwisu,</li>
@@ -388,7 +400,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>7. Okres przechowywania danych</h2>
+<h2>8. Okres przechowywania danych</h2>
 <p>Dane osobowe przechowywane są przez okres:</p>
 <ul>
     <li>trwania umowy (konto użytkownika),</li>
@@ -399,7 +411,7 @@ function gp_get_privacy_policy_fallback_html(): string
 
 <hr>
 
-<h2>8. Prawa użytkownika</h2>
+<h2>9. Prawa użytkownika</h2>
 <p>Użytkownik ma prawo do:</p>
 <ul>
     <li>dostępu do swoich danych,</li>
@@ -408,22 +420,22 @@ function gp_get_privacy_policy_fallback_html(): string
     <li>ograniczenia przetwarzania,</li>
     <li>przenoszenia danych,</li>
     <li>wniesienia sprzeciwu,</li>
-    <li>złożenia skargi do Prezesa UODO.</li>
+    <li>złożenia skargi do Prezesa Urzędu Ochrony Danych Osobowych (UODO).</li>
 </ul>
 
 <hr>
 
-<h2>9. Zabezpieczenia danych</h2>
+<h2>10. Zabezpieczenia danych</h2>
 <p>Administrator stosuje odpowiednie środki techniczne i organizacyjne w celu ochrony danych osobowych przed ich utratą, nieuprawnionym dostępem lub ujawnieniem.</p>
 
 <hr>
 
-<h2>10. Zmiany polityki prywatności</h2>
+<h2>11. Zmiany polityki prywatności</h2>
 <p>Polityka prywatności może być aktualizowana. Nowa wersja będzie publikowana na tej stronie.</p>
 
 <hr>
 
-<h2>11. Postanowienia końcowe</h2>
+<h2>12. Postanowienia końcowe</h2>
 <p>Korzystanie z serwisu oznacza akceptację niniejszej Polityki Prywatności.</p>
 HTML;
 }
