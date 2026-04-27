@@ -1106,12 +1106,6 @@ body.home .gp-part-search-box {
 }
 .gp-hero {
   position: relative;
-  width: 100vw;
-  max-width: 100vw;
-  left: 50%;
-  right: 50%;
-  margin-left: -50vw;
-  margin-right: -50vw;
   min-height: clamp(200px, 30vw, 580px);
   background: #0f1420;
 }
