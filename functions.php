@@ -2568,39 +2568,6 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     $query->set('posts_per_page', 24);
 }, 30);
 
-add_action('template_redirect', function (): void {
-    $search_mode = isset($_GET['search_mode']) ? sanitize_key((string) wp_unslash($_GET['search_mode'])) : '';
-    if ($search_mode === 'vehicle_model') {
-        return;
-    }
-
-    if (is_admin() || !class_exists('WooCommerce') || is_singular('product')) {
-        return;
-    }
-
-    if (!is_shop() && !is_tax('product_cat') && !is_post_type_archive('product')) {
-        return;
-    }
-
-    $part_number_raw = isset($_GET['part_number']) ? sanitize_text_field((string) wp_unslash($_GET['part_number'])) : '';
-    if ($part_number_raw === '') {
-        return;
-    }
-
-    $product_id = gp_find_product_id_by_part_number($part_number_raw);
-    if ($product_id <= 0) {
-        return;
-    }
-
-    $product_url = get_permalink($product_id);
-    if (!is_string($product_url) || $product_url === '') {
-        return;
-    }
-
-    wp_safe_redirect($product_url);
-    exit;
-}, 20);
-
 add_filter('posts_where', function (string $where, WP_Query $query): string {
     if (gp_get_catalog_search_mode() === 'vehicle_model') {
         return $where;
@@ -2725,6 +2692,28 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
         OR ({$meta_terms_clause})
     ) ";
 }, 20, 2);
+
+add_filter('woocommerce_redirect_single_search_result', function (bool $should_redirect): bool {
+    if (is_admin() || !is_search()) {
+        return $should_redirect;
+    }
+
+    $post_type = isset($_GET['post_type']) ? sanitize_key((string) wp_unslash($_GET['post_type'])) : '';
+    if ($post_type !== 'product') {
+        return $should_redirect;
+    }
+
+    $search_phrase = isset($_GET['s']) ? sanitize_text_field((string) wp_unslash($_GET['s'])) : '';
+    if ($search_phrase === '') {
+        return $should_redirect;
+    }
+
+    if (gp_find_product_id_by_part_number($search_phrase) > 0) {
+        return false;
+    }
+
+    return $should_redirect;
+}, 20);
 
 /**
  * Customer returns workflow for WooCommerce My Account.
