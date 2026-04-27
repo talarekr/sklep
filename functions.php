@@ -2729,16 +2729,39 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
 /**
  * Customer returns workflow for WooCommerce My Account.
  */
+const GP_ADD_RETURN_ENDPOINT = 'add-return';
+const GP_ADD_RETURN_REWRITE_VERSION = '1';
+
+function gp_log_add_return_debug(string $message, array $context = []): void
+{
+    $payload = $context !== [] ? wp_json_encode($context) : '';
+    error_log('[gp-add-return] ' . $message . ($payload !== '' ? ' ' . $payload : ''));
+}
+
 add_action('init', function (): void {
     if (!function_exists('add_rewrite_endpoint')) {
         return;
     }
 
-    add_rewrite_endpoint('add-return', EP_ROOT | EP_PAGES);
+    add_rewrite_endpoint(GP_ADD_RETURN_ENDPOINT, EP_ROOT | EP_PAGES);
+
+    $saved_version = (string) get_option('gp_add_return_rewrite_version', '');
+    if ($saved_version !== GP_ADD_RETURN_REWRITE_VERSION) {
+        flush_rewrite_rules(false);
+        update_option('gp_add_return_rewrite_version', GP_ADD_RETURN_REWRITE_VERSION, false);
+        gp_log_add_return_debug('Flushed rewrite rules for add-return endpoint.', [
+            'rewrite_version' => GP_ADD_RETURN_REWRITE_VERSION,
+        ]);
+    }
 });
 
 add_filter('query_vars', function (array $vars): array {
-    $vars[] = 'add-return';
+    $vars[] = GP_ADD_RETURN_ENDPOINT;
+    return $vars;
+});
+
+add_filter('woocommerce_get_query_vars', function (array $vars): array {
+    $vars[GP_ADD_RETURN_ENDPOINT] = GP_ADD_RETURN_ENDPOINT;
     return $vars;
 });
 
@@ -2748,7 +2771,7 @@ add_filter('woocommerce_my_account_my_orders_actions', function (array $actions,
     }
 
     $actions['gp_add_return'] = [
-        'url' => wc_get_account_endpoint_url('add-return') . $order->get_id() . '/',
+        'url' => wc_get_account_endpoint_url(GP_ADD_RETURN_ENDPOINT) . $order->get_id() . '/',
         'name' => __('Dodaj zwrot', 'gp-clone'),
     ];
 
@@ -2847,17 +2870,40 @@ function gp_get_existing_active_return_for_order(int $order_id): int
     return isset($query->posts[0]) ? (int) $query->posts[0] : 0;
 }
 
-add_action('woocommerce_account_add-return_endpoint', function (): void {
+function gp_render_add_return_endpoint(): void
+{
+    $query_value = get_query_var(GP_ADD_RETURN_ENDPOINT);
+    $order_id = absint($query_value);
+    $current_user_id = get_current_user_id();
+
+    gp_log_add_return_debug('Endpoint callback invoked.', [
+        'endpoint' => GP_ADD_RETURN_ENDPOINT,
+        'query_value' => $query_value,
+        'order_id' => $order_id,
+        'is_logged_in' => is_user_logged_in(),
+        'current_user_id' => $current_user_id,
+    ]);
+
+    echo '<!-- add-return-endpoint-loaded -->';
+
     if (!is_user_logged_in()) {
         echo '<p>' . esc_html__('Musisz się zalogować, aby zgłosić zwrot.', 'gp-clone') . '</p>';
         return;
     }
 
-    $order_id = absint(get_query_var('add-return'));
     $order = $order_id > 0 ? wc_get_order($order_id) : null;
-    $current_user_id = get_current_user_id();
+    $order_exists = $order instanceof WC_Order;
+    $order_owner_id = $order_exists ? (int) $order->get_user_id() : 0;
+    $order_status = $order_exists ? (string) $order->get_status() : 'missing';
 
-    if (!$order instanceof WC_Order || (int) $order->get_user_id() !== $current_user_id) {
+    gp_log_add_return_debug('Order validation details.', [
+        'order_exists' => $order_exists,
+        'order_owner_id' => $order_owner_id,
+        'current_user_id' => $current_user_id,
+        'order_status' => $order_status,
+    ]);
+
+    if (!$order_exists || $order_owner_id !== $current_user_id) {
         echo '<p>' . esc_html__('Nie znaleziono zamówienia lub nie masz do niego dostępu.', 'gp-clone') . '</p>';
         return;
     }
@@ -2952,7 +2998,10 @@ add_action('woocommerce_account_add-return_endpoint', function (): void {
         </p>
     </form>
     <?php
-});
+}
+
+add_action('woocommerce_account_add-return_endpoint', 'gp_render_add_return_endpoint');
+add_action('woocommerce_account_add_return_endpoint', 'gp_render_add_return_endpoint');
 
 add_action('template_redirect', function (): void {
     if (!is_user_logged_in() || !isset($_POST['gp_action']) || wp_unslash((string) $_POST['gp_action']) !== 'submit_return') {
