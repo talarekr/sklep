@@ -372,7 +372,6 @@ $hero_slides = [
                 class="gp-hero__slide<?php echo $index === 0 ? ' is-active' : ''; ?>"
                 data-gp-hero-slide
                 aria-hidden="<?php echo $index === 0 ? 'false' : 'true'; ?>"
-                style="--gp-slide-bg:url('<?php echo esc_url($slide['image']); ?>');"
             >
                 <img
                     src="<?php echo esc_url($slide['image']); ?>"
