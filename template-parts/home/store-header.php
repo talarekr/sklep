@@ -349,19 +349,9 @@ if (taxonomy_exists('product_cat')) {
 <?php
 $hero_slides = [
     [
-        'title' => 'Kupuj u nas nawet <span>10%</span> taniej',
-        'image' => 'https://images.unsplash.com/photo-1486006920555-c77dcf18193c?auto=format&fit=crop&w=1920&q=80',
-        'alt' => 'Promocyjny baner sklepu Global Parts',
-    ],
-    [
-        'title' => 'Silniki, skrzynie i części <span>od ręki</span>',
-        'image' => 'https://images.unsplash.com/photo-1530046339160-ce3e530c7d2f?auto=format&fit=crop&w=1920&q=80',
-        'alt' => 'Magazyn części samochodowych gotowych do wysyłki',
-    ],
-    [
-        'title' => 'Sprawdzone części z <span>gwarancją</span>',
-        'image' => 'https://images.unsplash.com/photo-1619642751034-765dfdf7c58e?auto=format&fit=crop&w=1920&q=80',
-        'alt' => 'Mechanik przy naprawie auta i doborze części',
+        'title' => '',
+        'image' => 'https://gpswiss.pl/wp-content/uploads/baner.png',
+        'alt' => 'GP SWISS - największy wybór części używanych w Polsce',
     ],
 ];
 ?>
