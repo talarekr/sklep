@@ -2725,3 +2725,724 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
         OR ({$meta_terms_clause})
     ) ";
 }, 20, 2);
+
+/**
+ * Customer returns workflow for WooCommerce My Account.
+ */
+add_action('init', function (): void {
+    if (!function_exists('add_rewrite_endpoint')) {
+        return;
+    }
+
+    add_rewrite_endpoint('add-return', EP_ROOT | EP_PAGES);
+});
+
+add_filter('query_vars', function (array $vars): array {
+    $vars[] = 'add-return';
+    return $vars;
+});
+
+add_filter('woocommerce_my_account_my_orders_actions', function (array $actions, WC_Order $order): array {
+    if (!$order instanceof WC_Order || $order->get_status() !== 'completed') {
+        return $actions;
+    }
+
+    $actions['gp_add_return'] = [
+        'url' => wc_get_account_endpoint_url('add-return') . $order->get_id() . '/',
+        'name' => __('Dodaj zwrot', 'gp-clone'),
+    ];
+
+    return $actions;
+}, 20, 2);
+
+function gp_validate_bank_account_number(string $raw): bool
+{
+    $normalized = strtoupper(preg_replace('/\s+/', '', $raw) ?? '');
+    if ($normalized === '') {
+        return false;
+    }
+
+    if (str_starts_with($normalized, 'PL')) {
+        if (!preg_match('/^PL\d{26}$/', $normalized)) {
+            return false;
+        }
+        $iban = $normalized;
+    } else {
+        if (!preg_match('/^\d{26}$/', $normalized)) {
+            return false;
+        }
+        $iban = 'PL' . $normalized;
+    }
+
+    $rearranged = substr($iban, 4) . substr($iban, 0, 4);
+    $numeric = '';
+    foreach (str_split($rearranged) as $char) {
+        if (ctype_alpha($char)) {
+            $numeric .= (string) (ord($char) - 55);
+        } else {
+            $numeric .= $char;
+        }
+    }
+
+    $checksum = 0;
+    foreach (str_split($numeric) as $digit) {
+        $checksum = (int) (($checksum * 10 + (int) $digit) % 97);
+    }
+
+    return $checksum === 1;
+}
+
+function gp_get_order_returnable_items(WC_Order $order): array
+{
+    $items = [];
+
+    foreach ($order->get_items() as $item_id => $item) {
+        if (!$item instanceof WC_Order_Item_Product) {
+            continue;
+        }
+
+        $qty = (int) $item->get_quantity();
+        if ($qty <= 0) {
+            continue;
+        }
+
+        $items[$item_id] = [
+            'item_id' => (int) $item_id,
+            'product_id' => (int) $item->get_product_id(),
+            'name' => $item->get_name(),
+            'quantity' => $qty,
+            'line_total' => (float) $item->get_total(),
+            'line_total_formatted' => wc_price((float) $item->get_total(), ['currency' => $order->get_currency()]),
+        ];
+    }
+
+    return $items;
+}
+
+function gp_get_existing_active_return_for_order(int $order_id): int
+{
+    $query = new WP_Query([
+        'post_type' => 'gp_return_request',
+        'post_status' => 'publish',
+        'fields' => 'ids',
+        'posts_per_page' => 1,
+        'orderby' => 'date',
+        'order' => 'DESC',
+        'meta_query' => [
+            'relation' => 'AND',
+            [
+                'key' => '_gp_return_order_id',
+                'value' => $order_id,
+                'compare' => '=',
+                'type' => 'NUMERIC',
+            ],
+            [
+                'key' => '_gp_return_status',
+                'value' => ['new', 'in_progress'],
+                'compare' => 'IN',
+            ],
+        ],
+    ]);
+
+    return isset($query->posts[0]) ? (int) $query->posts[0] : 0;
+}
+
+add_action('woocommerce_account_add-return_endpoint', function (): void {
+    if (!is_user_logged_in()) {
+        echo '<p>' . esc_html__('Musisz się zalogować, aby zgłosić zwrot.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    $order_id = absint(get_query_var('add-return'));
+    $order = $order_id > 0 ? wc_get_order($order_id) : null;
+    $current_user_id = get_current_user_id();
+
+    if (!$order instanceof WC_Order || (int) $order->get_user_id() !== $current_user_id) {
+        echo '<p>' . esc_html__('Nie znaleziono zamówienia lub nie masz do niego dostępu.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    if ($order->get_status() !== 'completed') {
+        echo '<p>' . esc_html__('Zwrot można zgłosić tylko dla zamówienia ze statusem „Zrealizowane”.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    $active_return_id = gp_get_existing_active_return_for_order($order_id);
+    if ($active_return_id > 0) {
+        $pdf_url = wp_nonce_url(
+            add_query_arg(['gp_return_pdf' => $active_return_id], wc_get_page_permalink('myaccount')),
+            'gp_return_pdf_' . $active_return_id
+        );
+        echo '<div class="woocommerce-info" role="alert">';
+        echo esc_html__('Zwrot dla tego zamówienia został już zgłoszony i jest w trakcie obsługi.', 'gp-clone') . ' ';
+        echo '<a href="' . esc_url($pdf_url) . '">' . esc_html__('Pobierz PDF', 'gp-clone') . '</a>';
+        echo '</div>';
+        return;
+    }
+
+    $items = gp_get_order_returnable_items($order);
+    if ($items === []) {
+        echo '<p>' . esc_html__('To zamówienie nie zawiera pozycji możliwych do zwrotu.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    $saved_return_id = isset($_GET['gp_return_id']) ? absint(wp_unslash((string) $_GET['gp_return_id'])) : 0;
+    if ($saved_return_id > 0) {
+        $pdf_url = wp_nonce_url(
+            add_query_arg(['gp_return_pdf' => $saved_return_id], wc_get_page_permalink('myaccount')),
+            'gp_return_pdf_' . $saved_return_id
+        );
+        echo '<div class="woocommerce-message" role="alert">';
+        echo esc_html__('Zwrot został zapisany.', 'gp-clone') . ' ';
+        echo '<a href="' . esc_url($pdf_url) . '">' . esc_html__('Pobierz PDF zwrotu', 'gp-clone') . '</a>';
+        echo '</div>';
+    }
+
+    $billing_address = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($order->get_formatted_billing_address())));
+    ?>
+    <h3><?php esc_html_e('Formularz zwrotu', 'gp-clone'); ?></h3>
+    <p><strong><?php esc_html_e('Numer zamówienia:', 'gp-clone'); ?></strong> <?php echo esc_html($order->get_order_number()); ?></p>
+    <p><strong><?php esc_html_e('Data zamówienia:', 'gp-clone'); ?></strong> <?php echo esc_html(wc_format_datetime($order->get_date_created())); ?></p>
+    <form method="post" class="woocommerce-EditAccountForm edit-account">
+        <?php wp_nonce_field('gp_submit_return_' . $order_id); ?>
+        <input type="hidden" name="gp_action" value="submit_return">
+        <input type="hidden" name="order_id" value="<?php echo esc_attr((string) $order_id); ?>">
+
+        <p><strong><?php esc_html_e('Imię i nazwisko:', 'gp-clone'); ?></strong> <?php echo esc_html($order->get_formatted_billing_full_name()); ?></p>
+        <p><strong><?php esc_html_e('E-mail:', 'gp-clone'); ?></strong> <?php echo esc_html((string) $order->get_billing_email()); ?></p>
+        <p><strong><?php esc_html_e('Telefon:', 'gp-clone'); ?></strong> <?php echo esc_html((string) $order->get_billing_phone()); ?></p>
+        <p><strong><?php esc_html_e('Adres:', 'gp-clone'); ?></strong> <?php echo esc_html($billing_address); ?></p>
+
+        <table class="shop_table shop_table_responsive">
+            <thead>
+            <tr>
+                <th><?php esc_html_e('Produkt', 'gp-clone'); ?></th>
+                <th><?php esc_html_e('Ilość', 'gp-clone'); ?></th>
+                <th><?php esc_html_e('Cena', 'gp-clone'); ?></th>
+                <th><?php esc_html_e('Zwracam ten produkt', 'gp-clone'); ?></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($items as $item): ?>
+                <tr>
+                    <td><?php echo esc_html($item['name']); ?></td>
+                    <td>
+                        <?php echo esc_html((string) $item['quantity']); ?>
+                        <div>
+                            <label>
+                                <?php esc_html_e('Ilość do zwrotu:', 'gp-clone'); ?>
+                                <input type="number" min="1" max="<?php echo esc_attr((string) $item['quantity']); ?>" name="return_qty[<?php echo esc_attr((string) $item['item_id']); ?>]" value="<?php echo esc_attr((string) $item['quantity']); ?>">
+                            </label>
+                        </div>
+                    </td>
+                    <td><?php echo wp_kses_post($item['line_total_formatted']); ?></td>
+                    <td><input type="checkbox" name="return_items[]" value="<?php echo esc_attr((string) $item['item_id']); ?>"></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <p class="woocommerce-form-row woocommerce-form-row--wide form-row form-row-wide">
+            <label for="gp_bank_account"><?php esc_html_e('Podaj numer konta bankowego', 'gp-clone'); ?> <span class="required">*</span></label>
+            <input type="text" class="woocommerce-Input woocommerce-Input--text input-text" name="bank_account" id="gp_bank_account" required>
+        </p>
+
+        <p>
+            <button type="submit" class="woocommerce-Button button"><?php esc_html_e('Wyślij zwrot', 'gp-clone'); ?></button>
+        </p>
+    </form>
+    <?php
+});
+
+add_action('template_redirect', function (): void {
+    if (!is_user_logged_in() || !isset($_POST['gp_action']) || wp_unslash((string) $_POST['gp_action']) !== 'submit_return') {
+        return;
+    }
+
+    $order_id = isset($_POST['order_id']) ? absint(wp_unslash((string) $_POST['order_id'])) : 0;
+    $order = $order_id > 0 ? wc_get_order($order_id) : null;
+    $current_user_id = get_current_user_id();
+
+    if (!$order instanceof WC_Order || (int) $order->get_user_id() !== $current_user_id) {
+        wc_add_notice(__('Nieprawidłowe zamówienie.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('orders'));
+        exit;
+    }
+
+    if (!isset($_POST['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_POST['_wpnonce'])), 'gp_submit_return_' . $order_id)) {
+        wc_add_notice(__('Nie udało się zweryfikować formularza. Odśwież stronę i spróbuj ponownie.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    if ($order->get_status() !== 'completed') {
+        wc_add_notice(__('Zwrot można dodać tylko do zamówienia zrealizowanego.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('orders'));
+        exit;
+    }
+
+    $active_return_id = gp_get_existing_active_return_for_order($order_id);
+    if ($active_return_id > 0) {
+        wc_add_notice(__('Zwrot dla tego zamówienia został już zgłoszony.', 'gp-clone'), 'notice');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    $raw_bank_account = isset($_POST['bank_account']) ? sanitize_text_field(wp_unslash((string) $_POST['bank_account'])) : '';
+    if (!gp_validate_bank_account_number($raw_bank_account)) {
+        wc_add_notice(__('Podaj poprawny numer konta bankowego (26 cyfr lub IBAN PL).', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    $selected_item_ids = isset($_POST['return_items']) && is_array($_POST['return_items'])
+        ? array_map(static fn($id) => absint(wp_unslash((string) $id)), $_POST['return_items'])
+        : [];
+    $selected_item_ids = array_values(array_filter($selected_item_ids));
+
+    if ($selected_item_ids === []) {
+        wc_add_notice(__('Wybierz przynajmniej jeden produkt do zwrotu.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    $allowed_items = gp_get_order_returnable_items($order);
+    $qty_input = isset($_POST['return_qty']) && is_array($_POST['return_qty']) ? $_POST['return_qty'] : [];
+    $items_to_store = [];
+
+    foreach ($selected_item_ids as $item_id) {
+        if (!isset($allowed_items[$item_id])) {
+            continue;
+        }
+
+        $max_qty = (int) $allowed_items[$item_id]['quantity'];
+        $raw_qty = isset($qty_input[$item_id]) ? absint(wp_unslash((string) $qty_input[$item_id])) : $max_qty;
+        $qty = max(1, min($max_qty, $raw_qty));
+
+        $items_to_store[] = [
+            'item_id' => $item_id,
+            'product_id' => $allowed_items[$item_id]['product_id'],
+            'name' => $allowed_items[$item_id]['name'],
+            'qty' => $qty,
+            'line_total' => $allowed_items[$item_id]['line_total'],
+        ];
+    }
+
+    if ($items_to_store === []) {
+        wc_add_notice(__('Nie udało się zapisać wybranych pozycji zwrotu.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    $return_post_id = wp_insert_post([
+        'post_type' => 'gp_return_request',
+        'post_status' => 'publish',
+        'post_title' => sprintf('Zwrot #%d / Zamówienie #%s', time(), $order->get_order_number()),
+        'post_author' => $current_user_id,
+    ]);
+
+    if (is_wp_error($return_post_id) || $return_post_id <= 0) {
+        wc_add_notice(__('Wystąpił błąd podczas zapisu zwrotu.', 'gp-clone'), 'error');
+        wp_safe_redirect(wc_get_account_endpoint_url('add-return') . $order_id . '/');
+        exit;
+    }
+
+    update_post_meta($return_post_id, '_gp_return_status', 'new');
+    update_post_meta($return_post_id, '_gp_return_order_id', $order_id);
+    update_post_meta($return_post_id, '_gp_return_order_number', $order->get_order_number());
+    update_post_meta($return_post_id, '_gp_return_customer_name', $order->get_formatted_billing_full_name());
+    update_post_meta($return_post_id, '_gp_return_customer_email', $order->get_billing_email());
+    update_post_meta($return_post_id, '_gp_return_customer_phone', $order->get_billing_phone());
+    update_post_meta($return_post_id, '_gp_return_customer_address', wp_strip_all_tags($order->get_formatted_billing_address()));
+    update_post_meta($return_post_id, '_gp_return_bank_account', preg_replace('/\s+/', '', strtoupper($raw_bank_account)));
+    update_post_meta($return_post_id, '_gp_return_items', $items_to_store);
+    update_post_meta($return_post_id, '_gp_return_created_at', current_time('mysql'));
+    update_post_meta($return_post_id, '_gp_return_created_by', $current_user_id);
+
+    $linked_returns = get_post_meta($order_id, '_return_request_ids', true);
+    if (!is_array($linked_returns)) {
+        $linked_returns = [];
+    }
+    $linked_returns[] = $return_post_id;
+    update_post_meta($order_id, '_return_request_ids', array_values(array_unique(array_map('absint', $linked_returns))));
+
+    $order->add_order_note(sprintf('Klient zgłosił zwrot nr %d.', $return_post_id));
+
+    $pdf_url = wp_nonce_url(
+        add_query_arg(['gp_return_pdf' => $return_post_id], wc_get_page_permalink('myaccount')),
+        'gp_return_pdf_' . $return_post_id
+    );
+
+    $admin_email = get_option('admin_email');
+    if (is_email($admin_email)) {
+        wp_mail(
+            $admin_email,
+            sprintf('Nowe zgłoszenie zwrotu #%d', $return_post_id),
+            "Nowe zgłoszenie zwrotu zostało utworzone.\nNumer zwrotu: {$return_post_id}\nNumer zamówienia: " . $order->get_order_number() . "\nKlient: " . $order->get_formatted_billing_full_name()
+        );
+    }
+
+    if (is_email($order->get_billing_email())) {
+        wp_mail(
+            $order->get_billing_email(),
+            sprintf('Potwierdzenie zgłoszenia zwrotu #%d', $return_post_id),
+            "Twój zwrot został zgłoszony.\nNumer zwrotu: {$return_post_id}\nNumer zamówienia: " . $order->get_order_number() . "\nPobierz PDF: {$pdf_url}"
+        );
+    }
+
+    wp_safe_redirect(add_query_arg(['gp_return_id' => $return_post_id], wc_get_account_endpoint_url('add-return') . $order_id . '/'));
+    exit;
+});
+
+add_action('init', function (): void {
+    register_post_type('gp_return_request', [
+        'label' => __('Zwroty', 'gp-clone'),
+        'labels' => [
+            'name' => __('Zwroty', 'gp-clone'),
+            'singular_name' => __('Zwrot', 'gp-clone'),
+            'menu_name' => __('Zwroty', 'gp-clone'),
+        ],
+        'public' => false,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'menu_icon' => 'dashicons-undo',
+        'supports' => ['title', 'author'],
+        'capability_type' => 'post',
+    ]);
+});
+
+function gp_get_return_statuses(): array
+{
+    return [
+        'new' => __('Nowy', 'gp-clone'),
+        'in_progress' => __('W trakcie', 'gp-clone'),
+        'accepted' => __('Zaakceptowany', 'gp-clone'),
+        'rejected' => __('Odrzucony', 'gp-clone'),
+        'completed' => __('Zakończony', 'gp-clone'),
+    ];
+}
+
+add_filter('manage_gp_return_request_posts_columns', function (array $columns): array {
+    return [
+        'cb' => $columns['cb'] ?? '',
+        'title' => __('Numer zgłoszenia', 'gp-clone'),
+        'order_id' => __('Numer zamówienia', 'gp-clone'),
+        'customer' => __('Klient', 'gp-clone'),
+        'contact' => __('E-mail / telefon', 'gp-clone'),
+        'status' => __('Status zwrotu', 'gp-clone'),
+        'items' => __('Produkty', 'gp-clone'),
+        'bank_account' => __('Numer konta', 'gp-clone'),
+        'date' => __('Data zgłoszenia', 'gp-clone'),
+    ];
+});
+
+add_action('manage_gp_return_request_posts_custom_column', function (string $column, int $post_id): void {
+    $statuses = gp_get_return_statuses();
+    switch ($column) {
+        case 'order_id':
+            echo esc_html((string) get_post_meta($post_id, '_gp_return_order_number', true));
+            break;
+        case 'customer':
+            echo esc_html((string) get_post_meta($post_id, '_gp_return_customer_name', true));
+            break;
+        case 'contact':
+            echo esc_html((string) get_post_meta($post_id, '_gp_return_customer_email', true)) . '<br>';
+            echo esc_html((string) get_post_meta($post_id, '_gp_return_customer_phone', true));
+            break;
+        case 'status':
+            $status = (string) get_post_meta($post_id, '_gp_return_status', true);
+            echo esc_html($statuses[$status] ?? $status);
+            break;
+        case 'items':
+            $items = get_post_meta($post_id, '_gp_return_items', true);
+            if (is_array($items)) {
+                foreach ($items as $item) {
+                    $name = isset($item['name']) ? (string) $item['name'] : '';
+                    $qty = isset($item['qty']) ? (int) $item['qty'] : 0;
+                    echo esc_html(sprintf('%s × %d', $name, $qty)) . '<br>';
+                }
+            }
+            break;
+        case 'bank_account':
+            echo esc_html((string) get_post_meta($post_id, '_gp_return_bank_account', true));
+            break;
+    }
+}, 10, 2);
+
+add_action('restrict_manage_posts', function (string $post_type): void {
+    if ($post_type !== 'gp_return_request') {
+        return;
+    }
+
+    $current_status = isset($_GET['gp_return_status_filter']) ? sanitize_key(wp_unslash((string) $_GET['gp_return_status_filter'])) : '';
+    $statuses = gp_get_return_statuses();
+    echo '<select name="gp_return_status_filter">';
+    echo '<option value="">' . esc_html__('Wszystkie statusy', 'gp-clone') . '</option>';
+    foreach ($statuses as $status_key => $label) {
+        printf(
+            '<option value="%s" %s>%s</option>',
+            esc_attr($status_key),
+            selected($current_status, $status_key, false),
+            esc_html($label)
+        );
+    }
+    echo '</select>';
+});
+
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (!is_admin() || !$query->is_main_query()) {
+        return;
+    }
+
+    if ($query->get('post_type') !== 'gp_return_request') {
+        return;
+    }
+
+    $status_filter = isset($_GET['gp_return_status_filter']) ? sanitize_key(wp_unslash((string) $_GET['gp_return_status_filter'])) : '';
+    $statuses = gp_get_return_statuses();
+    if ($status_filter !== '' && isset($statuses[$status_filter])) {
+        $query->set('meta_query', [
+            [
+                'key' => '_gp_return_status',
+                'value' => $status_filter,
+                'compare' => '=',
+            ],
+        ]);
+    }
+
+    $query->set('orderby', 'date');
+    $query->set('order', 'DESC');
+});
+
+add_filter('post_row_actions', function (array $actions, WP_Post $post): array {
+    if ($post->post_type !== 'gp_return_request') {
+        return $actions;
+    }
+
+    $actions['gp_return_preview'] = '<a href="' . esc_url(admin_url('admin.php?page=gp-return-view&return_id=' . $post->ID)) . '">' . esc_html__('Podgląd', 'gp-clone') . '</a>';
+    return $actions;
+}, 10, 2);
+
+add_action('admin_menu', function (): void {
+    add_submenu_page(
+        null,
+        __('Podgląd zwrotu', 'gp-clone'),
+        __('Podgląd zwrotu', 'gp-clone'),
+        'edit_posts',
+        'gp-return-view',
+        function (): void {
+            $return_id = isset($_GET['return_id']) ? absint(wp_unslash((string) $_GET['return_id'])) : 0;
+            $post = $return_id > 0 ? get_post($return_id) : null;
+            if (!$post instanceof WP_Post || $post->post_type !== 'gp_return_request') {
+                wp_die(esc_html__('Nie znaleziono zwrotu.', 'gp-clone'));
+            }
+            if (!current_user_can('edit_post', $return_id)) {
+                wp_die(esc_html__('Brak dostępu.', 'gp-clone'));
+            }
+
+            $statuses = gp_get_return_statuses();
+            $status = (string) get_post_meta($return_id, '_gp_return_status', true);
+            $items = get_post_meta($return_id, '_gp_return_items', true);
+
+            echo '<div class="wrap"><h1>' . esc_html__('Podgląd zwrotu', 'gp-clone') . ' #' . esc_html((string) $return_id) . '</h1>';
+            echo '<p><strong>' . esc_html__('Numer zamówienia:', 'gp-clone') . '</strong> ' . esc_html((string) get_post_meta($return_id, '_gp_return_order_number', true)) . '</p>';
+            echo '<p><strong>' . esc_html__('Klient:', 'gp-clone') . '</strong> ' . esc_html((string) get_post_meta($return_id, '_gp_return_customer_name', true)) . '</p>';
+            echo '<p><strong>' . esc_html__('Status:', 'gp-clone') . '</strong> ' . esc_html($statuses[$status] ?? $status) . '</p>';
+            echo '<h2>' . esc_html__('Produkty', 'gp-clone') . '</h2><table class="widefat"><thead><tr><th>' . esc_html__('Nazwa', 'gp-clone') . '</th><th>' . esc_html__('Ilość', 'gp-clone') . '</th></tr></thead><tbody>';
+            if (is_array($items)) {
+                foreach ($items as $item) {
+                    echo '<tr><td>' . esc_html((string) ($item['name'] ?? '')) . '</td><td>' . esc_html((string) ((int) ($item['qty'] ?? 0))) . '</td></tr>';
+                }
+            }
+            echo '</tbody></table></div>';
+        }
+    );
+});
+
+add_action('add_meta_boxes', function (): void {
+    add_meta_box(
+        'gp_return_details',
+        __('Szczegóły zwrotu', 'gp-clone'),
+        function (WP_Post $post): void {
+            $status = (string) get_post_meta($post->ID, '_gp_return_status', true);
+            $statuses = gp_get_return_statuses();
+            wp_nonce_field('gp_save_return_meta_' . $post->ID, 'gp_return_meta_nonce');
+            ?>
+            <p>
+                <label for="gp_return_status"><strong><?php esc_html_e('Status zwrotu', 'gp-clone'); ?></strong></label><br>
+                <select id="gp_return_status" name="gp_return_status">
+                    <?php foreach ($statuses as $value => $label): ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($status, $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </p>
+            <?php
+        },
+        'gp_return_request',
+        'side'
+    );
+});
+
+add_action('save_post_gp_return_request', function (int $post_id): void {
+    if (!isset($_POST['gp_return_meta_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_POST['gp_return_meta_nonce'])), 'gp_save_return_meta_' . $post_id)) {
+        return;
+    }
+
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+
+    $status = isset($_POST['gp_return_status']) ? sanitize_key(wp_unslash((string) $_POST['gp_return_status'])) : 'new';
+    $statuses = gp_get_return_statuses();
+    if (!isset($statuses[$status])) {
+        $status = 'new';
+    }
+
+    update_post_meta($post_id, '_gp_return_status', $status);
+});
+
+function gp_build_simple_pdf(array $lines): string
+{
+    $content = "BT\n/F1 11 Tf\n50 790 Td\n";
+    foreach ($lines as $index => $line) {
+        if ($index > 0) {
+            $content .= "T*\n";
+        }
+
+        $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', (string) $line);
+        $escaped = str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], (string) $ascii);
+        $content .= '(' . $escaped . ") Tj\n";
+    }
+    $content .= "ET";
+
+    $objects = [];
+    $objects[] = "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj";
+    $objects[] = "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj";
+    $objects[] = "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj";
+    $objects[] = "4 0 obj << /Length " . strlen($content) . " >> stream\n{$content}\nendstream endobj";
+    $objects[] = "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj";
+
+    $pdf = "%PDF-1.4\n";
+    $offsets = [0];
+    foreach ($objects as $object) {
+        $offsets[] = strlen($pdf);
+        $pdf .= $object . "\n";
+    }
+
+    $xref_position = strlen($pdf);
+    $pdf .= "xref\n0 " . (count($objects) + 1) . "\n";
+    $pdf .= "0000000000 65535 f \n";
+    for ($i = 1; $i <= count($objects); $i++) {
+        $pdf .= sprintf("%010d 00000 n \n", $offsets[$i]);
+    }
+    $pdf .= "trailer << /Size " . (count($objects) + 1) . " /Root 1 0 R >>\n";
+    $pdf .= "startxref\n{$xref_position}\n%%EOF";
+
+    return $pdf;
+}
+
+function gp_get_return_pdf_html(int $return_id): string
+{
+    $post = get_post($return_id);
+    $items = get_post_meta($return_id, '_gp_return_items', true);
+    ob_start();
+    ?>
+    <!doctype html>
+    <html lang="pl">
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: DejaVu Sans, Arial, sans-serif; color:#111; font-size:12px; }
+            h1 { font-size: 20px; margin: 0 0 12px; }
+            .meta { margin-bottom: 14px; }
+            .meta p { margin: 3px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #bbb; padding: 6px; text-align: left; }
+            th { background: #f2f2f2; }
+            .signature { margin-top: 28px; }
+        </style>
+    </head>
+    <body>
+    <h1>Formularz zwrotu</h1>
+    <div class="meta">
+        <p><strong>Dane sklepu:</strong> GREGOR swiss GRZEGORZ PACIOREK, ul. Milanowska 137, 08-460 Sobolew</p>
+        <p><strong>Numer zgłoszenia:</strong> <?php echo esc_html((string) ($post instanceof WP_Post ? $post->ID : $return_id)); ?></p>
+        <p><strong>Numer zamówienia:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_order_number', true)); ?></p>
+        <p><strong>Data zgłoszenia:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_created_at', true)); ?></p>
+        <p><strong>Klient:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_name', true)); ?></p>
+        <p><strong>E-mail:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_email', true)); ?></p>
+        <p><strong>Telefon:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_phone', true)); ?></p>
+        <p><strong>Adres:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_customer_address', true)); ?></p>
+        <p><strong>Numer konta bankowego:</strong> <?php echo esc_html((string) get_post_meta($return_id, '_gp_return_bank_account', true)); ?></p>
+    </div>
+    <table>
+        <thead>
+        <tr>
+            <th>Produkt</th>
+            <th>Ilość</th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php if (is_array($items)) : foreach ($items as $item) : ?>
+            <tr>
+                <td><?php echo esc_html((string) ($item['name'] ?? '')); ?></td>
+                <td><?php echo esc_html((string) ((int) ($item['qty'] ?? 0))); ?></td>
+            </tr>
+        <?php endforeach; endif; ?>
+        </tbody>
+    </table>
+    <p class="signature">Podpis klienta: ________________________________</p>
+    </body>
+    </html>
+    <?php
+    return (string) ob_get_clean();
+}
+
+add_action('template_redirect', function (): void {
+    $return_id = isset($_GET['gp_return_pdf']) ? absint(wp_unslash((string) $_GET['gp_return_pdf'])) : 0;
+    if ($return_id <= 0) {
+        return;
+    }
+
+    if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_GET['_wpnonce'])), 'gp_return_pdf_' . $return_id)) {
+        wp_die(esc_html__('Nieprawidłowy link do PDF.', 'gp-clone'));
+    }
+
+    $post = get_post($return_id);
+    if (!$post instanceof WP_Post || $post->post_type !== 'gp_return_request') {
+        wp_die(esc_html__('Nie znaleziono zwrotu.', 'gp-clone'));
+    }
+
+    $current_user_id = get_current_user_id();
+    $created_by = (int) get_post_meta($return_id, '_gp_return_created_by', true);
+    if (!current_user_can('manage_woocommerce') && $current_user_id !== $created_by) {
+        wp_die(esc_html__('Brak dostępu do dokumentu.', 'gp-clone'));
+    }
+
+    $html = gp_get_return_pdf_html($return_id);
+    $pdf = '';
+    if (class_exists('\Dompdf\Dompdf')) {
+        $dompdf = new \Dompdf\Dompdf(['isRemoteEnabled' => false]);
+        $dompdf->loadHtml($html, 'UTF-8');
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->render();
+        $pdf = $dompdf->output();
+    } else {
+        $lines = [
+            'FORMULARZ ZWROTU',
+            'Sklep: GREGOR swiss GRZEGORZ PACIOREK, ul. Milanowska 137, 08-460 Sobolew',
+            'Numer zgloszenia: ' . $post->ID,
+            'Numer zamowienia: ' . (string) get_post_meta($return_id, '_gp_return_order_number', true),
+            'Data zgloszenia: ' . (string) get_post_meta($return_id, '_gp_return_created_at', true),
+            'Klient: ' . (string) get_post_meta($return_id, '_gp_return_customer_name', true),
+            'Produkty i ilosci znajduja sie w panelu zamowienia.',
+        ];
+        $pdf = gp_build_simple_pdf($lines);
+    }
+    nocache_headers();
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="zwrot-' . $post->ID . '.pdf"');
+    header('Content-Length: ' . strlen($pdf));
+    echo $pdf;
+    exit;
+});
