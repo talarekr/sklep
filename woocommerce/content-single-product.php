@@ -21,7 +21,7 @@ $availability_text = $availability['availability'] ?? __('Dostępny', 'gp-clone'
 $availability_class = !empty($availability['class']) ? sanitize_html_class($availability['class']) : 'in-stock';
 $part_number = function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak';
 $sku = $product->get_sku();
-$delivery_window = __('Dostawa: 23–24 kwi', 'gp-clone');
+$delivery_window = gp_get_delivery_text();
 $returns_info = __('Zwrot do 21 dni zgodnie z regulaminem.', 'gp-clone');
 ?>
 <div id="product-<?php the_ID(); ?>" <?php wc_product_class('gp-product-page', $product); ?>>
