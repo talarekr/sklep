@@ -1109,10 +1109,9 @@ body.home .gp-part-search-box {
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
-  aspect-ratio: 2076 / 758;
+  height: clamp(260px, calc((100vw * 758 / 2076) - 120px), 620px);
   min-height: 0;
   background: transparent;
-  overflow: hidden;
 }
 .gp-hero__slides {
   position: absolute;
