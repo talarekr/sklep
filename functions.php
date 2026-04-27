@@ -2693,6 +2693,28 @@ add_filter('posts_search', function (string $search, WP_Query $query): string {
     ) ";
 }, 20, 2);
 
+add_filter('woocommerce_redirect_single_search_result', function (bool $should_redirect): bool {
+    if (is_admin() || !is_search()) {
+        return $should_redirect;
+    }
+
+    $post_type = isset($_GET['post_type']) ? sanitize_key((string) wp_unslash($_GET['post_type'])) : '';
+    if ($post_type !== 'product') {
+        return $should_redirect;
+    }
+
+    $search_phrase = isset($_GET['s']) ? sanitize_text_field((string) wp_unslash($_GET['s'])) : '';
+    if ($search_phrase === '') {
+        return $should_redirect;
+    }
+
+    if (gp_find_product_id_by_part_number($search_phrase) > 0) {
+        return false;
+    }
+
+    return $should_redirect;
+}, 20);
+
 /**
  * Customer returns workflow for WooCommerce My Account.
  */
