@@ -1116,6 +1116,10 @@ body.home .gp-part-search-box {
 .gp-hero__slide {
   position: absolute;
   inset: 0;
+  background-image: var(--gp-slide-bg);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
   opacity: 0;
   transition: opacity .7s ease;
   pointer-events: none;
@@ -1129,7 +1133,6 @@ body.home .gp-part-search-box {
   object-fit: contain;
   object-position: center;
   display: block;
-  background: #0f1420;
 }
 .gp-hero__overlay {
   position: absolute;
