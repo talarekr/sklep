@@ -1299,11 +1299,36 @@ class Importer
             return $this->sync_single_order_offer_from_event($offer_id, $inactive_status, $event_id, $event_type);
         }
 
-        if ($this->is_terminal_offer_event_type($event_type)) {
-            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+        if (!$this->is_supported_offer_event_type($event_type)) {
+            $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORT_SKIPPED_REASON', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => 'unsupported_event_type',
+            ]);
+
             return true;
         }
 
+        if ($this->is_terminal_offer_event_type($event_type)) {
+            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+            $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORT_SKIPPED_REASON', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => 'terminal_offer_event',
+            ]);
+            return true;
+        }
+
+        $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORT_START', [
+            'offer_id' => $offer_id,
+            'stream' => $stream,
+            'event_id' => $event_id,
+            'event_type' => $event_type,
+        ]);
         $details = $this->client->get_offer_details($offer_id);
         if (is_wp_error($details)) {
             $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : $details->get_error_message();
@@ -1321,6 +1346,13 @@ class Importer
 
             $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
             $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => 'offer_missing',
+            ]);
+            $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORT_SKIPPED_REASON', [
                 'offer_id' => $offer_id,
                 'stream' => $stream,
                 'event_id' => $event_id,
@@ -1348,15 +1380,26 @@ class Importer
                 'event_type' => $event_type,
                 'reason' => $reason,
             ]);
+            $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORT_SKIPPED_REASON', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => $reason,
+            ]);
 
             return true;
         }
 
         $result = $this->mapper->upsert_product($details, $settings);
+        $product_id = (int) ($result['product_id'] ?? 0);
+        if ($product_id > 0) {
+            update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+        }
         if (($result['result'] ?? '') === 'created') {
             $this->logger->info('EVENT_SYNC_NEW_OFFER_IMPORTED', [
                 'offer_id' => $offer_id,
-                'product_id' => (int) ($result['product_id'] ?? 0),
+                'product_id' => $product_id,
                 'stream' => $stream,
                 'event_id' => $event_id,
                 'event_type' => $event_type,
@@ -1364,7 +1407,7 @@ class Importer
         } elseif (($result['result'] ?? '') === 'updated') {
             $this->logger->info('EVENT_SYNC_OFFER_UPDATED', [
                 'offer_id' => $offer_id,
-                'product_id' => (int) ($result['product_id'] ?? 0),
+                'product_id' => $product_id,
                 'stream' => $stream,
                 'event_id' => $event_id,
                 'event_type' => $event_type,
@@ -1380,6 +1423,14 @@ class Importer
             ]);
             return false;
         }
+        $this->logger->info('EVENT_SYNC_OFFER_ACTIVE_IMPORTED_TO_WOO', [
+            'offer_id' => $offer_id,
+            'product_id' => $product_id,
+            'stream' => $stream,
+            'event_id' => $event_id,
+            'event_type' => $event_type,
+            'result' => (string) ($result['result'] ?? ''),
+        ]);
 
         $stock_available = isset($details['stock']['available']) && is_numeric($details['stock']['available'])
             ? max(0, (int) $details['stock']['available'])
@@ -1398,18 +1449,77 @@ class Importer
             ]);
         }
 
-        if ($stream === 'order_events') {
-            $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type, $details);
+        return true;
+    }
+
+    private function is_supported_offer_event_type(string $event_type): bool
+    {
+        $event_type = strtoupper(sanitize_text_field($event_type));
+
+        return in_array($event_type, [
+            'OFFER_CREATED',
+            'OFFER_ACTIVATED',
+            'OFFER_CHANGED',
+            'OFFER_PRICE_CHANGED',
+            'OFFER_STOCK_CHANGED',
+            'OFFER_ENDED',
+            'OFFER_DEACTIVATED',
+            'OFFER_ARCHIVED',
+            'OFFER_FINISHED',
+        ], true);
+    }
+
+    private function sync_single_order_offer_from_event(
+        string $offer_id,
+        string $inactive_status,
+        string $event_id,
+        string $event_type
+    ): bool {
+        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id);
+        if (count($lookup['product_ids']) === 0) {
+            $this->logger->warning('missing_linked_product_for_offer', [
+                'offer_id' => $offer_id,
+                'stream' => 'order_events',
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'lookup_attempts' => $lookup['attempts'],
+                'lookup_identifiers' => $lookup['identifiers'],
+            ]);
+
+            return true;
         }
 
-        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $details);
-        $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
-        $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
-            'event_id' => $event_id,
-            'event_type' => $event_type,
-            'offer_id' => $offer_id,
-            'reason' => 'order_event_is_authoritative',
-        ]);
+        foreach ($lookup['product_ids'] as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $previous_stock = $product->get_stock_quantity();
+            $previous_stock_status = (string) $product->get_stock_status();
+            $previous_status = (string) $product->get_status();
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($inactive_status);
+            $product->save();
+
+            $this->logger->info('EVENT_SYNC_ORDER_APPLIED_TO_WOO', [
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'lookup_method' => $lookup['resolved_by'],
+                'previous_stock' => $previous_stock,
+                'new_stock' => 0,
+                'previous_stock_status' => $previous_stock_status,
+                'new_stock_status' => 'outofstock',
+                'previous_product_status' => $previous_status,
+                'new_product_status' => $inactive_status,
+                'action' => 'set_outofstock_and_hide',
+            ]);
+        }
 
         return true;
     }
