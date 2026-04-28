@@ -854,10 +854,19 @@ function gp_handle_google_oauth_request(): void
         gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
     }
 
+    $email_verified = !empty($google_user['email_verified']);
+    if (!$email_verified) {
+        gp_google_oauth_log('google_email_not_verified', [
+            'email' => $email,
+            'context' => $context,
+        ]);
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'google_email_not_verified');
+    }
+
     $existing_user = get_user_by('email', $email);
     if ($context === 'login' && !$existing_user) {
         gp_google_oauth_log('login_user_not_found', ['email' => $email]);
-        gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+        gp_auth_redirect_with_notice('/zarejestruj', 'google_register_required');
     }
 
     $user_id = $existing_user ? (int) $existing_user->ID : 0;
@@ -914,7 +923,7 @@ function gp_handle_google_oauth_request(): void
     }
 
     update_user_meta($user_id, 'gp_google_sub', sanitize_text_field((string) ($google_user['sub'] ?? '')));
-    update_user_meta($user_id, 'gp_google_email_verified', !empty($google_user['email_verified']) ? '1' : '0');
+    update_user_meta($user_id, 'gp_google_email_verified', $email_verified ? '1' : '0');
     update_user_meta($user_id, 'gp_google_picture', esc_url_raw((string) ($google_user['picture'] ?? '')));
 
     wp_set_current_user($user_id);
@@ -985,6 +994,8 @@ function gp_get_auth_notice(string $type): array
         'register_failed' => ['error', __('Nie udało się utworzyć konta. Spróbuj ponownie.', 'gp-clone')],
         'register_success' => ['success', __('Konto zostało utworzone poprawnie. Możesz się teraz zalogować.', 'gp-clone')],
         'google_auth_not_configured' => ['error', __('Logowanie Google jest obecnie niedostępne. Skontaktuj się z administratorem.', 'gp-clone')],
+        'google_email_not_verified' => ['error', __('Konto Google musi mieć zweryfikowany adres e-mail.', 'gp-clone')],
+        'google_register_required' => ['error', __('Nie znaleziono konta dla tego adresu e-mail. Użyj „Zarejestruj przez Google”.', 'gp-clone')],
     ];
 
     return $messages[$type] ?? ['', ''];

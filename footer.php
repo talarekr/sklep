@@ -9,9 +9,8 @@ $privacy_policy_url = gp_get_public_privacy_policy_url();
     <div class="gp-container">
         <div class="gp-footer__cols">
             <div>
-                <h3>GP Swiss</h3>
+                <h3>GP GREGOR Swiss</h3>
                 <ul>
-                    <li><a href="<?php echo esc_url(home_url('/zwroty')); ?>">Zwroty</a></li>
                     <li><a href="<?php echo esc_url(home_url('/kontakt')); ?>">Kontakt</a></li>
                     <li><a href="<?php echo esc_url(home_url('/regulamin-platnosci')); ?>">Regulamin</a></li>
                     <li><a href="<?php echo esc_url($privacy_policy_url); ?>">Polityka prywatności</a></li>

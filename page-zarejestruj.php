@@ -27,7 +27,7 @@ get_header();
             </fieldset>
 
             <?php if ($google_auth_url !== '') : ?>
-                <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Kontynuuj z Google">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></a>
+                <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Zarejestruj przez Google">G <span><?php esc_html_e('Zarejestruj przez Google', 'gp-clone'); ?></span></a>
                 <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
             <?php endif; ?>
 
