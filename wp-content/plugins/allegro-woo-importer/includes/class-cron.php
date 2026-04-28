@@ -150,7 +150,7 @@ class Cron
             return 0;
         }
 
-        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, [$context], 'awi-manual');
+        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, $context, 'awi-manual');
         if (empty($action_id)) {
             $this->logger->error('MANUAL_SYNC_ERROR', [
                 'reason' => 'enqueue_returned_empty_action_id',
@@ -162,53 +162,6 @@ class Cron
         }
 
         return (int) $action_id;
-    }
-
-    private function describe_registered_callbacks_for_hook(string $hook): array
-    {
-        global $wp_filter;
-
-        if (!isset($wp_filter[$hook]) || !is_object($wp_filter[$hook]) || !isset($wp_filter[$hook]->callbacks)) {
-            return [];
-        }
-
-        $callbacks = [];
-        foreach ((array) $wp_filter[$hook]->callbacks as $priority => $entries) {
-            foreach ((array) $entries as $entry) {
-                $function = $entry['function'] ?? null;
-                $accepted_args = isset($entry['accepted_args']) ? (int) $entry['accepted_args'] : 0;
-                $callbacks[] = [
-                    'priority' => (int) $priority,
-                    'accepted_args' => $accepted_args,
-                    'callback' => $this->format_callback_name($function),
-                ];
-            }
-        }
-
-        return $callbacks;
-    }
-
-    private function format_callback_name($callback): string
-    {
-        if (is_string($callback)) {
-            return $callback;
-        }
-
-        if (is_array($callback) && count($callback) === 2) {
-            $target = $callback[0];
-            $method = (string) $callback[1];
-            if (is_object($target)) {
-                return get_class($target) . '->' . $method;
-            }
-
-            return (string) $target . '::' . $method;
-        }
-
-        if ($callback instanceof \Closure) {
-            return 'closure';
-        }
-
-        return 'unknown_callback';
     }
 
     public function run_missing_import_batch(): void
