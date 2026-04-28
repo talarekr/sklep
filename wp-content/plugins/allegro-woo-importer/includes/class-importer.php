@@ -1418,21 +1418,33 @@ class Importer
         string $event_id,
         string $event_type,
         string $stream
-    ): array {
-        $resolution = $this->resolve_linked_product_ids_by_offer_id($offer_id);
-        $product_ids = $resolution['product_ids'];
+    ): void {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $product_ids = array_map('intval', (array) $query->posts);
         if (count($product_ids) === 0) {
             $this->logger->warning('missing_linked_product_for_offer', [
                 'offer_id' => $offer_id,
                 'stream' => $stream,
                 'event_id' => $event_id,
                 'event_type' => $event_type,
-                'lookup_attempts' => $resolution['lookup_attempts'],
             ]);
-            return [];
+            wp_reset_postdata();
+            return;
         }
 
-        $applied_product_ids = [];
         foreach ($product_ids as $product_id) {
             $product = wc_get_product($product_id);
             if (!$product instanceof \WC_Product) {
@@ -1454,10 +1466,9 @@ class Importer
                 'event_id' => $event_id,
                 'event_type' => $event_type,
             ]);
-            $applied_product_ids[] = $product_id;
         }
 
-        return $applied_product_ids;
+        wp_reset_postdata();
     }
 
     private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
