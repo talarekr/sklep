@@ -27,7 +27,7 @@ class Cron
     public function hooks(): void
     {
         add_filter('cron_schedules', [$this, 'register_intervals']);
-        add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import']);
+        add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import'], 10, 1);
         add_action(Plugin::MISSING_IMPORT_CRON_HOOK, [$this, 'run_missing_import_batch']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
         add_action('admin_init', [$this, 'maybe_repair_schedule_admin_only']);
@@ -49,44 +49,85 @@ class Cron
         return $schedules;
     }
 
-    public function run_scheduled_import(): void
+    public function run_scheduled_import(array $context = []): void
     {
         if (Plugin::is_safe_mode_enabled()) {
             $this->logger->warning('Safe mode enabled: scheduled import skipped.');
             return;
         }
 
+        $trigger = sanitize_key((string) ($context['trigger'] ?? 'scheduled'));
+        $is_manual_trigger = $trigger === 'manual_sync';
+        $manual_context = [
+            'trigger' => $trigger,
+            'request_id' => sanitize_text_field((string) ($context['request_id'] ?? '')),
+            'user_id' => isset($context['user_id']) ? (int) $context['user_id'] : 0,
+        ];
+
         $this->logger->info('Cron import started.');
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
             'hook' => Plugin::CRON_HOOK,
+            'trigger' => $trigger,
         ]);
-        $event_sync_summary = $this->importer->run_event_based_sync();
-        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
-            'hook' => Plugin::CRON_HOOK,
-            'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
-            'reason' => (string) ($event_sync_summary['reason'] ?? ''),
-            'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
-            'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
-            'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
-        ]);
+        try {
+            $event_sync_summary = $this->importer->run_event_based_sync();
+            $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
+                'hook' => Plugin::CRON_HOOK,
+                'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
+                'reason' => (string) ($event_sync_summary['reason'] ?? ''),
+                'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
+                'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
+                'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
+                'trigger' => $trigger,
+            ]);
 
-        if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
-            $this->logger->warning('EVENT_SYNC_ERROR', [
-                'stage' => 'fallback_to_full_import',
-                'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+            if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
+                $this->logger->warning('EVENT_SYNC_ERROR', [
+                    'stage' => 'fallback_to_full_import',
+                    'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+                ]);
+                $this->logger->warning('EVENT_SYNC_FALLBACK_FULL_IMPORT_STARTED', [
+                    'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+                ]);
+                $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
+                $this->importer->import_offers();
+            } else {
+                $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
+                    'reason' => 'event_sync_finished_without_fallback_required',
+                    'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
+                ]);
+            }
+
+            if ($is_manual_trigger) {
+                $this->logger->info('MANUAL_SYNC_DONE', $manual_context + [
+                    'event_sync_status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
+                    'event_sync_reason' => (string) ($event_sync_summary['reason'] ?? ''),
+                ]);
+            }
+        } catch (\Throwable $exception) {
+            if ($is_manual_trigger) {
+                $this->logger->error('MANUAL_SYNC_ERROR', $manual_context + [
+                    'message' => $exception->getMessage(),
+                ]);
+            }
+            $this->logger->error('Scheduled import failed with unhandled exception.', [
+                'message' => $exception->getMessage(),
+                'trigger' => $trigger,
             ]);
-            $this->logger->warning('EVENT_SYNC_FALLBACK_FULL_IMPORT_STARTED', [
-                'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
-            ]);
-            $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
-            $this->importer->import_offers();
-            return;
+        }
+    }
+
+    public function schedule_manual_sync_now(array $context): bool
+    {
+        if (!function_exists('as_schedule_single_action')) {
+            $this->logger->error('MANUAL_SYNC_ERROR', [
+                'reason' => 'action_scheduler_unavailable',
+            ] + $context);
+            return false;
         }
 
-        $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
-            'reason' => 'event_sync_finished_without_fallback_required',
-            'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
-        ]);
+        as_schedule_single_action(time() + 1, Plugin::CRON_HOOK, $context, self::ACTION_SCHEDULER_GROUP);
+        return true;
     }
 
     public function run_missing_import_batch(): void
