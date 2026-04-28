@@ -14,6 +14,7 @@ class Cron
     private const ADMIN_REPAIR_THROTTLE_SECONDS = 300;
     private const ALREADY_EXISTS_LOG_TRANSIENT_KEY = 'awi_background_sync_exists_log';
     private const ADMIN_REPAIR_TRANSIENT_KEY = 'awi_background_sync_admin_repair';
+    private const SCHEDULE_DRIFT_TOLERANCE_SECONDS = 120;
 
     private Importer $importer;
     private Logger $logger;
@@ -61,12 +62,14 @@ class Cron
 
     public function run_scheduled_import($context = []): void
     {
-        if (!is_array($context)) {
-            $context = [
-                'legacy_context_value' => (string) $context,
-                'legacy_context_type' => gettype($context),
-            ];
-        }
+        $raw_context = $context;
+        $this->logger->info('EVENT_SYNC_RAW_CONTEXT_RECEIVED', [
+            'type' => gettype($raw_context),
+            'keys' => is_array($raw_context) ? array_keys($raw_context) : [],
+            'value_shape' => $this->describe_context_shape($raw_context),
+        ]);
+
+        $context = $this->normalize_scheduled_import_context($raw_context);
 
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
             'hook' => Plugin::CRON_HOOK,
@@ -78,6 +81,9 @@ class Cron
             $this->logger->warning('Safe mode enabled: scheduled import skipped.');
             return;
         }
+
+        $settings = Plugin::get_settings();
+        $configured_interval = sanitize_key((string) ($settings['cron_interval'] ?? 'manual'));
 
         $trigger = sanitize_key((string) ($context['trigger'] ?? 'scheduled'));
         $is_manual_trigger = $trigger === 'manual_sync';
@@ -91,21 +97,32 @@ class Cron
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START_CONTEXT', [
             'hook' => Plugin::CRON_HOOK,
             'trigger' => $trigger,
+            'configured_cron_interval' => $configured_interval,
             'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
         ]);
         try {
             $event_sync_summary = $this->importer->run_event_based_sync();
+            $event_sync_status_snapshot = $this->importer->get_event_sync_status();
+            $event_sync_checkpoint = is_array($event_sync_status_snapshot['checkpoint'] ?? null)
+                ? (array) $event_sync_status_snapshot['checkpoint']
+                : [];
+            $event_sync_result_status = (string) ($event_sync_summary['status'] ?? 'unknown');
+            $event_sync_result_reason = (string) ($event_sync_summary['reason'] ?? '');
+            $fallback_required = $event_sync_result_status === 'fallback_required';
+
             $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
                 'hook' => Plugin::CRON_HOOK,
-                'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
-                'reason' => (string) ($event_sync_summary['reason'] ?? ''),
+                'status' => $event_sync_result_status,
+                'reason' => $event_sync_result_reason,
+                'checkpoint' => $event_sync_checkpoint,
+                'fallback_required' => $fallback_required,
                 'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
                 'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
                 'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
                 'trigger' => $trigger,
             ]);
 
-            if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
+            if ($fallback_required) {
                 $this->logger->warning('EVENT_SYNC_ERROR', [
                     'stage' => 'fallback_to_full_import',
                     'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
@@ -150,7 +167,7 @@ class Cron
             return 0;
         }
 
-        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, $context, 'awi-manual');
+        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, [$context], 'awi-manual');
         if (empty($action_id)) {
             $this->logger->error('MANUAL_SYNC_ERROR', [
                 'reason' => 'enqueue_returned_empty_action_id',
@@ -366,6 +383,8 @@ class Cron
                 'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
                 'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
                 'reason' => 'existing_job_detected_outside_default_group_or_args',
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
 
             return true;
@@ -380,6 +399,8 @@ class Cron
                 'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
                 'reason' => 'existing_job_detected_outside_default_group_or_args',
                 'source' => $source,
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
 
             return true;
@@ -398,16 +419,84 @@ class Cron
                 ]);
             }
         } else {
+            $max_expected_next_run_timestamp = time() + $interval_seconds + self::SCHEDULE_DRIFT_TOLERANCE_SECONDS;
+            if (
+                $next_action_timestamp > $max_expected_next_run_timestamp
+                && function_exists('as_unschedule_all_actions')
+                && function_exists('as_schedule_recurring_action')
+            ) {
+                $old_next_run_at = gmdate('Y-m-d H:i:s', $next_action_timestamp);
+                as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                $new_action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+
+                if ($new_action_id !== false) {
+                    $this->logger->info('BACKGROUND_SYNC_RESCHEDULED_INTERVAL_CHANGED', [
+                        'old_next_run_at' => $old_next_run_at,
+                        'configured_interval' => $interval,
+                        'configured_interval_seconds' => $interval_seconds,
+                        'new_action_id' => $new_action_id,
+                        'source' => $source,
+                    ]);
+
+                    return true;
+                }
+            }
+
             $this->log_background_sync_already_exists_throttled([
                 'runner' => 'action_scheduler',
                 'hook' => Plugin::CRON_HOOK,
                 'next_run_at' => gmdate('Y-m-d H:i:s', $next_action_timestamp),
                 'next_run_timestamp' => $next_action_timestamp,
                 'source' => $source,
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
         }
 
         return true;
+    }
+
+
+    private function normalize_scheduled_import_context($context): array
+    {
+        if (is_array($context) && array_key_exists(0, $context) && is_array($context[0])) {
+            return $context[0];
+        }
+
+        if (is_array($context) && $this->is_associative_array($context)) {
+            return $context;
+        }
+
+        if (is_array($context) && count($context) === 0) {
+            return [];
+        }
+
+        return [
+            'legacy_context_value' => is_scalar($context) || $context === null ? (string) $context : '[non_scalar]',
+            'legacy_context_type' => gettype($context),
+        ];
+    }
+
+    private function describe_context_shape($context): string
+    {
+        if (!is_array($context)) {
+            return 'scalar';
+        }
+
+        if (count($context) === 0) {
+            return 'array_empty';
+        }
+
+        if (array_key_exists(0, $context) && is_array($context[0])) {
+            return 'array_with_nested_context';
+        }
+
+        return $this->is_associative_array($context) ? 'array_assoc' : 'array_list';
+    }
+
+    private function is_associative_array(array $value): bool
+    {
+        return array_keys($value) !== range(0, count($value) - 1);
     }
 
     private function describe_registered_callbacks_for_hook(string $hook): array
