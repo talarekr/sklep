@@ -116,12 +116,21 @@
   });
 
   var googleConfig = window.gpGoogleAuth || null;
+  var lastGoogleContext = null;
+
   if (googleConfig && googleConfig.clientId && window.google && google.accounts && google.accounts.id) {
     google.accounts.id.initialize({
       client_id: googleConfig.clientId,
       callback: function (response) {
-        var wrapper = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]');
-        if (!wrapper || !response || !response.credential) {
+        if (!response || !response.credential) {
+          return;
+        }
+
+        var contextSelector = lastGoogleContext
+          ? '[data-gp-google-button][data-gp-context="' + lastGoogleContext + '"]'
+          : '[data-gp-google-button]';
+        var wrapper = document.querySelector(contextSelector);
+        if (!wrapper) {
           return;
         }
 
@@ -141,7 +150,6 @@
     });
 
     document.querySelectorAll('[data-gp-google-button]').forEach(function (buttonHost) {
-      buttonHost.setAttribute('data-gp-google-active', '1');
       google.accounts.id.renderButton(buttonHost, {
         type: 'standard',
         theme: 'outline',
@@ -149,6 +157,17 @@
         text: 'continue_with',
         width: 320
       });
+
+      var socialForm = buttonHost.parentNode ? buttonHost.parentNode.querySelector('[data-gp-google-form]') : null;
+      var triggerButton = socialForm ? socialForm.querySelector('[data-gp-google-submit]') : null;
+
+      if (triggerButton) {
+        triggerButton.addEventListener('click', function (event) {
+          event.preventDefault();
+          lastGoogleContext = buttonHost.getAttribute('data-gp-context') || null;
+          google.accounts.id.prompt();
+        });
+      }
     });
   }
 })();
