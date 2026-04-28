@@ -184,6 +184,34 @@ class AllegroClient
         ]);
     }
 
+    public function get_offer_events(array $query = [])
+    {
+        $query = $this->sanitize_events_query($query);
+
+        return $this->request('GET', '/sale/offer-events', [
+            'query' => $query,
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => '',
+                'product_id' => 0,
+            ],
+        ]);
+    }
+
+    public function get_order_events(array $query = [])
+    {
+        $query = $this->sanitize_events_query($query);
+
+        return $this->request('GET', '/order/events', [
+            'query' => $query,
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => '',
+                'product_id' => 0,
+            ],
+        ]);
+    }
+
     public function get_category_details(string $category_id)
     {
         $category_id = sanitize_text_field($category_id);
@@ -314,7 +342,7 @@ class AllegroClient
             'headers' => [
                 'Authorization' => 'Bearer ' . $token,
                 'Accept' => self::ACCEPT_HEADER,
-                'Content-Type' => 'application/json',
+                'Content-Type' => self::ACCEPT_HEADER,
             ],
         ];
         $request_context = is_array($args['log_context'] ?? null) ? $args['log_context'] : [];
@@ -410,5 +438,22 @@ class AllegroClient
         }
 
         return max(self::MIN_RETRY_DELAY_SECONDS, min(self::MAX_RETRY_DELAY_SECONDS, $retry_after_seconds));
+    }
+
+    private function sanitize_events_query(array $query): array
+    {
+        $safe = [];
+
+        if (isset($query['from'])) {
+            $safe['from'] = sanitize_text_field((string) $query['from']);
+        }
+        if (isset($query['limit'])) {
+            $safe['limit'] = max(1, min(1000, (int) $query['limit']));
+        }
+        if (isset($query['occurredAt.gte'])) {
+            $safe['occurredAt.gte'] = sanitize_text_field((string) $query['occurredAt.gte']);
+        }
+
+        return $safe;
     }
 }

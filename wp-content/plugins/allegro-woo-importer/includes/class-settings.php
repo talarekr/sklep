@@ -367,6 +367,7 @@ class Settings
         }
         $import_lock_status = $this->get_import_lock_status();
         $missing_import_checkpoint = $this->importer->get_missing_import_checkpoint();
+        $event_sync_status = $this->importer->get_event_sync_status();
 
         $log_tail = $this->logger->read_tail(80);
 
