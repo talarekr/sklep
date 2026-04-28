@@ -13,12 +13,15 @@ class Importer
     private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
     private const IMPORT_LOCK_OPTION_KEY = 'awi_import_lock';
     private const MISSING_IMPORT_CHECKPOINT_OPTION_KEY = 'awi_missing_import_checkpoint';
+    private const EVENT_SYNC_CHECKPOINT_OPTION_KEY = 'awi_event_sync_checkpoint';
+    private const EVENT_SYNC_STATUS_OPTION_KEY = 'awi_event_sync_status';
     private const BATCH_LIMIT = 50;
     private const MISSING_IMPORT_BATCH_LIMIT = 50;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
     private const IMPORT_LOCK_TTL_SECONDS = self::MAX_EXECUTION_TIME_SECONDS + 60;
     private const OFFER_STATUS_SYNC_BATCH_SIZE = 50;
+    private const EVENT_SYNC_MAX_GAP_SECONDS = DAY_IN_SECONDS;
 
     private AllegroClient $client;
     private ProductMapper $mapper;
@@ -434,6 +437,181 @@ class Importer
         return $checkpoint;
     }
 
+    public function run_event_based_sync(): array
+    {
+        $this->ensure_runtime_limits();
+        $started_at = microtime(true);
+        $checkpoint = $this->get_event_sync_checkpoint();
+        $lock_context = $this->build_lock_context();
+        $lock_context['mode'] = 'event_sync';
+
+        if (!$this->acquire_import_lock($lock_context)) {
+            $this->logger->warning('EVENT_SYNC_ERROR', [
+                'stage' => 'acquire_lock',
+                'reason' => 'import_lock_active',
+            ]);
+
+            return [
+                'status' => 'skipped_due_to_lock',
+            ];
+        }
+
+        try {
+            $this->logger->info('EVENT_SYNC_START', [
+                'checkpoint' => $checkpoint,
+            ]);
+
+            $now = time();
+            $last_success_ts = (int) ($checkpoint['last_success_ts'] ?? 0);
+            $gap_seconds = $last_success_ts > 0 ? max(0, $now - $last_success_ts) : 0;
+            if ($last_success_ts > 0 && $gap_seconds > self::EVENT_SYNC_MAX_GAP_SECONDS) {
+                $this->logger->warning('EVENT_SYNC_ERROR', [
+                    'stage' => 'gap_detection',
+                    'reason' => 'checkpoint_gap_exceeded',
+                    'gap_seconds' => $gap_seconds,
+                    'max_gap_seconds' => self::EVENT_SYNC_MAX_GAP_SECONDS,
+                ]);
+
+                return [
+                    'status' => 'fallback_required',
+                    'reason' => 'checkpoint_gap_exceeded',
+                ];
+            }
+
+            $offer_events_response = $this->client->get_offer_events([
+                'from' => (string) ($checkpoint['last_offer_event_id'] ?? ''),
+                'limit' => 100,
+            ]);
+            if (is_wp_error($offer_events_response)) {
+                $this->logger->error('EVENT_SYNC_ERROR', [
+                    'stage' => 'fetch_offer_events',
+                    'reason' => $offer_events_response->get_error_message(),
+                ]);
+
+                return [
+                    'status' => 'fallback_required',
+                    'reason' => 'offer_events_api_error',
+                ];
+            }
+
+            $order_events_response = $this->client->get_order_events([
+                'from' => (string) ($checkpoint['last_order_event_id'] ?? ''),
+                'limit' => 100,
+            ]);
+            if (is_wp_error($order_events_response)) {
+                $this->logger->error('EVENT_SYNC_ERROR', [
+                    'stage' => 'fetch_order_events',
+                    'reason' => $order_events_response->get_error_message(),
+                ]);
+
+                return [
+                    'status' => 'fallback_required',
+                    'reason' => 'order_events_api_error',
+                ];
+            }
+
+            $settings = Plugin::get_settings();
+            $inactive_status = in_array((string) ($settings['inactive_product_status'] ?? 'draft'), ['draft', 'private'], true)
+                ? (string) $settings['inactive_product_status']
+                : 'draft';
+
+            $offer_events = $this->sort_events_by_time_and_id($this->normalize_events_list($offer_events_response, ['offerEvents', 'events']));
+            $order_events = $this->sort_events_by_time_and_id($this->normalize_events_list($order_events_response, ['events', 'orderEvents']));
+            $processed = 0;
+            $last_error = '';
+
+            foreach ($offer_events as $event) {
+                $event_id = sanitize_text_field((string) ($event['id'] ?? ''));
+                $offer_id = sanitize_text_field((string) ($event['offer']['id'] ?? $event['offerId'] ?? ''));
+                $type = sanitize_text_field((string) ($event['type'] ?? 'unknown'));
+                $occurred_at = sanitize_text_field((string) ($event['occurredAt'] ?? ''));
+                $this->logger->info('EVENT_SYNC_EVENT_RECEIVED', [
+                    'stream' => 'offer_events',
+                    'event_id' => $event_id,
+                    'event_type' => $type,
+                    'offer_id' => $offer_id,
+                    'occurred_at' => $occurred_at,
+                ]);
+                if ($offer_id !== '') {
+                    $processed_ok = $this->sync_single_offer_from_event($offer_id, $inactive_status, $settings, 'offer_events', $event_id, $type);
+                    if (!$processed_ok) {
+                        $last_error = 'offer_event_processing_failed';
+                        $this->save_event_sync_status('event_based', 'error', $last_error, $checkpoint);
+                        return [
+                            'status' => 'error',
+                            'reason' => $last_error,
+                        ];
+                    }
+                }
+
+                if ($event_id !== '') {
+                    $checkpoint['last_offer_event_id'] = $event_id;
+                }
+                $checkpoint['last_success_ts'] = time();
+                $checkpoint['last_success_at'] = gmdate('Y-m-d H:i:s');
+                $this->save_event_sync_checkpoint($checkpoint);
+                $processed++;
+            }
+
+            foreach ($order_events as $event) {
+                $event_id = sanitize_text_field((string) ($event['id'] ?? ''));
+                $type = sanitize_text_field((string) ($event['type'] ?? 'unknown'));
+                $occurred_at = sanitize_text_field((string) ($event['occurredAt'] ?? ''));
+                $offer_ids = $this->extract_offer_ids_from_order_event($event);
+                $this->logger->info('EVENT_SYNC_EVENT_RECEIVED', [
+                    'stream' => 'order_events',
+                    'event_id' => $event_id,
+                    'event_type' => $type,
+                    'offer_ids' => $offer_ids,
+                    'occurred_at' => $occurred_at,
+                ]);
+                $order_processed_ok = true;
+                foreach ($offer_ids as $offer_id) {
+                    $this->logger->info('EVENT_SYNC_ORDER_SOLD', [
+                        'event_id' => $event_id,
+                        'event_type' => $type,
+                        'offer_id' => $offer_id,
+                    ]);
+                    $processed_ok = $this->sync_single_offer_from_event($offer_id, $inactive_status, $settings, 'order_events', $event_id, $type);
+                    if (!$processed_ok) {
+                        $order_processed_ok = false;
+                        $last_error = 'order_event_processing_failed';
+                        break;
+                    }
+                }
+                if (!$order_processed_ok) {
+                    $this->save_event_sync_status('event_based', 'error', $last_error, $checkpoint);
+                    return [
+                        'status' => 'error',
+                        'reason' => $last_error,
+                    ];
+                }
+
+                if ($event_id !== '') {
+                    $checkpoint['last_order_event_id'] = $event_id;
+                }
+                $checkpoint['last_success_ts'] = time();
+                $checkpoint['last_success_at'] = gmdate('Y-m-d H:i:s');
+                $this->save_event_sync_checkpoint($checkpoint);
+                $processed++;
+            }
+
+            $summary = [
+                'status' => 'ok',
+                'processed_events' => $processed,
+                'offer_events' => count($offer_events),
+                'order_events' => count($order_events),
+                'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
+            ];
+            $this->logger->info('EVENT_SYNC_DONE', $summary);
+            $this->save_event_sync_status('event_based', 'ok', '', $checkpoint);
+
+            return $summary;
+        } finally {
+            $this->release_import_lock($lock_context);
+        }
+    }
+
     public function continue_missing_import(): array
     {
         $checkpoint = $this->get_missing_import_checkpoint();
@@ -731,6 +909,11 @@ class Importer
 
         $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
         if ($offer_id === '') {
+            $this->logger->warning('SYNC_WOO_SOLD_OUT_SKIPPED', [
+                'product_id' => $product_id,
+                'reason' => 'missing_allegro_offer_id_meta',
+                'meta_key' => '_allegro_offer_id',
+            ]);
             return;
         }
 
@@ -928,6 +1111,49 @@ class Importer
         update_option(self::MISSING_IMPORT_CHECKPOINT_OPTION_KEY, $checkpoint, false);
     }
 
+    private function get_event_sync_checkpoint(): array
+    {
+        $checkpoint = get_option(self::EVENT_SYNC_CHECKPOINT_OPTION_KEY, []);
+        if (!is_array($checkpoint)) {
+            $checkpoint = [];
+        }
+
+        return [
+            'last_offer_event_id' => sanitize_text_field((string) ($checkpoint['last_offer_event_id'] ?? '')),
+            'last_order_event_id' => sanitize_text_field((string) ($checkpoint['last_order_event_id'] ?? '')),
+            'last_success_ts' => max(0, (int) ($checkpoint['last_success_ts'] ?? 0)),
+            'last_success_at' => sanitize_text_field((string) ($checkpoint['last_success_at'] ?? '')),
+        ];
+    }
+
+    private function save_event_sync_checkpoint(array $checkpoint): void
+    {
+        update_option(self::EVENT_SYNC_CHECKPOINT_OPTION_KEY, $checkpoint, false);
+        $this->logger->info('EVENT_SYNC_CHECKPOINT_SAVED', $checkpoint);
+    }
+
+    public function get_event_sync_status(): array
+    {
+        $status = get_option(self::EVENT_SYNC_STATUS_OPTION_KEY, []);
+        if (!is_array($status)) {
+            $status = [];
+        }
+
+        return [
+            'last_run_at' => sanitize_text_field((string) ($status['last_run_at'] ?? '')),
+            'last_run_mode' => sanitize_text_field((string) ($status['last_run_mode'] ?? '')),
+            'last_status' => sanitize_text_field((string) ($status['last_status'] ?? '')),
+            'last_error' => sanitize_text_field((string) ($status['last_error'] ?? '')),
+            'checkpoint' => is_array($status['checkpoint'] ?? null) ? (array) $status['checkpoint'] : $this->get_event_sync_checkpoint(),
+        ];
+    }
+
+    public function mark_fallback_full_import_started(string $reason): void
+    {
+        $checkpoint = $this->get_event_sync_checkpoint();
+        $this->save_event_sync_status('fallback_full_import', 'started', $reason, $checkpoint);
+    }
+
     private function calculate_page_no_from_offset(int $offset): int
     {
         return max(1, (int) floor(max(0, $offset) / self::BATCH_LIMIT) + 1);
@@ -936,6 +1162,173 @@ class Importer
     private function reset_checkpoint(): void
     {
         delete_option(self::CHECKPOINT_OPTION_KEY);
+    }
+
+    private function normalize_events_list(array $payload, array $keys): array
+    {
+        foreach ($keys as $key) {
+            if (is_array($payload[$key] ?? null)) {
+                return (array) $payload[$key];
+            }
+        }
+
+        return [];
+    }
+
+    private function extract_offer_ids_from_order_event(array $event): array
+    {
+        $ids = [];
+        $line_items = is_array($event['lineItems'] ?? null) ? (array) $event['lineItems'] : [];
+        foreach ($line_items as $line_item) {
+            if (!is_array($line_item)) {
+                continue;
+            }
+
+            $offer_id = sanitize_text_field((string) ($line_item['offer']['id'] ?? $line_item['offerId'] ?? ''));
+            if ($offer_id !== '') {
+                $ids[] = $offer_id;
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    private function sync_single_offer_from_event(
+        string $offer_id,
+        string $inactive_status,
+        array $settings,
+        string $stream,
+        string $event_id,
+        string $event_type
+    ): bool {
+        $details = $this->client->get_offer_details($offer_id);
+        if (is_wp_error($details)) {
+            $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : $details->get_error_message();
+            if ($details->get_error_code() !== 'awi_api_error_404') {
+                $this->logger->error('EVENT_SYNC_ERROR', [
+                    'stage' => 'get_offer_details',
+                    'stream' => $stream,
+                    'event_id' => $event_id,
+                    'event_type' => $event_type,
+                    'offer_id' => $offer_id,
+                    'reason' => $reason,
+                ]);
+                return false;
+            }
+
+            $this->apply_inactive_state_by_offer_id($offer_id, $inactive_status, 'offer_missing');
+            $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => 'offer_missing',
+            ]);
+            return true;
+        }
+
+        $result = $this->mapper->upsert_product($details, $settings);
+        if (($result['result'] ?? '') === 'created') {
+            $this->logger->info('EVENT_SYNC_NEW_OFFER_IMPORTED', [
+                'offer_id' => $offer_id,
+                'product_id' => (int) ($result['product_id'] ?? 0),
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+        } elseif (($result['result'] ?? '') === 'updated') {
+            $this->logger->info('EVENT_SYNC_OFFER_UPDATED', [
+                'offer_id' => $offer_id,
+                'product_id' => (int) ($result['product_id'] ?? 0),
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+        } elseif (($result['result'] ?? '') === 'error') {
+            $this->logger->error('EVENT_SYNC_ERROR', [
+                'stage' => (string) ($result['stage'] ?? 'upsert_product'),
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => (string) ($result['error'] ?? 'unknown_error'),
+            ]);
+            return false;
+        }
+
+        $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
+        $stock_available = isset($details['stock']['available']) && is_numeric($details['stock']['available'])
+            ? max(0, (int) $details['stock']['available'])
+            : null;
+        if ($publication_status !== 'ACTIVE' || $stock_available === 0) {
+            $reason = $publication_status !== 'ACTIVE'
+                ? 'publication_' . strtolower($publication_status)
+                : 'stock_zero';
+            $this->apply_inactive_state_by_offer_id($offer_id, $inactive_status, $reason);
+            $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => $reason,
+            ]);
+        }
+
+        return true;
+    }
+
+    private function apply_inactive_state_by_offer_id(string $offer_id, string $inactive_status, string $reason): void
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $settings = Plugin::get_settings();
+        $dry_run = !empty($settings['destructive_sync_dry_run']);
+        $destructive_enabled = !empty($settings['destructive_sync_enabled']);
+        $changes = 0;
+        foreach (array_map('intval', (array) $query->posts) as $product_id) {
+            $this->apply_inactive_offer_state($product_id, $offer_id, $inactive_status, $dry_run, $destructive_enabled, $changes, $reason);
+        }
+        wp_reset_postdata();
+    }
+
+    private function save_event_sync_status(string $mode, string $status, string $error, array $checkpoint): void
+    {
+        update_option(self::EVENT_SYNC_STATUS_OPTION_KEY, [
+            'last_run_at' => gmdate('Y-m-d H:i:s'),
+            'last_run_mode' => $mode,
+            'last_status' => $status,
+            'last_error' => $error,
+            'checkpoint' => $checkpoint,
+        ], false);
+    }
+
+    private function sort_events_by_time_and_id(array $events): array
+    {
+        usort($events, static function ($a, $b): int {
+            $a_time = is_array($a) ? strtotime((string) ($a['occurredAt'] ?? '')) : 0;
+            $b_time = is_array($b) ? strtotime((string) ($b['occurredAt'] ?? '')) : 0;
+            if ($a_time === $b_time) {
+                $a_id = is_array($a) ? (string) ($a['id'] ?? '') : '';
+                $b_id = is_array($b) ? (string) ($b['id'] ?? '') : '';
+                return strcmp($a_id, $b_id);
+            }
+
+            return $a_time <=> $b_time;
+        });
+
+        return $events;
     }
 
     private function should_stop_for_runtime(float $started_at): bool
