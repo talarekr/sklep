@@ -444,11 +444,19 @@ class Importer
         $checkpoint = $this->get_event_sync_checkpoint();
         $lock_context = $this->build_lock_context();
         $lock_context['mode'] = 'event_sync';
+        $this->logger->info('EVENT_SYNC_START', [
+            'stage' => 'attempt',
+            'checkpoint' => $checkpoint,
+        ]);
 
         if (!$this->acquire_import_lock($lock_context)) {
             $this->logger->warning('EVENT_SYNC_ERROR', [
                 'stage' => 'acquire_lock',
                 'reason' => 'import_lock_active',
+            ]);
+            $this->logger->warning('EVENT_SYNC_SKIPPED', [
+                'reason' => 'import_lock_active',
+                'checkpoint' => $checkpoint,
             ]);
 
             return [
@@ -458,6 +466,7 @@ class Importer
 
         try {
             $this->logger->info('EVENT_SYNC_START', [
+                'stage' => 'running',
                 'checkpoint' => $checkpoint,
             ]);
 
@@ -517,6 +526,12 @@ class Importer
 
             $offer_events = $this->sort_events_by_time_and_id($this->normalize_events_list($offer_events_response, ['offerEvents', 'events']));
             $order_events = $this->sort_events_by_time_and_id($this->normalize_events_list($order_events_response, ['events', 'orderEvents']));
+            if (count($offer_events) === 0 && count($order_events) === 0) {
+                $this->logger->info('EVENT_SYNC_NO_EVENTS', [
+                    'last_offer_event_id' => (string) ($checkpoint['last_offer_event_id'] ?? ''),
+                    'last_order_event_id' => (string) ($checkpoint['last_order_event_id'] ?? ''),
+                ]);
+            }
             $processed = 0;
             $last_error = '';
 
@@ -1274,7 +1289,61 @@ class Importer
             ]);
         }
 
+        if ($stream === 'order_events') {
+            $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type);
+        }
+
         return true;
+    }
+
+    private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        foreach (array_map('intval', (array) $query->posts) as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $previous_stock = $product->get_stock_quantity();
+            $previous_stock_status = (string) $product->get_stock_status();
+            $previous_status = (string) $product->get_status();
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($inactive_status);
+            $product->save();
+
+            $this->logger->info('EVENT_SYNC_ORDER_APPLIED_TO_WOO', [
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'previous_stock' => $previous_stock,
+                'new_stock' => 0,
+                'previous_stock_status' => $previous_stock_status,
+                'new_stock_status' => 'outofstock',
+                'previous_product_status' => $previous_status,
+                'new_product_status' => $inactive_status,
+                'action' => 'set_outofstock_and_hide',
+            ]);
+        }
+
+        wp_reset_postdata();
     }
 
     private function apply_inactive_state_by_offer_id(string $offer_id, string $inactive_status, string $reason): void

@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 class AllegroClient
 {
     private const ACCEPT_HEADER = 'application/vnd.allegro.public.v1+json';
+    private const CONTENT_TYPE_HEADER = 'application/vnd.allegro.public.v1+json';
     private const API_REQUEST_TIMEOUT_SECONDS = 20;
     private const API_REQUEST_REDIRECTION_LIMIT = 3;
     private const MAX_RETRY_ATTEMPTS = 4;
@@ -187,6 +188,10 @@ class AllegroClient
     public function get_offer_events(array $query = [])
     {
         $query = $this->sanitize_events_query($query);
+        $this->logger->info('EVENT_SYNC_ENDPOINT_CALL', [
+            'endpoint' => '/sale/offer-events',
+            'query' => $query,
+        ]);
 
         return $this->request('GET', '/sale/offer-events', [
             'query' => $query,
@@ -201,6 +206,10 @@ class AllegroClient
     public function get_order_events(array $query = [])
     {
         $query = $this->sanitize_events_query($query);
+        $this->logger->info('EVENT_SYNC_ENDPOINT_CALL', [
+            'endpoint' => '/order/events',
+            'query' => $query,
+        ]);
 
         return $this->request('GET', '/order/events', [
             'query' => $query,
@@ -342,7 +351,7 @@ class AllegroClient
             'headers' => [
                 'Authorization' => 'Bearer ' . $token,
                 'Accept' => self::ACCEPT_HEADER,
-                'Content-Type' => 'application/json',
+                'Content-Type' => self::CONTENT_TYPE_HEADER,
             ],
         ];
         $request_context = is_array($args['log_context'] ?? null) ? $args['log_context'] : [];
