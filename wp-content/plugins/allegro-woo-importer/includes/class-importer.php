@@ -1274,7 +1274,61 @@ class Importer
             ]);
         }
 
+        if ($stream === 'order_events') {
+            $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type);
+        }
+
         return true;
+    }
+
+    private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        foreach (array_map('intval', (array) $query->posts) as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $previous_stock = $product->get_stock_quantity();
+            $previous_stock_status = (string) $product->get_stock_status();
+            $previous_status = (string) $product->get_status();
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($inactive_status);
+            $product->save();
+
+            $this->logger->info('EVENT_SYNC_ORDER_APPLIED_TO_WOO', [
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'previous_stock' => $previous_stock,
+                'new_stock' => 0,
+                'previous_stock_status' => $previous_stock_status,
+                'new_stock_status' => 'outofstock',
+                'previous_product_status' => $previous_status,
+                'new_product_status' => $inactive_status,
+                'action' => 'set_outofstock_and_hide',
+            ]);
+        }
+
+        wp_reset_postdata();
     }
 
     private function apply_inactive_state_by_offer_id(string $offer_id, string $inactive_status, string $reason): void
