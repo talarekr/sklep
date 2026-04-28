@@ -34,6 +34,7 @@ class Settings
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_post_awi_manual_import', [$this, 'handle_manual_import']);
+        add_action('admin_post_awi_manual_sync_trigger', [$this, 'handle_manual_sync_trigger']);
         add_action('admin_post_awi_missing_import_start', [$this, 'handle_missing_import_start']);
         add_action('admin_post_awi_missing_import_continue', [$this, 'handle_missing_import_continue']);
         add_action('admin_post_awi_missing_import_pause', [$this, 'handle_missing_import_pause']);
@@ -196,6 +197,60 @@ class Settings
         $this->handle_missing_import_action('awi_missing_import_start', 'start');
     }
 
+    public function handle_manual_sync_trigger(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_manual_sync_trigger');
+        if ($this->block_heavy_operation('manual_sync_trigger')) {
+            return;
+        }
+
+        $redirect = add_query_arg(['page' => 'awi-settings'], admin_url('admin.php'));
+        $lock_status = $this->get_import_lock_status();
+
+        if (!empty($lock_status['is_active'])) {
+            $this->logger->warning('MANUAL_SYNC_SKIPPED_LOCK_ACTIVE', [
+                'lock' => $lock_status['lock_payload'] ?? [],
+                'trigger' => 'admin_button',
+                'user_id' => get_current_user_id(),
+            ]);
+            wp_safe_redirect(add_query_arg([
+                'page' => 'awi-settings',
+                'awi_manual_sync_status' => 'lock_active',
+            ], admin_url('admin.php')));
+            exit;
+        }
+
+        $context = [
+            'trigger' => 'manual_sync',
+            'request_id' => wp_generate_uuid4(),
+            'user_id' => get_current_user_id(),
+        ];
+        $this->logger->info('MANUAL_SYNC_TRIGGERED', $context + [
+            'source' => 'admin_settings_button',
+        ]);
+
+        if (!$this->cron->schedule_manual_sync_now($context)) {
+            $this->logger->error('MANUAL_SYNC_ERROR', $context + [
+                'reason' => 'schedule_failed',
+            ]);
+            wp_safe_redirect(add_query_arg([
+                'page' => 'awi-settings',
+                'awi_manual_sync_status' => 'error',
+            ], admin_url('admin.php')));
+            exit;
+        }
+
+        wp_safe_redirect(add_query_arg([
+            'page' => 'awi-settings',
+            'awi_manual_sync_status' => 'started',
+        ], admin_url('admin.php')));
+        exit;
+    }
+
     public function handle_missing_import_continue(): void
     {
         $this->handle_missing_import_action('awi_missing_import_continue', 'continue');
@@ -317,6 +372,32 @@ class Settings
                     : __('Nie znaleziono aktywnego import locka do usunięcia.', 'allegro-woo-importer'),
                 'updated'
             );
+        }
+
+        if (isset($_GET['awi_manual_sync_status'])) {
+            $manual_sync_status = sanitize_key((string) $_GET['awi_manual_sync_status']);
+            if ($manual_sync_status === 'started') {
+                add_settings_error(
+                    'awi_messages',
+                    'awi_manual_sync_started',
+                    __('Synchronizacja została uruchomiona i zaplanowana do natychmiastowego wykonania w Action Scheduler.', 'allegro-woo-importer'),
+                    'updated'
+                );
+            } elseif ($manual_sync_status === 'lock_active') {
+                add_settings_error(
+                    'awi_messages',
+                    'awi_manual_sync_lock_active',
+                    __('Synchronizacja już trwa (aktywny lock importera). Spróbuj ponownie po jej zakończeniu.', 'allegro-woo-importer'),
+                    'error'
+                );
+            } elseif ($manual_sync_status === 'error') {
+                add_settings_error(
+                    'awi_messages',
+                    'awi_manual_sync_error',
+                    __('Nie udało się uruchomić synchronizacji ręcznej. Sprawdź logi wtyczki.', 'allegro-woo-importer'),
+                    'error'
+                );
+            }
         }
 
         if (isset($_GET['awi_listing_regen_done'])) {
