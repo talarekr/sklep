@@ -410,6 +410,59 @@ class Cron
         return true;
     }
 
+    private function describe_registered_callbacks_for_hook(string $hook): array
+    {
+        global $wp_filter;
+
+        try {
+            if (empty($wp_filter[$hook]) || !is_object($wp_filter[$hook])) {
+                return [];
+            }
+
+            $hook_callbacks = $wp_filter[$hook]->callbacks ?? [];
+            if (!is_array($hook_callbacks)) {
+                return [];
+            }
+
+            $callbacks = [];
+
+            foreach ($hook_callbacks as $priority => $items) {
+                if (!is_array($items)) {
+                    continue;
+                }
+
+                foreach ($items as $item) {
+                    $function = $item['function'] ?? null;
+
+                    if (is_string($function)) {
+                        $callback = $function;
+                    } elseif (is_array($function)) {
+                        $target = $function[0] ?? 'unknown';
+                        $class = is_object($target) ? get_class($target) : (string) $target;
+                        $method = (string) ($function[1] ?? 'unknown');
+                        $callback = $class . '::' . $method;
+                    } elseif ($function instanceof \Closure) {
+                        $callback = 'Closure';
+                    } elseif (is_object($function) && method_exists($function, '__invoke')) {
+                        $callback = get_class($function) . '::__invoke';
+                    } else {
+                        $callback = gettype($function);
+                    }
+
+                    $callbacks[] = [
+                        'priority' => (int) $priority,
+                        'callback' => $callback,
+                        'accepted_args' => isset($item['accepted_args']) ? (int) $item['accepted_args'] : null,
+                    ];
+                }
+            }
+
+            return $callbacks;
+        } catch (\Throwable $exception) {
+            return [];
+        }
+    }
+
     private function log_background_sync_already_exists_throttled(array $context): void
     {
         $last_logged_ts = (int) get_transient(self::ALREADY_EXISTS_LOG_TRANSIENT_KEY);
