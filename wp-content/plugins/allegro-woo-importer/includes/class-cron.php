@@ -261,27 +261,26 @@ class Cron
             return false;
         }
 
-        $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, self::SCHEDULER_ARGS, self::ACTION_SCHEDULER_GROUP);
-        $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, self::SCHEDULER_ARGS, self::ACTION_SCHEDULER_GROUP) !== false;
+        $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+        $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP) !== false;
         $next_action_timestamp_any_group = (int) as_next_scheduled_action(Plugin::CRON_HOOK);
         $has_any_scheduled_action_any_group = as_has_scheduled_action(Plugin::CRON_HOOK) !== false;
-        $existing_pending_count = $this->count_pending_actions_for_main_hook();
-        $will_schedule = ($next_action_timestamp <= 0 && !$has_any_scheduled_action && !$has_any_scheduled_action_any_group);
-
-        $this->logger->info('BACKGROUND_SYNC_SCHEDULER_DEBUG', [
-            'source' => $source,
-            'has_scheduled_action_global' => $has_any_scheduled_action_any_group,
-            'has_scheduled_action_group' => $has_any_scheduled_action,
-            'next_scheduled_action' => $next_action_timestamp,
-            'existing_pending_count' => $existing_pending_count,
-            'group' => self::ACTION_SCHEDULER_GROUP,
-            'args' => self::SCHEDULER_ARGS,
-            'interval' => $interval,
-            'will_schedule' => $will_schedule,
-        ]);
 
         if ($next_action_timestamp <= 0 && !$has_any_scheduled_action && $has_any_scheduled_action_any_group) {
-            $this->log_background_sync_already_exists_throttled([
+            $this->logger->warning('BACKGROUND_SYNC_ALREADY_SCHEDULED', [
+                'runner' => 'action_scheduler',
+                'hook' => Plugin::CRON_HOOK,
+                'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
+                'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
+                'reason' => 'existing_job_detected_outside_default_group_or_args',
+            ]);
+
+            return true;
+        }
+
+        if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
+            as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+            $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
                 'runner' => 'action_scheduler',
                 'hook' => Plugin::CRON_HOOK,
                 'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
