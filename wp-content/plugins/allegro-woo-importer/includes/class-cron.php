@@ -14,6 +14,7 @@ class Cron
     private const ADMIN_REPAIR_THROTTLE_SECONDS = 300;
     private const ALREADY_EXISTS_LOG_TRANSIENT_KEY = 'awi_background_sync_exists_log';
     private const ADMIN_REPAIR_TRANSIENT_KEY = 'awi_background_sync_admin_repair';
+    private const SCHEDULE_DRIFT_TOLERANCE_SECONDS = 120;
 
     private Importer $importer;
     private Logger $logger;
@@ -418,6 +419,29 @@ class Cron
                 ]);
             }
         } else {
+            $max_expected_next_run_timestamp = time() + $interval_seconds + self::SCHEDULE_DRIFT_TOLERANCE_SECONDS;
+            if (
+                $next_action_timestamp > $max_expected_next_run_timestamp
+                && function_exists('as_unschedule_all_actions')
+                && function_exists('as_schedule_recurring_action')
+            ) {
+                $old_next_run_at = gmdate('Y-m-d H:i:s', $next_action_timestamp);
+                as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                $new_action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+
+                if ($new_action_id !== false) {
+                    $this->logger->info('BACKGROUND_SYNC_RESCHEDULED_INTERVAL_CHANGED', [
+                        'old_next_run_at' => $old_next_run_at,
+                        'configured_interval' => $interval,
+                        'configured_interval_seconds' => $interval_seconds,
+                        'new_action_id' => $new_action_id,
+                        'source' => $source,
+                    ]);
+
+                    return true;
+                }
+            }
+
             $this->log_background_sync_already_exists_throttled([
                 'runner' => 'action_scheduler',
                 'hook' => Plugin::CRON_HOOK,
