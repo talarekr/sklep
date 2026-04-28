@@ -8,6 +8,12 @@ if (!defined('ABSPATH')) {
 
 class AllegroAuth
 {
+    private const REQUIRED_OAUTH_SCOPES = [
+        'allegro:api:sale:offers:read',
+        'allegro:api:sale:offers:write',
+        'allegro:api:orders:read',
+    ];
+    public const ORDER_EVENTS_REQUIRED_SCOPE = 'allegro:api:orders:read';
     private const TOKEN_REFRESH_LEEWAY_SECONDS = 300;
     private const TOKEN_REFRESH_LOCK_OPTION_KEY = 'awi_allegro_token_refresh_lock';
     private const TOKEN_REFRESH_LOCK_TTL_SECONDS = 60;
@@ -43,6 +49,7 @@ class AllegroAuth
             'client_id' => $settings['client_id'],
             'redirect_uri' => $redirect_uri,
             'state' => $state,
+            'scope' => implode(' ', self::REQUIRED_OAUTH_SCOPES),
         ];
 
         return add_query_arg($query, $base . '/auth/oauth/authorize');
@@ -116,6 +123,37 @@ class AllegroAuth
         $settings = Plugin::get_settings();
 
         return $this->get_effective_redirect_uri($settings);
+    }
+
+    public function has_required_order_events_scope(?string $token_scope): bool
+    {
+        $scopes = $this->normalize_scope_list($token_scope);
+        return in_array(self::ORDER_EVENTS_REQUIRED_SCOPE, $scopes, true);
+    }
+
+    private function normalize_scope_list(?string $scope_value): array
+    {
+        $scope_value = trim((string) $scope_value);
+        if ($scope_value === '') {
+            return [];
+        }
+
+        $parts = preg_split('/\s+/', $scope_value);
+        if (!is_array($parts)) {
+            return [];
+        }
+
+        $scopes = [];
+        foreach ($parts as $scope) {
+            $scope = sanitize_text_field((string) $scope);
+            if ($scope === '') {
+                continue;
+            }
+
+            $scopes[] = $scope;
+        }
+
+        return array_values(array_unique($scopes));
     }
 
     private function is_oauth_callback_request(): bool
@@ -282,6 +320,7 @@ class AllegroAuth
             'expires_at' => $expires_at,
             'token_expires_at' => $expires_at,
             'connected_at' => gmdate('Y-m-d H:i:s'),
+            'awi_order_events_access_denied_notice' => 0,
         ];
 
         $new_refresh_token = sanitize_text_field((string) ($token_data['refresh_token'] ?? ''));

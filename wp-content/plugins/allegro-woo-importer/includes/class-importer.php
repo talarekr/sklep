@@ -508,6 +508,26 @@ class Importer
                 'limit' => 100,
             ]);
             if (is_wp_error($order_events_response)) {
+                if ($this->is_order_events_access_denied_error($order_events_response)) {
+                    $this->logger->warning('EVENT_SYNC_ORDER_EVENTS_DISABLED_ACCESS_DENIED', [
+                        'stage' => 'fetch_order_events',
+                        'reason' => $order_events_response->get_error_message(),
+                        'required_scope' => AllegroAuth::ORDER_EVENTS_REQUIRED_SCOPE,
+                    ]);
+                    $this->logger->warning('ALLEGRO_OAUTH_SCOPES_INSUFFICIENT_FOR_ORDER_EVENTS', [
+                        'required_scope' => AllegroAuth::ORDER_EVENTS_REQUIRED_SCOPE,
+                        'source' => 'event_sync_order_events_call',
+                        'reauthorization_required' => true,
+                    ]);
+
+                    $settings = Plugin::get_settings();
+                    $settings['awi_order_events_access_denied_notice'] = 1;
+                    Plugin::update_settings($settings);
+
+                    $order_events_response = [
+                        'events' => [],
+                    ];
+                } else {
                 $this->logger->error('EVENT_SYNC_ERROR', [
                     'stage' => 'fetch_order_events',
                     'reason' => $order_events_response->get_error_message(),
@@ -517,6 +537,7 @@ class Importer
                     'status' => 'fallback_required',
                     'reason' => 'order_events_api_error',
                 ];
+                }
             }
 
             $settings = Plugin::get_settings();
@@ -1208,6 +1229,32 @@ class Importer
         return array_values(array_unique($ids));
     }
 
+    private function is_order_events_access_denied_error(\WP_Error $error): bool
+    {
+        $data = $error->get_error_data();
+        $status = is_array($data) ? (int) ($data['status'] ?? 0) : 0;
+        if ($status !== 403) {
+            return false;
+        }
+
+        $body = is_array($data) ? (string) ($data['body'] ?? '') : '';
+        if ($body === '') {
+            return true;
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return true;
+        }
+
+        $error_code = sanitize_text_field((string) ($decoded['errors'][0]['code'] ?? $decoded['code'] ?? ''));
+        if ($error_code === '') {
+            return true;
+        }
+
+        return strtolower($error_code) === 'accessdenied';
+    }
+
     private function sync_single_offer_from_event(
         string $offer_id,
         string $inactive_status,
@@ -1216,6 +1263,11 @@ class Importer
         string $event_id,
         string $event_type
     ): bool {
+        if ($this->is_terminal_offer_event_type($event_type)) {
+            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+            return true;
+        }
+
         $details = $this->client->get_offer_details($offer_id);
         if (is_wp_error($details)) {
             $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : $details->get_error_message();
@@ -1231,7 +1283,7 @@ class Importer
                 return false;
             }
 
-            $this->apply_inactive_state_by_offer_id($offer_id, $inactive_status, 'offer_missing');
+            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
             $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
                 'offer_id' => $offer_id,
                 'stream' => $stream,
@@ -1294,6 +1346,76 @@ class Importer
         }
 
         return true;
+    }
+
+    private function is_terminal_offer_event_type(string $event_type): bool
+    {
+        $event_type = strtoupper(sanitize_text_field($event_type));
+        return in_array($event_type, [
+            'OFFER_ARCHIVED',
+            'OFFER_ENDED',
+            'OFFER_DEACTIVATED',
+            'OFFER_FINISHED',
+        ], true);
+    }
+
+    private function apply_archived_or_ended_offer_to_woo(
+        string $offer_id,
+        string $inactive_status,
+        string $event_id,
+        string $event_type,
+        string $stream
+    ): void {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $product_ids = array_map('intval', (array) $query->posts);
+        if (count($product_ids) === 0) {
+            $this->logger->warning('missing_linked_product_for_offer', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+            wp_reset_postdata();
+            return;
+        }
+
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($inactive_status);
+            $product->save();
+
+            $this->logger->info('EVENT_SYNC_OFFER_ARCHIVED_APPLIED_TO_WOO', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'post_status' => $inactive_status,
+                'stock_status' => 'outofstock',
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+        }
+
+        wp_reset_postdata();
     }
 
     private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
