@@ -100,6 +100,17 @@ class Cron
             'configured_cron_interval' => $configured_interval,
             'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
         ]);
+
+        $event_sync_summary = [
+            'status' => 'unknown',
+            'reason' => '',
+            'processed_events' => 0,
+            'offer_events' => 0,
+            'order_events' => 0,
+        ];
+        $event_sync_checkpoint = [];
+        $scheduled_run_result_logged = false;
+
         try {
             $event_sync_summary = $this->importer->run_event_based_sync();
             $event_sync_status_snapshot = $this->importer->get_event_sync_status();
@@ -121,6 +132,7 @@ class Cron
                 'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
                 'trigger' => $trigger,
             ]);
+            $scheduled_run_result_logged = true;
 
             if ($fallback_required) {
                 $this->logger->warning('EVENT_SYNC_ERROR', [
@@ -146,6 +158,13 @@ class Cron
                 ]);
             }
         } catch (\Throwable $exception) {
+            $event_sync_summary = [
+                'status' => 'error',
+                'reason' => 'unhandled_exception',
+                'processed_events' => 0,
+                'offer_events' => 0,
+                'order_events' => 0,
+            ];
             if ($is_manual_trigger) {
                 $this->logger->error('MANUAL_SYNC_ERROR', $manual_context + [
                     'message' => $exception->getMessage(),
@@ -155,6 +174,23 @@ class Cron
                 'message' => $exception->getMessage(),
                 'trigger' => $trigger,
             ]);
+        } finally {
+            if (!$scheduled_run_result_logged) {
+                $event_sync_result_status = (string) ($event_sync_summary['status'] ?? 'unknown');
+                $event_sync_result_reason = (string) ($event_sync_summary['reason'] ?? '');
+                $fallback_required = $event_sync_result_status === 'fallback_required';
+                $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
+                    'hook' => Plugin::CRON_HOOK,
+                    'status' => $event_sync_result_status,
+                    'reason' => $event_sync_result_reason,
+                    'checkpoint' => $event_sync_checkpoint,
+                    'fallback_required' => $fallback_required,
+                    'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
+                    'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
+                    'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
+                    'trigger' => $trigger,
+                ]);
+            }
         }
     }
 
@@ -391,22 +427,6 @@ class Cron
         }
 
         if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
-            as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-            $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
-                'runner' => 'action_scheduler',
-                'hook' => Plugin::CRON_HOOK,
-                'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
-                'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
-                'reason' => 'existing_job_detected_outside_default_group_or_args',
-                'source' => $source,
-                'configured_interval' => $interval,
-                'configured_interval_seconds' => $interval_seconds,
-            ]);
-
-            return true;
-        }
-
-        if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
             $action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, self::SCHEDULER_ARGS, self::ACTION_SCHEDULER_GROUP);
             if ($action_id !== false) {
                 $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
@@ -419,6 +439,31 @@ class Cron
                 ]);
             }
         } else {
+            $is_invalid_or_stale_next_run = $next_action_timestamp <= time();
+            if (
+                $is_invalid_or_stale_next_run
+                && function_exists('as_unschedule_all_actions')
+                && function_exists('as_schedule_recurring_action')
+            ) {
+                $old_next_run_timestamp = $next_action_timestamp;
+                $old_next_run_at = $old_next_run_timestamp > 0 ? gmdate('Y-m-d H:i:s', $old_next_run_timestamp) : '';
+                as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                $new_action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, self::SCHEDULER_ARGS, self::ACTION_SCHEDULER_GROUP);
+
+                if ($new_action_id !== false) {
+                    $this->logger->warning('BACKGROUND_SYNC_RESCHEDULED_INVALID_NEXT_RUN', [
+                        'old_next_run_at' => $old_next_run_at,
+                        'old_next_run_timestamp' => $old_next_run_timestamp,
+                        'configured_interval' => $interval,
+                        'configured_interval_seconds' => $interval_seconds,
+                        'new_action_id' => $new_action_id,
+                        'source' => $source,
+                    ]);
+
+                    return true;
+                }
+            }
+
             $max_expected_next_run_timestamp = time() + $interval_seconds + self::SCHEDULE_DRIFT_TOLERANCE_SECONDS;
             if (
                 $next_action_timestamp > $max_expected_next_run_timestamp
@@ -442,15 +487,17 @@ class Cron
                 }
             }
 
-            $this->log_background_sync_already_exists_throttled([
-                'runner' => 'action_scheduler',
-                'hook' => Plugin::CRON_HOOK,
-                'next_run_at' => gmdate('Y-m-d H:i:s', $next_action_timestamp),
-                'next_run_timestamp' => $next_action_timestamp,
-                'source' => $source,
-                'configured_interval' => $interval,
-                'configured_interval_seconds' => $interval_seconds,
-            ]);
+            if ($next_action_timestamp > time()) {
+                $this->log_background_sync_already_exists_throttled([
+                    'runner' => 'action_scheduler',
+                    'hook' => Plugin::CRON_HOOK,
+                    'next_run_at' => gmdate('Y-m-d H:i:s', $next_action_timestamp),
+                    'next_run_timestamp' => $next_action_timestamp,
+                    'source' => $source,
+                    'configured_interval' => $interval,
+                    'configured_interval_seconds' => $interval_seconds,
+                ]);
+            }
         }
 
         return true;
