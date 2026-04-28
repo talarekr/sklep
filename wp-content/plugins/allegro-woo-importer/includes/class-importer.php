@@ -1402,56 +1402,6 @@ class Importer
             $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type, $details);
         }
 
-        return true;
-    }
-
-    private function sync_single_order_offer_from_event(
-        string $offer_id,
-        string $inactive_status,
-        string $event_id,
-        string $event_type
-    ): bool {
-        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, []);
-        if (count($lookup['product_ids']) > 0) {
-            $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
-            $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
-                'event_id' => $event_id,
-                'event_type' => $event_type,
-                'offer_id' => $offer_id,
-                'reason' => 'resolved_before_offer_details_fetch',
-            ]);
-            return true;
-        }
-
-        $details = $this->client->get_offer_details($offer_id);
-        if (is_wp_error($details)) {
-            if ($details->get_error_code() === 'awi_api_error_404') {
-                $this->logger->info('EVENT_SYNC_ORDER_OFFER_DETAILS_404_IGNORED', [
-                    'event_id' => $event_id,
-                    'event_type' => $event_type,
-                    'offer_id' => $offer_id,
-                    'error_code' => $details->get_error_code(),
-                ]);
-            } else {
-                $this->logger->warning('EVENT_SYNC_ORDER_OFFER_DETAILS_FETCH_FAILED_IGNORED', [
-                    'event_id' => $event_id,
-                    'event_type' => $event_type,
-                    'offer_id' => $offer_id,
-                    'error_code' => $details->get_error_code(),
-                    'error_message' => $details->get_error_message(),
-                ]);
-            }
-
-            $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
-            $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
-                'event_id' => $event_id,
-                'event_type' => $event_type,
-                'offer_id' => $offer_id,
-                'reason' => 'offer_details_unavailable',
-            ]);
-            return true;
-        }
-
         $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $details);
         $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
         $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
@@ -1532,16 +1482,6 @@ class Importer
     ): void
     {
         $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $offer_details);
-        $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
-    }
-
-    private function apply_order_sold_state_from_lookup(
-        string $offer_id,
-        string $inactive_status,
-        string $event_id,
-        string $event_type,
-        array $lookup
-    ): void {
         if (count($lookup['product_ids']) === 0) {
             $this->logger->warning('missing_linked_product_for_offer', [
                 'offer_id' => $offer_id,
@@ -1640,20 +1580,6 @@ class Importer
                     'identifiers' => $identifiers,
                 ];
             }
-        }
-
-        $product_ids = $this->find_product_ids_by_meta_like('_allegro_offer_url', $offer_id, $attempts);
-        if (count($product_ids) > 0) {
-            foreach ($product_ids as $product_id) {
-                update_post_meta($product_id, '_allegro_offer_id', $offer_id);
-            }
-
-            return [
-                'product_ids' => $product_ids,
-                'resolved_by' => 'offer_url_like:_allegro_offer_url',
-                'attempts' => $attempts,
-                'identifiers' => $identifiers,
-            ];
         }
 
         $external_id = sanitize_text_field((string) ($offer_details['external']['id'] ?? ''));
@@ -1769,39 +1695,6 @@ class Importer
         $product_ids = array_values(array_unique(array_map('intval', (array) $query->posts)));
         $attempts[] = [
             'lookup' => 'meta_query_exact',
-            'meta_key' => $meta_key,
-            'value' => $value,
-            'matched_count' => count($product_ids),
-        ];
-
-        return $product_ids;
-    }
-
-    private function find_product_ids_by_meta_like(string $meta_key, string $value, array &$attempts): array
-    {
-        $meta_key = sanitize_key($meta_key);
-        $value = sanitize_text_field($value);
-        if ($meta_key === '' || $value === '') {
-            return [];
-        }
-
-        $query = new \WP_Query([
-            'post_type' => 'product',
-            'post_status' => 'any',
-            'fields' => 'ids',
-            'posts_per_page' => 100,
-            'meta_query' => [
-                [
-                    'key' => $meta_key,
-                    'value' => $value,
-                    'compare' => 'LIKE',
-                ],
-            ],
-        ]);
-
-        $product_ids = array_values(array_unique(array_map('intval', (array) $query->posts)));
-        $attempts[] = [
-            'lookup' => 'meta_query_like',
             'meta_key' => $meta_key,
             'value' => $value,
             'matched_count' => count($product_ids),
