@@ -199,12 +199,18 @@ class Settings
 
     public function handle_manual_sync_trigger(): void
     {
+        $handler_source = __METHOD__;
+
         if (!current_user_can('manage_options')) {
             wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
         }
 
         check_admin_referer('awi_manual_sync_trigger');
         if ($this->block_heavy_operation('manual_sync_trigger')) {
+            $this->logger->warning('MANUAL_SYNC_SKIPPED_HEAVY_OPERATION_BLOCK', [
+                'source' => $handler_source,
+                'reason' => 'block_heavy_operation_returned_true',
+            ]);
             return;
         }
 
@@ -216,6 +222,7 @@ class Settings
                 'lock' => $lock_status['lock_payload'] ?? [],
                 'trigger' => 'admin_button',
                 'user_id' => get_current_user_id(),
+                'source' => $handler_source,
             ]);
             wp_safe_redirect(add_query_arg([
                 'page' => 'awi-settings',
@@ -231,11 +238,14 @@ class Settings
         ];
         $this->logger->info('MANUAL_SYNC_TRIGGERED', $context + [
             'source' => 'admin_settings_button',
+            'function' => $handler_source,
         ]);
 
-        if (!$this->cron->schedule_manual_sync_now($context)) {
+        $action_id = $this->cron->schedule_manual_sync_now($context);
+        if ($action_id <= 0) {
             $this->logger->error('MANUAL_SYNC_ERROR', $context + [
                 'reason' => 'schedule_failed',
+                'source' => $handler_source,
             ]);
             wp_safe_redirect(add_query_arg([
                 'page' => 'awi-settings',
@@ -243,6 +253,13 @@ class Settings
             ], admin_url('admin.php')));
             exit;
         }
+
+        $this->logger->info('MANUAL_SYNC_ENQUEUED', $context + [
+            'action_id' => $action_id,
+            'hook' => Plugin::CRON_HOOK,
+            'group' => 'awi-manual',
+            'source' => $handler_source,
+        ]);
 
         wp_safe_redirect(add_query_arg([
             'page' => 'awi-settings',

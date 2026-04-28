@@ -117,17 +117,27 @@ class Cron
         }
     }
 
-    public function schedule_manual_sync_now(array $context): bool
+    public function schedule_manual_sync_now(array $context): int
     {
-        if (!function_exists('as_schedule_single_action')) {
+        if (!function_exists('as_enqueue_async_action')) {
             $this->logger->error('MANUAL_SYNC_ERROR', [
                 'reason' => 'action_scheduler_unavailable',
             ] + $context);
-            return false;
+            return 0;
         }
 
-        as_schedule_single_action(time() + 1, Plugin::CRON_HOOK, $context, self::ACTION_SCHEDULER_GROUP);
-        return true;
+        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, $context, 'awi-manual');
+        if (empty($action_id)) {
+            $this->logger->error('MANUAL_SYNC_ERROR', [
+                'reason' => 'enqueue_returned_empty_action_id',
+                'hook' => Plugin::CRON_HOOK,
+                'group' => 'awi-manual',
+                'action_id' => $action_id,
+            ] + $context);
+            return 0;
+        }
+
+        return (int) $action_id;
     }
 
     public function run_missing_import_batch(): void
