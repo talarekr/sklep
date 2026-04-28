@@ -1328,7 +1328,7 @@ class Importer
 
         $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
         if ($publication_status !== 'ACTIVE') {
-            $affected_product_ids = $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+            $affected_product_ids = $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream, $details);
             foreach ($affected_product_ids as $product_id) {
                 $this->logger->info('EVENT_SYNC_OFFER_SKIPPED_FULL_IMPORT_NOT_ACTIVE', [
                     'offer_id' => $offer_id,
@@ -1395,7 +1395,7 @@ class Importer
         }
 
         if ($stream === 'order_events') {
-            $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type);
+            $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type, $details);
         }
 
         return true;
@@ -1417,32 +1417,21 @@ class Importer
         string $inactive_status,
         string $event_id,
         string $event_type,
-        string $stream
-    ): void {
-        $query = new \WP_Query([
-            'post_type' => 'product',
-            'post_status' => 'any',
-            'fields' => 'ids',
-            'posts_per_page' => 100,
-            'meta_query' => [
-                [
-                    'key' => '_allegro_offer_id',
-                    'value' => $offer_id,
-                    'compare' => '=',
-                ],
-            ],
-        ]);
-
-        $product_ids = array_map('intval', (array) $query->posts);
+        string $stream,
+        array $offer_details = []
+    ): array {
+        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $offer_details);
+        $product_ids = $lookup['product_ids'];
         if (count($product_ids) === 0) {
             $this->logger->warning('missing_linked_product_for_offer', [
                 'offer_id' => $offer_id,
                 'stream' => $stream,
                 'event_id' => $event_id,
                 'event_type' => $event_type,
+                'lookup_attempts' => $lookup['attempts'],
+                'lookup_identifiers' => $lookup['identifiers'],
             ]);
-            wp_reset_postdata();
-            return;
+            return [];
         }
 
         foreach ($product_ids as $product_id) {
@@ -1468,26 +1457,31 @@ class Importer
             ]);
         }
 
-        wp_reset_postdata();
+        return $product_ids;
     }
 
-    private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
+    private function apply_order_sold_state_by_offer_id(
+        string $offer_id,
+        string $inactive_status,
+        string $event_id,
+        string $event_type,
+        array $offer_details = []
+    ): void
     {
-        $query = new \WP_Query([
-            'post_type' => 'product',
-            'post_status' => 'any',
-            'fields' => 'ids',
-            'posts_per_page' => 100,
-            'meta_query' => [
-                [
-                    'key' => '_allegro_offer_id',
-                    'value' => $offer_id,
-                    'compare' => '=',
-                ],
-            ],
-        ]);
+        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $offer_details);
+        if (count($lookup['product_ids']) === 0) {
+            $this->logger->warning('missing_linked_product_for_offer', [
+                'offer_id' => $offer_id,
+                'stream' => 'order_events',
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'lookup_attempts' => $lookup['attempts'],
+                'lookup_identifiers' => $lookup['identifiers'],
+            ]);
+            return;
+        }
 
-        foreach (array_map('intval', (array) $query->posts) as $product_id) {
+        foreach ($lookup['product_ids'] as $product_id) {
             $product = wc_get_product($product_id);
             if (!$product instanceof \WC_Product) {
                 continue;
@@ -1508,6 +1502,7 @@ class Importer
                 'event_type' => $event_type,
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
+                'lookup_method' => $lookup['resolved_by'],
                 'previous_stock' => $previous_stock,
                 'new_stock' => 0,
                 'previous_stock_status' => $previous_stock_status,
@@ -1517,8 +1512,199 @@ class Importer
                 'action' => 'set_outofstock_and_hide',
             ]);
         }
+    }
 
-        wp_reset_postdata();
+    private function resolve_linked_product_ids_for_offer(string $offer_id, array $offer_details = []): array
+    {
+        $offer_id = sanitize_text_field($offer_id);
+        $attempts = [];
+        $identifiers = [
+            'offer_id' => $offer_id,
+            'external_id' => '',
+            'sku' => '',
+            'part_number' => '',
+        ];
+
+        if ($offer_id === '') {
+            return [
+                'product_ids' => [],
+                'resolved_by' => 'none',
+                'attempts' => $attempts,
+                'identifiers' => $identifiers,
+            ];
+        }
+
+        $product_ids = $this->find_product_ids_by_exact_meta_key('_allegro_offer_id', $offer_id, $attempts);
+        if (count($product_ids) > 0) {
+            return [
+                'product_ids' => $product_ids,
+                'resolved_by' => '_allegro_offer_id',
+                'attempts' => $attempts,
+                'identifiers' => $identifiers,
+            ];
+        }
+
+        $legacy_offer_meta_keys = [
+            'allegro_offer_id',
+            '_awi_allegro_offer_id',
+            '_allegro_offer',
+            '_offer_id',
+            'offer_id',
+            '_allegro_id',
+            'allegro_id',
+        ];
+        foreach ($legacy_offer_meta_keys as $legacy_key) {
+            $product_ids = $this->find_product_ids_by_exact_meta_key($legacy_key, $offer_id, $attempts);
+            if (count($product_ids) > 0) {
+                foreach ($product_ids as $product_id) {
+                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                }
+
+                return [
+                    'product_ids' => $product_ids,
+                    'resolved_by' => 'legacy_meta:' . $legacy_key,
+                    'attempts' => $attempts,
+                    'identifiers' => $identifiers,
+                ];
+            }
+        }
+
+        $external_id = sanitize_text_field((string) ($offer_details['external']['id'] ?? ''));
+        if ($external_id !== '') {
+            $identifiers['external_id'] = $external_id;
+            $external_meta_keys = ['_allegro_external_id', 'allegro_external_id', '_external_id', 'external_id'];
+            foreach ($external_meta_keys as $meta_key) {
+                $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $external_id, $attempts);
+                if (count($product_ids) > 0) {
+                    foreach ($product_ids as $product_id) {
+                        update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                    }
+
+                    return [
+                        'product_ids' => $product_ids,
+                        'resolved_by' => 'external_id:' . $meta_key,
+                        'attempts' => $attempts,
+                        'identifiers' => $identifiers,
+                    ];
+                }
+            }
+        }
+
+        $sku = $this->extract_offer_lookup_value($offer_details, ['sku', 'numer części', 'nr części', 'part number']);
+        if ($sku !== '') {
+            $identifiers['sku'] = $sku;
+
+            if (function_exists('wc_get_product_id_by_sku')) {
+                $product_id = (int) wc_get_product_id_by_sku($sku);
+                $attempts[] = [
+                    'lookup' => 'wc_get_product_id_by_sku',
+                    'value' => $sku,
+                    'matched_count' => $product_id > 0 ? 1 : 0,
+                ];
+                if ($product_id > 0) {
+                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+
+                    return [
+                        'product_ids' => [$product_id],
+                        'resolved_by' => 'sku:wc_get_product_id_by_sku',
+                        'attempts' => $attempts,
+                        'identifiers' => $identifiers,
+                    ];
+                }
+            }
+
+            $product_ids = $this->find_product_ids_by_exact_meta_key('_sku', $sku, $attempts);
+            if (count($product_ids) > 0) {
+                foreach ($product_ids as $product_id) {
+                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                }
+
+                return [
+                    'product_ids' => $product_ids,
+                    'resolved_by' => 'sku:_sku',
+                    'attempts' => $attempts,
+                    'identifiers' => $identifiers,
+                ];
+            }
+        }
+
+        $part_number = $this->extract_offer_lookup_value($offer_details, ['numer części', 'nr części', 'part number']);
+        if ($part_number !== '') {
+            $identifiers['part_number'] = $part_number;
+            $part_number_meta_keys = ['_part_number', 'part_number', '_product_part_number'];
+            foreach ($part_number_meta_keys as $meta_key) {
+                $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $part_number, $attempts);
+                if (count($product_ids) > 0) {
+                    foreach ($product_ids as $product_id) {
+                        update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                    }
+
+                    return [
+                        'product_ids' => $product_ids,
+                        'resolved_by' => 'part_number:' . $meta_key,
+                        'attempts' => $attempts,
+                        'identifiers' => $identifiers,
+                    ];
+                }
+            }
+        }
+
+        return [
+            'product_ids' => [],
+            'resolved_by' => 'none',
+            'attempts' => $attempts,
+            'identifiers' => $identifiers,
+        ];
+    }
+
+    private function find_product_ids_by_exact_meta_key(string $meta_key, string $value, array &$attempts): array
+    {
+        $meta_key = sanitize_key($meta_key);
+        $value = sanitize_text_field($value);
+        if ($meta_key === '' || $value === '') {
+            return [];
+        }
+
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => $meta_key,
+                    'value' => $value,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $product_ids = array_values(array_unique(array_map('intval', (array) $query->posts)));
+        $attempts[] = [
+            'lookup' => 'meta_query_exact',
+            'meta_key' => $meta_key,
+            'value' => $value,
+            'matched_count' => count($product_ids),
+        ];
+
+        return $product_ids;
+    }
+
+    private function extract_offer_lookup_value(array $offer_details, array $parameter_names): string
+    {
+        foreach (($offer_details['parameters'] ?? []) as $parameter) {
+            $name = mb_strtolower(sanitize_text_field((string) ($parameter['name'] ?? '')));
+            if (!in_array($name, $parameter_names, true)) {
+                continue;
+            }
+
+            $candidate = sanitize_text_field((string) ($parameter['values'][0] ?? ''));
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return '';
     }
 
     private function apply_inactive_state_by_offer_id(string $offer_id, string $inactive_status, string $reason): void
