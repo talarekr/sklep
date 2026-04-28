@@ -118,18 +118,18 @@ class Cron
         }
     }
 
-    public function get_manual_action_scheduler_group(): string
+    public function schedule_manual_sync_now(array $context): bool
     {
-        return self::MANUAL_ACTION_SCHEDULER_GROUP;
-    }
-
-    public function schedule_manual_sync_now()
-    {
-        if (!function_exists('as_enqueue_async_action')) {
+        if (!function_exists('as_schedule_single_action')) {
+            $this->logger->error('MANUAL_SYNC_ERROR', [
+                'reason' => 'action_scheduler_unavailable',
+            ] + $context);
             return false;
         }
+    }
 
-        return as_enqueue_async_action(Plugin::CRON_HOOK, [], self::MANUAL_ACTION_SCHEDULER_GROUP);
+        as_schedule_single_action(time() + 1, Plugin::CRON_HOOK, $context, self::ACTION_SCHEDULER_GROUP);
+        return true;
     }
 
     public function run_missing_import_batch(): void

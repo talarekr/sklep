@@ -199,43 +199,23 @@ class Settings
 
     public function handle_manual_sync_trigger(): void
     {
-        $log_context = [
-            'source' => __METHOD__,
-            'function' => __FUNCTION__,
-            'trigger' => 'admin_button',
-            'user_id' => get_current_user_id(),
-        ];
-
         if (!current_user_can('manage_options')) {
-            $this->logger->warning('MANUAL_SYNC_ERROR', $log_context + [
-                'reason' => 'missing_capability_manage_options',
-                'return_path' => 'wp_die',
-            ]);
             wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
         }
 
         check_admin_referer('awi_manual_sync_trigger');
         if ($this->block_heavy_operation('manual_sync_trigger')) {
-            $this->logger->warning('MANUAL_SYNC_ERROR', $log_context + [
-                'reason' => 'safe_mode_enabled',
-                'return_path' => 'blocked_by_safe_mode',
-            ]);
             return;
         }
 
+        $redirect = add_query_arg(['page' => 'awi-settings'], admin_url('admin.php'));
         $lock_status = $this->get_import_lock_status();
-        $this->logger->info('MANUAL_SYNC_TRIGGERED', $log_context + [
-            'lock_active' => !empty($lock_status['is_active']),
-            'lock_expires_at' => (int) ($lock_status['expires_at_ts'] ?? 0),
-        ]);
 
         if (!empty($lock_status['is_active'])) {
             $this->logger->warning('MANUAL_SYNC_SKIPPED_LOCK_ACTIVE', [
                 'lock' => $lock_status['lock_payload'] ?? [],
-                'return_path' => 'redirect_lock_active',
-            ] + $log_context);
-            $this->logger->info('MANUAL_SYNC_RETURN', $log_context + [
-                'result' => 'lock_active',
+                'trigger' => 'admin_button',
+                'user_id' => get_current_user_id(),
             ]);
             wp_safe_redirect(add_query_arg([
                 'page' => 'awi-settings',
@@ -244,14 +224,18 @@ class Settings
             exit;
         }
 
-        $action_id = $this->cron->schedule_manual_sync_now();
-        if (empty($action_id)) {
-            $this->logger->error('MANUAL_SYNC_ERROR', $log_context + [
-                'reason' => 'enqueue_failed',
-                'hook' => Plugin::CRON_HOOK,
-                'group' => $this->cron->get_manual_action_scheduler_group(),
-                'action_id' => $action_id,
-                'return_path' => 'redirect_error',
+        $context = [
+            'trigger' => 'manual_sync',
+            'request_id' => wp_generate_uuid4(),
+            'user_id' => get_current_user_id(),
+        ];
+        $this->logger->info('MANUAL_SYNC_TRIGGERED', $context + [
+            'source' => 'admin_settings_button',
+        ]);
+
+        if (!$this->cron->schedule_manual_sync_now($context)) {
+            $this->logger->error('MANUAL_SYNC_ERROR', $context + [
+                'reason' => 'schedule_failed',
             ]);
             wp_safe_redirect(add_query_arg([
                 'page' => 'awi-settings',
@@ -259,13 +243,6 @@ class Settings
             ], admin_url('admin.php')));
             exit;
         }
-
-        $this->logger->info('MANUAL_SYNC_ENQUEUED', $log_context + [
-            'action_id' => (int) $action_id,
-            'hook' => Plugin::CRON_HOOK,
-            'group' => $this->cron->get_manual_action_scheduler_group(),
-            'return_path' => 'redirect_started',
-        ]);
 
         wp_safe_redirect(add_query_arg([
             'page' => 'awi-settings',
