@@ -1294,6 +1294,28 @@ class Importer
             return true;
         }
 
+        $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
+        if ($publication_status !== 'ACTIVE') {
+            $affected_product_ids = $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+            foreach ($affected_product_ids as $product_id) {
+                $this->logger->info('EVENT_SYNC_OFFER_SKIPPED_FULL_IMPORT_NOT_ACTIVE', [
+                    'offer_id' => $offer_id,
+                    'product_id' => (int) $product_id,
+                    'publication_status' => $publication_status,
+                ]);
+            }
+            $reason = 'publication_' . strtolower($publication_status);
+            $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+                'reason' => $reason,
+            ]);
+
+            return true;
+        }
+
         $result = $this->mapper->upsert_product($details, $settings);
         if (($result['result'] ?? '') === 'created') {
             $this->logger->info('EVENT_SYNC_NEW_OFFER_IMPORTED', [
@@ -1323,7 +1345,6 @@ class Importer
             return false;
         }
 
-        $publication_status = strtoupper((string) ($details['publication']['status'] ?? 'INACTIVE'));
         $stock_available = isset($details['stock']['available']) && is_numeric($details['stock']['available'])
             ? max(0, (int) $details['stock']['available'])
             : null;
