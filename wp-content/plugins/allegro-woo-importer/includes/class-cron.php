@@ -25,6 +25,7 @@ class Cron
         add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import']);
         add_action(Plugin::MISSING_IMPORT_CRON_HOOK, [$this, 'run_missing_import_batch']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
+        $this->cleanup_duplicate_main_import_actions();
 
         if (Plugin::is_safe_mode_enabled()) {
             self::clear_schedule();
@@ -53,7 +54,18 @@ class Cron
         }
 
         $this->logger->info('Cron import started.');
-        $this->importer->import_offers();
+        $event_sync_summary = $this->importer->run_event_based_sync();
+        if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
+            $this->logger->warning('EVENT_SYNC_ERROR', [
+                'stage' => 'fallback_to_full_import',
+                'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+            ]);
+            $this->logger->warning('EVENT_SYNC_FALLBACK_FULL_IMPORT_STARTED', [
+                'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+            ]);
+            $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
+            $this->importer->import_offers();
+        }
     }
 
     public function run_missing_import_batch(): void
@@ -172,9 +184,15 @@ class Cron
         $interval = $settings['cron_interval'] ?? 'manual';
         if ($interval !== 'manual') {
             $interval_seconds = wp_get_schedules()[$interval]['interval'] ?? 0;
-            if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_recurring_action') && $interval_seconds > 0) {
+            if (
+                function_exists('as_next_scheduled_action')
+                && function_exists('as_has_scheduled_action')
+                && function_exists('as_schedule_recurring_action')
+                && $interval_seconds > 0
+            ) {
                 $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-                if ($next_action_timestamp <= 0) {
+                $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP) !== false;
+                if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
                     as_schedule_recurring_action(time() + 60, (int) $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
                     return;
                 }
@@ -202,7 +220,11 @@ class Cron
 
     private function schedule_main_import_with_action_scheduler(string $interval): bool
     {
-        if (!function_exists('as_next_scheduled_action') || !function_exists('as_schedule_recurring_action')) {
+        if (
+            !function_exists('as_next_scheduled_action')
+            || !function_exists('as_has_scheduled_action')
+            || !function_exists('as_schedule_recurring_action')
+        ) {
             return false;
         }
 
@@ -213,7 +235,8 @@ class Cron
         }
 
         $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-        if ($next_action_timestamp <= 0) {
+        $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP) !== false;
+        if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
             as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
             $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
                 'runner' => 'action_scheduler',
@@ -231,5 +254,43 @@ class Cron
         }
 
         return true;
+    }
+
+    private function cleanup_duplicate_main_import_actions(): void
+    {
+        if (
+            !function_exists('as_get_scheduled_actions')
+            || !function_exists('as_unschedule_action')
+        ) {
+            return;
+        }
+
+        $active_actions = as_get_scheduled_actions([
+            'hook' => Plugin::CRON_HOOK,
+            'group' => self::ACTION_SCHEDULER_GROUP,
+            'status' => 'pending',
+            'orderby' => 'date',
+            'order' => 'ASC',
+            'per_page' => 20,
+        ], 'ids');
+
+        if (!is_array($active_actions) || count($active_actions) <= 1) {
+            return;
+        }
+
+        $removed = 0;
+        $target_removed = count($active_actions) - 1;
+        while ($removed < $target_removed) {
+            as_unschedule_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+            $removed++;
+        }
+
+        $this->logger->warning('BACKGROUND_SYNC_DUPLICATES_CLEANED', [
+            'hook' => Plugin::CRON_HOOK,
+            'group' => self::ACTION_SCHEDULER_GROUP,
+            'duplicates_removed' => $removed,
+            'active_before' => count($active_actions),
+            'active_after' => 1,
+        ]);
     }
 }

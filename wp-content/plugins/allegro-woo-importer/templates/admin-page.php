@@ -8,6 +8,7 @@
  * @var array  $listing_last_batch
  * @var array  $import_lock_status
  * @var array  $missing_import_checkpoint
+ * @var array  $event_sync_status
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -169,6 +170,17 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Errors:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($missing_import_checkpoint['errors'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Last checked offer_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($missing_import_checkpoint['last_checked_offer_id'] ?? '') !== '' ? $missing_import_checkpoint['last_checked_offer_id'] : '—')); ?></strong></li>
         <li><?php esc_html_e('Last imported offer_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($missing_import_checkpoint['last_imported_offer_id'] ?? '') !== '' ? $missing_import_checkpoint['last_imported_offer_id'] : '—')); ?></strong></li>
+    </ul>
+
+    <h3><?php esc_html_e('Event sync status', 'allegro-woo-importer'); ?></h3>
+    <ul>
+        <li><?php esc_html_e('Last event sync run:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['last_run_at'] ?? '') !== '' ? $event_sync_status['last_run_at'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Last run mode:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['last_run_mode'] ?? '') !== '' ? $event_sync_status['last_run_mode'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Last status:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['last_status'] ?? '') !== '' ? $event_sync_status['last_status'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Last event sync error:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['last_error'] ?? '') !== '' ? $event_sync_status['last_error'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Checkpoint last_offer_event_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['checkpoint']['last_offer_event_id'] ?? '') !== '' ? $event_sync_status['checkpoint']['last_offer_event_id'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Checkpoint last_order_event_id:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['checkpoint']['last_order_event_id'] ?? '') !== '' ? $event_sync_status['checkpoint']['last_order_event_id'] : '—')); ?></strong></li>
+        <li><?php esc_html_e('Checkpoint last_success_at:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) (($event_sync_status['checkpoint']['last_success_at'] ?? '') !== '' ? $event_sync_status['checkpoint']['last_success_at'] : '—')); ?></strong></li>
     </ul>
 
     <h3><?php esc_html_e('Status głównego import locka', 'allegro-woo-importer'); ?></h3>
