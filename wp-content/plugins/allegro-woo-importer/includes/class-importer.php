@@ -1295,6 +1295,10 @@ class Importer
         string $event_id,
         string $event_type
     ): bool {
+        if ($stream === 'order_events') {
+            return $this->sync_single_order_offer_from_event($offer_id, $inactive_status, $event_id, $event_type);
+        }
+
         if ($this->is_terminal_offer_event_type($event_type)) {
             $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
             return true;
@@ -1397,6 +1401,15 @@ class Importer
         if ($stream === 'order_events') {
             $this->apply_order_sold_state_by_offer_id($offer_id, $inactive_status, $event_id, $event_type, $details);
         }
+
+        $lookup = $this->resolve_linked_product_ids_for_offer($offer_id, $details);
+        $this->apply_order_sold_state_from_lookup($offer_id, $inactive_status, $event_id, $event_type, $lookup);
+        $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
+            'event_id' => $event_id,
+            'event_type' => $event_type,
+            'offer_id' => $offer_id,
+            'reason' => 'order_event_is_authoritative',
+        ]);
 
         return true;
     }
