@@ -236,6 +236,21 @@ class Cron
 
         $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
         $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP) !== false;
+        $next_action_timestamp_any_group = (int) as_next_scheduled_action(Plugin::CRON_HOOK);
+        $has_any_scheduled_action_any_group = as_has_scheduled_action(Plugin::CRON_HOOK) !== false;
+
+        if ($next_action_timestamp <= 0 && !$has_any_scheduled_action && $has_any_scheduled_action_any_group) {
+            $this->logger->warning('BACKGROUND_SYNC_ALREADY_SCHEDULED', [
+                'runner' => 'action_scheduler',
+                'hook' => Plugin::CRON_HOOK,
+                'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
+                'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
+                'reason' => 'existing_job_detected_outside_default_group_or_args',
+            ]);
+
+            return true;
+        }
+
         if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
             as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
             $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
@@ -258,36 +273,66 @@ class Cron
 
     private function cleanup_duplicate_main_import_actions(): void
     {
-        if (
-            !function_exists('as_get_scheduled_actions')
-            || !function_exists('as_unschedule_action')
-        ) {
+        if (!function_exists('as_get_scheduled_actions')) {
             return;
         }
 
         $active_actions = as_get_scheduled_actions([
             'hook' => Plugin::CRON_HOOK,
-            'group' => self::ACTION_SCHEDULER_GROUP,
             'status' => 'pending',
             'orderby' => 'date',
             'order' => 'ASC',
-            'per_page' => 20,
+            'per_page' => 100,
         ], 'ids');
 
         if (!is_array($active_actions) || count($active_actions) <= 1) {
             return;
         }
 
+        $action_store = null;
+        if (class_exists('\\ActionScheduler') && method_exists('\\ActionScheduler', 'store')) {
+            $action_store = \ActionScheduler::store();
+        }
+
+        if ($action_store === null || !method_exists($action_store, 'fetch_action') || !method_exists($action_store, 'cancel_action')) {
+            return;
+        }
+
+        $canonical_action_id = 0;
+        foreach ($active_actions as $action_id) {
+            $action = $action_store->fetch_action((int) $action_id);
+            if (!is_object($action) || !method_exists($action, 'get_group')) {
+                continue;
+            }
+
+            if ((string) $action->get_group() === self::ACTION_SCHEDULER_GROUP) {
+                $canonical_action_id = (int) $action_id;
+                break;
+            }
+        }
+
+        if ($canonical_action_id <= 0) {
+            $canonical_action_id = (int) $active_actions[0];
+        }
+
         $removed = 0;
-        $target_removed = count($active_actions) - 1;
-        while ($removed < $target_removed) {
-            as_unschedule_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+        $removed_ids = [];
+        foreach ($active_actions as $action_id) {
+            $action_id = (int) $action_id;
+            if ($action_id === $canonical_action_id) {
+                continue;
+            }
+
+            $action_store->cancel_action($action_id);
             $removed++;
+            $removed_ids[] = $action_id;
         }
 
         $this->logger->warning('BACKGROUND_SYNC_DUPLICATES_CLEANED', [
             'hook' => Plugin::CRON_HOOK,
             'group' => self::ACTION_SCHEDULER_GROUP,
+            'kept_action_id' => $canonical_action_id,
+            'removed_action_ids' => $removed_ids,
             'duplicates_removed' => $removed,
             'active_before' => count($active_actions),
             'active_after' => 1,
