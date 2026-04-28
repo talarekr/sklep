@@ -1386,7 +1386,7 @@ class Importer
         string $event_id,
         string $event_type,
         string $stream
-    ): array {
+    ): void {
         $query = new \WP_Query([
             'post_type' => 'product',
             'post_status' => 'any',
@@ -1410,10 +1410,9 @@ class Importer
                 'event_type' => $event_type,
             ]);
             wp_reset_postdata();
-            return [];
+            return;
         }
 
-        $applied_product_ids = [];
         foreach ($product_ids as $product_id) {
             $product = wc_get_product($product_id);
             if (!$product instanceof \WC_Product) {
@@ -1435,11 +1434,9 @@ class Importer
                 'event_id' => $event_id,
                 'event_type' => $event_type,
             ]);
-            $applied_product_ids[] = $product_id;
         }
 
         wp_reset_postdata();
-        return $applied_product_ids;
     }
 
     private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
