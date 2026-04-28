@@ -1263,6 +1263,11 @@ class Importer
         string $event_id,
         string $event_type
     ): bool {
+        if ($this->is_terminal_offer_event_type($event_type)) {
+            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
+            return true;
+        }
+
         $details = $this->client->get_offer_details($offer_id);
         if (is_wp_error($details)) {
             $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : $details->get_error_message();
@@ -1278,7 +1283,7 @@ class Importer
                 return false;
             }
 
-            $this->apply_inactive_state_by_offer_id($offer_id, $inactive_status, 'offer_missing');
+            $this->apply_archived_or_ended_offer_to_woo($offer_id, $inactive_status, $event_id, $event_type, $stream);
             $this->logger->info('EVENT_SYNC_OFFER_ENDED', [
                 'offer_id' => $offer_id,
                 'stream' => $stream,
@@ -1341,6 +1346,76 @@ class Importer
         }
 
         return true;
+    }
+
+    private function is_terminal_offer_event_type(string $event_type): bool
+    {
+        $event_type = strtoupper(sanitize_text_field($event_type));
+        return in_array($event_type, [
+            'OFFER_ARCHIVED',
+            'OFFER_ENDED',
+            'OFFER_DEACTIVATED',
+            'OFFER_FINISHED',
+        ], true);
+    }
+
+    private function apply_archived_or_ended_offer_to_woo(
+        string $offer_id,
+        string $inactive_status,
+        string $event_id,
+        string $event_type,
+        string $stream
+    ): void {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 100,
+            'meta_query' => [
+                [
+                    'key' => '_allegro_offer_id',
+                    'value' => $offer_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $product_ids = array_map('intval', (array) $query->posts);
+        if (count($product_ids) === 0) {
+            $this->logger->warning('missing_linked_product_for_offer', [
+                'offer_id' => $offer_id,
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+            wp_reset_postdata();
+            return;
+        }
+
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product instanceof \WC_Product) {
+                continue;
+            }
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($inactive_status);
+            $product->save();
+
+            $this->logger->info('EVENT_SYNC_OFFER_ARCHIVED_APPLIED_TO_WOO', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'post_status' => $inactive_status,
+                'stock_status' => 'outofstock',
+                'stream' => $stream,
+                'event_id' => $event_id,
+                'event_type' => $event_type,
+            ]);
+        }
+
+        wp_reset_postdata();
     }
 
     private function apply_order_sold_state_by_offer_id(string $offer_id, string $inactive_status, string $event_id, string $event_type): void
