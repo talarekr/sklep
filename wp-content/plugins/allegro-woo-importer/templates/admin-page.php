@@ -138,6 +138,13 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <input type="hidden" name="action" value="awi_restore_active_offers">
         <?php submit_button(__('Recovery: przywróć ACTIVE do instock', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
     </form>
+    <?php if (current_user_can('manage_options')) : ?>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+        <?php wp_nonce_field('awi_manual_sync_trigger'); ?>
+        <input type="hidden" name="action" value="awi_manual_sync_trigger">
+        <?php submit_button(__('Uruchom synchronizację teraz', 'allegro-woo-importer'), 'primary', 'submit', false); ?>
+    </form>
+    <?php endif; ?>
 
     <h3><?php esc_html_e('Import missing Allegro offers', 'allegro-woo-importer'); ?></h3>
     <p><?php esc_html_e('Tryb skanuje aktywne oferty Allegro batchami i importuje wyłącznie brakujące produkty.', 'allegro-woo-importer'); ?></p>
