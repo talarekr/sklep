@@ -448,6 +448,25 @@ class Settings
         }
 
         $settings = Plugin::get_settings();
+        $order_events_scope_missing = !empty($settings['access_token'])
+            && !$this->auth->has_required_order_events_scope((string) ($settings['token_scope'] ?? ''));
+        $order_events_access_denied_notice = !empty($settings['awi_order_events_access_denied_notice']);
+        if ($order_events_scope_missing || $order_events_access_denied_notice) {
+            add_settings_error(
+                'awi_messages',
+                'awi_order_events_scope_missing',
+                __('Brak uprawnień Allegro do odczytu zamówień. Sprzedaże z Allegro nie będą wykrywane przez order-events.', 'allegro-woo-importer'),
+                'error'
+            );
+            if ($order_events_scope_missing) {
+                $this->logger->warning('ALLEGRO_OAUTH_SCOPES_INSUFFICIENT_FOR_ORDER_EVENTS', [
+                    'required_scope' => AllegroAuth::ORDER_EVENTS_REQUIRED_SCOPE,
+                    'token_scope' => sanitize_text_field((string) ($settings['token_scope'] ?? '')),
+                    'source' => 'settings_page_render',
+                    'reauthorization_required' => true,
+                ]);
+            }
+        }
         $history = get_option(Plugin::HISTORY_OPTION_KEY, []);
         if (!is_array($history)) {
             $history = [];
