@@ -593,7 +593,7 @@ class Importer
                 $event_id = sanitize_text_field((string) ($event['id'] ?? ''));
                 $type = sanitize_text_field((string) ($event['type'] ?? 'unknown'));
                 $occurred_at = sanitize_text_field((string) ($event['occurredAt'] ?? ''));
-                $offer_ids = $this->extract_offer_ids_from_order_event($event);
+                $offer_ids = $this->extract_offer_ids_from_order_event($event, $event_id, $type);
                 $this->logger->info('EVENT_SYNC_EVENT_RECEIVED', [
                     'stream' => 'order_events',
                     'event_id' => $event_id,
@@ -1211,18 +1211,50 @@ class Importer
         return [];
     }
 
-    private function extract_offer_ids_from_order_event(array $event): array
+    private function extract_offer_ids_from_order_event(array $event, string $event_id, string $event_type): array
     {
         $ids = [];
-        $line_items = is_array($event['lineItems'] ?? null) ? (array) $event['lineItems'] : [];
-        foreach ($line_items as $line_item) {
-            if (!is_array($line_item)) {
-                continue;
-            }
+        $line_items_groups = [];
+        $line_items_groups[] = is_array($event['lineItems'] ?? null) ? (array) $event['lineItems'] : [];
+        $line_items_groups[] = is_array($event['checkoutForm']['lineItems'] ?? null) ? (array) $event['checkoutForm']['lineItems'] : [];
+        $line_items_groups[] = is_array($event['order']['lineItems'] ?? null) ? (array) $event['order']['lineItems'] : [];
 
-            $offer_id = sanitize_text_field((string) ($line_item['offer']['id'] ?? $line_item['offerId'] ?? ''));
-            if ($offer_id !== '') {
-                $ids[] = $offer_id;
+        foreach ($line_items_groups as $line_items) {
+            foreach ($line_items as $line_item) {
+                if (!is_array($line_item)) {
+                    continue;
+                }
+
+                $offer_id = sanitize_text_field((string) ($line_item['offer']['id'] ?? $line_item['offerId'] ?? ''));
+                if ($offer_id !== '') {
+                    $ids[] = $offer_id;
+                }
+            }
+        }
+
+        $checkout_form_id = sanitize_text_field((string) ($event['checkoutForm']['id'] ?? $event['checkoutFormId'] ?? $event['order']['checkoutForm']['id'] ?? ''));
+        if (count($ids) === 0 && $checkout_form_id !== '') {
+            $checkout_form = $this->client->get_checkout_form($checkout_form_id);
+            if (is_wp_error($checkout_form)) {
+                $this->logger->warning('EVENT_SYNC_ERROR', [
+                    'stage' => 'fetch_checkout_form',
+                    'event_id' => $event_id,
+                    'event_type' => $event_type,
+                    'checkout_form_id' => $checkout_form_id,
+                    'reason' => $checkout_form->get_error_message(),
+                ]);
+            } else {
+                $checkout_line_items = is_array($checkout_form['lineItems'] ?? null) ? (array) $checkout_form['lineItems'] : [];
+                foreach ($checkout_line_items as $line_item) {
+                    if (!is_array($line_item)) {
+                        continue;
+                    }
+
+                    $offer_id = sanitize_text_field((string) ($line_item['offer']['id'] ?? $line_item['offerId'] ?? ''));
+                    if ($offer_id !== '') {
+                        $ids[] = $offer_id;
+                    }
+                }
             }
         }
 
