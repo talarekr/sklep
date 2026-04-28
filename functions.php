@@ -82,6 +82,20 @@ add_action('wp_enqueue_scripts', function () {
         'isLoggedIn' => is_user_logged_in(),
     ]);
 
+    if (is_page(['zaloguj', 'zarejestruj'])) {
+        $google_settings = gp_get_google_oauth_settings();
+        wp_localize_script('gp-clone-profile-auth', 'gpGoogleAuth', [
+            'clientId' => (string) ($google_settings['client_id'] ?? ''),
+            'endpoint' => admin_url('admin-post.php'),
+            'nonce' => wp_create_nonce('gp_google_identity_nonce'),
+            'labels' => [
+                'missingEmail' => __('Konto Google nie zwróciło adresu e-mail.', 'gp-clone'),
+                'unavailable' => __('Logowanie Google jest chwilowo niedostępne.', 'gp-clone'),
+            ],
+        ]);
+        wp_enqueue_script('google-identity-services', 'https://accounts.google.com/gsi/client', [], null, true);
+    }
+
     if (class_exists('WooCommerce')) {
         wp_enqueue_style('gp-clone-woo', get_template_directory_uri() . '/assets/css/woocommerce.css', ['gp-clone-style'], '1.4.0');
         wp_enqueue_script('wc-cart-fragments');
@@ -651,10 +665,6 @@ function gp_get_google_oauth_unavailability_reasons(array $settings): array
         $reasons[] = 'missing_client_id';
     }
 
-    if (($settings['client_secret'] ?? '') === '') {
-        $reasons[] = 'missing_client_secret';
-    }
-
     return $reasons;
 }
 
@@ -976,6 +986,130 @@ function gp_render_google_oauth_admin_notice(): void
     printf('<div class="notice notice-warning"><p>%s</p></div>', esc_html($message));
 }
 add_action('admin_notices', 'gp_render_google_oauth_admin_notice');
+
+function gp_register_google_auth_settings(): void
+{
+    register_setting('gp_google_auth_settings', 'gp_google_client_id', ['type' => 'string', 'sanitize_callback' => 'sanitize_text_field']);
+    register_setting('gp_google_auth_settings', 'gp_google_client_secret', ['type' => 'string', 'sanitize_callback' => 'sanitize_text_field']);
+}
+add_action('admin_init', 'gp_register_google_auth_settings');
+
+function gp_add_google_auth_settings_page(): void
+{
+    add_options_page(
+        __('Google logowanie', 'gp-clone'),
+        __('Google logowanie', 'gp-clone'),
+        'manage_options',
+        'gp-google-auth-settings',
+        'gp_render_google_auth_settings_page'
+    );
+}
+add_action('admin_menu', 'gp_add_google_auth_settings_page');
+
+function gp_render_google_auth_settings_page(): void
+{
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    ?>
+    <div class="wrap">
+        <h1><?php esc_html_e('Ustawienia logowania Google', 'gp-clone'); ?></h1>
+        <form method="post" action="options.php">
+            <?php settings_fields('gp_google_auth_settings'); ?>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row"><label for="gp_google_client_id"><?php esc_html_e('Google Client ID', 'gp-clone'); ?></label></th>
+                    <td><input name="gp_google_client_id" id="gp_google_client_id" type="text" class="regular-text" value="<?php echo esc_attr((string) get_option('gp_google_client_id', '')); ?>"></td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="gp_google_client_secret"><?php esc_html_e('Google Client Secret', 'gp-clone'); ?></label></th>
+                    <td><input name="gp_google_client_secret" id="gp_google_client_secret" type="password" class="regular-text" value="<?php echo esc_attr((string) get_option('gp_google_client_secret', '')); ?>" autocomplete="off"></td>
+                </tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
+
+function gp_verify_google_id_token(string $id_token): array|WP_Error
+{
+    $response = wp_remote_get('https://oauth2.googleapis.com/tokeninfo?id_token=' . rawurlencode($id_token), ['timeout' => 15]);
+    if (is_wp_error($response)) {
+        return new WP_Error('google_verify_failed', __('Weryfikacja Google nie powiodła się.', 'gp-clone'));
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+    if ($status !== 200 || !is_array($data)) {
+        return new WP_Error('google_verify_failed', __('Weryfikacja Google nie powiodła się.', 'gp-clone'));
+    }
+
+    $settings = gp_get_google_oauth_settings();
+    if (($data['aud'] ?? '') !== ($settings['client_id'] ?? '')) {
+        return new WP_Error('google_invalid_audience', __('Nieprawidłowy token Google.', 'gp-clone'));
+    }
+
+    return $data;
+}
+
+function gp_handle_google_identity_submit(): void
+{
+    if (!isset($_POST['gp_google_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash((string) $_POST['gp_google_nonce'])), 'gp_google_identity_nonce')) {
+        gp_auth_redirect_with_notice('/zaloguj', 'login_failed');
+    }
+
+    $context = isset($_POST['gp_context']) && sanitize_key(wp_unslash((string) $_POST['gp_context'])) === 'register' ? 'register' : 'login';
+    $credential = isset($_POST['credential']) ? sanitize_text_field(wp_unslash((string) $_POST['credential'])) : '';
+    if ($credential === '') {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $claims = gp_verify_google_id_token($credential);
+    if ($claims instanceof WP_Error) {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    $email = sanitize_email((string) ($claims['email'] ?? ''));
+    if ($email === '' || !is_email($email)) {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    if (($claims['email_verified'] ?? 'false') !== 'true') {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'google_email_not_verified');
+    }
+
+    $existing_user = get_user_by('email', $email);
+    $user_id = $existing_user ? (int) $existing_user->ID : 0;
+    if ($user_id <= 0) {
+        $base_login = sanitize_user(strstr($email, '@', true) ?: $email, true);
+        if ($base_login === '') {
+            $base_login = 'google_user';
+        }
+        $candidate_login = $base_login;
+        $suffix = 1;
+        while (username_exists($candidate_login)) {
+            $suffix++;
+            $candidate_login = $base_login . $suffix;
+        }
+        $new_user_id = function_exists('wc_create_new_customer')
+            ? wc_create_new_customer($email, $candidate_login, wp_generate_password(24, true, true))
+            : wp_create_user($candidate_login, wp_generate_password(24, true, true), $email);
+        if ($new_user_id instanceof WP_Error) {
+            gp_auth_redirect_with_notice('/zarejestruj', 'register_failed');
+        }
+        $user_id = (int) $new_user_id;
+    }
+
+    update_user_meta($user_id, 'gp_google_sub', sanitize_text_field((string) ($claims['sub'] ?? '')));
+    wp_set_current_user($user_id);
+    wp_set_auth_cookie($user_id, true);
+    wp_safe_redirect(function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/moj-profil'));
+    exit;
+}
+add_action('admin_post_nopriv_gp_google_identity', 'gp_handle_google_identity_submit');
+add_action('admin_post_gp_google_identity', 'gp_handle_google_identity_submit');
 
 function gp_get_auth_notice(string $type): array
 {

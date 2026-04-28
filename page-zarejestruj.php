@@ -3,7 +3,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-$google_auth_url = gp_get_google_auth_url('register');
 $terms_url = home_url('/regulamin-platnosci');
 $privacy_url = home_url('/polityka-prywatnosci');
 
@@ -13,6 +12,17 @@ get_header();
     <div class="gp-auth-card">
         <h1><?php esc_html_e('Utwórz konto', 'gp-clone'); ?></h1>
         <?php gp_render_auth_notice_from_query(); ?>
+        <?php if (gp_is_google_oauth_available()) : ?>
+            <div class="gp-auth-social" data-gp-google-button data-gp-context="register"></div>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-google-form>
+                <input type="hidden" name="action" value="gp_google_identity">
+                <input type="hidden" name="gp_context" value="register">
+                <input type="hidden" name="gp_google_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_identity_nonce')); ?>">
+                <input type="hidden" name="credential" value="" data-gp-google-credential>
+                <button class="gp-auth-social" type="submit" data-gp-google-submit><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
+            </form>
+            <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
+        <?php endif; ?>
 
         <form class="gp-auth-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-auth-form novalidate>
             <input type="hidden" name="action" value="gp_profile_register">
@@ -25,11 +35,6 @@ get_header();
                     <span><?php esc_html_e('Konto klienta (osoba prywatna lub firma)', 'gp-clone'); ?></span>
                 </label>
             </fieldset>
-
-            <?php if ($google_auth_url !== '') : ?>
-                <a class="gp-auth-social" href="<?php echo esc_url($google_auth_url); ?>" aria-label="Zarejestruj przez Google">G <span><?php esc_html_e('Zarejestruj przez Google', 'gp-clone'); ?></span></a>
-                <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
-            <?php endif; ?>
 
             <div class="gp-auth-grid gp-auth-grid--two">
                 <div>
