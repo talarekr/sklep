@@ -61,12 +61,14 @@ class Cron
 
     public function run_scheduled_import($context = []): void
     {
-        if (!is_array($context)) {
-            $context = [
-                'legacy_context_value' => (string) $context,
-                'legacy_context_type' => gettype($context),
-            ];
-        }
+        $raw_context = $context;
+        $this->logger->info('EVENT_SYNC_RAW_CONTEXT_RECEIVED', [
+            'type' => gettype($raw_context),
+            'keys' => is_array($raw_context) ? array_keys($raw_context) : [],
+            'value_shape' => $this->describe_context_shape($raw_context),
+        ]);
+
+        $context = $this->normalize_scheduled_import_context($raw_context);
 
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
             'hook' => Plugin::CRON_HOOK,
@@ -150,7 +152,7 @@ class Cron
             return 0;
         }
 
-        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, $context, 'awi-manual');
+        $action_id = as_enqueue_async_action(Plugin::CRON_HOOK, [$context], 'awi-manual');
         if (empty($action_id)) {
             $this->logger->error('MANUAL_SYNC_ERROR', [
                 'reason' => 'enqueue_returned_empty_action_id',
@@ -408,6 +410,49 @@ class Cron
         }
 
         return true;
+    }
+
+
+    private function normalize_scheduled_import_context($context): array
+    {
+        if (is_array($context) && array_key_exists(0, $context) && is_array($context[0])) {
+            return $context[0];
+        }
+
+        if (is_array($context) && $this->is_associative_array($context)) {
+            return $context;
+        }
+
+        if (is_array($context) && count($context) === 0) {
+            return [];
+        }
+
+        return [
+            'legacy_context_value' => is_scalar($context) || $context === null ? (string) $context : '[non_scalar]',
+            'legacy_context_type' => gettype($context),
+        ];
+    }
+
+    private function describe_context_shape($context): string
+    {
+        if (!is_array($context)) {
+            return 'scalar';
+        }
+
+        if (count($context) === 0) {
+            return 'array_empty';
+        }
+
+        if (array_key_exists(0, $context) && is_array($context[0])) {
+            return 'array_with_nested_context';
+        }
+
+        return $this->is_associative_array($context) ? 'array_assoc' : 'array_list';
+    }
+
+    private function is_associative_array(array $value): bool
+    {
+        return array_keys($value) !== range(0, count($value) - 1);
     }
 
     private function describe_registered_callbacks_for_hook(string $hook): array
