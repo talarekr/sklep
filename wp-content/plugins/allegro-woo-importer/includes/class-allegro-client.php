@@ -221,6 +221,28 @@ class AllegroClient
         ]);
     }
 
+    public function get_checkout_form(string $checkout_form_id)
+    {
+        $checkout_form_id = sanitize_text_field($checkout_form_id);
+        if ($checkout_form_id === '') {
+            return new \WP_Error('awi_missing_checkout_form_id', __('Brak checkout form id Allegro.', 'allegro-woo-importer'));
+        }
+
+        $endpoint = '/order/checkout-forms/' . rawurlencode($checkout_form_id);
+        $this->logger->info('EVENT_SYNC_ENDPOINT_CALL', [
+            'endpoint' => '/order/checkout-forms/{id}',
+            'checkout_form_id' => $checkout_form_id,
+        ]);
+
+        return $this->request('GET', $endpoint, [
+            'log_context' => [
+                'request_type' => 'allegro_api',
+                'offer_id' => '',
+                'product_id' => 0,
+            ],
+        ]);
+    }
+
     public function get_category_details(string $category_id)
     {
         $category_id = sanitize_text_field($category_id);

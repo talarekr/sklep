@@ -119,6 +119,7 @@ final class Plugin
             'token_scope' => '',
             'token_type' => '',
             'connected_at' => '',
+            'awi_order_events_access_denied_notice' => 0,
             'last_sync_at' => '',
             'last_sync_created' => 0,
             'last_sync_updated' => 0,

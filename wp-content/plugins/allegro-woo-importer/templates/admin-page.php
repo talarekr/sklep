@@ -121,6 +121,12 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <?php esc_html_e('Wygaśnięcie access tokena:', 'allegro-woo-importer'); ?>
         <code><?php echo esc_html((string) (($settings['expires_at'] ?? $settings['token_expires_at']) ?: '—')); ?></code>
     </p>
+    <?php if (!empty($settings['awi_order_events_access_denied_notice'])) : ?>
+        <p style="color:#b32d2e; font-weight:600;">
+            <?php esc_html_e('Brak uprawnień Allegro do odczytu zamówień. Sprzedaże z Allegro nie będą wykrywane przez order-events.', 'allegro-woo-importer'); ?>
+            <?php esc_html_e('Kliknij "Połącz z Allegro", aby wymusić ponowną autoryzację konta z właściwymi scope.', 'allegro-woo-importer'); ?>
+        </p>
+    <?php endif; ?>
 
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('awi_manual_import'); ?>
