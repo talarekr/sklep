@@ -114,4 +114,41 @@
       });
     });
   });
+
+  var googleConfig = window.gpGoogleAuth || null;
+  if (googleConfig && googleConfig.clientId && window.google && google.accounts && google.accounts.id) {
+    google.accounts.id.initialize({
+      client_id: googleConfig.clientId,
+      callback: function (response) {
+        var wrapper = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]');
+        if (!wrapper || !response || !response.credential) {
+          return;
+        }
+
+        var form = wrapper.parentNode.querySelector('[data-gp-google-form]');
+        if (!form) {
+          return;
+        }
+
+        var credentialInput = form.querySelector('[data-gp-google-credential]');
+        if (!credentialInput) {
+          return;
+        }
+
+        credentialInput.value = response.credential;
+        form.submit();
+      }
+    });
+
+    document.querySelectorAll('[data-gp-google-button]').forEach(function (buttonHost) {
+      buttonHost.setAttribute('data-gp-google-active', '1');
+      google.accounts.id.renderButton(buttonHost, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        width: 320
+      });
+    });
+  }
 })();
