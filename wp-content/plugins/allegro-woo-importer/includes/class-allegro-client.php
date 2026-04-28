@@ -188,6 +188,10 @@ class AllegroClient
     public function get_offer_events(array $query = [])
     {
         $query = $this->sanitize_events_query($query);
+        $this->logger->info('EVENT_SYNC_ENDPOINT_CALL', [
+            'endpoint' => '/sale/offer-events',
+            'query' => $query,
+        ]);
 
         return $this->request('GET', '/sale/offer-events', [
             'query' => $query,
@@ -202,6 +206,10 @@ class AllegroClient
     public function get_order_events(array $query = [])
     {
         $query = $this->sanitize_events_query($query);
+        $this->logger->info('EVENT_SYNC_ENDPOINT_CALL', [
+            'endpoint' => '/order/events',
+            'query' => $query,
+        ]);
 
         return $this->request('GET', '/order/events', [
             'query' => $query,

@@ -57,7 +57,19 @@ class Cron
         }
 
         $this->logger->info('Cron import started.');
+        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
+            'hook' => Plugin::CRON_HOOK,
+        ]);
         $event_sync_summary = $this->importer->run_event_based_sync();
+        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
+            'hook' => Plugin::CRON_HOOK,
+            'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
+            'reason' => (string) ($event_sync_summary['reason'] ?? ''),
+            'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
+            'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
+            'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
+        ]);
+
         if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
             $this->logger->warning('EVENT_SYNC_ERROR', [
                 'stage' => 'fallback_to_full_import',
@@ -68,7 +80,13 @@ class Cron
             ]);
             $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
             $this->importer->import_offers();
+            return;
         }
+
+        $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
+            'reason' => 'event_sync_finished_without_fallback_required',
+            'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
+        ]);
     }
 
     public function run_missing_import_batch(): void

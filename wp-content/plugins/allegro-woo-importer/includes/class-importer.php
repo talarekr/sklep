@@ -444,11 +444,19 @@ class Importer
         $checkpoint = $this->get_event_sync_checkpoint();
         $lock_context = $this->build_lock_context();
         $lock_context['mode'] = 'event_sync';
+        $this->logger->info('EVENT_SYNC_START', [
+            'stage' => 'attempt',
+            'checkpoint' => $checkpoint,
+        ]);
 
         if (!$this->acquire_import_lock($lock_context)) {
             $this->logger->warning('EVENT_SYNC_ERROR', [
                 'stage' => 'acquire_lock',
                 'reason' => 'import_lock_active',
+            ]);
+            $this->logger->warning('EVENT_SYNC_SKIPPED', [
+                'reason' => 'import_lock_active',
+                'checkpoint' => $checkpoint,
             ]);
 
             return [
@@ -458,6 +466,7 @@ class Importer
 
         try {
             $this->logger->info('EVENT_SYNC_START', [
+                'stage' => 'running',
                 'checkpoint' => $checkpoint,
             ]);
 
@@ -517,6 +526,12 @@ class Importer
 
             $offer_events = $this->sort_events_by_time_and_id($this->normalize_events_list($offer_events_response, ['offerEvents', 'events']));
             $order_events = $this->sort_events_by_time_and_id($this->normalize_events_list($order_events_response, ['events', 'orderEvents']));
+            if (count($offer_events) === 0 && count($order_events) === 0) {
+                $this->logger->info('EVENT_SYNC_NO_EVENTS', [
+                    'last_offer_event_id' => (string) ($checkpoint['last_offer_event_id'] ?? ''),
+                    'last_order_event_id' => (string) ($checkpoint['last_order_event_id'] ?? ''),
+                ]);
+            }
             $processed = 0;
             $last_error = '';
 
