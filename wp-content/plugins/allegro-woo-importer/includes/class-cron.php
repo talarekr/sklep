@@ -81,6 +81,9 @@ class Cron
             return;
         }
 
+        $settings = Plugin::get_settings();
+        $configured_interval = sanitize_key((string) ($settings['cron_interval'] ?? 'manual'));
+
         $trigger = sanitize_key((string) ($context['trigger'] ?? 'scheduled'));
         $is_manual_trigger = $trigger === 'manual_sync';
         $manual_context = [
@@ -93,21 +96,32 @@ class Cron
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START_CONTEXT', [
             'hook' => Plugin::CRON_HOOK,
             'trigger' => $trigger,
+            'configured_cron_interval' => $configured_interval,
             'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
         ]);
         try {
             $event_sync_summary = $this->importer->run_event_based_sync();
+            $event_sync_status_snapshot = $this->importer->get_event_sync_status();
+            $event_sync_checkpoint = is_array($event_sync_status_snapshot['checkpoint'] ?? null)
+                ? (array) $event_sync_status_snapshot['checkpoint']
+                : [];
+            $event_sync_result_status = (string) ($event_sync_summary['status'] ?? 'unknown');
+            $event_sync_result_reason = (string) ($event_sync_summary['reason'] ?? '');
+            $fallback_required = $event_sync_result_status === 'fallback_required';
+
             $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_RESULT', [
                 'hook' => Plugin::CRON_HOOK,
-                'status' => (string) ($event_sync_summary['status'] ?? 'unknown'),
-                'reason' => (string) ($event_sync_summary['reason'] ?? ''),
+                'status' => $event_sync_result_status,
+                'reason' => $event_sync_result_reason,
+                'checkpoint' => $event_sync_checkpoint,
+                'fallback_required' => $fallback_required,
                 'processed_events' => (int) ($event_sync_summary['processed_events'] ?? 0),
                 'offer_events' => (int) ($event_sync_summary['offer_events'] ?? 0),
                 'order_events' => (int) ($event_sync_summary['order_events'] ?? 0),
                 'trigger' => $trigger,
             ]);
 
-            if (($event_sync_summary['status'] ?? '') === 'fallback_required') {
+            if ($fallback_required) {
                 $this->logger->warning('EVENT_SYNC_ERROR', [
                     'stage' => 'fallback_to_full_import',
                     'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
@@ -368,6 +382,8 @@ class Cron
                 'next_run_timestamp_any_group' => $next_action_timestamp_any_group,
                 'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
                 'reason' => 'existing_job_detected_outside_default_group_or_args',
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
 
             return true;
@@ -382,6 +398,8 @@ class Cron
                 'next_run_at_any_group' => $next_action_timestamp_any_group > 0 ? gmdate('Y-m-d H:i:s', $next_action_timestamp_any_group) : '',
                 'reason' => 'existing_job_detected_outside_default_group_or_args',
                 'source' => $source,
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
 
             return true;
@@ -406,6 +424,8 @@ class Cron
                 'next_run_at' => gmdate('Y-m-d H:i:s', $next_action_timestamp),
                 'next_run_timestamp' => $next_action_timestamp,
                 'source' => $source,
+                'configured_interval' => $interval,
+                'configured_interval_seconds' => $interval_seconds,
             ]);
         }
 
