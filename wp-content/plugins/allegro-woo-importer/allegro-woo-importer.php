@@ -17,6 +17,7 @@ define('AWI_PLUGIN_FILE', __FILE__);
 define('AWI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AWI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AWI_VERSION', '1.0.0');
+define('AWI_PLUGIN_BUILD', '2026-04-28-hook-diagnostic-1');
 if (!defined('AWI_SKIP_IMAGES')) {
     define('AWI_SKIP_IMAGES', true);
 }

@@ -27,10 +27,20 @@ class Cron
     public function hooks(): void
     {
         add_filter('cron_schedules', [$this, 'register_intervals']);
-        add_action(Plugin::CRON_HOOK, [$this, 'run_scheduled_import'], 10, 1);
+        $callback = [$this, 'run_scheduled_import'];
+        add_action(Plugin::CRON_HOOK, $callback, 10, 1);
         add_action(Plugin::MISSING_IMPORT_CRON_HOOK, [$this, 'run_missing_import_batch']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
         add_action('admin_init', [$this, 'maybe_repair_schedule_admin_only']);
+        $this->logger->info('CRON_HOOK_REGISTERED', [
+            'hook' => Plugin::CRON_HOOK,
+            'callback' => __CLASS__ . '::run_scheduled_import',
+            'class' => __CLASS__,
+            'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
+            'accepted_args' => 1,
+            'current_callback_priority' => has_action(Plugin::CRON_HOOK, $callback),
+            'registered_callbacks' => $this->describe_registered_callbacks_for_hook(Plugin::CRON_HOOK),
+        ]);
 
         if (Plugin::is_safe_mode_enabled()) {
             self::clear_schedule();
@@ -49,8 +59,21 @@ class Cron
         return $schedules;
     }
 
-    public function run_scheduled_import(array $context = []): void
+    public function run_scheduled_import($context = []): void
     {
+        if (!is_array($context)) {
+            $context = [
+                'legacy_context_value' => (string) $context,
+                'legacy_context_type' => gettype($context),
+            ];
+        }
+
+        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
+            'hook' => Plugin::CRON_HOOK,
+            'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
+            'context_keys' => array_keys($context),
+        ]);
+
         if (Plugin::is_safe_mode_enabled()) {
             $this->logger->warning('Safe mode enabled: scheduled import skipped.');
             return;
@@ -65,9 +88,10 @@ class Cron
         ];
 
         $this->logger->info('Cron import started.');
-        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START', [
+        $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START_CONTEXT', [
             'hook' => Plugin::CRON_HOOK,
             'trigger' => $trigger,
+            'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
         ]);
         try {
             $event_sync_summary = $this->importer->run_event_based_sync();
