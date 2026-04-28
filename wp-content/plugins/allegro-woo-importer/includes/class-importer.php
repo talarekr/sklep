@@ -508,6 +508,26 @@ class Importer
                 'limit' => 100,
             ]);
             if (is_wp_error($order_events_response)) {
+                if ($this->is_order_events_access_denied_error($order_events_response)) {
+                    $this->logger->warning('EVENT_SYNC_ORDER_EVENTS_DISABLED_ACCESS_DENIED', [
+                        'stage' => 'fetch_order_events',
+                        'reason' => $order_events_response->get_error_message(),
+                        'required_scope' => AllegroAuth::ORDER_EVENTS_REQUIRED_SCOPE,
+                    ]);
+                    $this->logger->warning('ALLEGRO_OAUTH_SCOPES_INSUFFICIENT_FOR_ORDER_EVENTS', [
+                        'required_scope' => AllegroAuth::ORDER_EVENTS_REQUIRED_SCOPE,
+                        'source' => 'event_sync_order_events_call',
+                        'reauthorization_required' => true,
+                    ]);
+
+                    $settings = Plugin::get_settings();
+                    $settings['awi_order_events_access_denied_notice'] = 1;
+                    Plugin::update_settings($settings);
+
+                    $order_events_response = [
+                        'events' => [],
+                    ];
+                } else {
                 $this->logger->error('EVENT_SYNC_ERROR', [
                     'stage' => 'fetch_order_events',
                     'reason' => $order_events_response->get_error_message(),
@@ -517,6 +537,7 @@ class Importer
                     'status' => 'fallback_required',
                     'reason' => 'order_events_api_error',
                 ];
+                }
             }
 
             $settings = Plugin::get_settings();
@@ -1206,6 +1227,32 @@ class Importer
         }
 
         return array_values(array_unique($ids));
+    }
+
+    private function is_order_events_access_denied_error(\WP_Error $error): bool
+    {
+        $data = $error->get_error_data();
+        $status = is_array($data) ? (int) ($data['status'] ?? 0) : 0;
+        if ($status !== 403) {
+            return false;
+        }
+
+        $body = is_array($data) ? (string) ($data['body'] ?? '') : '';
+        if ($body === '') {
+            return true;
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return true;
+        }
+
+        $error_code = sanitize_text_field((string) ($decoded['errors'][0]['code'] ?? $decoded['code'] ?? ''));
+        if ($error_code === '') {
+            return true;
+        }
+
+        return strtolower($error_code) === 'accessdenied';
     }
 
     private function sync_single_offer_from_event(
