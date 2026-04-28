@@ -1452,23 +1452,6 @@ class Importer
         return true;
     }
 
-    private function is_supported_offer_event_type(string $event_type): bool
-    {
-        $event_type = strtoupper(sanitize_text_field($event_type));
-
-        return in_array($event_type, [
-            'OFFER_CREATED',
-            'OFFER_ACTIVATED',
-            'OFFER_CHANGED',
-            'OFFER_PRICE_CHANGED',
-            'OFFER_STOCK_CHANGED',
-            'OFFER_ENDED',
-            'OFFER_DEACTIVATED',
-            'OFFER_ARCHIVED',
-            'OFFER_FINISHED',
-        ], true);
-    }
-
     private function sync_single_order_offer_from_event(
         string $offer_id,
         string $inactive_status,
