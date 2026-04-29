@@ -4,27 +4,39 @@
     var trigger = profileMenu.querySelector('[data-gp-profile-trigger]');
     var dropdown = profileMenu.querySelector('[data-gp-profile-dropdown]');
 
-    var closeDropdown = function () {
-      trigger.setAttribute('aria-expanded', 'false');
-      dropdown.hidden = true;
-    };
-
     if (!trigger || !dropdown) {
       return;
     }
 
-    var toggleDropdown = function () {
-      var isOpen = trigger.getAttribute('aria-expanded') === 'true';
-      trigger.setAttribute('aria-expanded', String(!isOpen));
-      dropdown.hidden = isOpen;
+    var setDropdownState = function (isOpen) {
+      profileMenu.classList.toggle('is-open', isOpen);
+      trigger.setAttribute('aria-expanded', String(isOpen));
+      dropdown.hidden = !isOpen;
     };
 
+    var closeDropdown = function () {
+      setDropdownState(false);
+    };
+
+    var toggleDropdown = function () {
+      var isOpen = profileMenu.classList.contains('is-open');
+      setDropdownState(!isOpen);
+      console.log('profile tap');
+      console.log(profileMenu.classList);
+    };
+
+    var lastTouchAt = 0;
+
     trigger.addEventListener('click', function (event) {
+      if (Date.now() - lastTouchAt < 500) {
+        return;
+      }
       event.preventDefault();
       toggleDropdown();
     });
 
     trigger.addEventListener('touchend', function (event) {
+      lastTouchAt = Date.now();
       event.preventDefault();
       toggleDropdown();
     }, { passive: false });
