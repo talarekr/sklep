@@ -343,17 +343,14 @@ body {
   gap: 14px;
 }
 .gp-auth-social {
-  min-height: 46px;
-  border: 1px solid #cdd6e4;
-  border-radius: 9px;
-  font-size: 16px;
-  background: #fff;
-  color: #25314b;
-  display: inline-flex;
+  width: 100%;
+  min-height: 44px;
+  display: flex;
   justify-content: center;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
+}
+.gp-auth-social > div,
+.gp-auth-social iframe {
+  max-width: 100%;
 }
 .gp-auth-separator {
   display: grid;

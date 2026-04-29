@@ -161,23 +161,22 @@
 
     document.querySelectorAll('[data-gp-google-button]').forEach(function (button) {
       button.setAttribute('data-gp-google-active', '1');
-      button.addEventListener('click', function (event) {
-        event.preventDefault();
-        if (!(window.google && window.google.accounts && window.google.accounts.id && google.accounts.id.prompt)) {
-          return;
-        }
 
-        document.querySelectorAll('[data-gp-google-button]').forEach(function (btn) {
-          btn.removeAttribute('data-gp-google-active');
+      var buttonWidth = Math.max(220, Math.min(400, Math.round(button.clientWidth || 320)));
+
+      try {
+        google.accounts.id.renderButton(button, {
+          theme: 'outline',
+          size: 'large',
+          type: 'standard',
+          text: 'continue_with',
+          shape: 'pill',
+          logo_alignment: 'left',
+          width: buttonWidth
         });
-        button.setAttribute('data-gp-google-active', '1');
-
-        try {
-          google.accounts.id.prompt();
-        } catch (e) {
-          return;
-        }
-      });
+      } catch (e) {
+        return;
+      }
     });
   }
 
