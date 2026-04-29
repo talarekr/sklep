@@ -312,7 +312,17 @@ if (taxonomy_exists('product_cat')) {
         <div class="gp-auth-modal__grid">
             <section>
                 <h3 id="gp-auth-modal-title"><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></h3>
-                <button type="button" class="gp-auth-social">G <span><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></span></button>
+                <?php if (gp_is_google_oauth_available()) : ?>
+                    <div class="gp-auth-social" data-gp-google-button data-gp-context="login"></div>
+                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-google-form>
+                        <input type="hidden" name="action" value="gp_google_identity">
+                        <input type="hidden" name="gp_context" value="login">
+                        <input type="hidden" name="gp_google_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_identity_nonce')); ?>">
+                        <input type="hidden" name="credential" value="" data-gp-google-credential>
+                        <input type="hidden" name="gp_google_request_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_request_nonce')); ?>" data-gp-google-request-nonce>
+                    </form>
+                    <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
+                <?php endif; ?>
                 <form class="gp-auth-form gp-auth-form--compact" method="get" action="<?php echo esc_url(home_url('/zaloguj')); ?>">
                     <div>
                         <label for="gp-modal-email"><?php esc_html_e('Adres e-mail', 'gp-clone'); ?></label>

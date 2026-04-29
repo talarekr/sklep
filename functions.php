@@ -82,7 +82,7 @@ add_action('wp_enqueue_scripts', function () {
         'isLoggedIn' => is_user_logged_in(),
     ]);
 
-    if (is_page(['zaloguj', 'zarejestruj']) && !empty(get_option('gp_google_client_id'))) {
+    if (!is_user_logged_in() && !empty(get_option('gp_google_client_id'))) {
         $google_settings = gp_get_google_oauth_settings();
         wp_localize_script('gp-clone-profile-auth', 'gpGoogleAuth', [
             'clientId' => (string) ($google_settings['client_id'] ?? ''),

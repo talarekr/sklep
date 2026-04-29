@@ -813,12 +813,25 @@
   border-left: 0;
   padding-left: 0;
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.gp-auth-modal__side h4 {
+  margin: 0;
+}
+
+.gp-auth-modal__side .gp-btn {
+  width: 100%;
+  justify-content: center;
 }
 
 .gp-auth-modal__benefits {
-  margin: 4px 0 0;
+  margin: 6px auto 0;
   padding-left: 18px;
+  text-align: left;
 }
 
 .woocommerce-cart .wc-proceed-to-checkout .checkout-button {
