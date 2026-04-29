@@ -1507,6 +1507,29 @@ class Importer
         return true;
     }
 
+
+    private function is_supported_offer_event_type(string $event_type): bool
+    {
+        $event_type = strtoupper(sanitize_text_field($event_type));
+        if ($event_type === '') {
+            return false;
+        }
+
+        return in_array($event_type, [
+            'OFFER_ACTIVATED',
+            'OFFER_ENDED',
+            'OFFER_ARCHIVED',
+            'OFFER_DEACTIVATED',
+            'OFFER_FINISHED',
+            'OFFER_MODIFIED',
+            'OFFER_UPDATED',
+            'OFFER_STOCK_CHANGED',
+            'OFFER_PRICE_CHANGED',
+            'OFFER_VISIBILITY_CHANGED',
+            'OFFER_PUBLICATION_STATUS_CHANGED',
+        ], true);
+    }
+
     private function is_terminal_offer_event_type(string $event_type): bool
     {
         $event_type = strtoupper(sanitize_text_field($event_type));
@@ -1672,6 +1695,18 @@ class Importer
                     'attempts' => $attempts,
                     'identifiers' => $identifiers,
                 ];
+            }
+        }
+
+        if (count($offer_details) === 0) {
+            $offer_details_response = $this->client->get_offer_details($offer_id);
+            $attempts[] = [
+                'lookup' => 'offer_details_api',
+                'value' => $offer_id,
+                'matched_count' => is_wp_error($offer_details_response) ? 0 : 1,
+            ];
+            if (!is_wp_error($offer_details_response) && is_array($offer_details_response)) {
+                $offer_details = $offer_details_response;
             }
         }
 
