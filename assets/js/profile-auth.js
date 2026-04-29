@@ -32,6 +32,7 @@
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       toggleDropdown();
     });
 
@@ -42,14 +43,16 @@
     }, { passive: false });
 
     document.addEventListener('click', function (event) {
-      if (!profileMenu.contains(event.target)) {
-        closeDropdown();
+      if (profileMenu.contains(event.target)) {
+        return;
       }
+
+      setDropdownState(false);
     });
 
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') {
-        closeDropdown();
+        setDropdownState(false);
       }
     });
   }
