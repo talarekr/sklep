@@ -307,15 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const viewport = carousel.querySelector('[data-gp-carousel-viewport]');
       const viewportWidth = viewport ? viewport.getBoundingClientRect().width : 0;
-      const gap = Number.parseFloat(window.getComputedStyle(track).columnGap || window.getComputedStyle(track).gap || '0') || 0;
-      const slideWidth = visible > 0 ? (viewportWidth - gap * (visible - 1)) / visible : viewportWidth;
-
-      slides.forEach((slide) => {
-        slide.style.flexBasis = `${slideWidth}px`;
-        slide.style.maxWidth = `${slideWidth}px`;
-      });
-
-      const offset = Math.max(0, page * ((slideWidth * visible) + (gap * visible)));
+      const offset = Math.max(0, page * viewportWidth);
 
       track.style.transform = `translateX(-${offset}px)`;
       prev.disabled = page === 0;
