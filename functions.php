@@ -82,16 +82,12 @@ add_action('wp_enqueue_scripts', function () {
         'isLoggedIn' => is_user_logged_in(),
     ]);
 
-    if (is_page(['zaloguj', 'zarejestruj'])) {
+    if (is_page(['zaloguj', 'zarejestruj']) && !empty(get_option('gp_google_client_id'))) {
         $google_settings = gp_get_google_oauth_settings();
         wp_localize_script('gp-clone-profile-auth', 'gpGoogleAuth', [
             'clientId' => (string) ($google_settings['client_id'] ?? ''),
             'endpoint' => admin_url('admin-post.php'),
-            'nonce' => wp_create_nonce('gp_google_identity_nonce'),
-            'labels' => [
-                'missingEmail' => __('Konto Google nie zwróciło adresu e-mail.', 'gp-clone'),
-                'unavailable' => __('Logowanie Google jest chwilowo niedostępne.', 'gp-clone'),
-            ],
+            'nonce' => wp_create_nonce('gp_google_request_nonce'),
         ]);
         wp_enqueue_script('google-identity-services', 'https://accounts.google.com/gsi/client', [], null, true);
     }
@@ -1066,6 +1062,11 @@ function gp_handle_google_identity_submit(): void
         gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
     }
 
+    $request_nonce = isset($_POST['gp_google_request_nonce']) ? sanitize_text_field(wp_unslash((string) $_POST['gp_google_request_nonce'])) : '';
+    if ($request_nonce === '') {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
     $claims = gp_verify_google_id_token($credential);
     if ($claims instanceof WP_Error) {
         gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
@@ -1073,6 +1074,10 @@ function gp_handle_google_identity_submit(): void
 
     $email = sanitize_email((string) ($claims['email'] ?? ''));
     if ($email === '' || !is_email($email)) {
+        gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
+    }
+
+    if (($claims['nonce'] ?? '') !== $request_nonce) {
         gp_auth_redirect_with_notice($context === 'register' ? '/zarejestruj' : '/zaloguj', 'login_failed');
     }
 

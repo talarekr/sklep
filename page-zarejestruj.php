@@ -13,13 +13,14 @@ get_header();
         <h1><?php esc_html_e('Utwórz konto', 'gp-clone'); ?></h1>
         <?php gp_render_auth_notice_from_query(); ?>
         <?php if (gp_is_google_oauth_available()) : ?>
-            <div class="gp-auth-social" data-gp-google-button data-gp-context="register"></div>
+            <button class="gp-auth-social" type="button" data-gp-google-button data-gp-context="register"><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-google-form>
                 <input type="hidden" name="action" value="gp_google_identity">
                 <input type="hidden" name="gp_context" value="register">
                 <input type="hidden" name="gp_google_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_identity_nonce')); ?>">
                 <input type="hidden" name="credential" value="" data-gp-google-credential>
-                <button class="gp-auth-social" type="submit" data-gp-google-submit><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
+                <input type="hidden" name="gp_google_request_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_request_nonce')); ?>" data-gp-google-request-nonce>
+                
             </form>
             <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
         <?php endif; ?>
