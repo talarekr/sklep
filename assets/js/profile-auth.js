@@ -116,39 +116,69 @@
   });
 
   var googleConfig = window.gpGoogleAuth || null;
-  if (googleConfig && googleConfig.clientId && window.google && google.accounts && google.accounts.id) {
-    google.accounts.id.initialize({
-      client_id: googleConfig.clientId,
-      callback: function (response) {
-        var wrapper = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]');
-        if (!wrapper || !response || !response.credential) {
-          return;
-        }
+  if (!googleConfig || !googleConfig.clientId) {
+    return;
+  }
 
-        var form = wrapper.parentNode.querySelector('[data-gp-google-form]');
-        if (!form) {
-          return;
-        }
+  var startedAt = Date.now();
+  var maxWaitMs = 5000;
 
-        var credentialInput = form.querySelector('[data-gp-google-credential]');
-        if (!credentialInput) {
-          return;
-        }
-
-        credentialInput.value = response.credential;
-        form.submit();
+  function setupGoogleIdentity() {
+    if (!(window.google && window.google.accounts && window.google.accounts.id)) {
+      if (Date.now() - startedAt < maxWaitMs) {
+        window.setTimeout(setupGoogleIdentity, 150);
       }
-    });
+      return;
+    }
+
+    try {
+      google.accounts.id.initialize({
+        client_id: googleConfig.clientId,
+        nonce: googleConfig.nonce || '',
+        callback: function (response) {
+          if (!response || !response.credential) {
+            return;
+          }
+
+          var activeHost = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]') || document.querySelector('[data-gp-google-button]');
+          if (!activeHost || !activeHost.parentNode) {
+            return;
+          }
+
+          var form = activeHost.parentNode.querySelector('[data-gp-google-form]');
+          var credentialInput = form ? form.querySelector('[data-gp-google-credential]') : null;
+          if (!form || !credentialInput) {
+            return;
+          }
+
+          credentialInput.value = response.credential;
+          form.submit();
+        }
+      });
+    } catch (e) {
+      return;
+    }
 
     document.querySelectorAll('[data-gp-google-button]').forEach(function (buttonHost) {
       buttonHost.setAttribute('data-gp-google-active', '1');
-      google.accounts.id.renderButton(buttonHost, {
-        type: 'standard',
-        theme: 'outline',
-        size: 'large',
-        text: 'continue_with',
-        width: 320
-      });
+      var hostWidth = buttonHost.offsetWidth || buttonHost.clientWidth || 320;
+      var buttonWidth = Math.max(220, Math.min(400, hostWidth));
+
+      try {
+        google.accounts.id.renderButton(buttonHost, {
+          theme: 'outline',
+          size: 'large',
+          type: 'standard',
+          text: 'continue_with',
+          shape: 'pill',
+          logo_alignment: 'left',
+          width: buttonWidth
+        });
+      } catch (e) {
+        return;
+      }
     });
   }
+
+  setupGoogleIdentity();
 })();
