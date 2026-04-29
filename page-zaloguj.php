@@ -12,7 +12,7 @@ get_header();
         <h1><?php esc_html_e('Zaloguj się', 'gp-clone'); ?></h1>
         <?php gp_render_auth_notice_from_query(); ?>
         <?php if (gp_is_google_oauth_available()) : ?>
-            <div class="gp-auth-social" data-gp-google-button data-gp-context="login" aria-label="Google Sign-In"></div>
+            <button class="gp-auth-social" type="button" data-gp-google-button data-gp-context="login"><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" data-gp-google-form>
                 <input type="hidden" name="action" value="gp_google_identity">
                 <input type="hidden" name="gp_context" value="login">

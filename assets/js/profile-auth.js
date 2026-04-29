@@ -140,12 +140,12 @@
             return;
           }
 
-          var activeHost = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]') || document.querySelector('[data-gp-google-button]');
-          if (!activeHost || !activeHost.parentNode) {
+          var activeButton = document.querySelector('[data-gp-google-button][data-gp-google-active="1"]');
+          if (!activeButton || !activeButton.parentNode) {
             return;
           }
 
-          var form = activeHost.parentNode.querySelector('[data-gp-google-form]');
+          var form = activeButton.parentNode.querySelector('[data-gp-google-form]');
           var credentialInput = form ? form.querySelector('[data-gp-google-credential]') : null;
           if (!form || !credentialInput) {
             return;
@@ -159,24 +159,25 @@
       return;
     }
 
-    document.querySelectorAll('[data-gp-google-button]').forEach(function (buttonHost) {
-      buttonHost.setAttribute('data-gp-google-active', '1');
-      var hostWidth = buttonHost.offsetWidth || buttonHost.clientWidth || 320;
-      var buttonWidth = Math.max(220, Math.min(400, hostWidth));
+    document.querySelectorAll('[data-gp-google-button]').forEach(function (button) {
+      button.setAttribute('data-gp-google-active', '1');
+      button.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (!(window.google && window.google.accounts && window.google.accounts.id && google.accounts.id.prompt)) {
+          return;
+        }
 
-      try {
-        google.accounts.id.renderButton(buttonHost, {
-          theme: 'outline',
-          size: 'large',
-          type: 'standard',
-          text: 'continue_with',
-          shape: 'pill',
-          logo_alignment: 'left',
-          width: buttonWidth
+        document.querySelectorAll('[data-gp-google-button]').forEach(function (btn) {
+          btn.removeAttribute('data-gp-google-active');
         });
-      } catch (e) {
-        return;
-      }
+        button.setAttribute('data-gp-google-active', '1');
+
+        try {
+          google.accounts.id.prompt();
+        } catch (e) {
+          return;
+        }
+      });
     });
   }
 
