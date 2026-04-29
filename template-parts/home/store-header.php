@@ -294,8 +294,12 @@ if (taxonomy_exists('product_cat')) {
             </div>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
                 <?php foreach ($shortcuts as $shortcut) : ?>
-                    <?php $shortcut_url = $shortcut['url'] ?? $resolve_category_url($shortcut['slugs'], $shortcut['label']); ?>
-                    <a href="<?php echo esc_url($shortcut_url); ?>"><?php echo esc_html($shortcut['label']); ?></a>
+                    <?php
+                    $shortcut_url = $shortcut['url'] ?? $resolve_category_url($shortcut['slugs'], $shortcut['label']);
+                    $mobile_hidden_labels = ['Felgi', 'Fotele'];
+                    $shortcut_classes = in_array($shortcut['label'], $mobile_hidden_labels, true) ? 'gp-shortcuts__item gp-shortcuts__item--mobile-hidden' : 'gp-shortcuts__item';
+                    ?>
+                    <a class="<?php echo esc_attr($shortcut_classes); ?>" href="<?php echo esc_url($shortcut_url); ?>"><?php echo esc_html($shortcut['label']); ?></a>
                 <?php endforeach; ?>
             </nav>
             <div class="gp-phone">
