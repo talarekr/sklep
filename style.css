@@ -1160,16 +1160,9 @@ body.home .gp-part-search-box {
   .gp-category-search-hero__form { grid-template-columns: 1fr; }
   .gp-category-search-hero__form input { font-size: 16px; min-height: 42px; }
   .gp-category-search-hero__form button { width: 100%; min-height: 42px; font-size: 18px; }
-  body.home .gp-home-products .gp-carousel__viewport {
-    overflow: hidden;
-    padding: 0;
-  }
-  body.home .gp-home-products .gp-products.gp-carousel__track {
-    overflow: hidden;
-  }
   body.home .gp-home-products .gp-carousel__slide {
-    margin: 0;
-    box-sizing: border-box;
+    flex: 0 0 calc((100% - 12px) / 2);
+    max-width: calc((100% - 12px) / 2);
   }
 }
 @media (max-width: 479px) {

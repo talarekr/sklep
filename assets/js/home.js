@@ -306,32 +306,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (page > pages - 1) page = pages - 1;
 
       const gap = Number.parseFloat(window.getComputedStyle(track).columnGap || window.getComputedStyle(track).gap || '0') || 0;
+      const basis = `calc((100% - ${(visible - 1) * gap}px) / ${visible})`;
+      slides.forEach((slide) => {
+        slide.style.flexBasis = basis;
+        slide.style.maxWidth = basis;
+      });
+
       const viewport = carousel.querySelector('[data-gp-carousel-viewport]');
       const viewportWidth = viewport ? viewport.getBoundingClientRect().width : 0;
-      const isHomepageMobile = document.body.classList.contains('home') && window.matchMedia('(max-width: 767px)').matches;
-
-      let step = viewportWidth;
-
-      if (isHomepageMobile && viewportWidth > 0) {
-        const cardWidth = Math.max(0, (viewportWidth - gap) / 2);
-        slides.forEach((slide) => {
-          slide.style.flex = `0 0 ${cardWidth}px`;
-          slide.style.flexBasis = `${cardWidth}px`;
-          slide.style.maxWidth = `${cardWidth}px`;
-          slide.style.width = `${cardWidth}px`;
-        });
-        step = (cardWidth + gap) * 2;
-      } else {
-        const basis = `calc((100% - ${(visible - 1) * gap}px) / ${visible})`;
-        slides.forEach((slide) => {
-          slide.style.flex = `0 0 ${basis}`;
-          slide.style.flexBasis = basis;
-          slide.style.maxWidth = basis;
-          slide.style.width = '';
-        });
-      }
-
-      const offset = Math.max(0, page * step);
+      const offset = Math.max(0, page * viewportWidth);
 
       track.style.transform = `translateX(-${offset}px)`;
       prev.disabled = page === 0;
@@ -350,7 +333,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('resize', update);
-    window.addEventListener('orientationchange', update);
     update();
   });
 });
