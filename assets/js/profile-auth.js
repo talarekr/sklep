@@ -9,11 +9,25 @@
       dropdown.hidden = true;
     };
 
-    trigger.addEventListener('click', function () {
+    if (!trigger || !dropdown) {
+      return;
+    }
+
+    var toggleDropdown = function () {
       var isOpen = trigger.getAttribute('aria-expanded') === 'true';
       trigger.setAttribute('aria-expanded', String(!isOpen));
       dropdown.hidden = isOpen;
+    };
+
+    trigger.addEventListener('click', function (event) {
+      event.preventDefault();
+      toggleDropdown();
     });
+
+    trigger.addEventListener('touchend', function (event) {
+      event.preventDefault();
+      toggleDropdown();
+    }, { passive: false });
 
     document.addEventListener('click', function (event) {
       if (!profileMenu.contains(event.target)) {
