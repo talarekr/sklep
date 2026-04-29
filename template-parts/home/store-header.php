@@ -162,7 +162,8 @@ if (taxonomy_exists('product_cat')) {
         <div class="gp-main-header__top-links">
             <a href="<?php echo esc_url(home_url('/kontakt')); ?>"><?php esc_html_e('Kontakt', 'gp-clone'); ?></a>
             <label class="gp-language-switcher" for="gp-language-select">
-                <span class="gp-language-switcher__label"><?php esc_html_e('Wybierz język', 'gp-clone'); ?></span>
+                <span class="gp-language-switcher__label" data-label-desktop><?php esc_html_e('Wybierz język', 'gp-clone'); ?></span>
+                <span class="gp-language-switcher__label gp-language-switcher__label--mobile" data-label-mobile><?php esc_html_e('Język', 'gp-clone'); ?></span>
                 <select id="gp-language-select" class="gp-language-switcher__select" aria-label="<?php esc_attr_e('Wybierz język', 'gp-clone'); ?>">
                     <option value="pl">🇵🇱 Polski</option>
                     <option value="en">🇬🇧 Angielski</option>
