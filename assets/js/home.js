@@ -305,6 +305,13 @@ document.addEventListener('DOMContentLoaded', () => {
       pages = Math.max(1, Math.ceil(slides.length / visible));
       if (page > pages - 1) page = pages - 1;
 
+      const gap = Number.parseFloat(window.getComputedStyle(track).columnGap || window.getComputedStyle(track).gap || '0') || 0;
+      const basis = `calc((100% - ${(visible - 1) * gap}px) / ${visible})`;
+      slides.forEach((slide) => {
+        slide.style.flexBasis = basis;
+        slide.style.maxWidth = basis;
+      });
+
       const viewport = carousel.querySelector('[data-gp-carousel-viewport]');
       const viewportWidth = viewport ? viewport.getBoundingClientRect().width : 0;
       const offset = Math.max(0, page * viewportWidth);
