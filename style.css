@@ -153,6 +153,9 @@ body {
   display: inline-flex;
   align-items: center;
 }
+.gp-language-switcher__label--mobile {
+  display: none;
+}
 .gp-main-header__row {
   display: grid;
   grid-template-columns: 220px minmax(360px, 1fr) auto;
@@ -193,6 +196,8 @@ body {
   background: var(--gp-navy);
   color: #fff;
   padding: 0 22px;
+  min-width: 84px;
+  white-space: nowrap;
   font-weight: 700;
   cursor: pointer;
 }
@@ -866,6 +871,7 @@ body.home .gp-part-search-box {
 .gp-carousel__slide {
   flex: 0 0 calc((100% - 36px) / 4);
   max-width: calc((100% - 36px) / 4);
+  min-width: 0;
 }
 .gp-carousel__nav {
   display: flex;
@@ -1073,14 +1079,26 @@ body.home .gp-part-search-box {
   .gp-brand-logos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) {
-  .gp-main-header__top-links { justify-content: flex-start; gap: 16px; overflow-x: auto; }
+  .gp-main-header__top-links { justify-content: flex-start; gap: 12px; overflow-x: auto; padding-inline: 2px; }
+  .gp-main-header__top-links > a:first-child { flex: 0 0 auto; }
   .gp-language-switcher {
     min-width: max-content;
   }
-  .gp-main-search { min-height: 50px; }
-  .gp-main-search input { min-height: 48px; font-size: 16px; }
-  .gp-main-search button { padding: 0 14px; }
+  .gp-language-switcher__label[data-label-desktop] { display: none; }
+  .gp-language-switcher__label--mobile { display: inline; }
+  .gp-main-search { min-height: 50px; grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .gp-main-search input { min-height: 48px; min-width: 0; font-size: 16px; }
+  .gp-main-search button { padding: 0 12px; min-width: 74px; font-size: 15px; }
   .gp-main-actions { justify-content: space-between; }
+  .gp-logo-wrap { display: flex; justify-content: center; }
+  .gp-logo-link { display: inline-flex; justify-content: center; }
+  .gp-profile-menu { position: relative; }
+  .gp-profile-dropdown {
+    right: auto;
+    left: 12px;
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+  }
   .gp-all-cat-dropdown {
     width: 100%;
     max-width: none;
@@ -1112,6 +1130,13 @@ body.home .gp-part-search-box {
   .gp-category-search-hero__form { grid-template-columns: 1fr; }
   .gp-category-search-hero__form input { font-size: 16px; min-height: 42px; }
   .gp-category-search-hero__form button { width: 100%; min-height: 42px; font-size: 18px; }
+  body.home .gp-home-products .gp-products.gp-carousel__track {
+    gap: 8px;
+  }
+  body.home .gp-home-products .gp-carousel__slide {
+    flex: 0 0 calc((100% - 8px) / 2);
+    max-width: calc((100% - 8px) / 2);
+  }
 }
 @media (max-width: 479px) {
   .gp-all-cat-dropdown__list {

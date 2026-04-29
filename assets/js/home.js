@@ -268,7 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const getVisibleCount = () => {
-    if (window.matchMedia('(max-width: 767px)').matches) return 1;
+    if (window.matchMedia('(max-width: 767px)').matches) return 2;
     if (window.matchMedia('(max-width: 1199px)').matches) return 2;
     return 4;
   };
@@ -305,7 +305,19 @@ document.addEventListener('DOMContentLoaded', () => {
       pages = Math.max(1, Math.ceil(slides.length / visible));
       if (page > pages - 1) page = pages - 1;
 
-      track.style.transform = `translateX(-${page * 100}%)`;
+      const viewport = carousel.querySelector('[data-gp-carousel-viewport]');
+      const viewportWidth = viewport ? viewport.getBoundingClientRect().width : 0;
+      const gap = Number.parseFloat(window.getComputedStyle(track).columnGap || window.getComputedStyle(track).gap || '0') || 0;
+      const slideWidth = visible > 0 ? (viewportWidth - gap * (visible - 1)) / visible : viewportWidth;
+
+      slides.forEach((slide) => {
+        slide.style.flexBasis = `${slideWidth}px`;
+        slide.style.maxWidth = `${slideWidth}px`;
+      });
+
+      const offset = Math.max(0, page * ((slideWidth * visible) + (gap * visible)));
+
+      track.style.transform = `translateX(-${offset}px)`;
       prev.disabled = page === 0;
       next.disabled = page >= pages - 1;
       renderDots();
