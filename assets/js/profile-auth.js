@@ -21,26 +21,13 @@
     var toggleDropdown = function () {
       var isOpen = profileMenu.classList.contains('is-open');
       setDropdownState(!isOpen);
-      console.log('profile tap');
-      console.log(profileMenu.classList);
     };
 
-    var lastTouchAt = 0;
-
     trigger.addEventListener('click', function (event) {
-      if (Date.now() - lastTouchAt < 500) {
-        return;
-      }
       event.preventDefault();
       event.stopPropagation();
       toggleDropdown();
     });
-
-    trigger.addEventListener('touchend', function (event) {
-      lastTouchAt = Date.now();
-      event.preventDefault();
-      toggleDropdown();
-    }, { passive: false });
 
     document.addEventListener('click', function (event) {
       if (profileMenu.contains(event.target)) {

@@ -1107,11 +1107,16 @@ body.home .gp-part-search-box {
     margin: 0 auto;
   }
   .gp-profile-dropdown {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(calc(100vw - 24px), 360px);
-    max-width: calc(100vw - 24px);
+    position: fixed;
+    top: auto;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    width: auto;
+    max-width: none;
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+    z-index: 1000;
   }
   .gp-carousel__slide {
     flex: 0 0 calc((100% - 12px) / 2) !important;
