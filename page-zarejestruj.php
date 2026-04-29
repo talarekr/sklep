@@ -19,7 +19,7 @@ get_header();
                 <input type="hidden" name="gp_context" value="register">
                 <input type="hidden" name="gp_google_nonce" value="<?php echo esc_attr(wp_create_nonce('gp_google_identity_nonce')); ?>">
                 <input type="hidden" name="credential" value="" data-gp-google-credential>
-                <button class="gp-auth-social" type="button" data-gp-google-submit><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
+                <button class="gp-auth-social" type="submit" data-gp-google-submit><?php esc_html_e('Kontynuuj z Google', 'gp-clone'); ?></button>
             </form>
             <div class="gp-auth-separator"><span><?php esc_html_e('lub', 'gp-clone'); ?></span></div>
         <?php endif; ?>
