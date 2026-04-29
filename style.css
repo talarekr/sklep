@@ -237,6 +237,9 @@ body {
   padding: 18px;
   z-index: 30;
 }
+.gp-profile-menu.is-open .gp-profile-dropdown {
+  display: block;
+}
 .gp-profile-dropdown__actions {
   display: grid;
   gap: 12px;
