@@ -1507,6 +1507,29 @@ class Importer
         return true;
     }
 
+
+    private function is_supported_offer_event_type(string $event_type): bool
+    {
+        $event_type = strtoupper(sanitize_text_field($event_type));
+        if ($event_type === '') {
+            return false;
+        }
+
+        return in_array($event_type, [
+            'OFFER_ACTIVATED',
+            'OFFER_ENDED',
+            'OFFER_ARCHIVED',
+            'OFFER_DEACTIVATED',
+            'OFFER_FINISHED',
+            'OFFER_MODIFIED',
+            'OFFER_UPDATED',
+            'OFFER_STOCK_CHANGED',
+            'OFFER_PRICE_CHANGED',
+            'OFFER_VISIBILITY_CHANGED',
+            'OFFER_PUBLICATION_STATUS_CHANGED',
+        ], true);
+    }
+
     private function is_terminal_offer_event_type(string $event_type): bool
     {
         $event_type = strtoupper(sanitize_text_field($event_type));
