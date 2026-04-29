@@ -348,6 +348,19 @@ body {
   display: flex;
   justify-content: center;
 }
+.gp-auth-social[data-gp-google-button] {
+  width: calc(100% - 4px);
+  max-width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+}
+.gp-auth-social[data-gp-google-button] > div {
+  width: 100% !important;
+  display: flex;
+  justify-content: center;
+}
 .gp-auth-social > div,
 .gp-auth-social iframe {
   max-width: 100%;
