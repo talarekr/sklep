@@ -1698,6 +1698,18 @@ class Importer
             }
         }
 
+        if (count($offer_details) === 0) {
+            $offer_details_response = $this->client->get_offer_details($offer_id);
+            $attempts[] = [
+                'lookup' => 'offer_details_api',
+                'value' => $offer_id,
+                'matched_count' => is_wp_error($offer_details_response) ? 0 : 1,
+            ];
+            if (!is_wp_error($offer_details_response) && is_array($offer_details_response)) {
+                $offer_details = $offer_details_response;
+            }
+        }
+
         $external_id = sanitize_text_field((string) ($offer_details['external']['id'] ?? ''));
         if ($external_id !== '') {
             $identifiers['external_id'] = $external_id;
