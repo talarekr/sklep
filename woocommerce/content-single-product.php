@@ -22,7 +22,7 @@ $availability_class = !empty($availability['class']) ? sanitize_html_class($avai
 $part_number = function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak';
 $sku = $product->get_sku();
 $delivery_window = gp_get_delivery_text();
-$returns_info = __('Zwrot do 21 dni zgodnie z regulaminem.', 'gp-clone');
+$returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
 ?>
 <div id="product-<?php the_ID(); ?>" <?php wc_product_class('gp-product-page', $product); ?>>
     <section class="gp-product-page__hero">
