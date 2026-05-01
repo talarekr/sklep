@@ -2401,7 +2401,7 @@ function gp_product_tab_warranty(): void
 
 function gp_product_tab_seller(): void
 {
-    echo '<p>' . esc_html__('Global Parts / GP Swiss - wyspecjalizowany sklep z częściami samochodowymi. Oferujemy wsparcie w doborze części po numerze OEM i szybki kontakt z działem sprzedaży.', 'gp-clone') . '</p>';
+    echo '<p>' . esc_html__('GP Global Swiss - wyspecjalizowany sklep z częściami samochodowymi. Oferujemy wsparcie w doborze części po numerze OEM i szybki kontakt z działem sprzedaży.', 'gp-clone') . '</p>';
 }
 
 function gp_get_product_part_number($product): string
