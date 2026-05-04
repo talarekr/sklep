@@ -40,8 +40,7 @@ class EbayAuth
 
     public function handle_oauth_callback(): void
     {
-        $page = sanitize_text_field((string) ($_GET['page'] ?? ''));
-        if ($page !== 'ebay-auth-callback' && !isset($_GET['wei_ebay_oauth'])) return;
+        if (!isset($_GET['wei_ebay_oauth'])) return;
         $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
         if ($code === '') return;
         $this->exchange_code($code);
