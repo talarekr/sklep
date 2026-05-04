@@ -10,6 +10,7 @@ use WEI\Services\EbayClient;
 use WEI\Services\Logger;
 use WEI\Services\OrderImporter;
 use WEI\Services\SyncService;
+use WEI\Services\AdminPage;
 
 class Plugin
 {
@@ -24,8 +25,10 @@ class Plugin
         $adapter = new EbayAdapter($client, $repo, $logger);
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger);
 
         Migrations::maybe_upgrade();
+        $adminPage->hooks();
 
         add_action('init', [$auth, 'handle_oauth_callback']);
         add_action('woocommerce_product_set_stock', [$sync, 'handle_stock_change'], 10, 1);
