@@ -1,0 +1,51 @@
+<?php
+
+namespace WEI\Repositories;
+
+use WEI\Services\Logger;
+
+class MappingRepository
+{
+    public function __construct(private Logger $logger)
+    {
+    }
+
+    public function upsert(array $data): void
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $existing = $this->find_by_product((int) $data['woo_product_id'], isset($data['woo_variation_id']) ? (int) $data['woo_variation_id'] : null);
+        $now = gmdate('Y-m-d H:i:s');
+        $row = array_merge($data, ['updated_at' => $now]);
+
+        if ($existing) {
+            $wpdb->update($table, $row, ['id' => (int) $existing['id']]);
+            return;
+        }
+
+        $row['created_at'] = $now;
+        $wpdb->insert($table, $row);
+    }
+
+    public function find_by_product(int $product_id, ?int $variation_id = null): ?array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        if ($variation_id === null) {
+            $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND woo_product_id=%d AND woo_variation_id IS NULL LIMIT 1", 'ebay', $product_id);
+        } else {
+            $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND woo_product_id=%d AND woo_variation_id=%d LIMIT 1", 'ebay', $product_id, $variation_id);
+        }
+        $row = $wpdb->get_row($sql, ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
+
+    public function find_by_sku(string $sku): ?array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND sku=%s LIMIT 1", 'ebay', $sku);
+        $row = $wpdb->get_row($sql, ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
+}
