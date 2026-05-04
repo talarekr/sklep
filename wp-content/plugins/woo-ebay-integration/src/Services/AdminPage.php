@@ -25,12 +25,12 @@ class AdminPage
 
     public function register_menu(): void
     {
-        add_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_woocommerce', 'wei-ebay-integration', [$this, 'render']);
+        add_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_options', 'woo-ebay', [$this, 'render']);
     }
 
     public function render(): void
     {
-        if (!current_user_can('manage_woocommerce')) {
+        if (!current_user_can('manage_options')) {
             wp_die('No access');
         }
         $s = $this->settings();
@@ -49,7 +49,7 @@ class AdminPage
         $s['client_secret'] = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
         $s['redirect_uri'] = esc_url_raw((string) ($_POST['redirect_uri'] ?? ''));
         update_option(Plugin::OPTION_KEY, $s, false);
-        wp_safe_redirect(admin_url('admin.php?page=wei-ebay-integration&saved=1'));
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
     }
 
@@ -85,7 +85,7 @@ class AdminPage
 
     private function go(): void
     {
-        wp_safe_redirect(admin_url('admin.php?page=wei-ebay-integration'));
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay'));
         exit;
     }
 
