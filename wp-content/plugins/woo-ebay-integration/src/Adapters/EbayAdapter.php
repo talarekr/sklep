@@ -109,7 +109,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $sku = (string) $product->get_sku();
         if ($sku === '') return ['result' => 'error', 'error' => 'missing_sku'];
 
-        $item = $this->client->create_or_replace_inventory_item($sku, [
+        $itemPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
             'condition' => 'NEW',
             'product' => [
@@ -118,13 +118,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'aspects' => ['MPN' => [(string) get_post_meta($product_id, '_part_number', true)]],
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
             ],
+        ];
+        $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
+            'stage' => 'createOrReplaceInventoryItem',
+            'product_id' => $product_id,
+            'sku' => $sku,
         ]);
-        if (is_wp_error($item)) return ['result' => 'error', 'error' => $item->get_error_message()];
+        if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
 
         $marketplaceId = $this->marketplace_id();
         $settings = $this->settings();
 
-        $offer = $this->client->create_offer([
+        $offerPayload = [
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
             'merchantLocationKey' => $this->merchant_location_key(),
@@ -135,12 +140,27 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
             'pricingSummary' => ['price' => ['value' => (string) $product->get_price(), 'currency' => get_woocommerce_currency()]],
+        ];
+        $offer = $this->client->create_offer($offerPayload, [
+            'stage' => 'createOffer',
+            'product_id' => $product_id,
+            'sku' => $sku,
         ]);
-        if (is_wp_error($offer)) return ['result' => 'error', 'error' => $offer->get_error_message()];
+        if (is_wp_error($offer)) return $this->export_error_response('createOffer', $offer, $product_id, $sku);
 
         $offer_id = (string) ($offer['offerId'] ?? '');
-        $published = $offer_id !== '' ? $this->client->publish_offer($offer_id) : new \WP_Error('wei_offer_missing', 'Missing offerId');
-        if (is_wp_error($published)) return ['result' => 'error', 'error' => $published->get_error_message()];
+        $published = $offer_id !== ''
+            ? $this->client->publish_offer($offer_id, [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+            ])
+            : new \WP_Error('wei_offer_missing', 'Missing offerId', [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+            ]);
+        if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
 
         $listing_id = (string) ($published['listingId'] ?? '');
         $this->repo->upsert([
@@ -195,6 +215,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
         update_option(Plugin::OPTION_KEY, $settings, false);
 
         return ['result' => 'success'] + $result;
+    }
+
+    private function export_error_response(string $stage, \WP_Error $error, int $product_id, string $sku): array
+    {
+        $error_data = $error->get_error_data();
+        $context = is_array($error_data) ? $error_data : ['raw_error_data' => $error_data];
+        $context['stage'] = $context['stage'] ?? $stage;
+        $context['product_id'] = $context['product_id'] ?? $product_id;
+        $context['sku'] = $context['sku'] ?? $sku;
+
+        $this->logger->error('Product export failed', $context + ['error' => $error->get_error_message()]);
+
+        return [
+            'result' => 'error',
+            'error' => $error->get_error_message(),
+            'error_details' => $context,
+        ];
     }
 
     private function upsert_policy_by_name(string $type, string $policyName, string $marketplaceId)

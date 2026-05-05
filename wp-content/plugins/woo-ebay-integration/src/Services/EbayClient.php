@@ -10,24 +10,24 @@ class EbayClient
     {
     }
 
-    public function create_or_replace_inventory_item(string $sku, array $payload)
+    public function create_or_replace_inventory_item(string $sku, array $payload, array $context = [])
     {
-        return $this->request('PUT', '/sell/inventory/v1/inventory_item/' . rawurlencode($sku), $payload);
+        return $this->request('PUT', '/sell/inventory/v1/inventory_item/' . rawurlencode($sku), $payload, [], $context);
     }
 
-    public function create_offer(array $payload)
+    public function create_offer(array $payload, array $context = [])
     {
-        return $this->request('POST', '/sell/inventory/v1/offer', $payload);
+        return $this->request('POST', '/sell/inventory/v1/offer', $payload, [], $context);
     }
 
-    public function update_offer(string $offer_id, array $payload)
+    public function update_offer(string $offer_id, array $payload, array $context = [])
     {
-        return $this->request('PUT', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), $payload);
+        return $this->request('PUT', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), $payload, [], $context);
     }
 
-    public function publish_offer(string $offer_id)
+    public function publish_offer(string $offer_id, array $context = [])
     {
-        return $this->request('POST', '/sell/inventory/v1/offer/' . rawurlencode($offer_id) . '/publish', []);
+        return $this->request('POST', '/sell/inventory/v1/offer/' . rawurlencode($offer_id) . '/publish', [], [], $context);
     }
 
     public function bulk_update_price_quantity(array $requests)
@@ -85,7 +85,7 @@ class EbayClient
         return $this->request('POST', '/sell/inventory/v1/location/' . rawurlencode($merchant_location_key), $payload);
     }
 
-    private function request(string $method, string $path, ?array $body = null, array $query = [])
+    private function request(string $method, string $path, ?array $body = null, array $query = [], array $context = [])
     {
         $token = $this->auth->get_valid_access_token();
         if (is_wp_error($token)) {
@@ -146,14 +146,22 @@ class EbayClient
                 }
             }
 
-            $error_context = [
+            $sanitized_headers = $this->sanitize_sensitive_data($args['headers'] ?? []);
+            $request_payload = $body !== null ? $this->sanitize_sensitive_data($body) : null;
+
+            $error_context = array_merge([
+                'stage' => (string) ($context['stage'] ?? 'unknown'),
+                'product_id' => isset($context['product_id']) ? (int) $context['product_id'] : null,
+                'sku' => isset($context['sku']) ? (string) $context['sku'] : null,
                 'endpoint' => $path,
                 'method' => $method,
                 'status' => $status,
                 'response_body' => is_array($decoded) ? $decoded : $raw_body,
+                'request_payload' => $request_payload,
+                'request_headers' => $sanitized_headers,
                 'correlation_headers' => $correlation_headers,
                 'response_headers' => $normalized_headers,
-            ];
+            ], $this->sanitize_sensitive_data($context));
 
             $this->logger->error('eBay API request failed', $error_context);
             return new \WP_Error('wei_ebay_http_error', 'eBay API HTTP error', $error_context);
@@ -161,4 +169,31 @@ class EbayClient
 
         return new \WP_Error('wei_ebay_http_error', 'eBay API retries exhausted');
     }
+
+    private function sanitize_sensitive_data($data)
+    {
+        if (!is_array($data)) {
+            return $data;
+        }
+
+        $sanitized = [];
+        foreach ($data as $key => $value) {
+            $normalizedKey = strtolower((string) $key);
+            $isSecret = str_contains($normalizedKey, 'authorization')
+                || str_contains($normalizedKey, 'token')
+                || str_contains($normalizedKey, 'secret')
+                || str_contains($normalizedKey, 'password');
+
+            if ($isSecret) {
+                $sanitized[$key] = '[REDACTED]';
+                continue;
+            }
+
+            $sanitized[$key] = is_array($value) ? $this->sanitize_sensitive_data($value) : $value;
+        }
+
+        return $sanitized;
+    }
+
 }
+
