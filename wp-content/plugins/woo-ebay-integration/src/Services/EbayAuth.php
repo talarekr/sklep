@@ -20,13 +20,15 @@ class EbayAuth
         $state = wp_generate_password(20, false, false);
         set_transient('wei_oauth_state_' . get_current_user_id(), $state, 10 * MINUTE_IN_SECONDS);
 
-        return add_query_arg([
+        $params = [
             'client_id' => $s['client_id'] ?? '',
             'response_type' => 'code',
             'redirect_uri' => $s['runame'] ?? '',
             'scope' => self::SCOPES,
             'state' => $state,
-        ], self::AUTH_URL);
+        ];
+
+        return self::AUTH_URL . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
 
     public function disconnect(): void
