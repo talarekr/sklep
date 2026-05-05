@@ -50,6 +50,11 @@ class EbayClient
         return $this->request('GET', '/sell/inventory/v1/location');
     }
 
+    public function create_or_update_location(string $merchant_location_key, array $payload)
+    {
+        return $this->request('POST', '/sell/inventory/v1/location/' . rawurlencode($merchant_location_key), $payload);
+    }
+
     private function request(string $method, string $path, ?array $body = null, array $query = [])
     {
         $token = $this->auth->get_valid_access_token();
