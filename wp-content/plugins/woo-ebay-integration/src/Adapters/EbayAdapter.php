@@ -172,8 +172,33 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     ? $error_data['response_body']
                     : [];
 
-                $existing_offer_id = trim((string) ($response_body['offerId'] ?? ''));
+                $existing_offer_id = '';
+                $errors = is_array($response_body['errors'] ?? null) ? $response_body['errors'] : [];
+                foreach ($errors as $error_entry) {
+                    if (!is_array($error_entry)) {
+                        continue;
+                    }
+
+                    $parameters = is_array($error_entry['parameters'] ?? null) ? $error_entry['parameters'] : [];
+                    foreach ($parameters as $parameter) {
+                        if (!is_array($parameter)) {
+                            continue;
+                        }
+
+                        if ((string) ($parameter['name'] ?? '') !== 'offerId') {
+                            continue;
+                        }
+
+                        $existing_offer_id = trim((string) ($parameter['value'] ?? ''));
+                        if ($existing_offer_id !== '') {
+                            break 2;
+                        }
+                    }
+                }
                 $error_message = strtolower((string) ($response_body['message'] ?? ''));
+                if ($error_message === '' && isset($errors[0]) && is_array($errors[0])) {
+                    $error_message = strtolower((string) ($errors[0]['message'] ?? ''));
+                }
                 $is_offer_exists = $existing_offer_id !== '' && str_contains($error_message, 'offer entity already exists');
 
                 if (!$is_offer_exists) {
@@ -181,6 +206,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 }
 
                 $offer_id = $existing_offer_id;
+                $this->logger->info('Existing offer detected, switching to update flow: ' . $offer_id, [
+                    'product_id' => $product_id,
+                    'sku' => $sku,
+                    'marketplace_id' => $marketplaceId,
+                ]);
             } else {
                 $offer_id = (string) ($offer['offerId'] ?? '');
             }
