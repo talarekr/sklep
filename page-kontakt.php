@@ -40,6 +40,20 @@ $status_config = [
                 <p>REGON: 368948917</p>
                 <p>Tel: <a href="tel:+48504266984">504 266 984</a></p>
                 <p>E-mail: <a href="mailto:biuro@gpswiss.pl">biuro@gpswiss.pl</a></p>
+
+                <div class="gp-contact-card__map" aria-label="Mapa dojazdu do Sokół 74, 08-460 Poręby">
+                    <iframe
+                        src="https://www.google.com/maps?q=Sok%C3%B3%C5%82+74%2C+08-460+Por%C4%99by&output=embed"
+                        loading="lazy"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        allowfullscreen
+                        title="Google Maps - Sokół 74, 08-460 Poręby"></iframe>
+                </div>
+                <p class="gp-contact-card__map-link">
+                    <a href="https://www.google.com/maps/search/?api=1&query=Sok%C3%B3%C5%82+74%2C+08-460+Por%C4%99by" target="_blank" rel="noopener noreferrer">
+                        <?php esc_html_e('Otwórz w Google Maps', 'gp-clone'); ?>
+                    </a>
+                </p>
             </section>
 
             <section class="gp-contact-form">

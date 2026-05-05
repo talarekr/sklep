@@ -1017,6 +1017,25 @@ body.home .gp-part-search-box {
 .gp-contact-card p {
   margin: 0 0 8px;
 }
+
+.gp-contact-card__map {
+  margin-top: 16px;
+  border: 1px solid #e1e6ef;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.gp-contact-card__map iframe {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border: 0;
+}
+.gp-contact-card__map-link {
+  margin-top: 10px;
+}
+.gp-contact-card__map-link a {
+  font-weight: 600;
+}
 .gp-contact-form__notice {
   margin: 0 0 12px;
   padding: 10px 12px;
