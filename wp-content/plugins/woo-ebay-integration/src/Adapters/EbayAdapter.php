@@ -20,6 +20,19 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings = $this->settings();
         $marketplaceId = $this->marketplace_id();
 
+        if (trim((string) ($settings['marketplace_id'] ?? '')) === '') {
+            return ['ready' => false, 'failed' => 'marketplace_id_missing'];
+        }
+
+        if (trim((string) ($settings['default_category_id'] ?? '')) === '') {
+            return ['ready' => false, 'failed' => 'category_id_missing'];
+        }
+
+        $token = $this->client->get_access_token();
+        if (is_wp_error($token)) {
+            return ['ready' => false, 'failed' => 'oauth', 'error' => $token->get_error_message()];
+        }
+
         $checks = [
             'fulfillment_policy' => $this->client->get_policies('fulfillment_policy', $marketplaceId),
             'payment_policy' => $this->client->get_policies('payment_policy', $marketplaceId),
@@ -279,162 +292,33 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return get_woocommerce_currency();
     }
 
-    public function upsert_business_policies(): array
+    public function refresh_policies(): array
     {
-        $settings = $this->settings();
         $marketplaceId = $this->marketplace_id();
 
-        $result = [];
-        $result['ebay_fulfillment_policy_id'] = $this->upsert_policy_by_name('fulfillment_policy', (string) ($settings['fulfillment_policy_name'] ?? ''), $marketplaceId);
-        $result['ebay_payment_policy_id'] = $this->upsert_policy_by_name('payment_policy', (string) ($settings['payment_policy_name'] ?? ''), $marketplaceId);
-        $result['ebay_return_policy_id'] = $this->upsert_policy_by_name('return_policy', (string) ($settings['return_policy_name'] ?? ''), $marketplaceId);
+        $fulfillment = $this->client->get_policies('fulfillment_policy', $marketplaceId);
+        $payment = $this->client->get_policies('payment_policy', $marketplaceId);
+        $return = $this->client->get_policies('return_policy', $marketplaceId);
 
-        foreach ($result as $key => $value) {
-            if (is_wp_error($value)) {
-                return ['result' => 'error', 'error' => $value->get_error_message(), 'error_details' => $value->get_error_data()];
+        foreach (['fulfillment' => $fulfillment, 'payment' => $payment, 'return' => $return] as $key => $res) {
+            if (is_wp_error($res)) {
+                return ['result' => 'error', 'failed' => $key, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()];
             }
         }
 
-        $settings['ebay_fulfillment_policy_id'] = (string) $result['ebay_fulfillment_policy_id'];
-        $settings['ebay_payment_policy_id'] = (string) $result['ebay_payment_policy_id'];
-        $settings['ebay_return_policy_id'] = (string) $result['ebay_return_policy_id'];
+        $settings = $this->settings();
+        $settings['wei_cached_policies'] = [
+            'fulfillmentPolicies' => $fulfillment['fulfillmentPolicies'] ?? [],
+            'paymentPolicies' => $payment['paymentPolicies'] ?? [],
+            'returnPolicies' => $return['returnPolicies'] ?? [],
+        ];
         update_option(Plugin::OPTION_KEY, $settings, false);
 
-        return ['result' => 'success'] + $result;
-    }
-
-    private function export_error_response(string $stage, \WP_Error $error, int $product_id, string $sku): array
-    {
-        $error_data = $error->get_error_data();
-        $context = is_array($error_data) ? $error_data : ['raw_error_data' => $error_data];
-        $context['stage'] = $context['stage'] ?? $stage;
-        $context['product_id'] = $context['product_id'] ?? $product_id;
-        $context['sku'] = $context['sku'] ?? $sku;
-
-        $this->logger->error('Product export failed', $context + ['error' => $error->get_error_message()]);
-
-        return [
-            'result' => 'error',
-            'error' => $error->get_error_message(),
-            'error_details' => $context,
-        ];
-    }
-
-    private function upsert_policy_by_name(string $type, string $policyName, string $marketplaceId)
-    {
-        if ($policyName === '') {
-            return new \WP_Error('wei_policy_name_missing', 'Policy name is required', ['type' => $type]);
-        }
-
-        $existingRes = $this->client->get_policies($type, $marketplaceId);
-        if (is_wp_error($existingRes)) {
-            return $existingRes;
-        }
-
-        $collectionMap = [
-            'fulfillment_policy' => 'fulfillmentPolicies',
-            'payment_policy' => 'paymentPolicies',
-            'return_policy' => 'returnPolicies',
-        ];
-        $idFieldMap = [
-            'fulfillment_policy' => 'fulfillmentPolicyId',
-            'payment_policy' => 'paymentPolicyId',
-            'return_policy' => 'returnPolicyId',
-        ];
-
-        $policies = is_array($existingRes[$collectionMap[$type]] ?? null) ? $existingRes[$collectionMap[$type]] : [];
-        $existingId = '';
-        foreach ($policies as $policy) {
-            if ((string) ($policy['name'] ?? '') === $policyName) {
-                $existingId = (string) ($policy[$idFieldMap[$type]] ?? '');
-                break;
-            }
-        }
-
-        $payload = ['name' => $policyName, 'description' => $policyName, 'marketplaceId' => $marketplaceId];
-        if ($type === 'fulfillment_policy') {
-            $payload += [
-                'categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']],
-                'handlingTime' => ['unit' => 'DAY', 'value' => 1],
-                'globalShipping' => false,
-                'shippingOptions' => [[
-                    'optionType' => 'DOMESTIC',
-                    'costType' => 'FLAT_RATE',
-                    'shippingServices' => [[
-                        'sortOrder' => 1,
-                        'shippingServiceCode' => 'DE_StandardShippingFromAbroad',
-                        'shippingCost' => ['currency' => 'EUR', 'value' => '9.99'],
-                    ]],
-                ]],
-            ];
-        } elseif ($type === 'payment_policy') {
-            // eBay Managed Payments: do not set payment methods manually.
-            $payload = [
-                'name' => $policyName,
-                'marketplaceId' => $marketplaceId,
-                'categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']],
-                'immediatePay' => true,
-            ];
-        } else {
-            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'returnsAccepted' => true, 'returnPeriod' => ['unit' => 'DAY', 'value' => 30], 'returnMethod' => 'REPLACEMENT', 'returnShippingCostPayer' => 'BUYER'];
-        }
-
-        if ($existingId !== '') {
-            $updated = $this->upsert_policy_request($type, $payload, $marketplaceId, $existingId);
-            if (is_wp_error($updated)) return $updated;
-            return $existingId;
-        }
-
-        $created = $this->upsert_policy_request($type, $payload, $marketplaceId);
-        if (is_wp_error($created)) return $created;
-        return (string) ($created[$idFieldMap[$type]] ?? '');
-    }
-
-
-    private function upsert_policy_request(string $type, array $payload, string $marketplaceId, string $existingId = '')
-    {
-        $method = $existingId !== '' ? 'update_' . $type : 'create_' . $type;
-        $response = $existingId !== ''
-            ? $this->client->{$method}($existingId, $payload)
-            : $this->client->{$method}($payload);
-
-        if (!is_wp_error($response) || $type !== 'fulfillment_policy' || $marketplaceId !== 'EBAY_DE') {
-            return $response;
-        }
-
-        $fallbackServiceCodes = [
-            'DE_StandardDispatch',
-            'DE_DeutschePostBrief',
-            'DE_DHLPaket',
-        ];
-
-        foreach ($fallbackServiceCodes as $serviceCode) {
-            $fallbackPayload = $payload;
-            if (isset($fallbackPayload['shippingOptions'][0]['shippingServices'][0])) {
-                unset($fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingCarrierCode']);
-                $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingServiceCode'] = $serviceCode;
-            }
-
-            $this->logger->warning('Primary fulfillment shipping service failed, retrying EBAY_DE fallback', [
-                'marketplaceId' => $marketplaceId,
-                'error' => $response->get_error_message(),
-                'error_data' => $response->get_error_data(),
-                'payload' => $payload,
-                'fallback_payload' => $fallbackPayload,
-            ]);
-
-            $retryResponse = $existingId !== ''
-                ? $this->client->{$method}($existingId, $fallbackPayload)
-                : $this->client->{$method}($fallbackPayload);
-
-            if (!is_wp_error($retryResponse)) {
-                return $retryResponse;
-            }
-
-            $response = $retryResponse;
-        }
-
-        return $response;
+        return ['result' => 'success', 'counts' => [
+            'fulfillment' => count($settings['wei_cached_policies']['fulfillmentPolicies']),
+            'payment' => count($settings['wei_cached_policies']['paymentPolicies']),
+            'return' => count($settings['wei_cached_policies']['returnPolicies']),
+        ]];
     }
 
     private function settings(): array

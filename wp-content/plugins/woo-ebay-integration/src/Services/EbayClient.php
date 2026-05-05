@@ -16,6 +16,12 @@ class EbayClient
     {
     }
 
+
+    public function get_access_token()
+    {
+        return $this->auth->get_valid_access_token();
+    }
+
     public function create_or_replace_inventory_item(string $sku, array $payload, array $context = [])
     {
         return $this->request('PUT', '/sell/inventory/v1/inventory_item/' . rawurlencode($sku), $payload, [], $context);
