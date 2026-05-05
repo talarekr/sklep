@@ -23,7 +23,7 @@ class EbayAuth
         return add_query_arg([
             'client_id' => $s['client_id'] ?? '',
             'response_type' => 'code',
-            'redirect_uri' => $s['redirect_uri'] ?? '',
+            'redirect_uri' => $s['runame'] ?? '',
             'scope' => self::SCOPES,
             'state' => $state,
         ], self::AUTH_URL);
@@ -40,9 +40,12 @@ class EbayAuth
 
     public function handle_oauth_callback(): void
     {
-        if (!isset($_GET['wei_ebay_oauth'])) return;
+        $page = sanitize_text_field((string) ($_GET['page'] ?? ''));
+        if ($page !== 'ebay-auth-callback') return;
+
         $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
         if ($code === '') return;
+
         $this->exchange_code($code);
     }
 
@@ -76,7 +79,7 @@ class EbayAuth
             'body' => [
                 'grant_type' => 'authorization_code',
                 'code' => $code,
-                'redirect_uri' => $s['redirect_uri'] ?? '',
+                'redirect_uri' => $s['runame'] ?? '',
             ],
         ]);
 
