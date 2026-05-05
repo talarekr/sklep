@@ -130,6 +130,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
 
         $settings = $this->settings();
+        $defaultCategoryId = trim((string) ($settings['default_category_id'] ?? ''));
+        if ($defaultCategoryId === '') {
+            return ['result' => 'error', 'message' => 'Missing eBay category ID'];
+        }
 
         $priceValue = (float) $product->get_price();
         $priceCurrency = $this->offer_currency($marketplaceId);
@@ -142,6 +146,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
             'merchantLocationKey' => $this->merchant_location_key(),
+            'categoryId' => $defaultCategoryId,
             'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
