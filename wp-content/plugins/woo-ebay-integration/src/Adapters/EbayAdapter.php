@@ -2,6 +2,8 @@
 
 namespace WEI\Adapters;
 
+use WEI\Plugin;
+
 use WEI\Interfaces\MarketplaceAdapterInterface;
 use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayClient;
@@ -15,10 +17,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     public function readiness_check(): array
     {
+        $marketplaceId = $this->marketplace_id();
+
         $checks = [
-            'fulfillment_policy' => $this->client->get_policies('fulfillment_policy'),
-            'payment_policy' => $this->client->get_policies('payment_policy'),
-            'return_policy' => $this->client->get_policies('return_policy'),
+            'fulfillment_policy' => $this->client->get_policies('fulfillment_policy', $marketplaceId),
+            'payment_policy' => $this->client->get_policies('payment_policy', $marketplaceId),
+            'return_policy' => $this->client->get_policies('return_policy', $marketplaceId),
             'locations' => $this->client->get_locations(),
         ];
 
@@ -56,9 +60,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         if (is_wp_error($item)) return ['result' => 'error', 'error' => $item->get_error_message()];
 
+        $marketplaceId = $this->marketplace_id();
+
         $offer = $this->client->create_offer([
             'sku' => $sku,
-            'marketplaceId' => 'EBAY_US',
+            'marketplaceId' => $marketplaceId,
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
@@ -79,12 +85,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'remote_inventory_id' => $sku,
             'remote_offer_id' => $offer_id,
             'remote_listing_id' => $listing_id,
-            'marketplace_id' => 'EBAY_US',
+            'marketplace_id' => $marketplaceId,
             'status' => 'active',
             'last_sync_at' => gmdate('Y-m-d H:i:s'),
         ]);
 
         return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku];
+    }
+
+    private function marketplace_id(): string
+    {
+        $settings = get_option(Plugin::OPTION_KEY, []);
+        if (!is_array($settings)) {
+            return 'EBAY_DE';
+        }
+
+        $marketplaceId = (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
+        return $marketplaceId !== '' ? $marketplaceId : 'EBAY_DE';
     }
 
     public function sync_stock(int $product_id, ?int $variation_id = null): array
