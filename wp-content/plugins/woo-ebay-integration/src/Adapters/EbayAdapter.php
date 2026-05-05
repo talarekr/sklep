@@ -251,6 +251,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'name' => $policyName,
                 'marketplaceId' => $marketplaceId,
                 'categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']],
+                'immediatePay' => true,
             ];
         } else {
             $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'returnsAccepted' => true, 'returnPeriod' => ['unit' => 'DAY', 'value' => 30], 'returnMethod' => 'REPLACEMENT', 'returnShippingCostPayer' => 'BUYER'];
