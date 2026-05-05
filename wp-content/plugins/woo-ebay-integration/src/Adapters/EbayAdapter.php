@@ -23,7 +23,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ];
 
         foreach ($checks as $k => $v) {
-            if (is_wp_error($v)) return ['ready' => false, 'failed' => $k, 'error' => $v->get_error_message()];
+            if (is_wp_error($v)) {
+                return [
+                    'ready' => false,
+                    'failed' => $k,
+                    'error' => $v->get_error_message(),
+                    'error_details' => $v->get_error_data(),
+                ];
+            }
         }
 
         return ['ready' => true, 'details' => $checks];
