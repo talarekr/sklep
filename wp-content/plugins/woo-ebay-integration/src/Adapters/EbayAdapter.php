@@ -232,7 +232,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($type === 'fulfillment_policy') {
             $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'handlingTime' => ['unit' => 'DAY', 'value' => 1], 'shippingOptions' => [['optionType' => 'DOMESTIC', 'costType' => 'FLAT_RATE', 'shippingServices' => [['shippingCost' => ['currency' => 'EUR', 'value' => '0.0'], 'sortOrder' => 1, 'shippingServiceCode' => 'DE_DHLPaket']]]]];
         } elseif ($type === 'payment_policy') {
-            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'immediatePay' => true, 'paymentMethods' => [['paymentMethodType' => 'PAYPAL']]];
+            // eBay Managed Payments: do not set payment methods manually.
+            $payload = [
+                'name' => $policyName,
+                'marketplaceId' => $marketplaceId,
+                'categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']],
+            ];
         } else {
             $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'returnsAccepted' => true, 'returnPeriod' => ['unit' => 'DAY', 'value' => 30], 'returnMethod' => 'REPLACEMENT', 'returnShippingCostPayer' => 'BUYER'];
         }
