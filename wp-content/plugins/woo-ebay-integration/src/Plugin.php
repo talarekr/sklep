@@ -30,7 +30,7 @@ class Plugin
         Migrations::maybe_upgrade();
         $adminPage->hooks();
 
-        add_action('init', [$auth, 'handle_oauth_callback']);
+        add_action('admin_init', [$auth, 'handle_oauth_callback']);
         add_action('woocommerce_product_set_stock', [$sync, 'handle_stock_change'], 10, 1);
         add_action('woocommerce_variation_set_stock', [$sync, 'handle_stock_change'], 10, 1);
         add_action('wei_ebay_sync_stock_batch', [$sync, 'sync_stock_batch']);

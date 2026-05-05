@@ -26,6 +26,13 @@ class AdminPage
     public function register_menu(): void
     {
         add_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_options', 'woo-ebay', [$this, 'render']);
+        add_submenu_page(null, 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_woocommerce', 'ebay-auth-callback', [$this, 'render_oauth_callback']);
+    }
+
+    public function render_oauth_callback(): void
+    {
+        // Callback is handled in WEI\Services\EbayAuth::handle_oauth_callback.
+        wp_die('OAuth callback page.');
     }
 
     public function render(): void
