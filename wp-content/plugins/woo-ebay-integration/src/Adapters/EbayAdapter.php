@@ -17,6 +17,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     public function readiness_check(): array
     {
+        $settings = $this->settings();
         $marketplaceId = $this->marketplace_id();
 
         $checks = [
@@ -37,16 +38,30 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        $policyCollections = [
-            'fulfillmentPolicies' => is_array($checks['fulfillment_policy']['fulfillmentPolicies'] ?? null) ? $checks['fulfillment_policy']['fulfillmentPolicies'] : [],
-            'paymentPolicies' => is_array($checks['payment_policy']['paymentPolicies'] ?? null) ? $checks['payment_policy']['paymentPolicies'] : [],
-            'returnPolicies' => is_array($checks['return_policy']['returnPolicies'] ?? null) ? $checks['return_policy']['returnPolicies'] : [],
-            'locations' => is_array($checks['locations']['locations'] ?? null) ? $checks['locations']['locations'] : [],
+        $locations = is_array($checks['locations']['locations'] ?? null) ? $checks['locations']['locations'] : [];
+        if (count($locations) < 1) {
+            return ['ready' => false, 'failed' => 'locations', 'details' => $checks];
+        }
+
+        $requiredPolicyIds = [
+            'fulfillment_policy' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'payment_policy' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+            'return_policy' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
 
-        foreach ($policyCollections as $collectionName => $values) {
-            if (count($values) < 1) {
-                return ['ready' => false, 'failed' => $collectionName, 'details' => $checks];
+        if (in_array('', $requiredPolicyIds, true)) {
+            return ['ready' => false, 'failed' => 'policy_id_missing', 'details' => $checks, 'required_policy_ids' => $requiredPolicyIds];
+        }
+
+        $policySeen = [
+            'fulfillment_policy' => $this->policy_id_exists($checks['fulfillment_policy']['fulfillmentPolicies'] ?? [], $requiredPolicyIds['fulfillment_policy']),
+            'payment_policy' => $this->policy_id_exists($checks['payment_policy']['paymentPolicies'] ?? [], $requiredPolicyIds['payment_policy']),
+            'return_policy' => $this->policy_id_exists($checks['return_policy']['returnPolicies'] ?? [], $requiredPolicyIds['return_policy']),
+        ];
+
+        foreach ($policySeen as $key => $seen) {
+            if (!$seen) {
+                return ['ready' => false, 'failed' => $key . '_not_found', 'details' => $checks, 'required_policy_ids' => $requiredPolicyIds];
             }
         }
 
@@ -107,11 +122,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (is_wp_error($item)) return ['result' => 'error', 'error' => $item->get_error_message()];
 
         $marketplaceId = $this->marketplace_id();
+        $settings = $this->settings();
 
         $offer = $this->client->create_offer([
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
             'merchantLocationKey' => $this->merchant_location_key(),
+            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
@@ -142,24 +161,112 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function marketplace_id(): string
     {
-        $settings = get_option(Plugin::OPTION_KEY, []);
-        if (!is_array($settings)) {
-            return 'EBAY_DE';
-        }
-
+        $settings = $this->settings();
         $marketplaceId = (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
         return $marketplaceId !== '' ? $marketplaceId : 'EBAY_DE';
     }
 
     private function merchant_location_key(): string
     {
-        $settings = get_option(Plugin::OPTION_KEY, []);
-        if (!is_array($settings)) {
-            return 'gpswiss-pl';
-        }
-
+        $settings = $this->settings();
         $merchantLocationKey = (string) ($settings['inventory_location_key'] ?? 'gpswiss-pl');
         return $merchantLocationKey !== '' ? $merchantLocationKey : 'gpswiss-pl';
+    }
+
+    public function upsert_business_policies(): array
+    {
+        $settings = $this->settings();
+        $marketplaceId = $this->marketplace_id();
+
+        $result = [];
+        $result['ebay_fulfillment_policy_id'] = $this->upsert_policy_by_name('fulfillment_policy', (string) ($settings['fulfillment_policy_name'] ?? ''), $marketplaceId);
+        $result['ebay_payment_policy_id'] = $this->upsert_policy_by_name('payment_policy', (string) ($settings['payment_policy_name'] ?? ''), $marketplaceId);
+        $result['ebay_return_policy_id'] = $this->upsert_policy_by_name('return_policy', (string) ($settings['return_policy_name'] ?? ''), $marketplaceId);
+
+        foreach ($result as $key => $value) {
+            if (is_wp_error($value)) {
+                return ['result' => 'error', 'error' => $value->get_error_message(), 'error_details' => $value->get_error_data()];
+            }
+        }
+
+        $settings['ebay_fulfillment_policy_id'] = (string) $result['ebay_fulfillment_policy_id'];
+        $settings['ebay_payment_policy_id'] = (string) $result['ebay_payment_policy_id'];
+        $settings['ebay_return_policy_id'] = (string) $result['ebay_return_policy_id'];
+        update_option(Plugin::OPTION_KEY, $settings, false);
+
+        return ['result' => 'success'] + $result;
+    }
+
+    private function upsert_policy_by_name(string $type, string $policyName, string $marketplaceId)
+    {
+        if ($policyName === '') {
+            return new \WP_Error('wei_policy_name_missing', 'Policy name is required', ['type' => $type]);
+        }
+
+        $existingRes = $this->client->get_policies($type, $marketplaceId);
+        if (is_wp_error($existingRes)) {
+            return $existingRes;
+        }
+
+        $collectionMap = [
+            'fulfillment_policy' => 'fulfillmentPolicies',
+            'payment_policy' => 'paymentPolicies',
+            'return_policy' => 'returnPolicies',
+        ];
+        $idFieldMap = [
+            'fulfillment_policy' => 'fulfillmentPolicyId',
+            'payment_policy' => 'paymentPolicyId',
+            'return_policy' => 'returnPolicyId',
+        ];
+
+        $policies = is_array($existingRes[$collectionMap[$type]] ?? null) ? $existingRes[$collectionMap[$type]] : [];
+        $existingId = '';
+        foreach ($policies as $policy) {
+            if ((string) ($policy['name'] ?? '') === $policyName) {
+                $existingId = (string) ($policy[$idFieldMap[$type]] ?? '');
+                break;
+            }
+        }
+
+        $payload = ['name' => $policyName, 'description' => $policyName, 'marketplaceId' => $marketplaceId];
+        if ($type === 'fulfillment_policy') {
+            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'handlingTime' => ['unit' => 'DAY', 'value' => 1], 'shippingOptions' => [['optionType' => 'DOMESTIC', 'costType' => 'FLAT_RATE', 'shippingServices' => [['shippingCost' => ['currency' => 'EUR', 'value' => '0.0'], 'sortOrder' => 1, 'shippingServiceCode' => 'DE_DHLPaket']]]]];
+        } elseif ($type === 'payment_policy') {
+            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'immediatePay' => true, 'paymentMethods' => [['paymentMethodType' => 'PAYPAL']]];
+        } else {
+            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'returnsAccepted' => true, 'returnPeriod' => ['unit' => 'DAY', 'value' => 30], 'returnMethod' => 'REPLACEMENT', 'returnShippingCostPayer' => 'BUYER'];
+        }
+
+        if ($existingId !== '') {
+            $updater = 'update_' . $type;
+            $updated = $this->client->{$updater}($existingId, $payload);
+            if (is_wp_error($updated)) return $updated;
+            return $existingId;
+        }
+
+        $creator = 'create_' . $type;
+        $created = $this->client->{$creator}($payload);
+        if (is_wp_error($created)) return $created;
+        return (string) ($created[$idFieldMap[$type]] ?? '');
+    }
+
+    private function settings(): array
+    {
+        $settings = get_option(Plugin::OPTION_KEY, []);
+        return is_array($settings) ? $settings : [];
+    }
+
+    private function policy_id_exists(array $policies, string $requiredId): bool
+    {
+        if ($requiredId === '') return false;
+        foreach ($policies as $policy) {
+            foreach (['fulfillmentPolicyId', 'paymentPolicyId', 'returnPolicyId'] as $field) {
+                if ((string) ($policy[$field] ?? '') === $requiredId) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public function sync_stock(int $product_id, ?int $variation_id = null): array
