@@ -84,7 +84,8 @@ class EbayClient
             }
 
             $status = (int) wp_remote_retrieve_response_code($res);
-            $decoded = json_decode((string) wp_remote_retrieve_body($res), true);
+            $raw_body = (string) wp_remote_retrieve_body($res);
+            $decoded = json_decode($raw_body, true);
             if ($status >= 200 && $status < 300) {
                 return is_array($decoded) ? $decoded : [];
             }
@@ -94,8 +95,33 @@ class EbayClient
                 continue;
             }
 
-            $this->logger->error('eBay API request failed', ['path' => $path, 'status' => $status, 'body' => $decoded]);
-            return new \WP_Error('wei_ebay_http_error', 'eBay API HTTP error', ['status' => $status, 'body' => $decoded]);
+            $response_headers = wp_remote_retrieve_headers($res);
+            $normalized_headers = [];
+            if ($response_headers instanceof \WpOrg\Requests\Utility\CaseInsensitiveDictionary) {
+                $normalized_headers = $response_headers->getAll();
+            } elseif (is_array($response_headers)) {
+                $normalized_headers = $response_headers;
+            }
+
+            $correlation_headers = [];
+            foreach ($normalized_headers as $header_name => $header_value) {
+                $header_name_lower = strtolower((string) $header_name);
+                if (str_contains($header_name_lower, 'correlation') || str_contains($header_name_lower, 'request-id') || str_contains($header_name_lower, 'trace')) {
+                    $correlation_headers[$header_name] = $header_value;
+                }
+            }
+
+            $error_context = [
+                'endpoint' => $path,
+                'method' => $method,
+                'status' => $status,
+                'response_body' => is_array($decoded) ? $decoded : $raw_body,
+                'correlation_headers' => $correlation_headers,
+                'response_headers' => $normalized_headers,
+            ];
+
+            $this->logger->error('eBay API request failed', $error_context);
+            return new \WP_Error('wei_ebay_http_error', 'eBay API HTTP error', $error_context);
         }
 
         return new \WP_Error('wei_ebay_http_error', 'eBay API retries exhausted');
