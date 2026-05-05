@@ -37,7 +37,53 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
+        $policyCollections = [
+            'fulfillmentPolicies' => is_array($checks['fulfillment_policy']['fulfillmentPolicies'] ?? null) ? $checks['fulfillment_policy']['fulfillmentPolicies'] : [],
+            'paymentPolicies' => is_array($checks['payment_policy']['paymentPolicies'] ?? null) ? $checks['payment_policy']['paymentPolicies'] : [],
+            'returnPolicies' => is_array($checks['return_policy']['returnPolicies'] ?? null) ? $checks['return_policy']['returnPolicies'] : [],
+            'locations' => is_array($checks['locations']['locations'] ?? null) ? $checks['locations']['locations'] : [],
+        ];
+
+        foreach ($policyCollections as $collectionName => $values) {
+            if (count($values) < 1) {
+                return ['ready' => false, 'failed' => $collectionName, 'details' => $checks];
+            }
+        }
+
         return ['ready' => true, 'details' => $checks];
+    }
+
+    public function upsert_inventory_location(): array
+    {
+        $settings = get_option(Plugin::OPTION_KEY, []);
+        $settings = is_array($settings) ? $settings : [];
+
+        $merchantLocationKey = (string) ($settings['inventory_location_key'] ?? 'gpswiss-pl');
+        $name = (string) ($settings['inventory_location_name'] ?? 'gpswiss-pl');
+        $country = (string) ($settings['inventory_location_country'] ?? 'PL');
+        $postalCode = (string) ($settings['inventory_location_postal_code'] ?? '08-460');
+        $city = (string) ($settings['inventory_location_city'] ?? 'Sobolew');
+        $addressLine1 = (string) ($settings['inventory_location_address_line_1'] ?? '');
+
+        $res = $this->client->create_or_update_location($merchantLocationKey, [
+            'location' => [
+                'address' => [
+                    'addressLine1' => $addressLine1,
+                    'city' => $city,
+                    'postalCode' => $postalCode,
+                    'country' => $country,
+                ],
+            ],
+            'name' => $name,
+            'merchantLocationStatus' => 'ENABLED',
+            'locationTypes' => ['WAREHOUSE'],
+        ]);
+
+        if (is_wp_error($res)) {
+            return ['result' => 'error', 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()];
+        }
+
+        return ['result' => 'success', 'merchantLocationKey' => $merchantLocationKey];
     }
 
     public function export_product(int $product_id, ?int $variation_id = null): array
@@ -65,6 +111,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $offer = $this->client->create_offer([
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
+            'merchantLocationKey' => $this->merchant_location_key(),
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
@@ -102,6 +149,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $marketplaceId = (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
         return $marketplaceId !== '' ? $marketplaceId : 'EBAY_DE';
+    }
+
+    private function merchant_location_key(): string
+    {
+        $settings = get_option(Plugin::OPTION_KEY, []);
+        if (!is_array($settings)) {
+            return 'gpswiss-pl';
+        }
+
+        $merchantLocationKey = (string) ($settings['inventory_location_key'] ?? 'gpswiss-pl');
+        return $merchantLocationKey !== '' ? $merchantLocationKey : 'gpswiss-pl';
     }
 
     public function sync_stock(int $product_id, ?int $variation_id = null): array

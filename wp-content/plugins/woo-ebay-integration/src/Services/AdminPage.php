@@ -21,6 +21,7 @@ class AdminPage
         add_action('admin_post_wei_export_product', [$this, 'export_product']);
         add_action('admin_post_wei_sync_stock', [$this, 'sync_stock']);
         add_action('admin_post_wei_import_order', [$this, 'import_order']);
+        add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
     }
 
     public function register_menu(): void
@@ -56,6 +57,12 @@ class AdminPage
         $s['client_secret'] = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
+        $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
+        $s['inventory_location_country'] = sanitize_text_field((string) ($_POST['inventory_location_country'] ?? 'PL'));
+        $s['inventory_location_postal_code'] = sanitize_text_field((string) ($_POST['inventory_location_postal_code'] ?? '08-460'));
+        $s['inventory_location_city'] = sanitize_text_field((string) ($_POST['inventory_location_city'] ?? 'Sobolew'));
+        $s['inventory_location_address_line_1'] = sanitize_text_field((string) ($_POST['inventory_location_address_line_1'] ?? ''));
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
@@ -91,6 +98,14 @@ class AdminPage
         $this->go();
     }
 
+    public function upsert_inventory_location(): void
+    {
+        check_admin_referer('wei_upsert_inventory_location');
+        $res = $this->adapter->upsert_inventory_location();
+        $this->set_status('Inventory location: ' . wp_json_encode($res));
+        $this->go();
+    }
+
     private function go(): void
     {
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay'));
@@ -111,6 +126,24 @@ class AdminPage
         $s = is_array($s) ? $s : [];
         if (empty($s['marketplace_id'])) {
             $s['marketplace_id'] = 'EBAY_DE';
+        }
+        if (empty($s['inventory_location_key'])) {
+            $s['inventory_location_key'] = 'gpswiss-pl';
+        }
+        if (empty($s['inventory_location_name'])) {
+            $s['inventory_location_name'] = 'gpswiss-pl';
+        }
+        if (empty($s['inventory_location_country'])) {
+            $s['inventory_location_country'] = 'PL';
+        }
+        if (empty($s['inventory_location_postal_code'])) {
+            $s['inventory_location_postal_code'] = '08-460';
+        }
+        if (empty($s['inventory_location_city'])) {
+            $s['inventory_location_city'] = 'Sobolew';
+        }
+        if (!isset($s['inventory_location_address_line_1'])) {
+            $s['inventory_location_address_line_1'] = '';
         }
         return $s;
     }
