@@ -6,6 +6,12 @@ class EbayClient
 {
     private const BASE = 'https://api.ebay.com';
 
+    private const MARKETPLACE_CONTENT_LANGUAGE = [
+        'EBAY_DE' => 'de-DE',
+        'EBAY_GB' => 'en-GB',
+        'EBAY_US' => 'en-US',
+    ];
+
     public function __construct(private EbayAuth $auth, private Logger $logger)
     {
     }
@@ -97,14 +103,21 @@ class EbayClient
             $url = add_query_arg($query, $url);
         }
 
+        $headers = [
+            'Authorization' => 'Bearer ' . $token,
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ];
+
+        $contentLanguage = $this->resolve_content_language($path, $body, $query, $context);
+        if ($contentLanguage !== '') {
+            $headers['Content-Language'] = $contentLanguage;
+        }
+
         $args = [
             'method' => $method,
             'timeout' => 25,
-            'headers' => [
-                'Authorization' => 'Bearer ' . $token,
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json',
-            ],
+            'headers' => $headers,
         ];
         if ($body !== null) {
             $args['body'] = wp_json_encode($body);
@@ -168,6 +181,21 @@ class EbayClient
         }
 
         return new \WP_Error('wei_ebay_http_error', 'eBay API retries exhausted');
+    }
+
+
+    private function resolve_content_language(string $path, ?array $body = null, array $query = [], array $context = []): string
+    {
+        if (!str_starts_with($path, '/sell/inventory/v1/')) {
+            return '';
+        }
+
+        $marketplaceId = (string) ($context['marketplace_id'] ?? $context['marketplaceId'] ?? $query['marketplace_id'] ?? $query['marketplaceId'] ?? $body['marketplaceId'] ?? '');
+        if ($marketplaceId === '') {
+            return '';
+        }
+
+        return self::MARKETPLACE_CONTENT_LANGUAGE[$marketplaceId] ?? '';
     }
 
     private function sanitize_sensitive_data($data)

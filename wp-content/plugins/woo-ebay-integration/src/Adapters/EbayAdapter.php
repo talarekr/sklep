@@ -119,14 +119,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
             ],
         ];
+        $marketplaceId = $this->marketplace_id();
+
         $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
             'stage' => 'createOrReplaceInventoryItem',
             'product_id' => $product_id,
             'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
         ]);
         if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
 
-        $marketplaceId = $this->marketplace_id();
         $settings = $this->settings();
 
         $offerPayload = [
@@ -145,6 +147,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'stage' => 'createOffer',
             'product_id' => $product_id,
             'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
         ]);
         if (is_wp_error($offer)) return $this->export_error_response('createOffer', $offer, $product_id, $sku);
 
