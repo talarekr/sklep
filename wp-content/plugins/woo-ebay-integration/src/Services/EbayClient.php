@@ -40,6 +40,36 @@ class EbayClient
         return $this->request('GET', '/sell/account/v1/' . $type, null, ['marketplace_id' => $marketplace_id]);
     }
 
+    public function create_fulfillment_policy(array $payload)
+    {
+        return $this->request('POST', '/sell/account/v1/fulfillment_policy', $payload);
+    }
+
+    public function create_payment_policy(array $payload)
+    {
+        return $this->request('POST', '/sell/account/v1/payment_policy', $payload);
+    }
+
+    public function create_return_policy(array $payload)
+    {
+        return $this->request('POST', '/sell/account/v1/return_policy', $payload);
+    }
+
+    public function update_fulfillment_policy(string $policy_id, array $payload)
+    {
+        return $this->request('PUT', '/sell/account/v1/fulfillment_policy/' . rawurlencode($policy_id), $payload);
+    }
+
+    public function update_payment_policy(string $policy_id, array $payload)
+    {
+        return $this->request('PUT', '/sell/account/v1/payment_policy/' . rawurlencode($policy_id), $payload);
+    }
+
+    public function update_return_policy(string $policy_id, array $payload)
+    {
+        return $this->request('PUT', '/sell/account/v1/return_policy/' . rawurlencode($policy_id), $payload);
+    }
+
     public function get_orders(array $query = [])
     {
         return $this->request('GET', '/sell/fulfillment/v1/order', null, $query);
