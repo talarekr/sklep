@@ -230,7 +230,21 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $payload = ['name' => $policyName, 'description' => $policyName, 'marketplaceId' => $marketplaceId];
         if ($type === 'fulfillment_policy') {
-            $payload += ['categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']], 'handlingTime' => ['unit' => 'DAY', 'value' => 1], 'shippingOptions' => [['optionType' => 'DOMESTIC', 'costType' => 'FLAT_RATE', 'shippingServices' => [['shippingCost' => ['currency' => 'EUR', 'value' => '0.0'], 'sortOrder' => 1, 'shippingServiceCode' => 'DE_DHLPaket']]]]];
+            $payload += [
+                'categoryTypes' => [['name' => 'ALL_EXCLUDING_MOTORS_VEHICLES']],
+                'handlingTime' => ['unit' => 'DAY', 'value' => 1],
+                'globalShipping' => false,
+                'shippingOptions' => [[
+                    'optionType' => 'DOMESTIC',
+                    'costType' => 'FLAT_RATE',
+                    'shippingServices' => [[
+                        'sortOrder' => 1,
+                        'shippingCarrierCode' => 'DHL',
+                        'shippingServiceCode' => 'DE_DHLPaket',
+                        'shippingCost' => ['currency' => 'EUR', 'value' => '9.99'],
+                    ]],
+                ]],
+            ];
         } elseif ($type === 'payment_policy') {
             // eBay Managed Payments: do not set payment methods manually.
             $payload = [
@@ -243,16 +257,45 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         if ($existingId !== '') {
-            $updater = 'update_' . $type;
-            $updated = $this->client->{$updater}($existingId, $payload);
+            $updated = $this->upsert_policy_request($type, $payload, $marketplaceId, $existingId);
             if (is_wp_error($updated)) return $updated;
             return $existingId;
         }
 
-        $creator = 'create_' . $type;
-        $created = $this->client->{$creator}($payload);
+        $created = $this->upsert_policy_request($type, $payload, $marketplaceId);
         if (is_wp_error($created)) return $created;
         return (string) ($created[$idFieldMap[$type]] ?? '');
+    }
+
+
+    private function upsert_policy_request(string $type, array $payload, string $marketplaceId, string $existingId = '')
+    {
+        $method = $existingId !== '' ? 'update_' . $type : 'create_' . $type;
+        $response = $existingId !== ''
+            ? $this->client->{$method}($existingId, $payload)
+            : $this->client->{$method}($payload);
+
+        if (!is_wp_error($response) || $type !== 'fulfillment_policy' || $marketplaceId !== 'EBAY_DE') {
+            return $response;
+        }
+
+        $fallbackPayload = $payload;
+        if (isset($fallbackPayload['shippingOptions'][0]['shippingServices'][0])) {
+            $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingCarrierCode'] = 'OTHER';
+            $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingServiceCode'] = 'DE_StandardDispatch';
+        }
+
+        $this->logger->warning('Primary fulfillment shipping service failed, retrying EBAY_DE fallback', [
+            'marketplaceId' => $marketplaceId,
+            'error' => $response->get_error_message(),
+            'error_data' => $response->get_error_data(),
+            'payload' => $payload,
+            'fallback_payload' => $fallbackPayload,
+        ]);
+
+        return $existingId !== ''
+            ? $this->client->{$method}($existingId, $fallbackPayload)
+            : $this->client->{$method}($fallbackPayload);
     }
 
     private function settings(): array
