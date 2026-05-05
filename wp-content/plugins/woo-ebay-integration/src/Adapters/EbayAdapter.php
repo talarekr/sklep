@@ -362,8 +362,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'costType' => 'FLAT_RATE',
                     'shippingServices' => [[
                         'sortOrder' => 1,
-                        'shippingCarrierCode' => 'DHL',
-                        'shippingServiceCode' => 'DE_DHLPaket',
+                        'shippingServiceCode' => 'DE_StandardShippingFromAbroad',
                         'shippingCost' => ['currency' => 'EUR', 'value' => '9.99'],
                     ]],
                 ]],
@@ -403,23 +402,39 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return $response;
         }
 
-        $fallbackPayload = $payload;
-        if (isset($fallbackPayload['shippingOptions'][0]['shippingServices'][0])) {
-            $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingCarrierCode'] = 'OTHER';
-            $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingServiceCode'] = 'DE_StandardDispatch';
+        $fallbackServiceCodes = [
+            'DE_StandardDispatch',
+            'DE_DeutschePostBrief',
+            'DE_DHLPaket',
+        ];
+
+        foreach ($fallbackServiceCodes as $serviceCode) {
+            $fallbackPayload = $payload;
+            if (isset($fallbackPayload['shippingOptions'][0]['shippingServices'][0])) {
+                unset($fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingCarrierCode']);
+                $fallbackPayload['shippingOptions'][0]['shippingServices'][0]['shippingServiceCode'] = $serviceCode;
+            }
+
+            $this->logger->warning('Primary fulfillment shipping service failed, retrying EBAY_DE fallback', [
+                'marketplaceId' => $marketplaceId,
+                'error' => $response->get_error_message(),
+                'error_data' => $response->get_error_data(),
+                'payload' => $payload,
+                'fallback_payload' => $fallbackPayload,
+            ]);
+
+            $retryResponse = $existingId !== ''
+                ? $this->client->{$method}($existingId, $fallbackPayload)
+                : $this->client->{$method}($fallbackPayload);
+
+            if (!is_wp_error($retryResponse)) {
+                return $retryResponse;
+            }
+
+            $response = $retryResponse;
         }
 
-        $this->logger->warning('Primary fulfillment shipping service failed, retrying EBAY_DE fallback', [
-            'marketplaceId' => $marketplaceId,
-            'error' => $response->get_error_message(),
-            'error_data' => $response->get_error_data(),
-            'payload' => $payload,
-            'fallback_payload' => $fallbackPayload,
-        ]);
-
-        return $existingId !== ''
-            ? $this->client->{$method}($existingId, $fallbackPayload)
-            : $this->client->{$method}($fallbackPayload);
+        return $response;
     }
 
     private function settings(): array
