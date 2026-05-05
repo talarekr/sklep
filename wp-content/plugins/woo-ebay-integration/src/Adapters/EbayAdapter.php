@@ -155,26 +155,58 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'listingDuration' => 'GTC',
             'pricingSummary' => ['price' => ['value' => (string) $priceValue, 'currency' => $priceCurrency]],
         ];
-        $offer = $this->client->create_offer($offerPayload, [
-            'stage' => 'createOffer',
+        $mapping = $this->repo->find_by_product($product_id, $variation_id);
+        $offer_id = trim((string) ($mapping['remote_offer_id'] ?? ''));
+
+        if ($offer_id === '') {
+            $offer = $this->client->create_offer($offerPayload, [
+                'stage' => 'createOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'marketplace_id' => $marketplaceId,
+            ]);
+
+            if (is_wp_error($offer)) {
+                $error_data = $offer->get_error_data();
+                $response_body = is_array($error_data) && isset($error_data['response_body']) && is_array($error_data['response_body'])
+                    ? $error_data['response_body']
+                    : [];
+
+                $existing_offer_id = trim((string) ($response_body['offerId'] ?? ''));
+                $error_message = strtolower((string) ($response_body['message'] ?? ''));
+                $is_offer_exists = $existing_offer_id !== '' && str_contains($error_message, 'offer entity already exists');
+
+                if (!$is_offer_exists) {
+                    return $this->export_error_response('createOffer', $offer, $product_id, $sku);
+                }
+
+                $offer_id = $existing_offer_id;
+            } else {
+                $offer_id = (string) ($offer['offerId'] ?? '');
+            }
+        }
+
+        if ($offer_id === '') {
+            return $this->export_error_response('createOffer', new \WP_Error('wei_offer_missing', 'Missing offerId', [
+                'stage' => 'createOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+            ]), $product_id, $sku);
+        }
+
+        $updated = $this->client->update_offer($offer_id, $offerPayload, [
+            'stage' => 'updateOffer',
             'product_id' => $product_id,
             'sku' => $sku,
             'marketplace_id' => $marketplaceId,
         ]);
-        if (is_wp_error($offer)) return $this->export_error_response('createOffer', $offer, $product_id, $sku);
+        if (is_wp_error($updated)) return $this->export_error_response('updateOffer', $updated, $product_id, $sku);
 
-        $offer_id = (string) ($offer['offerId'] ?? '');
-        $published = $offer_id !== ''
-            ? $this->client->publish_offer($offer_id, [
-                'stage' => 'publishOffer',
-                'product_id' => $product_id,
-                'sku' => $sku,
-            ])
-            : new \WP_Error('wei_offer_missing', 'Missing offerId', [
-                'stage' => 'publishOffer',
-                'product_id' => $product_id,
-                'sku' => $sku,
-            ]);
+        $published = $this->client->publish_offer($offer_id, [
+            'stage' => 'publishOffer',
+            'product_id' => $product_id,
+            'sku' => $sku,
+        ]);
         if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
 
         $listing_id = (string) ($published['listingId'] ?? '');
