@@ -19,7 +19,7 @@
     </form>
 
     <h2>2. Authorization</h2>
-    <p><a class="button" href="<?php echo esc_url($connect_url . '&wei_ebay_oauth=1'); ?>">Connect eBay</a></p>
+    <p><a class="button" href="<?php echo esc_url($connect_url); ?>">Connect eBay</a></p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_disconnect'); ?><input type="hidden" name="action" value="wei_disconnect" /><button class="button">Disconnect eBay</button></form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_test'); ?><input type="hidden" name="action" value="wei_test_connection" /><button class="button">Test connection</button></form>
     <p>Token expires at (unix): <?php echo esc_html((string) ($s['expires_at'] ?? '')); ?></p>
