@@ -23,10 +23,45 @@
         <p>Postal code: <input type="text" name="inventory_location_postal_code" value="<?php echo esc_attr($s['inventory_location_postal_code'] ?? '08-460'); ?>" class="regular-text" /></p>
         <p>City: <input type="text" name="inventory_location_city" value="<?php echo esc_attr($s['inventory_location_city'] ?? 'Sobolew'); ?>" class="regular-text" /></p>
         <p>Address line 1: <input type="text" name="inventory_location_address_line_1" value="<?php echo esc_attr($s['inventory_location_address_line_1'] ?? ''); ?>" class="regular-text" /></p>
-        <h3>Business Policies</h3>
-        <p>Fulfillment policy name: <input type="text" name="fulfillment_policy_name" value="<?php echo esc_attr($s['fulfillment_policy_name'] ?? 'GP Swiss Shipping'); ?>" class="regular-text" /></p>
-        <p>Payment policy name: <input type="text" name="payment_policy_name" value="<?php echo esc_attr($s['payment_policy_name'] ?? 'GP Swiss Payments'); ?>" class="regular-text" /></p>
-        <p>Return policy name: <input type="text" name="return_policy_name" value="<?php echo esc_attr($s['return_policy_name'] ?? 'GP Swiss Returns'); ?>" class="regular-text" /></p>
+        <h3>Business Policies (manual in eBay)</h3>
+        <?php $cached = is_array($s['wei_cached_policies'] ?? null) ? $s['wei_cached_policies'] : []; ?>
+        <?php $fulfillmentPolicies = is_array($cached['fulfillmentPolicies'] ?? null) ? $cached['fulfillmentPolicies'] : []; ?>
+        <?php $paymentPolicies = is_array($cached['paymentPolicies'] ?? null) ? $cached['paymentPolicies'] : []; ?>
+        <?php $returnPolicies = is_array($cached['returnPolicies'] ?? null) ? $cached['returnPolicies'] : []; ?>
+
+        <p>Fulfillment policy:
+            <select name="ebay_fulfillment_policy_id">
+                <option value="">-- select --</option>
+                <?php foreach ($fulfillmentPolicies as $policy): ?>
+                    <?php $policyId = (string) ($policy['fulfillmentPolicyId'] ?? ''); ?>
+                    <option value="<?php echo esc_attr($policyId); ?>" <?php selected((string) ($s['ebay_fulfillment_policy_id'] ?? ''), $policyId); ?>>
+                        <?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </p>
+        <p>Payment policy:
+            <select name="ebay_payment_policy_id">
+                <option value="">-- select --</option>
+                <?php foreach ($paymentPolicies as $policy): ?>
+                    <?php $policyId = (string) ($policy['paymentPolicyId'] ?? ''); ?>
+                    <option value="<?php echo esc_attr($policyId); ?>" <?php selected((string) ($s['ebay_payment_policy_id'] ?? ''), $policyId); ?>>
+                        <?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </p>
+        <p>Return policy:
+            <select name="ebay_return_policy_id">
+                <option value="">-- select --</option>
+                <?php foreach ($returnPolicies as $policy): ?>
+                    <?php $policyId = (string) ($policy['returnPolicyId'] ?? ''); ?>
+                    <option value="<?php echo esc_attr($policyId); ?>" <?php selected((string) ($s['ebay_return_policy_id'] ?? ''), $policyId); ?>>
+                        <?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </p>
         <p>Callback URL (info only): <code><?php echo esc_html(admin_url('admin.php?page=ebay-auth-callback')); ?></code></p>
         <p><button class="button button-primary">Save settings</button></p>
     </form>
@@ -37,9 +72,9 @@
         <p><button class="button">Create / Update inventory location</button></p>
     </form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-        <?php wp_nonce_field('wei_upsert_business_policies'); ?>
-        <input type="hidden" name="action" value="wei_upsert_business_policies" />
-        <p><button class="button">Create / Update business policies</button></p>
+        <?php wp_nonce_field('wei_refresh_policies'); ?>
+        <input type="hidden" name="action" value="wei_refresh_policies" />
+        <p><button class="button">Refresh policies from eBay</button></p>
     </form>
 
     <h2>2. Authorization</h2>
