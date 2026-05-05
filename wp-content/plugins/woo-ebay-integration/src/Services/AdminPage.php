@@ -47,7 +47,7 @@ class AdminPage
         $s['environment'] = in_array($_POST['environment'] ?? 'production', ['sandbox', 'production'], true) ? $_POST['environment'] : 'production';
         $s['client_id'] = sanitize_text_field((string) ($_POST['client_id'] ?? ''));
         $s['client_secret'] = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
-        $s['redirect_uri'] = esc_url_raw((string) ($_POST['redirect_uri'] ?? ''));
+        $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
