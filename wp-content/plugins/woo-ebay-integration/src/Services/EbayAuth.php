@@ -18,7 +18,7 @@ class EbayAuth
     {
         $s = $this->settings();
         $state = wp_generate_password(20, false, false);
-        set_transient('wei_oauth_state_' . get_current_user_id(), $state, 10 * MINUTE_IN_SECONDS);
+        set_transient('wei_oauth_state_' . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
 
         $params = [
             'client_id' => $s['client_id'] ?? '',
@@ -43,10 +43,30 @@ class EbayAuth
     public function handle_oauth_callback(): void
     {
         $page = sanitize_text_field((string) ($_GET['page'] ?? ''));
-        if ($page !== 'ebay-auth-callback') return;
+        if ($page !== 'ebay-auth-callback') {
+            return;
+        }
+
+        if (!current_user_can('manage_woocommerce') && !current_user_can('manage_options')) {
+            wp_die(__('Insufficient permissions to access this page.'));
+        }
+
+        $state = sanitize_text_field((string) ($_GET['state'] ?? ''));
+        if ($state === '' || !get_transient('wei_oauth_state_' . $state)) {
+            $this->redirect_with_error('invalid_state');
+        }
+
+        delete_transient('wei_oauth_state_' . $state);
+
+        $error = sanitize_text_field((string) ($_GET['error'] ?? ''));
+        if ($error !== '') {
+            $this->redirect_with_error($error);
+        }
 
         $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
-        if ($code === '') return;
+        if ($code === '') {
+            $this->redirect_with_error('missing_code');
+        }
 
         $this->exchange_code($code);
     }
@@ -87,10 +107,25 @@ class EbayAuth
 
         if (is_wp_error($r)) {
             $this->logger->error('OAuth code exchange failed', ['error' => $r->get_error_message()]);
-            return;
+            $this->redirect_with_error('token_exchange_failed');
         }
 
-        $this->persist_token((array) json_decode((string) wp_remote_retrieve_body($r), true));
+        $status = (int) wp_remote_retrieve_response_code($r);
+        $data = (array) json_decode((string) wp_remote_retrieve_body($r), true);
+        if ($status < 200 || $status >= 300 || empty($data['access_token'])) {
+            $this->logger->error('OAuth code exchange HTTP error', ['status' => $status, 'response' => $data]);
+            $this->redirect_with_error('token_exchange_http_error');
+        }
+
+        $this->persist_token($data);
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&ebay_connected=1'));
+        exit;
+    }
+
+    private function redirect_with_error(string $error): void
+    {
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&ebay_error=' . rawurlencode($error)));
+        exit;
     }
 
     private function refresh_access_token(string $refresh): string|\WP_Error
