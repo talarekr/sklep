@@ -55,6 +55,7 @@ class AdminPage
         $s['client_id'] = sanitize_text_field((string) ($_POST['client_id'] ?? ''));
         $s['client_secret'] = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
+        $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
@@ -107,6 +108,10 @@ class AdminPage
     private function settings(): array
     {
         $s = get_option(Plugin::OPTION_KEY, []);
-        return is_array($s) ? $s : [];
+        $s = is_array($s) ? $s : [];
+        if (empty($s['marketplace_id'])) {
+            $s['marketplace_id'] = 'EBAY_DE';
+        }
+        return $s;
     }
 }

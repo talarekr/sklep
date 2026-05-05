@@ -35,9 +35,9 @@ class EbayClient
         return $this->request('POST', '/sell/inventory/v1/bulk_update_price_quantity', ['requests' => $requests]);
     }
 
-    public function get_policies(string $type)
+    public function get_policies(string $type, string $marketplace_id = 'EBAY_DE')
     {
-        return $this->request('GET', '/sell/account/v1/' . $type);
+        return $this->request('GET', '/sell/account/v1/' . $type, null, ['marketplace_id' => $marketplace_id]);
     }
 
     public function get_orders(array $query = [])
