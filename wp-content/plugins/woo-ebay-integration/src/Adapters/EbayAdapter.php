@@ -131,6 +131,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $settings = $this->settings();
 
+        $priceValue = (float) $product->get_price();
+        $priceCurrency = $this->offer_currency($marketplaceId);
+        if ($marketplaceId === 'EBAY_DE') {
+            // TODO: replace fixed 4.25 with dynamic NBP exchange rate
+            $priceValue = round($priceValue / 4.25, 2);
+        }
+
         $offerPayload = [
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
@@ -141,7 +148,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
-            'pricingSummary' => ['price' => ['value' => (string) $product->get_price(), 'currency' => get_woocommerce_currency()]],
+            'pricingSummary' => ['price' => ['value' => (string) $priceValue, 'currency' => $priceCurrency]],
         ];
         $offer = $this->client->create_offer($offerPayload, [
             'stage' => 'createOffer',
@@ -194,6 +201,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings = $this->settings();
         $merchantLocationKey = (string) ($settings['inventory_location_key'] ?? 'gpswiss-pl');
         return $merchantLocationKey !== '' ? $merchantLocationKey : 'gpswiss-pl';
+    }
+
+    private function offer_currency(string $marketplaceId): string
+    {
+        if ($marketplaceId === 'EBAY_DE') {
+            return 'EUR';
+        }
+
+        return get_woocommerce_currency();
     }
 
     public function upsert_business_policies(): array
