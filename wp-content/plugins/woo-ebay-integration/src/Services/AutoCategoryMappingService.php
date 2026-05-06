@@ -51,12 +51,17 @@ class AutoCategoryMappingService
             }
 
             $existing = $this->categoryRepo->find($marketplaceId, $termId);
-            if ($this->is_confirmed_mapping($existing)) {
+            if ($this->is_manual_mapping($existing)) {
                 $summary['skipped_confirmed']++;
                 continue;
             }
 
-            $result = $this->auto_map_term($termId, $marketplaceId, $settings);
+            $reevaluated = $this->reevaluate_existing_mapping($existing, $settings);
+            if ($reevaluated !== null) {
+                $result = $reevaluated;
+            } else {
+                $result = $this->auto_map_term($termId, $marketplaceId, $settings);
+            }
             $summary['processed']++;
             $status = (string) ($result['status'] ?? 'suggestion_failed');
             if (isset($summary[$status])) {
@@ -158,7 +163,7 @@ class AutoCategoryMappingService
         return ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId];
     }
 
-    private function is_confirmed_mapping(?array $mapping): bool
+    private function is_manual_mapping(?array $mapping): bool
     {
         if (!$mapping || trim((string) ($mapping['ebay_category_id'] ?? '')) === '') {
             return false;
@@ -166,21 +171,46 @@ class AutoCategoryMappingService
 
         $status = (string) ($mapping['status'] ?? '');
         $source = (string) ($mapping['source'] ?? '');
-        if ($status === 'mapped_manual' || ($status === '' && $source === 'manual')) {
-            return true;
+        return $status === 'mapped_manual' || ($status === '' && $source === 'manual') || $source === 'manual';
+    }
+
+    private function reevaluate_existing_mapping(?array $mapping, array $settings): ?array
+    {
+        if (!$mapping || trim((string) ($mapping['ebay_category_id'] ?? '')) === '') {
+            return null;
         }
 
-        if ($status === 'mapped_auto' && $source === 'auto_taxonomy') {
-            $safety = CategoryMappingSafety::evaluate_auto_mapping(
-                (string) ($mapping['woo_category_path'] ?? ''),
-                trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
-                (float) ($mapping['confidence'] ?? 0),
-                $this->settings()
-            );
-            return !empty($safety['accepted']);
+        $status = (string) ($mapping['status'] ?? '');
+        $source = (string) ($mapping['source'] ?? '');
+        $eligible = ['mapped_auto', 'low_confidence_auto', 'category_sanity_failed', 'needs_category_review'];
+        if ($source !== 'auto_taxonomy' && !in_array($status, $eligible, true)) {
+            return null;
         }
 
-        return false;
+        $safety = CategoryMappingSafety::evaluate_auto_mapping(
+            (string) ($mapping['woo_category_path'] ?? ''),
+            trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
+            (float) ($mapping['confidence'] ?? 0),
+            $settings
+        );
+
+        $newStatus = !empty($safety['accepted']) ? 'mapped_auto' : (string) ($safety['status'] ?? 'needs_category_review');
+        $reason = '';
+        if ($newStatus === 'category_sanity_failed') {
+            $reason = (string) ($safety['sanity_reason'] ?? 'category mapping requires review');
+        } elseif ($newStatus === 'low_confidence_auto') {
+            $reason = 'Best suggestion confidence below auto-accept threshold';
+        } elseif ($newStatus === 'needs_category_review') {
+            $reason = 'Category mapping requires review';
+        }
+
+        $this->categoryRepo->upsert(array_merge($mapping, [
+            'source' => 'auto_taxonomy',
+            'status' => $newStatus,
+            'error_reason' => $reason,
+        ]));
+
+        return ['status' => $newStatus, 'confidence' => (float) ($mapping['confidence'] ?? 0), 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => (string) ($mapping['ebay_category_id'] ?? '')];
     }
 
     private function build_query(string $path, array $samples): string
@@ -275,8 +305,13 @@ class AutoCategoryMappingService
             $score += 0.15;
         }
 
-        if ($this->suggestion_is_leaf($suggestion)) {
+        $isSonstige = CategoryMappingSafety::is_sonstige_category($suggestionText);
+        $queryLooksSpecific = CategoryMappingSafety::is_specific_woo_category($query);
+
+        if ($this->suggestion_is_leaf($suggestion) && !$isSonstige) {
             $score += 0.15;
+        } elseif ($this->suggestion_is_leaf($suggestion)) {
+            $score += 0.03;
         }
 
         $hasIdentifiers = false;
@@ -291,8 +326,16 @@ class AutoCategoryMappingService
         if ($hasManufacturer) {
             $score += 0.05;
         }
-        if ($requiredAspects === [] || !in_array('Hersteller', $requiredAspects, true) || $hasManufacturer) {
+        if ($requiredAspects !== [] && in_array('Hersteller', $requiredAspects, true) && $hasManufacturer) {
             $score += 0.05;
+        }
+
+        if ($isSonstige) {
+            $score -= $queryLooksSpecific ? 0.35 : 0.25;
+        }
+
+        if ($queryLooksSpecific && !CategoryMappingSafety::matched_expected_keywords($query, $suggestionText)) {
+            $score -= 0.20;
         }
 
         return round(min(0.99, max(0.0, $score)), 4);

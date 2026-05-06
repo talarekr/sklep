@@ -8,7 +8,7 @@ use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy)
     {
     }
 
@@ -191,13 +191,18 @@ class AdminPage
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $ebayCategoryId = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
         if ($termId > 0 && $ebayCategoryId !== '') {
+            $postedName = sanitize_text_field((string) ($_POST['ebay_category_name'] ?? ''));
+            $postedPath = sanitize_text_field((string) ($_POST['ebay_category_path'] ?? ''));
+            $details = ($postedName === '' || $postedPath === '') ? $this->taxonomy->get_category_details_result($marketplaceId, $ebayCategoryId) : [];
+            $categoryName = $postedName !== '' ? $postedName : (string) ($details['category_name'] ?? 'unknown');
+            $categoryPath = $postedPath !== '' ? $postedPath : (string) ($details['category_path'] ?? 'unknown');
             $this->categoryRepo->upsert([
                 'marketplace_id' => $marketplaceId,
                 'woo_term_id' => $termId,
                 'woo_category_path' => $this->categoryRepo->woo_category_path($termId),
                 'ebay_category_id' => $ebayCategoryId,
-                'ebay_category_name' => sanitize_text_field((string) ($_POST['ebay_category_name'] ?? '')),
-                'ebay_category_path' => sanitize_text_field((string) ($_POST['ebay_category_path'] ?? '')),
+                'ebay_category_name' => $categoryName !== '' ? $categoryName : 'unknown',
+                'ebay_category_path' => $categoryPath !== '' ? $categoryPath : 'unknown',
                 'source' => 'manual',
                 'confidence' => 1,
                 'status' => 'mapped_manual',

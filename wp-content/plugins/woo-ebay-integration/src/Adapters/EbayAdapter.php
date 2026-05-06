@@ -106,6 +106,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'products_ready_accepted_auto_category' => 0,
             'products_blocked_low_confidence_category' => 0,
             'products_blocked_sanity_guard' => 0,
+            'products_blocked_sonstige_guard' => 0,
+            'products_blocked_expected_keyword' => 0,
             'products_needs_category_review' => 0,
             'unmapped' => 0,
             'taxonomy_api_forbidden' => 0,
@@ -133,6 +135,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
             if ($finalStatus === 'category_sanity_failed') {
                 $summary['products_blocked_sanity_guard'] += $productCount;
+                $reason = (string) ($evaluation['sanity_reason'] ?? '');
+                if ($reason === 'auto_mapping_to_sonstige_for_specific_woo_category') {
+                    $summary['products_blocked_sonstige_guard'] += $productCount;
+                } elseif ($reason === 'expected_path_keyword_missing') {
+                    $summary['products_blocked_expected_keyword'] += $productCount;
+                }
                 $summary['ready'] = false;
                 continue;
             }
@@ -836,12 +844,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 }
 
                 if ($status === 'needs_category_review' || $status === 'low_confidence_auto' || $status === 'category_sanity_failed') {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'product_override_found' => false];
+                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => $status !== 'category_sanity_failed', 'sanity_reason' => (string) ($mapping['error_reason'] ?? ''), 'product_override_found' => false];
                     continue;
                 }
 
                 if (in_array($status, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'product_override_found' => false];
+                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => $status !== 'category_sanity_failed', 'sanity_reason' => (string) ($mapping['error_reason'] ?? ''), 'product_override_found' => false];
                 }
             }
 
@@ -987,7 +995,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($skuResolution['sku'] === '') $errors[] = 'final eBay SKU missing';
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
-        if ($categoryId === '') { $errors[] = 'category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
+        if ($categoryId === '') { $errors[] = 'Category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
         if ($missingAspects !== []) { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
         if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
@@ -997,6 +1005,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $ready = $errors === [];
         $message = $ready ? 'Product ready for eBay export.' : 'Product not ready for eBay: ' . implode('; ', $errors) . '.';
+        if (!$ready && in_array('Category mapping requires review', $errors, true)) {
+            $message = 'Category mapping requires review.';
+        }
         if (in_array('Hersteller', $missingAspects, true)) {
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
