@@ -141,8 +141,30 @@
         <button class="button button-primary">Auto-map unmapped categories</button>
         <span class="description">Runs in WP Admin only; it does not export or publish offers.</span>
     </form>
+    <?php
+    $buildEbayCategoryUrl = static function (string $categoryId, array $categoryData = []): string {
+        $preferredUrl = '';
+        $urlKeys = ['categoryWebUrl', 'categoryUrl', 'webUrl', 'url'];
+        foreach ($urlKeys as $urlKey) {
+            if (isset($categoryData[$urlKey]) && is_scalar($categoryData[$urlKey])) {
+                $preferredUrl = trim((string) $categoryData[$urlKey]);
+                break;
+            }
+            if (isset($categoryData['raw_summary']) && is_array($categoryData['raw_summary']) && isset($categoryData['raw_summary'][$urlKey]) && is_scalar($categoryData['raw_summary'][$urlKey])) {
+                $preferredUrl = trim((string) $categoryData['raw_summary'][$urlKey]);
+                break;
+            }
+        }
+
+        if ($preferredUrl !== '' && preg_match('#^https?://#i', $preferredUrl)) {
+            return $preferredUrl;
+        }
+
+        return $categoryId !== '' ? 'https://www.ebay.de/b/' . rawurlencode($categoryId) : '';
+    };
+    ?>
     <table class="widefat striped">
-        <thead><tr><th>Woo category</th><th>Products</th><th>Current eBay category</th><th>Source</th><th>Confidence</th><th>Status</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
+        <thead><tr><th>Woo category</th><th>Products</th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th>Confidence</th><th>Status</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
         <tbody>
         <?php foreach ((array) ($category_mappings ?? []) as $row): ?>
             <?php
@@ -151,17 +173,29 @@
                 $statusValue = empty($row['ebay_category_id']) ? 'unmapped' : 'mapped_manual';
             }
             $debug = json_decode((string) ($row['suggestion_payload'] ?? ''), true);
+            $best = [];
             $bestSuggestion = '';
             if (is_array($debug)) {
                 $best = is_array($debug['best'] ?? null) ? $debug['best'] : [];
                 $bestSuggestion = trim((string) (($best['category_id'] ?? '') . ' ' . ($best['category_path'] ?? $best['category_name'] ?? '')));
             }
+            $displayCategoryId = trim((string) ($row['ebay_category_id'] ?? ''));
+            if ($displayCategoryId === '' && $statusValue === 'needs_category_review') {
+                $displayCategoryId = trim((string) ($best['category_id'] ?? ''));
+            }
+            $displayCategoryPath = trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')));
+            if ($displayCategoryPath === '' && $statusValue === 'needs_category_review') {
+                $displayCategoryPath = trim((string) (($best['category_path'] ?? '') . ' ' . ($best['category_name'] ?? '')));
+            }
+            $categoryUrl = $buildEbayCategoryUrl($displayCategoryId, $best);
             $statusColor = in_array($statusValue, ['mapped_manual', 'mapped_auto'], true) ? '#008a20' : (in_array($statusValue, ['needs_category_review'], true) ? '#996800' : '#b32d2e');
             ?>
             <tr>
                 <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
                 <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
-                <td><code><?php echo esc_html((string) ($row['ebay_category_id'] ?? '')); ?></code><br /><?php echo esc_html(trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')))); ?></td>
+                <td><code><?php echo esc_html($displayCategoryId); ?></code></td>
+                <td><?php echo esc_html($displayCategoryPath); ?></td>
+                <td><?php if ($categoryUrl !== ''): ?><a href="<?php echo esc_url($categoryUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html('Open on eBay DE'); ?></a><?php endif; ?></td>
                 <td><?php echo esc_html((string) ($row['source'] ?? '')); ?></td>
                 <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
                 <td><span style="color:<?php echo esc_attr($statusColor); ?>"><?php echo esc_html($statusValue); ?></span></td>
