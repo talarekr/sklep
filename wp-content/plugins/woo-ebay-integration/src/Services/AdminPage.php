@@ -65,9 +65,9 @@ class AdminPage
         $s['inventory_location_postal_code'] = sanitize_text_field((string) ($_POST['inventory_location_postal_code'] ?? '08-460'));
         $s['inventory_location_city'] = sanitize_text_field((string) ($_POST['inventory_location_city'] ?? 'Sobolew'));
         $s['inventory_location_address_line_1'] = sanitize_text_field((string) ($_POST['inventory_location_address_line_1'] ?? ''));
-        $s['ebay_fulfillment_policy_id'] = sanitize_text_field((string) ($_POST['ebay_fulfillment_policy_id'] ?? ''));
-        $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['ebay_payment_policy_id'] ?? ''));
-        $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['ebay_return_policy_id'] ?? ''));
+        $s['ebay_fulfillment_policy_id'] = sanitize_text_field((string) ($_POST['fulfillmentPolicyId'] ?? $_POST['ebay_fulfillment_policy_id'] ?? ''));
+        $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['paymentPolicyId'] ?? $_POST['ebay_payment_policy_id'] ?? ''));
+        $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['returnPolicyId'] ?? $_POST['ebay_return_policy_id'] ?? ''));
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;

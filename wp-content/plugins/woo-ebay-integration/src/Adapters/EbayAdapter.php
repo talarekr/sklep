@@ -148,6 +148,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['result' => 'error', 'message' => 'Missing eBay category ID'];
         }
 
+        $policyValidation = $this->validate_selected_policies($settings);
+        if (!$policyValidation['valid']) {
+            return [
+                'result' => 'error',
+                'error' => 'business_policy_ids_missing_or_invalid',
+                'message' => 'Missing or invalid eBay Business Policy IDs. Refresh EBAY_DE policies and select fulfillmentPolicyId, paymentPolicyId and returnPolicyId before export.',
+                'details' => $policyValidation,
+            ];
+        }
+
         $priceValue = (float) $product->get_price();
         $priceCurrency = $this->offer_currency($marketplaceId);
         if ($marketplaceId === 'EBAY_DE') {
@@ -155,14 +165,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $priceValue = round($priceValue / 4.25, 2);
         }
 
+        $listingPolicies = [
+            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+        ];
+
         $offerPayload = [
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
             'merchantLocationKey' => $this->merchant_location_key(),
             'categoryId' => $defaultCategoryId,
-            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
-            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
-            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+            'listingPolicies' => $listingPolicies,
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
             'listingDuration' => 'GTC',
@@ -172,6 +186,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $offer_id = trim((string) ($mapping['remote_offer_id'] ?? ''));
 
         if ($offer_id === '') {
+            $this->logger->info('eBay offer payload before createOffer', [
+                'stage' => 'createOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'marketplace_id' => $marketplaceId,
+                'offer_payload' => $offerPayload,
+            ]);
+
             $offer = $this->client->create_offer($offerPayload, [
                 'stage' => 'createOffer',
                 'product_id' => $product_id,
@@ -237,6 +259,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ]), $product_id, $sku);
         }
 
+        $this->logger->info('eBay offer payload before updateOffer', [
+            'stage' => 'updateOffer',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'offer_id' => $offer_id,
+            'marketplace_id' => $marketplaceId,
+            'offer_payload' => $offerPayload,
+        ]);
+
         $updated = $this->client->update_offer($offer_id, $offerPayload, [
             'stage' => 'updateOffer',
             'product_id' => $product_id,
@@ -245,12 +276,32 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         if (is_wp_error($updated)) return $this->export_error_response('updateOffer', $updated, $product_id, $sku);
 
+        $policyValidation = $this->validate_selected_policies($this->settings());
+        if (!$policyValidation['valid']) {
+            return [
+                'result' => 'error',
+                'error' => 'business_policy_ids_missing_or_invalid_before_publish',
+                'message' => 'Cannot publish eBay offer because one or more selected EBAY_DE Business Policy IDs are missing or no longer exist in cached policies.',
+                'details' => $policyValidation,
+            ];
+        }
+
         $published = $this->client->publish_offer($offer_id, [
             'stage' => 'publishOffer',
             'product_id' => $product_id,
             'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
         ]);
         if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
+
+        $this->logger->info('eBay publishOffer response', [
+            'stage' => 'publishOffer',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'offer_id' => $offer_id,
+            'marketplace_id' => $marketplaceId,
+            'response' => $published,
+        ]);
 
         $listing_id = (string) ($published['listingId'] ?? '');
         $this->repo->upsert([
@@ -308,17 +359,118 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $settings = $this->settings();
         $settings['wei_cached_policies'] = [
+            'marketplace_id' => $marketplaceId,
             'fulfillmentPolicies' => $fulfillment['fulfillmentPolicies'] ?? [],
             'paymentPolicies' => $payment['paymentPolicies'] ?? [],
             'returnPolicies' => $return['returnPolicies'] ?? [],
         ];
         update_option(Plugin::OPTION_KEY, $settings, false);
 
-        return ['result' => 'success', 'counts' => [
+        $counts = [
             'fulfillment' => count($settings['wei_cached_policies']['fulfillmentPolicies']),
             'payment' => count($settings['wei_cached_policies']['paymentPolicies']),
             'return' => count($settings['wei_cached_policies']['returnPolicies']),
-        ]];
+        ];
+
+        $this->logger->info('Marketplace used for policies: ' . $marketplaceId, [
+            'marketplace_id' => $marketplaceId,
+            'counts' => $counts,
+        ]);
+        $this->log_policy_details('Fulfillment policy', $settings['wei_cached_policies']['fulfillmentPolicies'], 'fulfillmentPolicyId', true);
+        $this->log_policy_details('Payment policy', $settings['wei_cached_policies']['paymentPolicies'], 'paymentPolicyId');
+        $this->log_policy_details('Return policy', $settings['wei_cached_policies']['returnPolicies'], 'returnPolicyId');
+
+        return ['result' => 'success', 'marketplace_id' => $marketplaceId, 'counts' => $counts];
+    }
+
+
+    private function validate_selected_policies(array $settings): array
+    {
+        $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
+        $required = [
+            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+        ];
+        $policySets = [
+            'fulfillmentPolicyId' => is_array($cached['fulfillmentPolicies'] ?? null) ? $cached['fulfillmentPolicies'] : [],
+            'paymentPolicyId' => is_array($cached['paymentPolicies'] ?? null) ? $cached['paymentPolicies'] : [],
+            'returnPolicyId' => is_array($cached['returnPolicies'] ?? null) ? $cached['returnPolicies'] : [],
+        ];
+
+        $currentMarketplaceId = $this->marketplace_id();
+        $cachedMarketplaceId = (string) ($cached['marketplace_id'] ?? '');
+
+        $missing = [];
+        $invalid = [];
+        if ($cachedMarketplaceId !== '' && $cachedMarketplaceId !== $currentMarketplaceId) {
+            $invalid['marketplace_id'] = $cachedMarketplaceId;
+        }
+
+        foreach ($required as $field => $id) {
+            if ($id === '') {
+                $missing[] = $field;
+                continue;
+            }
+
+            if (!$this->policy_id_exists($policySets[$field], $id)) {
+                $invalid[$field] = $id;
+            }
+        }
+
+        return [
+            'valid' => empty($missing) && empty($invalid),
+            'marketplace_id' => $currentMarketplaceId,
+            'cached_marketplace_id' => $cachedMarketplaceId,
+            'required_policy_ids' => $required,
+            'missing' => $missing,
+            'invalid' => $invalid,
+        ];
+    }
+
+    private function log_policy_details(string $message, array $policies, string $idField, bool $includeShipping = false): void
+    {
+        foreach ($policies as $policy) {
+            if (!is_array($policy)) {
+                continue;
+            }
+
+            $details = [
+                'id' => (string) ($policy[$idField] ?? ''),
+                'name' => (string) ($policy['name'] ?? ''),
+                'marketplaceId' => (string) ($policy['marketplaceId'] ?? ''),
+            ];
+
+            if ($includeShipping) {
+                $details['shippingOptions'] = $policy['shippingOptions'] ?? [];
+                $details['shippingServices'] = $this->extract_shipping_services($policy['shippingOptions'] ?? []);
+            }
+
+            $this->logger->info($message . ': ' . wp_json_encode($details), $details);
+        }
+    }
+
+    private function extract_shipping_services($shippingOptions): array
+    {
+        if (!is_array($shippingOptions)) {
+            return [];
+        }
+
+        $shippingServices = [];
+        foreach ($shippingOptions as $shippingOption) {
+            if (!is_array($shippingOption)) {
+                continue;
+            }
+
+            $services = is_array($shippingOption['shippingServices'] ?? null) ? $shippingOption['shippingServices'] : [];
+            foreach ($services as $service) {
+                if (is_array($service)) {
+                    $shippingServices[] = $service;
+                }
+            }
+        }
+
+        return $shippingServices;
     }
 
     private function settings(): array
