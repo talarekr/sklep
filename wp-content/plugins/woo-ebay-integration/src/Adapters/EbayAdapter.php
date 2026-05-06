@@ -159,7 +159,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
         $category = $this->resolve_category($product, $product_id, $sku, $marketplaceId, $settings);
         $categoryId = $category['category_id'];
-        $aspects = $this->resolve_product_aspects($product, $product_id, $sku, $settings, $categoryId);
+        $aspects = $this->resolve_product_aspects($product, $product_id, $sku, $settings, $categoryId, $content);
         $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
         update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
         if (!$preflight['ready']) {
@@ -459,7 +459,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
         $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
         $category = $this->resolve_category($product, $product_id, $skuResolution['sku'], $marketplaceId, $settings);
-        $aspects = $this->resolve_product_aspects($product, $product_id, $skuResolution['sku'], $settings, $category['category_id']);
+        $aspects = $this->resolve_product_aspects($product, $product_id, $skuResolution['sku'], $settings, $category['category_id'], $content);
         $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
         update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
         return $preflight;
@@ -958,7 +958,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $fallbacks;
     }
 
-    private function resolve_product_aspects($product, int $product_id, string $sku, array $settings, string $categoryId = ''): array
+    private function resolve_product_aspects($product, int $product_id, string $sku, array $settings, string $categoryId = '', array $content = []): array
     {
         $aspects = [];
 
@@ -993,7 +993,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, $categoryId, $settings);
+        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, $categoryId, $settings, $content);
         if ($manufacturer !== '') {
             $aspects['Hersteller'] = [$manufacturer];
         }
@@ -1038,41 +1038,149 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $sku;
     }
 
-    private function resolve_manufacturer_aspect_value($product, int $product_id, string $categoryId, array $settings): string
+    private function resolve_manufacturer_aspect_value($product, int $product_id, string $categoryId, array $settings, array $content = []): string
     {
-        foreach (['_manufacturer', '_brand'] as $metaKey) {
-            $value = trim((string) get_post_meta($product_id, $metaKey, true));
-            if ($value !== '') {
-                return $value;
-            }
-        }
-
         foreach (['Producent', 'Marka', 'Manufacturer'] as $attributeName) {
             if (!method_exists($product, 'get_attribute')) {
                 continue;
             }
 
-            $value = trim(wp_strip_all_tags((string) $product->get_attribute($attributeName)));
+            $value = $this->normalize_manufacturer_value((string) $product->get_attribute($attributeName));
             if ($value !== '') {
                 return $value;
             }
         }
 
-        $brandTaxonomies = ['product_brand', 'pwb-brand', 'yith_product_brand', 'pa_brand', 'pa_marka'];
-        foreach ($brandTaxonomies as $taxonomy) {
-            $terms = taxonomy_exists($taxonomy) ? wp_get_post_terms($product_id, $taxonomy) : [];
-            if (!is_wp_error($terms) && !empty($terms[0]->name)) {
-                return (string) $terms[0]->name;
+        foreach (['pa_producent', 'pa_marka'] as $taxonomy) {
+            $value = $this->manufacturer_from_taxonomy($product_id, $taxonomy);
+            if ($value !== '') {
+                return $value;
             }
+        }
+
+        foreach (['product_brand', 'pwb-brand', 'yith_product_brand', 'berocket_brand'] as $taxonomy) {
+            $value = $this->manufacturer_from_taxonomy($product_id, $taxonomy);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        foreach (['_manufacturer', '_brand'] as $metaKey) {
+            $value = $this->normalize_manufacturer_value((string) get_post_meta($product_id, $metaKey, true));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        $title = trim((string) ($content['title'] ?? ''));
+        if (method_exists($product, 'get_name')) {
+            $title = trim($title . ' ' . (string) $product->get_name());
+        }
+        $value = $this->detect_known_vehicle_brand($title);
+        if ($value !== '') {
+            return $value;
+        }
+
+        $description = trim((string) ($content['description'] ?? ''));
+        if ($description === '' && method_exists($product, 'get_description')) {
+            $description = (string) $product->get_description();
+        }
+        $value = $this->detect_manufacturer_from_labeled_description($description);
+        if ($value !== '') {
+            return $value;
         }
 
         $fallbacks = $this->parse_category_aspect_fallbacks((string) ($settings['category_aspect_fallbacks'] ?? ''));
         if ($categoryId !== '' && !empty($fallbacks[$categoryId]['Hersteller'][0])) {
-            return (string) $fallbacks[$categoryId]['Hersteller'][0];
+            return $this->normalize_manufacturer_value((string) $fallbacks[$categoryId]['Hersteller'][0]);
         }
 
-        $global = trim((string) ($settings['default_hersteller_fallback'] ?? ''));
-        return $global;
+        return $this->normalize_manufacturer_value((string) ($settings['default_hersteller_fallback'] ?? ''));
+    }
+
+    private function manufacturer_from_taxonomy(int $product_id, string $taxonomy): string
+    {
+        $terms = taxonomy_exists($taxonomy) ? wp_get_post_terms($product_id, $taxonomy) : [];
+        if (is_wp_error($terms) || empty($terms[0]->name)) {
+            return '';
+        }
+
+        return $this->normalize_manufacturer_value((string) $terms[0]->name);
+    }
+
+    private function detect_manufacturer_from_labeled_description(string $description): string
+    {
+        $description = preg_replace('/<\s*(br|\/p|\/li)\s*\/?>/iu', "\n", $description) ?: $description;
+        $description = wp_strip_all_tags($description);
+        if (!preg_match('/(?:^|\R)\s*(?:Marka|Marke|Hersteller|Producent)\s*:\s*([^\r\n<,;]+)/iu', $description, $matches)) {
+            return '';
+        }
+
+        return $this->normalize_manufacturer_value((string) $matches[1]);
+    }
+
+    private function detect_known_vehicle_brand(string $text): string
+    {
+        $text = wp_strip_all_tags($text);
+        foreach ($this->known_vehicle_brand_aliases() as $alias => $canonical) {
+            $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($alias, '/') . '(?![\p{L}\p{N}])/iu';
+            if (preg_match($pattern, $text)) {
+                return $canonical;
+            }
+        }
+
+        return '';
+    }
+
+    private function normalize_manufacturer_value(string $value): string
+    {
+        $value = trim(wp_strip_all_tags($value));
+        $value = preg_replace('/\s+/', ' ', $value) ?: '';
+        $value = trim($value, " \\t\\n\\r\\0\\x0B:,;|/-");
+        if ($value === '') {
+            return '';
+        }
+
+        $detected = $this->detect_known_vehicle_brand($value);
+        return $detected !== '' ? $detected : $value;
+    }
+
+    private function known_vehicle_brand_aliases(): array
+    {
+        return [
+            'Mercedes-Benz' => 'Mercedes-Benz',
+            'Land Rover' => 'Land Rover',
+            'Alfa Romeo' => 'Alfa Romeo',
+            'Volkswagen' => 'Volkswagen',
+            'Mitsubishi' => 'Mitsubishi',
+            'Chevrolet' => 'Chevrolet',
+            'Citroen' => 'Citroen',
+            'Hyundai' => 'Hyundai',
+            'Porsche' => 'Porsche',
+            'Peugeot' => 'Peugeot',
+            'Renault' => 'Renault',
+            'Mercedes' => 'Mercedes-Benz',
+            'Toyota' => 'Toyota',
+            'Nissan' => 'Nissan',
+            'Subaru' => 'Subaru',
+            'Suzuki' => 'Suzuki',
+            'Jaguar' => 'Jaguar',
+            'Skoda' => 'Skoda',
+            'Honda' => 'Honda',
+            'Volvo' => 'Volvo',
+            'Mazda' => 'Mazda',
+            'Lexus' => 'Lexus',
+            'Opel' => 'Opel',
+            'Seat' => 'SEAT',
+            'Audi' => 'Audi',
+            'Fiat' => 'Fiat',
+            'Ford' => 'Ford',
+            'Jeep' => 'Jeep',
+            'Mini' => 'Mini',
+            'BMW' => 'BMW',
+            'VW' => 'Volkswagen',
+            'Kia' => 'Kia',
+        ];
     }
 
     private function resolve_configured_aspect_overrides(string $sku, array $settings): array
