@@ -133,17 +133,40 @@
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run readiness check</button></form>
 
     <h2>4. Category Mapping (Woo/Allegro → eBay DE)</h2>
-    <p>Map WooCommerce product categories (currently mirroring Allegro) to eBay DE leaf categories. This stores data only in WEI tables/meta and does not change Allegro plugin settings or product SKU.</p>
+    <p>Auto-map scans WooCommerce product categories currently used by products, translates/normalizes the category query to German, and stores only confirmed high-confidence eBay DE leaf mappings automatically. Medium/low confidence rows remain blocked for export until reviewed.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 12px;">
+        <?php wp_nonce_field('wei_auto_map_categories'); ?>
+        <input type="hidden" name="action" value="wei_auto_map_categories" />
+        <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+        <button class="button button-primary">Auto-map unmapped categories</button>
+        <span class="description">Runs in WP Admin only; it does not export or publish offers.</span>
+    </form>
     <table class="widefat striped">
-        <thead><tr><th>Woo category</th><th>Products</th><th>eBay categoryId</th><th>eBay name/path</th><th>Status</th><th>Confirm mapping</th></tr></thead>
+        <thead><tr><th>Woo category</th><th>Products</th><th>Current eBay category</th><th>Source</th><th>Confidence</th><th>Status</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
         <tbody>
         <?php foreach ((array) ($category_mappings ?? []) as $row): ?>
+            <?php
+            $statusValue = (string) ($row['status'] ?? '');
+            if ($statusValue === '') {
+                $statusValue = empty($row['ebay_category_id']) ? 'unmapped' : 'mapped_manual';
+            }
+            $debug = json_decode((string) ($row['suggestion_payload'] ?? ''), true);
+            $bestSuggestion = '';
+            if (is_array($debug)) {
+                $best = is_array($debug['best'] ?? null) ? $debug['best'] : [];
+                $bestSuggestion = trim((string) (($best['category_id'] ?? '') . ' ' . ($best['category_path'] ?? $best['category_name'] ?? '')));
+            }
+            $statusColor = in_array($statusValue, ['mapped_manual', 'mapped_auto'], true) ? '#008a20' : (in_array($statusValue, ['needs_category_review'], true) ? '#996800' : '#b32d2e');
+            ?>
             <tr>
                 <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
                 <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
-                <td><code><?php echo esc_html((string) ($row['ebay_category_id'] ?? '')); ?></code></td>
-                <td><?php echo esc_html(trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')))); ?></td>
-                <td><?php echo empty($row['ebay_category_id']) ? '<span style="color:#b32d2e">unmapped</span>' : '<span style="color:#008a20">mapped</span>'; ?></td>
+                <td><code><?php echo esc_html((string) ($row['ebay_category_id'] ?? '')); ?></code><br /><?php echo esc_html(trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')))); ?></td>
+                <td><?php echo esc_html((string) ($row['source'] ?? '')); ?></td>
+                <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
+                <td><span style="color:<?php echo esc_attr($statusColor); ?>"><?php echo esc_html($statusValue); ?></span></td>
+                <td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td>
+                <td><?php echo esc_html((string) ($row['error_reason'] ?? '')); ?><?php if ($bestSuggestion !== ''): ?><br /><span class="description"><?php echo esc_html($bestSuggestion); ?></span><?php endif; ?></td>
                 <td>
                     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                         <?php wp_nonce_field('wei_save_category_mapping'); ?>
@@ -152,7 +175,7 @@
                         <input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" />
                         <input type="text" name="ebay_category_id" placeholder="179847" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" />
                         <input type="text" name="ebay_category_name" placeholder="eBay category name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" />
-                        <button class="button">Save</button>
+                        <button class="button">Save fallback</button>
                     </form>
                 </td>
             </tr>

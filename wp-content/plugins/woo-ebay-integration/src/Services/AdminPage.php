@@ -8,7 +8,7 @@ use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper)
     {
     }
 
@@ -26,6 +26,7 @@ class AdminPage
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
+        add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
     }
 
     public function register_menu(): void
@@ -96,6 +97,15 @@ class AdminPage
     public function test_connection(): void { check_admin_referer('wei_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }
     public function run_readiness(): void { check_admin_referer('wei_readiness'); $res = $this->adapter->readiness_check(); $this->set_status('Readiness: '.wp_json_encode($res)); $this->go(); }
 
+    public function auto_map_categories(): void
+    {
+        check_admin_referer('wei_auto_map_categories');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $res = $this->autoCategoryMapper->auto_map_used_categories($marketplaceId, 200);
+        $this->set_status('Auto category mapping: ' . wp_json_encode($res));
+        $this->go();
+    }
+
     public function export_product(): void
     {
         check_admin_referer('wei_export');
@@ -156,6 +166,8 @@ class AdminPage
                 'ebay_category_path' => sanitize_text_field((string) ($_POST['ebay_category_path'] ?? '')),
                 'source' => 'manual',
                 'confidence' => 1,
+                'status' => 'mapped_manual',
+                'error_reason' => '',
             ]);
             $this->set_status('Category mapping saved for Woo term ' . $termId . ' → eBay ' . $ebayCategoryId);
         } else {

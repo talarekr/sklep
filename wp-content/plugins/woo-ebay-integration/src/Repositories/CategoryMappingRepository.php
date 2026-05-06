@@ -24,6 +24,10 @@ class CategoryMappingRepository
             'ebay_category_path' => '',
             'source' => 'manual',
             'confidence' => 1.0,
+            'status' => 'mapped_manual',
+            'sample_product_ids' => '',
+            'suggestion_payload' => '',
+            'error_reason' => '',
             'updated_at' => $now,
         ], $data);
 
@@ -61,7 +65,7 @@ class CategoryMappingRepository
 
         $sql = $wpdb->prepare(
             "SELECT t.term_id, t.name, tt.parent, COUNT(DISTINCT p.ID) AS product_count,
-                    m.ebay_category_id, m.ebay_category_name, m.ebay_category_path, m.source, m.confidence, m.updated_at
+                    m.ebay_category_id, m.ebay_category_name, m.ebay_category_path, m.source, m.confidence, m.status, m.updated_at, m.error_reason, m.sample_product_ids, m.suggestion_payload
              FROM {$terms} t
              INNER JOIN {$termTaxonomy} tt ON tt.term_id = t.term_id AND tt.taxonomy = 'product_cat'
              INNER JOIN {$relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
@@ -80,6 +84,63 @@ class CategoryMappingRepository
         }
 
         return is_array($rows) ? $rows : [];
+    }
+
+    public function sample_products_for_category(int $term_id, int $limit = 5): array
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => ['publish', 'draft', 'private'],
+            'posts_per_page' => max(1, min(10, $limit)),
+            'fields' => 'ids',
+            'tax_query' => [[
+                'taxonomy' => 'product_cat',
+                'field' => 'term_id',
+                'terms' => [$term_id],
+                'include_children' => false,
+            ]],
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'no_found_rows' => true,
+        ]);
+
+        $samples = [];
+        foreach ((array) $query->posts as $product_id) {
+            $product = function_exists('wc_get_product') ? wc_get_product((int) $product_id) : null;
+            if (!$product) {
+                continue;
+            }
+            $samples[] = [
+                'id' => (int) $product_id,
+                'title' => (string) $product->get_name(),
+                'mpn' => $this->product_meta_or_attribute($product, (int) $product_id, ['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number'], ['MPN', 'Herstellernummer', 'OEM', 'Numer części', 'Numer czesci']),
+                'manufacturer' => $this->product_meta_or_attribute($product, (int) $product_id, ['_manufacturer', '_brand'], ['Producent', 'Marka', 'Manufacturer', 'Brand']),
+            ];
+        }
+
+        return $samples;
+    }
+
+    private function product_meta_or_attribute($product, int $product_id, array $meta_keys, array $attributes): string
+    {
+        foreach ($meta_keys as $meta_key) {
+            $value = trim((string) get_post_meta($product_id, (string) $meta_key, true));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        foreach ($attributes as $attribute) {
+            if (!method_exists($product, 'get_attribute')) {
+                continue;
+            }
+            $value = trim(wp_strip_all_tags((string) $product->get_attribute((string) $attribute)));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     public function woo_category_path(int $term_id): string
