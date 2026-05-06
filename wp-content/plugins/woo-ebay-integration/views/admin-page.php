@@ -22,9 +22,11 @@
         </p>
         <h3>Safe SKU / aspect defaults</h3>
         <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" <?php checked(!empty($s['use_woo_sku_for_ebay'])); ?> /> Use WooCommerce SKU for eBay when present</label><br />
-            <span class="description">If Woo SKU is empty, the plugin stores a stable eBay-only SKU in <code>_wei_ebay_sku</code> and does not touch <code>_sku</code>.</span></p>
-        <p><label><input type="checkbox" name="write_generated_sku_to_woo" value="1" <?php checked(!empty($s['write_generated_sku_to_woo'])); ?> /> Write generated eBay SKU to WooCommerce SKU</label><br />
-            <span class="description"><strong>Default OFF for Allegro safety.</strong> Enable only if you know Woo SKU is not managed by Allegro sync.</span></p>
+            <span class="description"><strong>Default OFF.</strong> When disabled, eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
+        <p>eBay-only SKU prefix: <input type="text" name="ebay_sku_prefix" value="<?php echo esc_attr((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?>" class="regular-text" placeholder="GPSW" /><br />
+            <span class="description">Generated format: <code>{prefix}-{product_id}</code>; future variants: <code>{prefix}-{product_id}-{variation_id}</code>. Stored in <code>_wei_ebay_sku</code> only.</span></p>
+        <p><strong>WooCommerce SKU write-back:</strong> <code>disabled</code><br />
+            <span class="description">For Allegro isolation this plugin never writes generated eBay SKU to WooCommerce <code>_sku</code>.</span></p>
         <p>Default manufacturer / Hersteller fallback: <input type="text" name="default_hersteller_fallback" value="<?php echo esc_attr($s['default_hersteller_fallback'] ?? ''); ?>" class="regular-text" placeholder="SEAT" /></p>
         <p>Category aspect fallbacks:<br />
             <textarea name="category_aspect_fallbacks" class="large-text code" rows="3" placeholder="179847|Hersteller|SEAT"><?php echo esc_textarea((string) ($s['category_aspect_fallbacks'] ?? '')); ?></textarea><br />
@@ -237,6 +239,10 @@
         <li><strong>Environment:</strong> <code><?php echo esc_html((string) ($s['environment'] ?? 'production')); ?></code></li>
         <li><strong>Marketplace ID:</strong> <code><?php echo esc_html((string) ($s['marketplace_id'] ?? 'EBAY_DE')); ?></code></li>
         <li><strong>Default eBay Category ID:</strong> <code><?php echo esc_html((string) ($s['default_category_id'] ?? '')); ?></code></li>
+        <li><strong>Use Woo SKU for eBay:</strong> <code><?php echo !empty($s['use_woo_sku_for_ebay']) ? 'on' : 'off'; ?></code></li>
+        <li><strong>eBay-only SKU prefix:</strong> <code><?php echo esc_html((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?></code></li>
+        <li><strong>Products missing _wei_ebay_sku:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></code></li>
+        <li><strong>Products with generated eBay SKU:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_with_generated_ebay_sku'] ?? '0')); ?></code></li>
         <li><strong>SKU Category Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_category_overrides'] ?? '')); ?></code></li>
         <li><strong>SKU Aspect Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_aspect_overrides'] ?? '')); ?></code></li>
         <li><strong>Translation Provider:</strong> <code><?php echo esc_html((string) ($s['translation_provider'] ?? 'disabled')); ?></code></li>

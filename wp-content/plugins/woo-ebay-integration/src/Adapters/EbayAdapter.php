@@ -16,6 +16,8 @@ use WEI\Interfaces\TranslationProviderInterface;
 
 class EbayAdapter implements MarketplaceAdapterInterface
 {
+    private const EBAY_SKU_MAX_LENGTH = 50;
+
     public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
     {
     }
@@ -356,9 +358,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
 
         $listing_id = (string) ($published['listingId'] ?? '');
-        update_post_meta($product_id, '_wei_ebay_sku', $sku);
-        update_post_meta($product_id, '_wei_ebay_offer_id', $offer_id);
-        update_post_meta($product_id, '_wei_ebay_item_id', $listing_id);
+        $metaProductId = $variation_id ?: $product_id;
+        if (!empty($skuResolution['wei_ebay_sku'])) {
+            update_post_meta($metaProductId, '_wei_ebay_sku', (string) $skuResolution['wei_ebay_sku']);
+        }
+        update_post_meta($metaProductId, '_wei_ebay_offer_id', $offer_id);
+        update_post_meta($metaProductId, '_wei_ebay_item_id', $listing_id);
         update_post_meta($product_id, '_wei_ebay_export_status', $listing_id !== '' ? 'published' : 'exported');
         $this->repo->upsert([
             'marketplace' => 'ebay',
@@ -461,30 +466,74 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_ebay_sku($product, int $product_id, ?int $variation_id, array $settings): array
     {
+        $metaProductId = $variation_id ?: $product_id;
         $wooSku = trim((string) $product->get_sku());
-        $stored = trim((string) get_post_meta($variation_id ?: $product_id, '_wei_ebay_sku', true));
-        $useWooSku = !empty($settings['use_woo_sku_for_ebay']) && $wooSku !== '';
+        $existingWeiEbaySku = trim((string) get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $useWooSkuSetting = !empty($settings['use_woo_sku_for_ebay']);
         $generated = false;
+        $wroteWooSku = false;
 
-        if ($useWooSku) {
-            $final = $wooSku;
-        } elseif ($stored !== '') {
-            $final = $stored;
+        if ($existingWeiEbaySku !== '') {
+            $final = $this->sanitize_ebay_sku($existingWeiEbaySku);
+        } elseif ($useWooSkuSetting && $wooSku !== '') {
+            $final = $this->sanitize_ebay_sku($wooSku);
         } else {
-            $final = 'GPSW-' . (string) ($variation_id ?: $product_id);
-            update_post_meta($variation_id ?: $product_id, '_wei_ebay_sku', $final);
-            $generated = true;
+            $final = $this->generated_ebay_sku($product_id, $variation_id, $settings);
+            if ($final !== '') {
+                update_post_meta($metaProductId, '_wei_ebay_sku', $final);
+                update_post_meta($metaProductId, '_wei_ebay_sku_generated', 1);
+                update_post_meta($metaProductId, '_wei_ebay_sku_generated_at', gmdate('Y-m-d H:i:s'));
+                $generated = true;
+            }
         }
 
-        if (!empty($settings['write_generated_sku_to_woo']) && $wooSku === '' && $final !== '') {
-            // Safety default is OFF. Only write when an admin explicitly opts in.
-            $product->set_sku($final);
-            $product->save();
-        }
-
-        $context = ['product_id' => $product_id, 'variation_id' => $variation_id, 'woo_sku' => $wooSku, 'wei_ebay_sku' => $stored ?: $final, 'generated' => $generated, 'final_sku_used_for_ebay' => $final];
+        $weiEbaySku = $existingWeiEbaySku !== '' ? $existingWeiEbaySku : ($generated ? $final : '');
+        $context = [
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'woo_sku' => $wooSku,
+            'existing_wei_ebay_sku' => $existingWeiEbaySku,
+            'wei_ebay_sku' => $weiEbaySku,
+            'generated' => $generated ? 'yes' : 'no',
+            'generated_bool' => $generated,
+            'final_sku_used_for_ebay' => $final,
+            'use_woo_sku_setting' => $useWooSkuSetting ? 'on' : 'off',
+            'wrote_woo_sku' => $wroteWooSku,
+        ];
         $this->logger->info('Resolved eBay SKU', $context);
-        return ['sku' => $final, 'woo_sku' => $wooSku, 'wei_ebay_sku' => $stored ?: $final, 'generated' => $generated];
+        return [
+            'sku' => $final,
+            'woo_sku' => $wooSku,
+            'existing_wei_ebay_sku' => $existingWeiEbaySku,
+            'wei_ebay_sku' => $weiEbaySku,
+            'generated' => $generated,
+            'final_sku_used_for_ebay' => $final,
+            'use_woo_sku_setting' => $useWooSkuSetting,
+            'wrote_woo_sku' => $wroteWooSku,
+        ];
+    }
+
+    private function generated_ebay_sku(int $product_id, ?int $variation_id, array $settings): string
+    {
+        $prefix = $this->sanitize_ebay_sku((string) ($settings['ebay_sku_prefix'] ?? 'GPSW'));
+        if ($prefix === '') {
+            $prefix = 'GPSW';
+        }
+
+        $raw = $variation_id ? $prefix . '-' . $product_id . '-' . $variation_id : $prefix . '-' . $product_id;
+        return $this->sanitize_ebay_sku($raw);
+    }
+
+    private function sanitize_ebay_sku(string $sku): string
+    {
+        $sku = trim($sku);
+        $sku = preg_replace('/[^A-Za-z0-9._-]+/', '-', $sku) ?: '';
+        $sku = trim($sku, '-_.');
+        if (strlen($sku) > self::EBAY_SKU_MAX_LENGTH) {
+            $sku = rtrim(substr($sku, 0, self::EBAY_SKU_MAX_LENGTH), '-_.');
+        }
+
+        return $sku;
     }
 
     private function resolve_german_content($product, int $product_id, string $marketplaceId, array $settings): array
@@ -1318,11 +1367,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $settings['default_hersteller_fallback'] = '';
         }
         if (!isset($settings['use_woo_sku_for_ebay'])) {
-            $settings['use_woo_sku_for_ebay'] = 1;
+            $settings['use_woo_sku_for_ebay'] = 0;
         }
-        if (!isset($settings['write_generated_sku_to_woo'])) {
-            $settings['write_generated_sku_to_woo'] = 0;
+        if (!isset($settings['ebay_sku_prefix'])) {
+            $settings['ebay_sku_prefix'] = 'GPSW';
         }
+        $settings['write_generated_sku_to_woo'] = 0;
         if (!isset($settings['stock_sync_mode'])) {
             $settings['stock_sync_mode'] = 'set_zero';
         }
