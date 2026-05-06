@@ -379,33 +379,49 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
         }
 
-        $published = $this->client->publish_offer($offer_id, [
-            'stage' => 'publishOffer',
-            'product_id' => $product_id,
-            'sku' => $sku,
-            'marketplace_id' => $marketplaceId,
-            'category_id' => $categoryId,
-        ]);
-        if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
+        $published = [];
+        $listing_id = '';
+        if (empty($settings['auto_publish_enabled'])) {
+            $this->logger->warning('publishOffer skipped because auto publish is disabled', [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'offer_id' => $offer_id,
+                'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
+                'wrote_allegro' => false,
+            ]);
+        } else {
+            $published = $this->client->publish_offer($offer_id, [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
+            ]);
+            if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
 
-        $this->logger->info('eBay publishOffer response', [
-            'stage' => 'publishOffer',
-            'product_id' => $product_id,
-            'sku' => $sku,
-            'offer_id' => $offer_id,
-            'marketplace_id' => $marketplaceId,
-            'category_id' => $categoryId,
-            'response' => $published,
-        ]);
+            $this->logger->info('eBay publishOffer response', [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'offer_id' => $offer_id,
+                'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
+                'response' => $published,
+            ]);
+            $listing_id = (string) ($published['listingId'] ?? '');
+        }
 
-        $listing_id = (string) ($published['listingId'] ?? '');
         $metaProductId = $variation_id ?: $product_id;
         if (!empty($skuResolution['wei_ebay_sku'])) {
             update_post_meta($metaProductId, '_wei_ebay_sku', (string) $skuResolution['wei_ebay_sku']);
         }
         update_post_meta($metaProductId, '_wei_ebay_offer_id', $offer_id);
         update_post_meta($metaProductId, '_wei_ebay_item_id', $listing_id);
-        update_post_meta($product_id, '_wei_ebay_export_status', $listing_id !== '' ? 'published' : 'exported');
+        update_post_meta($product_id, '_wei_ebay_last_payload_hash', hash('sha256', wp_json_encode(['inventory' => $itemPayload, 'offer' => $offerPayload]) ?: ''));
+        update_post_meta($metaProductId, '_wei_ebay_last_synced_quantity', (string) max(0, (int) $product->get_stock_quantity()));
+        update_post_meta($product_id, '_wei_ebay_export_status', $listing_id !== '' ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory'));
         $this->repo->upsert([
             'marketplace' => 'ebay',
             'woo_product_id' => $product_id,
@@ -1497,6 +1513,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $categoryId = (string) ($details['category_id'] ?? $requestPayload['categoryId'] ?? '');
         $missingAspects = $this->extract_missing_aspects($ebayErrors);
         $message = $this->admin_error_message($errorId, (string) ($primaryEbayError['message'] ?? $error->get_error_message()), $missingAspects);
+        if ($this->is_account_restriction_error($error)) {
+            update_option('wei_ebay_global_status', 'blocked_by_ebay_account_restriction', false);
+            update_option('wei_ebay_account_restriction_status', 'detected', false);
+            update_post_meta($product_id, '_wei_ebay_export_status', $stage === 'publishOffer' ? 'publish_blocked_account' : 'export_error');
+        }
 
         $logContext = [
             'stage' => $stage,
@@ -1717,6 +1738,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!isset($settings['stock_sync_mode'])) {
             $settings['stock_sync_mode'] = 'set_zero';
         }
+        if (!isset($settings['ebay_stock_sync_mode'])) {
+            $settings['ebay_stock_sync_mode'] = 'max_one';
+        }
+        if (!isset($settings['ebay_order_stock_update_mode'])) {
+            $settings['ebay_order_stock_update_mode'] = $settings['stock_sync_mode'];
+        }
+        if (!isset($settings['auto_publish_enabled'])) {
+            $settings['auto_publish_enabled'] = 0;
+        }
         if (!isset($settings['translation_provider'])) {
             $settings['translation_provider'] = 'disabled';
         } elseif ($settings['translation_provider'] === 'google') {
@@ -1763,30 +1793,73 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $product = wc_get_product($variation_id ?: $product_id);
         if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
-        $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $this->settings());
+        $settings = $this->settings();
+        $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
         $sku = $skuResolution['sku'];
         $map = $this->repo->find_by_sku($sku);
         if (!$map) return ['result' => 'skipped', 'reason' => 'mapping_not_found', 'sku_resolution' => $skuResolution];
+        if (empty($map['remote_offer_id'])) return ['result' => 'skipped', 'reason' => 'offer_id_missing', 'sku_resolution' => $skuResolution];
 
-        $settings = $this->settings();
-        $marketplaceId = (string) ($map['marketplace_id'] ?? $this->marketplace_id());
-        $priceResolution = $this->resolve_price($product, $product_id, $settings);
-        if ($marketplaceId === 'EBAY_DE' && empty($priceResolution['ready'])) {
-            return ['result' => 'error', 'error' => (string) ($priceResolution['error'] ?? 'invalid_price'), 'price_resolution' => $priceResolution];
+        $metaProductId = $variation_id ?: $product_id;
+        $wooStock = max(0, (int) $product->get_stock_quantity());
+        $wooStockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : '';
+        if ((string) ($settings['ebay_stock_sync_mode'] ?? 'max_one') === 'set_zero_only' && $wooStock > 0 && $wooStockStatus !== 'outofstock') {
+            update_post_meta($metaProductId, '_wei_ebay_stock_sync_pending', '0');
+            return ['result' => 'skipped', 'reason' => 'set_zero_only_positive_stock', 'quantity' => null, 'sku_resolution' => $skuResolution];
         }
-        $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
-        $priceCurrency = $this->offer_currency($marketplaceId);
+        $quantity = $this->compute_ebay_stock_quantity($product, $settings);
+        $hash = hash('sha256', wp_json_encode(['offer_id' => (string) $map['remote_offer_id'], 'quantity' => $quantity]) ?: '');
+        $lastHash = (string) get_post_meta($metaProductId, '_wei_ebay_last_stock_sync_hash', true);
+        $lastQty = get_post_meta($metaProductId, '_wei_ebay_last_stock_sync_qty', true);
+        if ($lastHash === $hash || ((string) $lastQty !== '' && (int) $lastQty === $quantity)) {
+            update_post_meta($metaProductId, '_wei_ebay_stock_sync_pending', '0');
+            return ['result' => 'skipped', 'reason' => 'unchanged', 'quantity' => $quantity, 'sku_resolution' => $skuResolution];
+        }
 
         $res = $this->client->bulk_update_price_quantity([[
             'offerId' => $map['remote_offer_id'],
-            'shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())],
-            'price' => ['value' => (string) $priceValue, 'currency' => $priceCurrency],
+            'shipToLocationAvailability' => ['quantity' => $quantity],
         ]]);
 
-        if (is_wp_error($res)) return ['result' => 'error', 'error' => $res->get_error_message()];
+        if (is_wp_error($res)) {
+            if ($this->is_account_restriction_error($res)) {
+                update_option('wei_ebay_account_restriction_status', 'stock_update_failed', false);
+                $this->logger->error('account_restriction_stock_update_failed', ['product_id' => $product_id, 'sku' => $sku, 'error' => $res->get_error_data(), 'wrote_allegro' => false]);
+            }
+            return ['result' => 'error', 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data(), 'quantity' => $quantity];
+        }
 
+        update_post_meta($metaProductId, '_wei_ebay_last_stock_sync_at', gmdate('Y-m-d H:i:s'));
+        update_post_meta($metaProductId, '_wei_ebay_last_stock_sync_qty', (string) $quantity);
+        update_post_meta($metaProductId, '_wei_ebay_last_stock_sync_hash', $hash);
+        update_post_meta($metaProductId, '_wei_ebay_last_synced_quantity', (string) $quantity);
+        delete_post_meta($metaProductId, '_wei_ebay_last_stock_sync_error');
         $this->repo->upsert(array_merge($map, ['last_sync_at' => gmdate('Y-m-d H:i:s')]));
-        return ['result' => 'success'];
+        return ['result' => 'success', 'quantity' => $quantity, 'sku' => $sku, 'mode' => (string) ($settings['ebay_stock_sync_mode'] ?? 'max_one')];
+    }
+
+
+    private function compute_ebay_stock_quantity($product, array $settings): int
+    {
+        $stock = max(0, (int) $product->get_stock_quantity());
+        $stockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : '';
+        if ($stockStatus === 'outofstock') {
+            $stock = 0;
+        }
+        $mode = (string) ($settings['ebay_stock_sync_mode'] ?? 'max_one');
+        if ($mode === 'set_zero_only') {
+            return 0;
+        }
+        if ($mode === 'exact_stock') {
+            return $stock;
+        }
+        return $stock > 0 ? 1 : 0;
+    }
+
+    private function is_account_restriction_error(\WP_Error $error): bool
+    {
+        $haystack = strtolower($error->get_error_message() . ' ' . (wp_json_encode($error->get_error_data()) ?: ''));
+        return str_contains($haystack, 'german tax rules') || str_contains($haystack, 'violation of our policy');
     }
 
     public function import_orders(array $query = []): array
