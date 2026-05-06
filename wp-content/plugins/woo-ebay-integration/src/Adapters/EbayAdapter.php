@@ -10,6 +10,7 @@ use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayClient;
 use WEI\Services\EbayTaxonomyService;
 use WEI\Services\Logger;
+use WEI\Services\Translation\GoogleCloudTranslateProvider;
 use WEI\Services\Translation\OpenAiTranslationProvider;
 use WEI\Interfaces\TranslationProviderInterface;
 
@@ -506,7 +507,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (class_exists('TRP_Translate_Press')) {
             $metaTitle = trim((string) get_post_meta($product_id, '_wei_translatepress_de_title', true));
             $metaDescription = trim((string) get_post_meta($product_id, '_wei_translatepress_de_description', true));
-            if ($metaTitle !== '' || $metaDescription !== '') {
+            if ($metaTitle !== '' && $metaDescription !== '') {
                 return $this->log_german_content($product_id, $product_id, 'translatepress_meta', $metaTitle, $metaDescription);
             }
         }
@@ -534,6 +535,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'description' => $description,
             'source' => $source,
             'language' => 'de-DE',
+            'product_id' => $sourceProductId,
             'source_product_id' => $sourceProductId,
             'translated_product_id' => $translatedProductId,
             'title_found' => $title !== '',
@@ -551,8 +553,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $hash = $this->german_content_source_hash($product);
         $baseLog = [
             'product_id' => $product_id,
-            'source_language' => 'pl-PL',
-            'target_language' => 'de-DE',
+            'source_language' => 'pl',
+            'target_language' => 'de',
             'provider' => $providerKey,
             'generated' => false,
             'content_hash' => $hash,
@@ -569,7 +571,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $provider = $this->translation_provider($settings);
         if (!$provider || !$provider->is_configured()) {
-            $message = 'German content missing and translation provider is not configured.';
+            $message = 'German content missing and Google Translation provider is not configured.';
             $this->logger->warning('German content generator unavailable', array_merge($baseLog, ['error_message' => $message]));
             return $this->log_german_content($product_id, 0, 'missing', '', '', array_merge($baseLog, ['error_message' => $message]));
         }
@@ -577,23 +579,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
         try {
             $sourceTitle = (string) $product->get_name();
             $sourceDescription = trim((string) $product->get_description());
-            if ($sourceDescription === '') {
-                $sourceDescription = trim((string) $product->get_short_description());
+            $sourceShortDescription = trim((string) $product->get_short_description());
+            if ($sourceShortDescription !== '' && $sourceShortDescription !== $sourceDescription) {
+                $sourceDescription = trim($sourceDescription . "\n\n" . $sourceShortDescription);
             }
             $translated = $provider->translate_product_content($product, [
-                'source_language' => 'pl-PL',
-                'target_language' => 'de-DE',
+                'source_language' => 'pl',
+                'target_language' => 'de',
                 'source_title' => $sourceTitle,
                 'source_description' => $sourceDescription,
                 'mpn' => $this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku()),
-                'manufacturer' => $this->resolve_hersteller_aspect_value($product, $product_id, $settings, ''),
+                'manufacturer' => $this->resolve_manufacturer_aspect_value($product, $product_id, '', $settings),
                 'title_limit' => 80,
             ]);
 
-            $title = trim(wp_strip_all_tags((string) ($translated['title_de'] ?? '')));
-            if (mb_strlen($title) > 80) {
-                $title = trim(mb_substr($title, 0, 80));
-            }
+            $mpn = $this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku());
+            $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, '', $settings);
+            $title = $this->sanitize_ebay_de_title((string) ($translated['title_de'] ?? ''), $mpn, $manufacturer);
             $description = trim(wp_kses_post((string) ($translated['description_de'] ?? '')));
             if ($title === '' || $description === '') {
                 throw new \RuntimeException('Translation provider returned empty German title or description.');
@@ -621,13 +623,48 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
     }
 
+
+    private function sanitize_ebay_de_title(string $title, string $mpn = '', string $manufacturer = ''): string
+    {
+        $title = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($title)) ?: '');
+        $important = array_values(array_filter(array_unique(array_map('trim', [$manufacturer, $mpn])), static fn($value) => $value !== ''));
+
+        $candidate = $title;
+        if (mb_strlen($candidate) > 80) {
+            $candidate = trim(mb_substr($candidate, 0, 80));
+        }
+
+        $missing = [];
+        foreach ($important as $term) {
+            if (mb_stripos($candidate, $term) === false) {
+                $missing[] = $term;
+            }
+        }
+
+        if ($missing !== []) {
+            $suffix = implode(' ', $missing);
+            $suffixLength = mb_strlen($suffix);
+            if ($suffixLength < 80) {
+                $mainLimit = 80 - $suffixLength - 1;
+                $candidate = trim(mb_substr($title, 0, max(0, $mainLimit)));
+                $candidate = trim($candidate . ' ' . $suffix);
+            }
+        }
+
+        if (mb_strlen($candidate) > 80) {
+            $candidate = trim(mb_substr($candidate, 0, 80));
+        }
+
+        return $candidate;
+    }
+
     private function configured_translation_provider_key(array $settings): string
     {
         $provider = strtolower(trim((string) ($settings['translation_provider'] ?? 'disabled')));
-        if ($provider === '' || !in_array($provider, ['disabled', 'openai', 'deepl', 'google'], true)) {
-            return 'disabled';
+        if ($provider === 'google') {
+            $provider = 'google_cloud_translate';
         }
-        if ($provider !== 'disabled' && trim((string) ($settings['translation_api_key'] ?? '')) === '') {
+        if ($provider === '' || !in_array($provider, ['disabled', 'google_cloud_translate', 'openai'], true)) {
             return 'disabled';
         }
         return $provider;
@@ -636,7 +673,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function translation_provider(array $settings): ?TranslationProviderInterface
     {
         $provider = $this->configured_translation_provider_key($settings);
+        if ($provider === 'google_cloud_translate') {
+            return new GoogleCloudTranslateProvider($settings, $this->logger);
+        }
         if ($provider === 'openai') {
+            // Optional/dev provider kept out of the main admin UI.
             return new OpenAiTranslationProvider($settings, $this->logger);
         }
         return null;
@@ -1234,6 +1275,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['translation_provider'])) {
             $settings['translation_provider'] = 'disabled';
+        } elseif ($settings['translation_provider'] === 'google') {
+            $settings['translation_provider'] = 'google_cloud_translate';
         }
         if (!isset($settings['translation_api_key'])) {
             $settings['translation_api_key'] = '';
@@ -1243,9 +1286,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['regenerate_german_content_on_hash_change'])) {
             $settings['regenerate_german_content_on_hash_change'] = 0;
-        }
-        if (!isset($settings['translation_openai_model'])) {
-            $settings['translation_openai_model'] = 'gpt-4o-mini';
         }
         return $settings;
     }
