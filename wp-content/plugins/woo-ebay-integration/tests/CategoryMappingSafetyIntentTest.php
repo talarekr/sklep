@@ -23,6 +23,17 @@ $cases = [
     ['FOTELE FOTEL WNĘTRZE SLINE KOMPLETNE AUDI A5', 'seats'],
     ['PANEL NAWIEWU KLIMATYZACJI AUDI Q5 FY', 'hvac_control_panel'],
     ['DMUCHAWA KLIMATYZACJI AUDI A3 8V', 'hvac_blower'],
+    ['Anlasser Audi A4 8K 2.0 TDI', 'starter'],
+    ['Anlasserkabelbaum für Lichtmaschine Audi A6', 'wiring_harness'],
+    ['Antriebswelle links Audi A5', 'driveshaft'],
+    ['Półoś napędowa Audi A4', 'driveshaft'],
+    ['Motorsteuergerät Audi A6 4G', 'control_module'],
+    ['PDC Parkkontrollmodul Audi Q5', 'control_module'],
+    ['Scheibenwaschflüssigkeitsbehälter Audi A3', 'washer_tank'],
+    ['Servolenkungsschlauch Audi A4', 'power_steering_hose'],
+    ['Dachhimmelleuchte Audi Q7', 'roof_light'],
+    ['Pleuellager Hauptlager Audi 2.0 TDI', 'engine_bearing'],
+    ['Panewki silnika Audi 2.0 TDI', 'engine_bearing'],
 ];
 
 $failures = [];
@@ -37,8 +48,15 @@ $negativeChecks = [
     ['Motoryzacja > Części samochodowe > Układ klimatyzacji > Przewody klimatyzacji Przewód klimatyzacji', 'Klimakompressoren & Kupplungen', 'ac_hose_candidate_is_ac_compressor'],
     ['Koło zapasowe18 Audi', 'Automobile > Mercedes-Benz', 'spare_wheel_candidate_is_vehicle_category'],
     ['GŁOŚNIK DRZWI PRZEDNICH', 'Fensterheber & -motoren', 'car_speaker_candidate_is_window_lifter_or_motor'],
-    ['PANEL NAWIEWU KLIMATYZACJI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'hvac_control_panel_candidate_is_engine_parts'],
-    ['Hak holowniczy Audi', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'tow_hook_candidate_is_engine_parts'],
+    ['PANEL NAWIEWU KLIMATYZACJI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Hak holowniczy Audi', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Anlasser Audi A4', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Antriebswelle links Audi A5', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Motorsteuergerät Audi A6', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Scheibenwaschflüssigkeitsbehälter Audi A3', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Servolenkungsschlauch Audi A4', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Dachhimmelleuchte Audi Q7', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['Anlasserkabelbaum Audi A6', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
 ];
 
 foreach ($negativeChecks as [$source, $candidate, $expectedReason]) {
@@ -52,12 +70,32 @@ $positiveChecks = [
     ['FOTELE FOTEL WNĘTRZE SLINE KOMPLETNE', 'Innenausstattung > Sitze', true],
     ['PANEL NAWIEWU KLIMATYZACJI', 'Innenausstattung > Schalter, Kontrollelemente & Zündschlösser', true],
     ['Przewód klimatyzacji', 'Klimaanlage > Klimaleitung', true],
+    ['Pleuellager Hauptlager Audi 2.0 TDI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {
     $sanity = CategoryMappingSafety::sanity_check($source, $candidate);
     if (empty($sanity['pass'])) {
         $failures[] = sprintf('Expected sanity pass for "%s" => "%s", got %s', $source, $candidate, json_encode($sanity));
+    }
+}
+
+
+$selectedCategoryChecks = [
+    ['Koło zapasowe18 Audi A4 B9 8W0601025', '12345', 'Auto & Motorrad: Teile > Reifen & Felgen > Kompletträder', ['Reifenbreite', 'Reifenquerschnitt', 'Zollgröße', 'Anzahl der Kompletträder', 'Reifenspezifikation'], 'spare_wheel_mapped_to_complete_wheels'],
+    ['Koło zapasowe18 Audi A4 B9 8W0601025', '99999', 'Auto & Motorrad: Teile > Reifen & Felgen > Ersatzrad Notrad Felge', [], ''],
+    ['Anlasser Audi A4', '33619', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', [], 'engine_bearing_category_mismatch'],
+    ['Pleuellager Hauptlager Audi 2.0 TDI', '33619', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', [], ''],
+];
+
+foreach ($selectedCategoryChecks as [$source, $categoryId, $categoryText, $requiredAspects, $expectedReason]) {
+    $safety = CategoryMappingSafety::selected_category_check($source, $categoryId, $categoryText, $requiredAspects);
+    $actualReason = (string) ($safety['reason'] ?? '');
+    if ($expectedReason === '' && empty($safety['pass'])) {
+        $failures[] = sprintf('Expected selected category pass for "%s" => "%s", got %s', $source, $categoryText, json_encode($safety));
+    }
+    if ($expectedReason !== '' && (!empty($safety['pass']) || $actualReason !== $expectedReason)) {
+        $failures[] = sprintf('Expected selected category failure %s for "%s" => "%s", got %s', $expectedReason, $source, $categoryText, json_encode($safety));
     }
 }
 

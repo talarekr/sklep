@@ -130,8 +130,12 @@ class CategoryMappingSafety
         $ebay = self::normalize($ebayPath);
         $intent = self::category_intent($wooPath);
 
-        if ($intent === 'spare_wheel' && self::contains_any($ebay, ['komplettrader', 'komplettraeder'])) {
+        if ($intent === 'spare_wheel' && self::is_complete_wheels_category_text($ebay)) {
             return ['pass' => false, 'reason' => 'spare_wheel_mapped_to_complete_wheels'];
+        }
+
+        if (self::is_engine_bearing_category_text($ebay) && !self::is_engine_bearing_intent($wooPath)) {
+            return ['pass' => false, 'reason' => 'engine_bearing_category_mismatch'];
         }
 
         if ($intent === 'seats' && self::contains_any($ebay, ['sitze', 'fahrzeugsitze', 'sitz', 'innenausstattung'])) {
@@ -182,6 +186,14 @@ class CategoryMappingSafety
         $woo = self::normalize($wooPath);
         $rules = [
             'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'kolo dojazdowe', 'dojazdowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
+            'engine_bearing' => ['motorlager', 'pleuellager', 'hauptlager', 'engine bearing', 'crank bearing', 'connecting rod bearing', 'panewki', 'panewka', 'lozyska silnika', 'lozysko silnika'],
+            'wiring_harness' => ['kabelbaum', 'kabelbaume', 'kabelbaeume', 'wiazka przewodow', 'wiazki przewodow', 'wiazka elektryczna', 'wiring harness'],
+            'starter' => ['rozrusznik', 'rozruszniki', 'anlasser', 'starter'],
+            'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen', 'polos', 'polos napedowa', 'półoś', 'driveshaft', 'drive shaft'],
+            'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'steuermodul', 'kontrollmodul', 'control module', 'module'],
+            'washer_tank' => ['scheibenwaschflussigkeitsbehalter', 'scheibenwaschfluessigkeitsbehaelter', 'scheibenwaschbehalter', 'scheibenwaschbehaelter', 'waschwasserbehalter', 'waschwasserbehaelter', 'zbiornik spryskiwaczy', 'washer tank'],
+            'power_steering_hose' => ['servolenkungsschlauch', 'servolenkung leitung', 'servolenkung schlauch', 'przewod wspomagania', 'waz wspomagania', 'power steering hose'],
+            'roof_light' => ['dachhimmelleuchte', 'dachhimmel leuchte', 'lampka podsufitki', 'oswietlenie podsufitki', 'innenleuchte', 'roof light'],
             'tow_hook' => ['hak holowniczy', 'holowniczy', 'nieodpinany 13 pin', '13 pin', 'abschlepphaken', 'anhangerkupplung', 'anhaengerkupplung', 'abschleppose', 'abschleppoese', 'tow hook', 'towbar', 'tow bar'],
             'sunroof' => ['szyberdach', 'dach panoramiczny', 'schiebedach', 'panoramadach', 'sunroof'],
             'gearbox_cover' => ['oslona dolna skrzyni', 'oslona skrzyni', 'unterfahrschutz', 'abdeckung', 'getriebeabdeckung', 'undertray', 'gearbox cover'],
@@ -211,7 +223,15 @@ class CategoryMappingSafety
     public static function expected_keywords_for_intent(string $intent): array
     {
         return match ($intent) {
-            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen', 'rader', 'raeder', 'reifen'],
+            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen'],
+            'engine_bearing' => ['motorlager', 'pleuellager', 'hauptlager', 'lager', 'lagerung', 'kurbelwellenlager'],
+            'starter' => ['anlasser', 'starter'],
+            'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen'],
+            'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'modul', 'module'],
+            'washer_tank' => ['waschwasserbehalter', 'waschwasserbehaelter', 'scheibenwaschanlage', 'scheibenwaschbehalter', 'scheibenwaschbehaelter'],
+            'power_steering_hose' => ['servolenkung', 'leitung', 'schlauch'],
+            'roof_light' => ['innenbeleuchtung', 'innenleuchte', 'leuchte', 'dachhimmel'],
+            'wiring_harness' => ['kabel', 'kabelbaum', 'kabelbaume', 'kabelbaeume', 'steckverbinder'],
             'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
             'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
             'gearbox_cover' => ['unterfahrschutz', 'abdeckung', 'getriebe', 'motorraum', 'spritzschutz'],
@@ -263,6 +283,58 @@ class CategoryMappingSafety
             return 'tow_hook_candidate_is_engine_parts';
         }
         return '';
+    }
+
+    public static function selected_category_check(string $sourceText, string $categoryId, string $categoryText, array $requiredAspects = []): array
+    {
+        $normalizedCategory = self::normalize($categoryText);
+        $intent = self::category_intent($sourceText);
+
+        if (trim($categoryId) === '33619' && !self::is_engine_bearing_intent($sourceText)) {
+            return ['pass' => false, 'reason' => 'engine_bearing_category_mismatch'];
+        }
+
+        if (self::is_engine_bearing_category_text($normalizedCategory) && !self::is_engine_bearing_intent($sourceText)) {
+            return ['pass' => false, 'reason' => 'engine_bearing_category_mismatch'];
+        }
+
+        if ($intent === 'spare_wheel') {
+            if (self::is_complete_wheels_category_text($normalizedCategory) || self::requires_complete_wheel_aspects($requiredAspects)) {
+                return ['pass' => false, 'reason' => 'spare_wheel_mapped_to_complete_wheels'];
+            }
+        }
+
+        return ['pass' => true, 'reason' => ''];
+    }
+
+    public static function is_engine_bearing_intent(string $sourceText): bool
+    {
+        return self::category_intent($sourceText) === 'engine_bearing';
+    }
+
+    private static function is_engine_bearing_category_text(string $normalizedCategory): bool
+    {
+        return self::contains_any($normalizedCategory, ['motor-, pleuel- & hauptlager', 'motor-, pleuel- und hauptlager', 'pleuel- & hauptlager', 'pleuel und hauptlager'])
+            || (self::contains_any($normalizedCategory, ['pleuellager', 'hauptlager']) && self::contains_any($normalizedCategory, ['motor', 'motoren', 'motorteile']));
+    }
+
+    private static function is_complete_wheels_category_text(string $normalizedCategory): bool
+    {
+        return self::contains_any($normalizedCategory, ['komplettrader', 'komplettraeder', 'komplettrad', 'komplettraeder', 'komplette rader', 'komplette raeder']);
+    }
+
+    private static function requires_complete_wheel_aspects(array $requiredAspects): bool
+    {
+        $required = array_map(static fn($name): string => self::normalize((string) $name), $requiredAspects);
+        $requiredText = implode(' | ', $required);
+        $wheelAspectHits = 0;
+        foreach (['reifenbreite', 'reifenquerschnitt', 'zollgrosse', 'zollgroesse', 'anzahl der komplettrader', 'anzahl der komplettraeder', 'reifenspezifikation'] as $aspect) {
+            if (str_contains($requiredText, $aspect)) {
+                $wheelAspectHits++;
+            }
+        }
+
+        return $wheelAspectHits >= 3;
     }
 
     public static function is_complete_engine_intent(string $wooPath): bool

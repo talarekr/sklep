@@ -1000,7 +1000,26 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $status = 'ready';
         $categoryId = (string) ($category['category_id'] ?? '');
         $requiredAspects = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
-        $missingAspects = array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name])));
+        $categoryText = trim(implode(' ', array_filter([
+            (string) ($category['category_path'] ?? ''),
+            (string) ($category['category_name'] ?? ''),
+            (string) ($category['mapping']['ebay_category_path'] ?? ''),
+            (string) ($category['mapping']['ebay_category_name'] ?? ''),
+        ], static fn($value): bool => trim((string) $value) !== '')));
+        $sourceText = trim(implode(' ', array_filter([
+            is_object($product) && method_exists($product, 'get_name') ? (string) $product->get_name() : '',
+            (string) ($content['title'] ?? ''),
+            (string) ($content['description'] ?? ''),
+            (string) ($category['mapping']['woo_category_path'] ?? ''),
+        ], static fn($value): bool => trim((string) $value) !== '')));
+        $selectedCategorySafety = CategoryMappingSafety::selected_category_check($sourceText, $categoryId, $categoryText, $requiredAspects);
+        if (empty($selectedCategorySafety['pass'])) {
+            $category['status'] = 'category_sanity_failed';
+            $category['sanity_check_pass'] = false;
+            $category['sanity_reason'] = (string) ($selectedCategorySafety['reason'] ?? 'selected_category_sanity_failed');
+            $categoryId = '';
+        }
+        $missingAspects = $categoryId !== '' ? array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name]))) : [];
         $priceResolution = $this->resolve_price($product, $product_id, $settings);
         $this->logger->info('Resolved eBay category for preflight/export', [
             'product_id' => $product_id,
@@ -1018,7 +1037,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
         if ($categoryId === '') { $errors[] = 'Category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
-        if ($missingAspects !== []) { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
+        if ($missingAspects !== [] && $categoryId !== '') { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
         if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
         if ((int) $product->get_stock_quantity() < 0) $errors[] = 'stock invalid';
