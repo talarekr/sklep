@@ -67,6 +67,13 @@ $provider = (string) ($s['translation_provider'] ?? 'disabled');
 $translationConfigured = $provider === 'google_cloud_translate' && (string) ($s['translation_api_key'] ?? '') !== '';
 $translationLabel = $translationConfigured ? 'Google Cloud Translate configured' : ($provider === 'disabled' ? 'disabled' : 'provider selected, API key missing');
 
+$nbpRateStatus = is_array($nbp_rate_status ?? null) ? $nbp_rate_status : [];
+$nbpRate = $nbpRateStatus['nbp_rate'] ?? null;
+$nbpEffectiveDate = (string) ($nbpRateStatus['nbp_effective_date'] ?? '');
+$nbpCacheAge = $nbpRateStatus['cache_age_seconds'] ?? null;
+$nbpCacheAgeLabel = is_numeric($nbpCacheAge) ? human_time_diff(time() - (int) $nbpCacheAge, time()) : '-';
+$nbpCacheStatus = (string) ($nbpRateStatus['cache_status'] ?? 'missing');
+
 $buildEbayCategoryUrl = static function (string $categoryId, array $categoryData = []): string {
     $preferredUrl = '';
     $urlKeys = ['categoryWebUrl', 'categoryUrl', 'webUrl', 'url'];
@@ -283,6 +290,18 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
     </div>
 
     <div class="postbox">
+        <h2>EBAY_DE price status</h2>
+        <table class="widefat striped" style="max-width:700px;">
+            <tbody>
+                <tr><th scope="row">NBP EUR rate</th><td><code><?php echo esc_html(is_numeric($nbpRate) ? number_format((float) $nbpRate, 4, '.', '') : 'missing'); ?></code></td></tr>
+                <tr><th scope="row">Effective date</th><td><?php echo esc_html($nbpEffectiveDate !== '' ? $nbpEffectiveDate : '-'); ?></td></tr>
+                <tr><th scope="row">Cache</th><td><?php echo esc_html($nbpCacheStatus); ?><?php if ($nbpCacheAgeLabel !== '-'): ?>, age <?php echo esc_html($nbpCacheAgeLabel); ?><?php endif; ?></td></tr>
+            </tbody>
+        </table>
+        <p class="description">eBay DE offer prices are resolved from WooCommerce PLN prices only for eBay payloads. WooCommerce regular/sale prices and Allegro data are not changed.</p>
+    </div>
+
+    <div class="postbox">
         <h2>Category mapping summary</h2>
         <div class="wei-grid">
             <div class="wei-metric"><span>Total categories</span><strong><?php echo esc_html((string) $categorySummary['total']); ?></strong></div>
@@ -410,6 +429,14 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
             <p>Category aspect fallbacks:<br /><textarea name="category_aspect_fallbacks" class="large-text code" rows="3" placeholder="179847|Hersteller|SEAT"><?php echo esc_textarea((string) ($s['category_aspect_fallbacks'] ?? '')); ?></textarea></p>
             <p>Auto category confidence threshold: <input type="number" step="0.01" min="0.01" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) ($s['auto_category_confidence_threshold'] ?? \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" class="small-text" /></p>
             <p>Stock sync mode: <select name="stock_sync_mode"><option value="set_zero" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
+        </details>
+
+        <details class="postbox">
+            <summary>Advanced: EBAY_DE price resolver</summary>
+            <p>Default markup percent: <input type="number" step="0.01" min="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_default_markup_percent'] ?? 25)); ?>" class="small-text" />%</p>
+            <p>Special category markup percent: <input type="number" step="0.01" min="0.01" name="ebay_special_category_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_special_category_markup_percent'] ?? 30)); ?>" class="small-text" />%</p>
+            <p>NBP rate cache TTL: <input type="number" step="0.25" min="0.25" name="nbp_rate_cache_ttl_hours" value="<?php echo esc_attr((string) ($s['nbp_rate_cache_ttl_hours'] ?? 12)); ?>" class="small-text" /> hours</p>
+            <p class="description">Special Woo category slugs: <code>silniki-kompletne</code>, <code>kompletne-skrzynie</code>. The resolved EUR price is used in <code>pricingSummary.price.value</code> only.</p>
         </details>
 
         <details class="postbox">
