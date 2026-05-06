@@ -12,6 +12,9 @@ class AutoSyncScheduler
     public const CRON_GROUP = 'wei_ebay_auto_sync';
     private const LOCK_KEY = 'wei_ebay_auto_sync_lock';
     private const LOCK_TTL = 3600;
+    private const READINESS_NOT_READY_LIMIT = 50;
+    private const READINESS_BUCKET_LIMIT = 25;
+
 
     public function __construct(private EbayAdapter $adapter, private OrderImporter $orderImporter, private Logger $logger)
     {
@@ -157,6 +160,19 @@ class AutoSyncScheduler
             'missing_stock' => 0,
             'missing_policies_location' => 0,
             'errors' => 0,
+            'not_ready_items' => [],
+            'not_ready_examples' => [],
+            'blocked_by_category_items' => [],
+            'missing_required_aspects_items' => [],
+            'invalid_price_items' => [],
+            'missing_exchange_rate_items' => [],
+            'missing_german_content_items' => [],
+            'missing_image_items' => [],
+            'missing_stock_items' => [],
+            'missing_policies_location_items' => [],
+            'not_ready_sample_ids' => [],
+            'blocked_by_category_sample_ids' => [],
+            'missing_required_aspects_sample_ids' => [],
         ];
 
         foreach ($ids as $productId) {
@@ -172,35 +188,147 @@ class AutoSyncScheduler
 
             $summary['not_ready']++;
             $status = (string) ($result['status'] ?? 'not_ready');
-            update_post_meta($productId, '_wei_ebay_export_status', in_array($status, ['ready', 'not_ready'], true) ? $status : 'not_ready');
-            update_post_meta($productId, '_wei_ebay_last_preflight_error', (string) ($result['message'] ?? $status));
-            if (in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
+            $item = $this->readiness_item($productId, $result);
+            $this->persist_not_ready_preflight_status($productId, $result, $item);
+            $this->append_limited($summary['not_ready_items'], $item, self::READINESS_NOT_READY_LIMIT);
+            $summary['not_ready_examples'] = $summary['not_ready_items'];
+            $this->append_limited($summary['not_ready_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+
+            if ($this->is_category_blocked_status($status)) {
                 $summary['blocked_by_category']++;
+                $this->append_limited($summary['blocked_by_category_items'], $item, self::READINESS_BUCKET_LIMIT);
+                $this->append_limited($summary['blocked_by_category_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
             } elseif ($status === 'not_ready_missing_german_content') {
                 $summary['missing_german_content']++;
+                $this->append_limited($summary['missing_german_content_items'], $item, self::READINESS_BUCKET_LIMIT);
             } elseif ($status === 'missing_required_aspects') {
                 $summary['missing_required_aspects']++;
+                $this->append_limited($summary['missing_required_aspects_items'], $item, self::READINESS_BUCKET_LIMIT);
+                $this->append_limited($summary['missing_required_aspects_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
             } elseif ($status === 'invalid_price') {
                 $summary['invalid_price']++;
+                $this->append_limited($summary['invalid_price_items'], $item, self::READINESS_BUCKET_LIMIT);
             } elseif ($status === 'missing_exchange_rate') {
                 $summary['missing_exchange_rate']++;
+                $this->append_limited($summary['missing_exchange_rate_items'], $item, self::READINESS_BUCKET_LIMIT);
             }
             $errors = array_map('strtolower', (array) ($result['errors'] ?? []));
             foreach ($errors as $error) {
                 if (str_contains($error, 'image')) {
                     $summary['missing_image']++;
+                    $this->append_limited($summary['missing_image_items'], $item, self::READINESS_BUCKET_LIMIT);
                 }
                 if (str_contains($error, 'stock')) {
                     $summary['missing_stock']++;
+                    $this->append_limited($summary['missing_stock_items'], $item, self::READINESS_BUCKET_LIMIT);
                 }
                 if (str_contains($error, 'polic') || str_contains($error, 'location')) {
                     $summary['missing_policies_location']++;
+                    $this->append_limited($summary['missing_policies_location_items'], $item, self::READINESS_BUCKET_LIMIT);
                 }
             }
         }
 
-        update_option('wei_ebay_readiness_summary', $summary + ['last_run' => gmdate('Y-m-d H:i:s')], false);
+        $summary['last_run'] = gmdate('Y-m-d H:i:s');
+        update_option('wei_ebay_readiness_summary', $summary, false);
+        $this->logger->info('eBay readiness scan completed', $this->readiness_log_context($summary));
         return $summary;
+    }
+
+    private function readiness_item(int $productId, array $result): array
+    {
+        $product = wc_get_product($productId);
+        $category = is_array($result['category'] ?? null) ? $result['category'] : [];
+        $mapping = is_array($category['mapping'] ?? null) ? $category['mapping'] : [];
+        $content = is_array($result['content'] ?? null) ? $result['content'] : [];
+        $skuResolution = is_array($result['sku_resolution'] ?? null) ? $result['sku_resolution'] : [];
+        $priceResolution = is_array($result['price_resolution'] ?? null) ? $result['price_resolution'] : [];
+        $status = (string) ($result['status'] ?? 'not_ready');
+        $errors = array_values(array_map('strval', (array) ($result['errors'] ?? [])));
+        $missingAspects = array_values(array_map('strval', (array) ($result['missing_aspects'] ?? [])));
+        $requiredAspects = array_values(array_map('strval', (array) ($result['required_aspects'] ?? [])));
+        $categoryName = (string) ($category['category_name'] ?? $mapping['ebay_category_name'] ?? '');
+        $categoryPath = (string) ($category['category_path'] ?? $mapping['ebay_category_path'] ?? '');
+        $categoryReason = (string) ($category['sanity_reason'] ?? $mapping['error_reason'] ?? '');
+        $message = (string) ($result['message'] ?? '');
+
+        return [
+            'product_id' => $productId,
+            'product_title' => $product ? (string) $product->get_name() : (string) get_the_title($productId),
+            'edit_url' => (string) get_edit_post_link($productId, ''),
+            'status' => $status,
+            'primary_reason' => $this->primary_readiness_reason($status, $errors, $missingAspects, $message, $categoryReason),
+            'errors' => $errors,
+            'category_id' => (string) ($category['category_id'] ?? $mapping['ebay_category_id'] ?? ''),
+            'category_name' => $categoryName,
+            'category_path' => $categoryPath,
+            'category_status' => (string) ($category['status'] ?? $mapping['status'] ?? ''),
+            'category_sanity_reason' => $categoryReason,
+            'missing_aspects' => $missingAspects,
+            'required_aspects' => $requiredAspects,
+            'price_ready' => !empty($priceResolution['ready']),
+            'content_ready' => !empty($content['title']) && !empty($content['description']),
+            'sku' => $product ? (string) $product->get_sku() : '',
+            'ebay_sku' => (string) ($skuResolution['sku'] ?? ''),
+        ];
+    }
+
+    private function primary_readiness_reason(string $status, array $errors, array $missingAspects, string $message, string $categoryReason): string
+    {
+        if ($this->is_category_blocked_status($status)) {
+            return $categoryReason !== '' ? 'blocked_by_category: ' . $categoryReason : 'blocked_by_category';
+        }
+        if ($status === 'missing_required_aspects') {
+            return 'missing_required_aspects' . ($missingAspects !== [] ? ': ' . implode(', ', $missingAspects) : '');
+        }
+        if ($status === 'not_ready_missing_german_content') {
+            return 'missing_german_content';
+        }
+        if ($status === 'invalid_price' || $status === 'missing_exchange_rate') {
+            return $status;
+        }
+        if ($errors !== []) {
+            return implode('; ', $errors);
+        }
+
+        return $message !== '' ? $message : $status;
+    }
+
+    private function persist_not_ready_preflight_status(int $productId, array $result, array $item): void
+    {
+        update_post_meta($productId, '_wei_ebay_export_status', 'not_ready');
+        update_post_meta($productId, '_wei_ebay_last_preflight_error', (string) ($result['message'] ?? $item['primary_reason'] ?? 'not_ready'));
+        update_post_meta($productId, '_wei_ebay_last_preflight_reason', (string) ($item['primary_reason'] ?? 'not_ready'));
+        update_post_meta($productId, '_wei_ebay_last_missing_aspects', (array) ($item['missing_aspects'] ?? []));
+        update_post_meta($productId, '_wei_ebay_last_category_status', (string) ($item['category_status'] ?? ''));
+        update_post_meta($productId, '_wei_ebay_last_category_reason', (string) ($item['category_sanity_reason'] ?? ''));
+        update_post_meta($productId, '_wei_ebay_last_preflight_at', gmdate('Y-m-d H:i:s'));
+    }
+
+    private function append_limited(array &$items, $item, int $limit): void
+    {
+        if (count($items) < $limit) {
+            $items[] = $item;
+        }
+    }
+
+    private function is_category_blocked_status(string $status): bool
+    {
+        return in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true);
+    }
+
+    private function readiness_log_context(array $summary): array
+    {
+        return [
+            'processed' => (int) ($summary['processed'] ?? 0),
+            'ready' => (int) ($summary['ready'] ?? 0),
+            'not_ready' => (int) ($summary['not_ready'] ?? 0),
+            'blocked_by_category' => (int) ($summary['blocked_by_category'] ?? 0),
+            'missing_required_aspects' => (int) ($summary['missing_required_aspects'] ?? 0),
+            'not_ready_sample_ids' => (array) ($summary['not_ready_sample_ids'] ?? []),
+            'blocked_by_category_sample_ids' => (array) ($summary['blocked_by_category_sample_ids'] ?? []),
+            'missing_required_aspects_sample_ids' => (array) ($summary['missing_required_aspects_sample_ids'] ?? []),
+        ];
     }
 
     public function run_export_batch(int $batchSize = 20): array
