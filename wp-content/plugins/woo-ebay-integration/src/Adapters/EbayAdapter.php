@@ -10,6 +10,7 @@ use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayClient;
 use WEI\Services\EbayTaxonomyService;
 use WEI\Services\EbaySkuGenerator;
+use WEI\Services\EbayPriceResolver;
 use WEI\Services\CategoryMappingSafety;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
@@ -20,7 +21,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 {
     private const EBAY_SKU_MAX_LENGTH = 50;
 
-    public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbaySkuGenerator $skuGenerator = null)
+    public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbaySkuGenerator $skuGenerator = null, private ?EbayPriceResolver $priceResolver = null)
     {
     }
 
@@ -85,11 +86,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         $categoryReadiness = $this->category_mapping_readiness($marketplaceId);
+        $priceReadiness = $this->priceResolver ? $this->priceResolver->readiness_summary($settings) : [];
         if (!$categoryReadiness['ready']) {
-            return ['ready' => false, 'failed' => 'category_mapping_review_required', 'details' => $checks, 'category_mappings' => $categoryReadiness];
+            return ['ready' => false, 'failed' => 'category_mapping_review_required', 'details' => $checks, 'category_mappings' => $categoryReadiness, 'price_readiness' => $priceReadiness];
         }
 
-        return ['ready' => true, 'details' => $checks, 'category_mappings' => $categoryReadiness];
+        return ['ready' => true, 'details' => $checks, 'category_mappings' => $categoryReadiness, 'price_readiness' => $priceReadiness];
     }
 
     private function category_mapping_readiness(string $marketplaceId): array
@@ -237,12 +239,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
         }
 
-        $priceValue = (float) $product->get_price();
         $priceCurrency = $this->offer_currency($marketplaceId);
-        if ($marketplaceId === 'EBAY_DE') {
-            // TODO: replace fixed 4.25 with dynamic NBP exchange rate
-            $priceValue = round($priceValue / 4.25, 2);
-        }
+        $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
+        $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
 
         $listingPolicies = [
             'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
@@ -272,6 +271,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'marketplace_id' => $marketplaceId,
                 'category_id' => $categoryId,
                 'offer_payload' => $offerPayload,
+                'price_resolution' => $priceResolution,
             ]);
 
             $offer = $this->client->create_offer($offerPayload, [
@@ -349,6 +349,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'marketplace_id' => $marketplaceId,
             'category_id' => $categoryId,
             'offer_payload' => $offerPayload,
+            'price_resolution' => $priceResolution,
         ]);
 
         $updated = $this->client->update_offer($offer_id, $offerPayload, [
@@ -410,7 +411,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'last_sync_at' => gmdate('Y-m-d H:i:s'),
         ]);
 
-        return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'content_source' => $content['source'], 'sku_resolution' => $skuResolution];
+        return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
     }
 
     private function marketplace_id(): string
@@ -970,6 +971,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $categoryId = (string) ($category['category_id'] ?? '');
         $requiredAspects = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
         $missingAspects = array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name])));
+        $priceResolution = $this->resolve_price($product, $product_id, $settings);
         $this->logger->info('Resolved eBay category for preflight/export', [
             'product_id' => $product_id,
             'category_id' => $categoryId,
@@ -988,7 +990,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($categoryId === '') { $errors[] = 'category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
         if ($missingAspects !== []) { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
-        if ((float) $product->get_price() <= 0) $errors[] = 'price invalid';
+        if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
         if ((int) $product->get_stock_quantity() < 0) $errors[] = 'stock invalid';
         if (!$product->get_image_id()) $errors[] = 'image missing';
         if ($this->merchant_location_key() === '') $errors[] = 'inventory location missing';
@@ -999,7 +1001,39 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
+    }
+
+    private function resolve_price($product, int $product_id, array $settings): array
+    {
+        if ($this->marketplace_id() !== 'EBAY_DE') {
+            $price = (float) $product->get_price();
+            return [
+                'base_price_pln' => $price,
+                'markup_percent' => 0,
+                'markup_source' => 'not_applicable',
+                'marked_price_pln' => $price,
+                'currency_source' => get_woocommerce_currency(),
+                'nbp_rate' => null,
+                'nbp_effective_date' => '',
+                'ebay_price_eur' => $price,
+                'ready' => $price > 0,
+                'error' => $price > 0 ? '' : 'invalid_price',
+            ];
+        }
+
+        return $this->priceResolver ? $this->priceResolver->resolve($product, $product_id, $settings) : [
+            'ready' => false,
+            'error' => 'missing_exchange_rate',
+            'base_price_pln' => (float) $product->get_price(),
+            'markup_percent' => null,
+            'markup_source' => 'resolver_missing',
+            'marked_price_pln' => null,
+            'currency_source' => 'nbp_table_a',
+            'nbp_rate' => null,
+            'nbp_effective_date' => '',
+            'ebay_price_eur' => null,
+        ];
     }
 
     private function parse_category_aspect_fallbacks(string $raw): array
@@ -1689,6 +1723,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!isset($settings['regenerate_german_content_on_hash_change'])) {
             $settings['regenerate_german_content_on_hash_change'] = 0;
         }
+        if (!isset($settings['ebay_default_markup_percent'])) {
+            $settings['ebay_default_markup_percent'] = 25;
+        }
+        if (!isset($settings['ebay_special_category_markup_percent'])) {
+            $settings['ebay_special_category_markup_percent'] = 30;
+        }
+        if (!isset($settings['nbp_rate_cache_ttl_hours'])) {
+            $settings['nbp_rate_cache_ttl_hours'] = 12;
+        }
         return $settings;
     }
 
@@ -1714,10 +1757,19 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $map = $this->repo->find_by_sku($sku);
         if (!$map) return ['result' => 'skipped', 'reason' => 'mapping_not_found', 'sku_resolution' => $skuResolution];
 
+        $settings = $this->settings();
+        $marketplaceId = (string) ($map['marketplace_id'] ?? $this->marketplace_id());
+        $priceResolution = $this->resolve_price($product, $product_id, $settings);
+        if ($marketplaceId === 'EBAY_DE' && empty($priceResolution['ready'])) {
+            return ['result' => 'error', 'error' => (string) ($priceResolution['error'] ?? 'invalid_price'), 'price_resolution' => $priceResolution];
+        }
+        $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
+        $priceCurrency = $this->offer_currency($marketplaceId);
+
         $res = $this->client->bulk_update_price_quantity([[
             'offerId' => $map['remote_offer_id'],
             'shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())],
-            'price' => ['value' => (string) $product->get_price(), 'currency' => get_woocommerce_currency()],
+            'price' => ['value' => (string) $priceValue, 'currency' => $priceCurrency],
         ]]);
 
         if (is_wp_error($res)) return ['result' => 'error', 'error' => $res->get_error_message()];

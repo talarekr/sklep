@@ -8,7 +8,7 @@ use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver)
     {
     }
 
@@ -53,6 +53,7 @@ class AdminPage
         $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
         $ebay_sku_status = $this->skuGenerator->status_counts();
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
+        $nbp_rate_status = $this->priceResolver->get_rate_status($s);
         $connect_url = $this->auth->get_authorize_url();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -72,6 +73,12 @@ class AdminPage
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $threshold = (float) ($_POST['auto_category_confidence_threshold'] ?? CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD);
         $s['auto_category_confidence_threshold'] = $threshold > 0 && $threshold <= 1 ? round($threshold, 4) : CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
+        $defaultMarkup = (float) ($_POST['ebay_default_markup_percent'] ?? 25);
+        $specialMarkup = (float) ($_POST['ebay_special_category_markup_percent'] ?? 30);
+        $nbpTtl = (float) ($_POST['nbp_rate_cache_ttl_hours'] ?? 12);
+        $s['ebay_default_markup_percent'] = $defaultMarkup > 0 ? round($defaultMarkup, 4) : 25;
+        $s['ebay_special_category_markup_percent'] = $specialMarkup > 0 ? round($specialMarkup, 4) : 30;
+        $s['nbp_rate_cache_ttl_hours'] = $nbpTtl > 0 ? round($nbpTtl, 4) : 12;
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
         $s['product_category_overrides'] = sanitize_textarea_field((string) ($_POST['product_category_overrides'] ?? ''));
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
@@ -308,6 +315,15 @@ class AdminPage
         $s['write_generated_sku_to_woo'] = 0;
         if (!isset($s['stock_sync_mode'])) {
             $s['stock_sync_mode'] = 'set_zero';
+        }
+        if (!isset($s['ebay_default_markup_percent'])) {
+            $s['ebay_default_markup_percent'] = 25;
+        }
+        if (!isset($s['ebay_special_category_markup_percent'])) {
+            $s['ebay_special_category_markup_percent'] = 30;
+        }
+        if (!isset($s['nbp_rate_cache_ttl_hours'])) {
+            $s['nbp_rate_cache_ttl_hours'] = 12;
         }
         return $s;
     }
