@@ -8,7 +8,6 @@ use WEI\Services\Translation\GoogleCloudTranslateProvider;
 
 class AutoCategoryMappingService
 {
-    private const AUTO_CONFIDENCE_THRESHOLD = 0.85;
     private const REVIEW_CONFIDENCE_THRESHOLD = 0.60;
 
     public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
@@ -20,7 +19,7 @@ class AutoCategoryMappingService
         $settings = $this->settings();
         $marketplaceId = trim($marketplaceId) !== '' ? trim($marketplaceId) : (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
         $rows = $this->categoryRepo->list_used_woo_categories($marketplaceId, $limit);
-        $summary = ['marketplace_id' => $marketplaceId, 'processed' => 0, 'mapped_auto' => 0, 'needs_category_review' => 0, 'unmapped' => 0, 'taxonomy_api_forbidden' => 0, 'suggestion_failed' => 0, 'skipped_confirmed' => 0];
+        $summary = ['marketplace_id' => $marketplaceId, 'processed' => 0, 'mapped_auto' => 0, 'low_confidence_auto' => 0, 'category_sanity_failed' => 0, 'needs_category_review' => 0, 'unmapped' => 0, 'taxonomy_api_forbidden' => 0, 'suggestion_failed' => 0, 'skipped_confirmed' => 0, 'threshold' => CategoryMappingSafety::threshold($settings)];
 
         $tree = $this->taxonomy->get_default_category_tree_id_result($marketplaceId);
         if (($tree['status'] ?? '') === 'taxonomy_api_forbidden') {
@@ -121,21 +120,31 @@ class AutoCategoryMappingService
         $source = 'suggestion';
         $errorReason = '';
 
+        $safety = ['threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => true, 'sanity_reason' => ''];
         if ($categoryId === '') {
             $status = 'suggestion_failed';
             $errorReason = 'Suggestion payload did not include categoryId';
-        } elseif ($confidence >= self::AUTO_CONFIDENCE_THRESHOLD) {
-            $status = 'mapped_auto';
-            $source = 'auto_taxonomy';
-        } elseif ($confidence >= self::REVIEW_CONFIDENCE_THRESHOLD) {
-            $status = 'needs_category_review';
         } else {
-            $status = 'unmapped';
-            $errorReason = 'Best suggestion confidence below review threshold';
+            $source = 'auto_taxonomy';
+            $safety = CategoryMappingSafety::evaluate_auto_mapping($path, (string) ($best['category_path'] ?? $best['category_name'] ?? ''), $confidence, $settings);
+            if (!empty($safety['accepted'])) {
+                $status = 'mapped_auto';
+            } elseif (($safety['status'] ?? '') === 'category_sanity_failed') {
+                $status = 'category_sanity_failed';
+                $errorReason = (string) ($safety['sanity_reason'] ?? 'category mapping requires review');
+            } elseif ($confidence >= self::REVIEW_CONFIDENCE_THRESHOLD) {
+                $status = 'low_confidence_auto';
+                $errorReason = 'Best suggestion confidence below auto-accept threshold';
+            } else {
+                $status = 'needs_category_review';
+                $errorReason = 'Best suggestion confidence below review threshold';
+            }
         }
 
+        $best['safety'] = $safety;
+
         $this->categoryRepo->upsert(array_merge($base, [
-            'ebay_category_id' => in_array($status, ['mapped_auto', 'needs_category_review'], true) ? $categoryId : '',
+            'ebay_category_id' => in_array($status, ['mapped_auto', 'low_confidence_auto', 'category_sanity_failed', 'needs_category_review'], true) ? $categoryId : '',
             'ebay_category_name' => (string) ($best['category_name'] ?? ''),
             'ebay_category_path' => (string) ($best['category_path'] ?? ''),
             'source' => $source,
@@ -145,8 +154,8 @@ class AutoCategoryMappingService
             'suggestion_payload' => $this->debug_payload($querySource, $query, $best, $result),
         ]));
 
-        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'category_id' => $categoryId]);
-        return ['status' => $status, 'confidence' => $confidence, 'category_id' => $categoryId];
+        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId]);
+        return ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId];
     }
 
     private function is_confirmed_mapping(?array $mapping): bool
@@ -157,7 +166,21 @@ class AutoCategoryMappingService
 
         $status = (string) ($mapping['status'] ?? '');
         $source = (string) ($mapping['source'] ?? '');
-        return in_array($status, ['mapped_manual', 'mapped_auto'], true) || ($status === '' && $source === 'manual');
+        if ($status === 'mapped_manual' || ($status === '' && $source === 'manual')) {
+            return true;
+        }
+
+        if ($status === 'mapped_auto' && $source === 'auto_taxonomy') {
+            $safety = CategoryMappingSafety::evaluate_auto_mapping(
+                (string) ($mapping['woo_category_path'] ?? ''),
+                trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
+                (float) ($mapping['confidence'] ?? 0),
+                $this->settings()
+            );
+            return !empty($safety['accepted']);
+        }
+
+        return false;
     }
 
     private function build_query(string $path, array $samples): string
@@ -319,6 +342,7 @@ class AutoCategoryMappingService
             'best' => $best,
             'taxonomy_status' => $result['status'] ?? '',
             'error' => $result['error'] ?? '',
+            'safety' => isset($best['safety']) && is_array($best['safety']) ? $best['safety'] : [],
         ], JSON_UNESCAPED_UNICODE);
     }
 

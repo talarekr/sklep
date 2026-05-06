@@ -67,6 +67,8 @@ class AdminPage
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
+        $threshold = (float) ($_POST['auto_category_confidence_threshold'] ?? CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD);
+        $s['auto_category_confidence_threshold'] = $threshold > 0 && $threshold <= 1 ? round($threshold, 4) : CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
         $s['product_category_overrides'] = sanitize_textarea_field((string) ($_POST['product_category_overrides'] ?? ''));
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
@@ -259,6 +261,9 @@ class AdminPage
         }
         if (!isset($s['auto_generate_german_content_preflight'])) {
             $s['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($s['auto_category_confidence_threshold'])) {
+            $s['auto_category_confidence_threshold'] = CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
         }
         if (!isset($s['regenerate_german_content_on_hash_change'])) {
             $s['regenerate_german_content_on_hash_change'] = 0;
