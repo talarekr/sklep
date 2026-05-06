@@ -104,6 +104,24 @@ class EbayAuth
         return $this->request_application_access_token();
     }
 
+    public function get_diagnostic_oauth_context(): array
+    {
+        $s = $this->settings();
+        return [
+            'client_id_configured' => (string) ($s['client_id'] ?? '') !== '',
+            'runame_configured' => (string) ($s['runame'] ?? '') !== '',
+            'refresh_token_present' => (string) ($s['refresh_token'] ?? '') !== '',
+            'access_token_present' => (string) ($s['access_token'] ?? '') !== '',
+            'access_token_expires_at' => (int) ($s['expires_at'] ?? 0),
+            'scope_requested' => self::SCOPES,
+            'scope_last_returned' => (string) ($s['scope_last_returned'] ?? ''),
+            'required_publish_scopes' => [
+                'https://api.ebay.com/oauth/api_scope/sell.inventory',
+                'https://api.ebay.com/oauth/api_scope/sell.account',
+            ],
+        ];
+    }
+
     public function get_taxonomy_oauth_context(): array
     {
         return [
@@ -234,6 +252,9 @@ class EbayAuth
         $s['access_token'] = (string) ($data['access_token'] ?? '');
         $s['refresh_token'] = (string) ($data['refresh_token'] ?? ($s['refresh_token'] ?? ''));
         $s['expires_at'] = time() + max(0, (int) ($data['expires_in'] ?? 0));
+        if (isset($data['scope'])) {
+            $s['scope_last_returned'] = (string) $data['scope'];
+        }
         update_option(Plugin::OPTION_KEY, $s, false);
     }
 
