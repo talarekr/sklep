@@ -63,7 +63,10 @@ class AdminPage
         $s = $this->settings();
         $s['environment'] = in_array($_POST['environment'] ?? 'production', ['sandbox', 'production'], true) ? $_POST['environment'] : 'production';
         $s['client_id'] = sanitize_text_field((string) ($_POST['client_id'] ?? ''));
-        $s['client_secret'] = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
+        $postedClientSecret = sanitize_text_field((string) ($_POST['client_secret'] ?? ''));
+        if ($postedClientSecret !== '') {
+            $s['client_secret'] = $postedClientSecret;
+        }
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
@@ -82,7 +85,10 @@ class AdminPage
         if ($provider === 'google') {
             $provider = 'google_cloud_translate';
         }
-        $s['translation_api_key'] = sanitize_text_field((string) ($_POST['translation_api_key'] ?? ''));
+        $postedTranslationApiKey = sanitize_text_field((string) ($_POST['translation_api_key'] ?? ''));
+        if ($postedTranslationApiKey !== '') {
+            $s['translation_api_key'] = $postedTranslationApiKey;
+        }
         $s['translation_provider'] = in_array($provider, ['disabled', 'google_cloud_translate'], true) ? $provider : 'disabled';
         $s['auto_generate_german_content_preflight'] = !empty($_POST['auto_generate_german_content_preflight']) ? 1 : 0;
         $s['regenerate_german_content_on_hash_change'] = !empty($_POST['regenerate_german_content_on_hash_change']) ? 1 : 0;
