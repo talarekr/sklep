@@ -22,6 +22,11 @@ class EbayClient
         return $this->auth->get_valid_access_token();
     }
 
+    public function oauth_diagnostic_context(): array
+    {
+        return $this->auth->get_diagnostic_oauth_context();
+    }
+
     public function create_or_replace_inventory_item(string $sku, array $payload, array $context = [])
     {
         return $this->request('PUT', '/sell/inventory/v1/inventory_item/' . rawurlencode($sku), $payload, [], $context);
@@ -35,6 +40,21 @@ class EbayClient
     public function update_offer(string $offer_id, array $payload, array $context = [])
     {
         return $this->request('PUT', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), $payload, [], $context);
+    }
+
+    public function get_offer(string $offer_id, array $context = [])
+    {
+        return $this->request('GET', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), null, [], $context);
+    }
+
+    public function delete_offer(string $offer_id, array $context = [])
+    {
+        return $this->request('DELETE', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), null, [], $context);
+    }
+
+    public function get_inventory_item(string $sku, array $context = [])
+    {
+        return $this->request('GET', '/sell/inventory/v1/inventory_item/' . rawurlencode($sku), null, [], $context);
     }
 
     public function publish_offer(string $offer_id, array $context = [])
@@ -112,6 +132,21 @@ class EbayClient
         return $this->request('GET', '/sell/inventory/v1/location');
     }
 
+    public function get_location(string $merchant_location_key, array $context = [])
+    {
+        return $this->request('GET', '/sell/inventory/v1/location/' . rawurlencode($merchant_location_key), null, [], $context);
+    }
+
+    public function get_privileges(array $context = [])
+    {
+        return $this->request('GET', '/sell/account/v1/privilege', null, [], $context);
+    }
+
+    public function get_opted_in_programs(array $context = [])
+    {
+        return $this->request('GET', '/sell/account/v1/program/get_opted_in_programs', null, [], $context);
+    }
+
     public function create_or_update_location(string $merchant_location_key, array $payload)
     {
         return $this->request('POST', '/sell/inventory/v1/location/' . rawurlencode($merchant_location_key), $payload);
@@ -173,7 +208,19 @@ class EbayClient
             $raw_body = (string) wp_remote_retrieve_body($res);
             $decoded = json_decode($raw_body, true);
             if ($status >= 200 && $status < 300) {
-                return is_array($decoded) ? $decoded : [];
+                $success = is_array($decoded) ? $decoded : [];
+                $warnings = $this->extract_response_messages($success, ['warnings', 'errors']);
+                if ($warnings !== []) {
+                    $this->logger->warning('eBay API success response included warnings/errors', array_merge([
+                        'stage' => (string) ($context['stage'] ?? 'unknown'),
+                        'endpoint' => $path,
+                        'method' => $method,
+                        'status' => $status,
+                        'messages' => $warnings,
+                        'response_body' => $this->sanitize_sensitive_data($success),
+                    ], $this->sanitize_sensitive_data($context)));
+                }
+                return $success;
             }
 
             if (in_array($status, [429, 500, 502, 503, 504], true) && $attempt < 4) {
@@ -235,6 +282,23 @@ class EbayClient
         }
 
         return self::MARKETPLACE_CONTENT_LANGUAGE[$marketplaceId] ?? '';
+    }
+
+    private function extract_response_messages(array $response, array $keys): array
+    {
+        $messages = [];
+        foreach ($keys as $key) {
+            if (!is_array($response[$key] ?? null)) {
+                continue;
+            }
+            foreach ($response[$key] as $entry) {
+                if (is_array($entry)) {
+                    $messages[] = $this->sanitize_sensitive_data($entry);
+                }
+            }
+        }
+
+        return $messages;
     }
 
     private function sanitize_sensitive_data($data)

@@ -667,6 +667,301 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $result;
     }
 
+
+
+    public function verify_api_publishing_readiness(int $product_id, ?int $variation_id = null, bool $writeDiagnosticOffer = false): array
+    {
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) {
+            return [
+                'result' => 'error',
+                'status' => 'not_ready',
+                'message' => 'Product not found.',
+                'product_id' => $product_id,
+                'manual_listing_note' => 'This diagnostic only checks API readiness; manual eBay UI listing ability is separate.',
+            ];
+        }
+
+        $settings = $this->settings();
+        $marketplaceId = $this->marketplace_id();
+        $preflight = $this->preflight_product($product_id, $variation_id);
+        $metaProductId = $variation_id ?: $product_id;
+        $mapping = $this->repo->find_by_product($product_id, $variation_id);
+        $offerId = trim((string) ($mapping['remote_offer_id'] ?? ''));
+        if ($offerId === '') {
+            $offerId = trim((string) get_post_meta($metaProductId, '_wei_ebay_offer_id', true));
+        }
+        $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
+        $sku = (string) ($skuResolution['sku'] ?? $mapping['sku'] ?? get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $category = is_array($preflight['category'] ?? null) ? $preflight['category'] : [];
+        $categoryId = (string) ($category['category_id'] ?? '');
+        $aspects = is_array($preflight['aspects'] ?? null) ? $preflight['aspects'] : [];
+        $content = is_array($preflight['content'] ?? null) ? $preflight['content'] : [];
+        $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
+        $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
+        $listingPolicies = [
+            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+        ];
+        $inventoryPayload = [
+            'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
+            'condition' => 'NEW',
+            'product' => [
+                'title' => (string) ($content['title'] ?? ''),
+                'description' => (string) ($content['description'] ?? ''),
+                'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
+                'aspects' => $aspects,
+            ],
+        ];
+        $offerPayload = [
+            'sku' => $sku,
+            'marketplaceId' => $marketplaceId,
+            'merchantLocationKey' => $this->merchant_location_key(),
+            'categoryId' => $categoryId,
+            'listingPolicies' => $listingPolicies,
+            'format' => 'FIXED_PRICE',
+            'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
+            'listingDuration' => 'GTC',
+            'pricingSummary' => ['price' => ['value' => (string) $priceValue, 'currency' => $this->offer_currency($marketplaceId)]],
+        ];
+
+        $result = [
+            'result' => 'success',
+            'status' => 'diagnostic_complete',
+            'message' => 'Inventory API publishOffer readiness diagnostic completed; no publishOffer call was made.',
+            'manual_listing_note' => 'Manual eBay UI listing success does not prove Inventory API publishOffer is allowed. This report separates UI listing ability from REST Inventory API publishing readiness.',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'marketplace_id' => $marketplaceId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'preflight_ready' => !empty($preflight['ready']),
+            'preflight' => $preflight,
+            'oauth_app_publish_readiness' => $this->client->oauth_diagnostic_context(),
+            'account_api_checks' => [],
+            'marketplace_policy_location_checks' => [],
+            'offer_before_publish' => null,
+            'inventory_item_before_publish' => null,
+            'publish_required_field_check' => [],
+            'diagnostic_create_update' => ['attempted' => false],
+            'fresh_offer_recreate_check' => ['attempted' => false, 'reason' => $writeDiagnosticOffer ? '' : 'Not requested. Enable diagnostic offer create/update to test fresh Inventory API create/update without publishing.'],
+            'alternate_api_path_note' => 'Not tested by this safe action. If Inventory API publishOffer remains blocked but manual UI listing works, a separate diagnostic should compare Trading API AddFixedPriceItem or Sell Feed LMS using the same seller, marketplace, policies, tax/business setup, and SKU-equivalent data.',
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+            'called_publish_offer' => false,
+        ];
+
+        $result['account_api_checks']['getPrivileges'] = $this->api_result($this->client->get_privileges([
+            'stage' => 'diagnosticGetPrivileges',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+        ]));
+        $programs = $this->client->get_opted_in_programs([
+            'stage' => 'diagnosticGetOptedInPrograms',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+        ]);
+        $result['account_api_checks']['getOptedInPrograms'] = $this->api_result($programs);
+        $result['account_api_checks']['selling_policy_management_opted_in'] = $this->program_is_opted_in($programs, 'SELLING_POLICY_MANAGEMENT');
+
+        foreach (['fulfillment_policy', 'payment_policy', 'return_policy'] as $type) {
+            $result['marketplace_policy_location_checks'][$type] = $this->api_result($this->client->get_policies($type, $marketplaceId));
+        }
+        $result['marketplace_policy_location_checks']['selected_policy_ids'] = $this->validate_selected_policies($settings);
+        $locations = $this->client->get_locations();
+        $result['marketplace_policy_location_checks']['locations'] = $this->api_result($locations);
+        $locationKey = $this->merchant_location_key();
+        $result['marketplace_policy_location_checks']['selected_location_key'] = $locationKey;
+        $result['marketplace_policy_location_checks']['selected_location_exists_in_list'] = $this->location_key_exists($locations, $locationKey);
+        $result['marketplace_policy_location_checks']['selected_location'] = $locationKey !== '' ? $this->api_result($this->client->get_location($locationKey, [
+            'stage' => 'diagnosticGetLocation',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+        ])) : ['ok' => false, 'error' => 'missing_location_key'];
+
+        if ($sku !== '') {
+            $inventoryItem = $this->client->get_inventory_item($sku, [
+                'stage' => 'diagnosticGetInventoryItem',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'marketplace_id' => $marketplaceId,
+            ]);
+            $result['inventory_item_before_publish'] = $this->api_result($inventoryItem);
+        }
+        if ($offerId !== '') {
+            $offer = $this->client->get_offer($offerId, [
+                'stage' => 'diagnosticGetOfferBeforePublish',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'offer_id' => $offerId,
+                'marketplace_id' => $marketplaceId,
+            ]);
+            $result['offer_before_publish'] = $this->api_result($offer);
+            $result['publish_required_field_check'] = $this->offer_publish_required_field_check(is_wp_error($offer) ? [] : (array) $offer, is_wp_error($result['inventory_item_before_publish'] ?? null) ? [] : (array) (($result['inventory_item_before_publish']['data'] ?? [])), $marketplaceId);
+        } else {
+            $result['publish_required_field_check'] = ['ready' => false, 'missing' => ['offer_id'], 'warnings' => ['No existing offer_id to retrieve with getOffer.']];
+        }
+
+        if ($writeDiagnosticOffer && !empty($preflight['ready'])) {
+            $createOrUpdate = ['attempted' => true, 'mode' => $offerId !== '' ? 'update_existing_offer_no_publish' : 'create_offer_no_publish'];
+            $inventoryWrite = $this->client->create_or_replace_inventory_item($sku, $inventoryPayload, [
+                'stage' => 'diagnosticCreateOrReplaceInventoryItem',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
+            ]);
+            $createOrUpdate['inventory_write'] = $this->api_result($inventoryWrite);
+            if (!is_wp_error($inventoryWrite)) {
+                $offerWrite = $offerId !== ''
+                    ? $this->client->update_offer($offerId, $offerPayload, ['stage' => 'diagnosticUpdateOfferNoPublish', 'product_id' => $product_id, 'sku' => $sku, 'offer_id' => $offerId, 'marketplace_id' => $marketplaceId, 'category_id' => $categoryId])
+                    : $this->client->create_offer($offerPayload, ['stage' => 'diagnosticCreateOfferNoPublish', 'product_id' => $product_id, 'sku' => $sku, 'marketplace_id' => $marketplaceId, 'category_id' => $categoryId]);
+                $createOrUpdate['offer_write'] = $this->api_result($offerWrite);
+                $newOfferId = is_array($offerWrite) ? trim((string) ($offerWrite['offerId'] ?? $offerId)) : $offerId;
+                if ($newOfferId !== '') {
+                    $createOrUpdate['get_offer_after_write'] = $this->api_result($this->client->get_offer($newOfferId, ['stage' => 'diagnosticGetOfferAfterWrite', 'product_id' => $product_id, 'sku' => $sku, 'offer_id' => $newOfferId, 'marketplace_id' => $marketplaceId]));
+                }
+            }
+            $result['diagnostic_create_update'] = $createOrUpdate;
+            $result['fresh_offer_recreate_check'] = ['attempted' => true, 'same_sku_recreate_possible' => false, 'reason' => 'Inventory API permits one active offer entity for a SKU/marketplace; this diagnostic updates or creates the current offer but does not publish. Recreating from scratch with the same SKU requires deleting/retiring the existing offer outside this safe action.'];
+        }
+
+        $result['exact_missing_api_prerequisites_before_publish'] = $this->summarize_publish_prerequisites($result);
+        update_option('wei_ebay_last_api_publish_readiness_result', $result, false);
+        update_post_meta($product_id, '_wei_ebay_api_publish_readiness_result', wp_json_encode($result));
+        $this->logger->info('eBay API publish readiness diagnostic completed', $result);
+
+        return $result;
+    }
+
+    private function api_result($response): array
+    {
+        if (is_wp_error($response)) {
+            return [
+                'ok' => false,
+                'error' => $response->get_error_code(),
+                'message' => $response->get_error_message(),
+                'details' => $response->get_error_data(),
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'warnings' => $this->extract_api_messages((array) $response, 'warnings'),
+            'errors' => $this->extract_api_messages((array) $response, 'errors'),
+            'data' => $response,
+        ];
+    }
+
+    private function extract_api_messages(array $response, string $key): array
+    {
+        return is_array($response[$key] ?? null) ? array_values($response[$key]) : [];
+    }
+
+    private function program_is_opted_in($programsResponse, string $programType): bool
+    {
+        if (is_wp_error($programsResponse)) {
+            return false;
+        }
+        foreach ((array) ($programsResponse['programs'] ?? []) as $program) {
+            if (is_array($program) && (string) ($program['programType'] ?? '') === $programType) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function location_key_exists($locationsResponse, string $locationKey): bool
+    {
+        if ($locationKey === '' || is_wp_error($locationsResponse)) {
+            return false;
+        }
+        foreach ((array) ($locationsResponse['locations'] ?? []) as $location) {
+            if (is_array($location) && (string) ($location['merchantLocationKey'] ?? '') === $locationKey) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function offer_publish_required_field_check(array $offer, array $inventoryItem, string $marketplaceId): array
+    {
+        $missing = [];
+        $warnings = [];
+        foreach (['sku', 'marketplaceId', 'merchantLocationKey', 'categoryId', 'format', 'listingDuration'] as $field) {
+            if (trim((string) ($offer[$field] ?? '')) === '') {
+                $missing[] = 'offer.' . $field;
+            }
+        }
+        foreach (['fulfillmentPolicyId', 'paymentPolicyId', 'returnPolicyId'] as $field) {
+            if (trim((string) ($offer['listingPolicies'][$field] ?? '')) === '') {
+                $missing[] = 'offer.listingPolicies.' . $field;
+            }
+        }
+        if ((float) ($offer['pricingSummary']['price']['value'] ?? 0) <= 0 || trim((string) ($offer['pricingSummary']['price']['currency'] ?? '')) === '') {
+            $missing[] = 'offer.pricingSummary.price';
+        }
+        if (!isset($offer['availableQuantity']) && !isset($offer['availability']['shipToLocationAvailability']['quantity'])) {
+            $missing[] = 'offer.availableQuantity';
+        }
+        if ((string) ($offer['marketplaceId'] ?? '') !== '' && (string) ($offer['marketplaceId'] ?? '') !== $marketplaceId) {
+            $warnings[] = 'Offer marketplaceId does not match current plugin marketplace_id.';
+        }
+        foreach (['condition'] as $field) {
+            if (trim((string) ($inventoryItem[$field] ?? '')) === '') {
+                $missing[] = 'inventory_item.' . $field;
+            }
+        }
+        foreach (['title', 'description'] as $field) {
+            if (trim((string) ($inventoryItem['product'][$field] ?? '')) === '') {
+                $missing[] = 'inventory_item.product.' . $field;
+            }
+        }
+        if (empty($inventoryItem['product']['imageUrls']) || !is_array($inventoryItem['product']['imageUrls'])) {
+            $missing[] = 'inventory_item.product.imageUrls';
+        }
+
+        return ['ready' => $missing === [], 'missing' => array_values(array_unique($missing)), 'warnings' => $warnings, 'listing_status' => (string) ($offer['listing']['listingStatus'] ?? '')];
+    }
+
+    private function summarize_publish_prerequisites(array $result): array
+    {
+        $missing = [];
+        if (empty($result['oauth_app_publish_readiness']['refresh_token_present'])) {
+            $missing[] = 'OAuth refresh token missing; reconnect eBay with sell.inventory and sell.account scopes.';
+        }
+        if (empty($result['account_api_checks']['getPrivileges']['ok'])) {
+            $missing[] = 'Account API getPrivileges failed for this OAuth token/app.';
+        } elseif (empty($result['account_api_checks']['getPrivileges']['data']['sellerRegistrationCompleted'])) {
+            $missing[] = 'Seller registration is not complete according to Account API getPrivileges.';
+        }
+        if (empty($result['account_api_checks']['selling_policy_management_opted_in'])) {
+            $missing[] = 'Seller is not opted in to SELLING_POLICY_MANAGEMENT business policies according to Account API.';
+        }
+        if (empty($result['marketplace_policy_location_checks']['selected_policy_ids']['valid'])) {
+            $missing[] = 'Selected fulfillment/payment/return policy IDs are missing, invalid, or cached for another marketplace.';
+        }
+        if (empty($result['marketplace_policy_location_checks']['selected_location_exists_in_list'])) {
+            $missing[] = 'Selected merchantLocationKey is missing from Inventory API locations.';
+        }
+        foreach ((array) ($result['publish_required_field_check']['missing'] ?? []) as $field) {
+            $missing[] = 'Missing required publish field: ' . $field;
+        }
+
+        if ($missing === []) {
+            $missing[] = 'No local/API prerequisite gap detected before publishOffer. If publishOffer still returns errorId 25019 / BLOCK_Seller_NonBlackbird_Issue607, treat it as an Inventory API publishOffer-specific eBay account/tax/business-policy block and escalate to eBay Developer Support with the response body and correlation headers.';
+        }
+
+        return array_values(array_unique($missing));
+    }
+
     private function record_manual_publish_result(int $product_id, int $metaProductId, array $result): void
     {
         update_post_meta($product_id, '_wei_ebay_manual_publish_result', wp_json_encode($result));

@@ -26,6 +26,7 @@ class AdminPage
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
+        add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
@@ -276,6 +277,24 @@ class AdminPage
             'wrote_allegro' => false,
         ];
         $this->set_status('Manual publish offer only: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function verify_api_publishing_readiness(): void
+    {
+        check_admin_referer('wei_verify_api_publishing_readiness');
+        $id = (int) ($_POST['product_id'] ?? 0);
+        $writeDiagnosticOffer = !empty($_POST['write_diagnostic_offer']);
+        $res = $id > 0 ? $this->adapter->verify_api_publishing_readiness($id, null, $writeDiagnosticOffer) : [
+            'result' => 'error',
+            'status' => 'missing_product_id',
+            'message' => 'Missing Woo product ID.',
+            'called_publish_offer' => false,
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ];
+        $this->set_status('Verify eBay API publishing readiness: ' . wp_json_encode($res));
         $this->go();
     }
 
