@@ -28,11 +28,18 @@ class OrderImporter
             if ($order_id === '' || in_array((string) ($order['orderFulfillmentStatus'] ?? ''), ['CANCELLED'], true)) continue;
 
             foreach ((array) ($order['lineItems'] ?? []) as $line) {
-                $sku = (string) ($line['sku'] ?? '');
-                $mapping = $sku !== '' ? $this->repo->find_by_sku($sku) : null;
-                if (!$mapping) continue;
+                if (!is_array($line)) continue;
 
-                $product_id = (int) ($mapping['woo_variation_id'] ?: $mapping['woo_product_id']);
+                $sku = trim((string) ($line['sku'] ?? ''));
+                $offerId = trim((string) ($line['offerId'] ?? $line['offer']['offerId'] ?? ''));
+                $itemId = trim((string) ($line['legacyItemId'] ?? $line['itemId'] ?? ''));
+                $resolution = $this->resolve_line_item_product($sku, $offerId, $itemId);
+                if (!$resolution) {
+                    $this->logger->warning('eBay order line item skipped: no Woo product mapping', ['sku' => $sku, 'offer_id' => $offerId, 'item_id' => $itemId, 'ebay_order_id' => $order_id]);
+                    continue;
+                }
+
+                $product_id = (int) $resolution['product_id'];
                 $product = wc_get_product($product_id);
                 if (!$product) continue;
 
@@ -57,11 +64,70 @@ class OrderImporter
                 update_post_meta($product_id, '_wei_processed_ebay_order_ids', array_values(array_unique($processedOrders)));
                 update_post_meta($product_id, '_wei_last_ebay_order_id', $order_id);
                 update_post_meta($product_id, '_wei_ebay_export_status', 'stock_synced_to_woo');
-                $this->logger->info('eBay order stock synced to WooCommerce only', ['product_id' => $product_id, 'sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode]);
-                $processed[] = ['order_id' => $order_id, 'product_id' => $product_id, 'result' => 'stock_synced_to_woo', 'old_stock' => $oldStock, 'new_stock' => $newStock];
+                $this->logger->info('eBay order stock synced to WooCommerce only', ['product_id' => $product_id, 'sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode, 'resolved_by' => $resolution['resolved_by']]);
+                $processed[] = ['order_id' => $order_id, 'product_id' => $product_id, 'result' => 'stock_synced_to_woo', 'old_stock' => $oldStock, 'new_stock' => $newStock, 'resolved_by' => $resolution['resolved_by']];
             }
         }
 
         return $processed === [] ? ['result' => 'skipped', 'reason' => 'no_mapped_line_items'] : ['result' => 'success', 'processed' => $processed];
+    }
+
+    private function resolve_line_item_product(string $sku, string $offerId, string $itemId): ?array
+    {
+        if ($sku !== '') {
+            $productId = $this->find_product_id_by_wei_ebay_sku($sku);
+            if ($productId > 0) {
+                return ['product_id' => $productId, 'resolved_by' => '_wei_ebay_sku'];
+            }
+
+            $mapping = $this->repo->find_by_sku($sku);
+            if ($mapping) {
+                return ['product_id' => (int) ($mapping['woo_variation_id'] ?: $mapping['woo_product_id']), 'resolved_by' => 'mapping_sku'];
+            }
+        }
+
+        if ($offerId !== '') {
+            $mapping = $this->repo->find_by_offer_id($offerId);
+            if ($mapping) {
+                return ['product_id' => (int) ($mapping['woo_variation_id'] ?: $mapping['woo_product_id']), 'resolved_by' => 'mapping_offer_id'];
+            }
+
+            $productId = $this->find_product_id_by_meta('_wei_ebay_offer_id', $offerId);
+            if ($productId > 0) {
+                return ['product_id' => $productId, 'resolved_by' => '_wei_ebay_offer_id'];
+            }
+        }
+
+        if ($itemId !== '') {
+            $mapping = $this->repo->find_by_listing_id($itemId);
+            if ($mapping) {
+                return ['product_id' => (int) ($mapping['woo_variation_id'] ?: $mapping['woo_product_id']), 'resolved_by' => 'mapping_item_id'];
+            }
+
+            $productId = $this->find_product_id_by_meta('_wei_ebay_item_id', $itemId);
+            if ($productId > 0) {
+                return ['product_id' => $productId, 'resolved_by' => '_wei_ebay_item_id'];
+            }
+        }
+
+        return null;
+    }
+
+    private function find_product_id_by_wei_ebay_sku(string $sku): int
+    {
+        return $this->find_product_id_by_meta('_wei_ebay_sku', $sku);
+    }
+
+    private function find_product_id_by_meta(string $metaKey, string $metaValue): int
+    {
+        global $wpdb;
+
+        $productId = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID WHERE m.meta_key = %s AND m.meta_value = %s AND p.post_type IN ('product', 'product_variation') LIMIT 1",
+            $metaKey,
+            $metaValue
+        ));
+
+        return $productId;
     }
 }

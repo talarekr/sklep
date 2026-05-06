@@ -50,6 +50,7 @@ class AdminPage
         $status = get_option('wei_last_status', []);
         $logs = get_option('wei_logs', []);
         $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
+        $ebay_sku_status = $this->ebay_sku_status_counts();
         $connect_url = $this->auth->get_authorize_url();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -69,7 +70,8 @@ class AdminPage
         $s['category_aspect_fallbacks'] = sanitize_textarea_field((string) ($_POST['category_aspect_fallbacks'] ?? ''));
         $s['default_hersteller_fallback'] = sanitize_text_field((string) ($_POST['default_hersteller_fallback'] ?? ''));
         $s['use_woo_sku_for_ebay'] = !empty($_POST['use_woo_sku_for_ebay']) ? 1 : 0;
-        $s['write_generated_sku_to_woo'] = !empty($_POST['write_generated_sku_to_woo']) ? 1 : 0;
+        $s['ebay_sku_prefix'] = $this->sanitize_ebay_sku_prefix((string) ($_POST['ebay_sku_prefix'] ?? 'GPSW'));
+        $s['write_generated_sku_to_woo'] = 0;
         $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
         $provider = strtolower(sanitize_text_field((string) ($_POST['translation_provider'] ?? 'disabled')));
         if ($provider === 'google') {
@@ -267,14 +269,56 @@ class AdminPage
             $s['default_hersteller_fallback'] = '';
         }
         if (!isset($s['use_woo_sku_for_ebay'])) {
-            $s['use_woo_sku_for_ebay'] = 1;
+            $s['use_woo_sku_for_ebay'] = 0;
         }
-        if (!isset($s['write_generated_sku_to_woo'])) {
-            $s['write_generated_sku_to_woo'] = 0;
+        if (!isset($s['ebay_sku_prefix'])) {
+            $s['ebay_sku_prefix'] = 'GPSW';
         }
+        $s['write_generated_sku_to_woo'] = 0;
         if (!isset($s['stock_sync_mode'])) {
             $s['stock_sync_mode'] = 'set_zero';
         }
         return $s;
+    }
+
+    private function sanitize_ebay_sku_prefix(string $prefix): string
+    {
+        $prefix = trim($prefix);
+        $prefix = preg_replace('/[^A-Za-z0-9._-]+/', '-', $prefix) ?: '';
+        $prefix = trim($prefix, '-_.');
+        return $prefix !== '' ? substr($prefix, 0, 20) : 'GPSW';
+    }
+
+    private function ebay_sku_status_counts(): array
+    {
+        global $wpdb;
+
+        $postTypes = ['product', 'product_variation'];
+        $placeholders = implode(',', array_fill(0, count($postTypes), '%s'));
+        $publishedStatuses = ['publish', 'private', 'draft'];
+        $statusPlaceholders = implode(',', array_fill(0, count($publishedStatuses), '%s'));
+
+        $baseArgs = array_merge($postTypes, $publishedStatuses);
+        $total = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM {$wpdb->posts} p WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
+            ...$baseArgs
+        ));
+        $withSku = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s AND m.meta_value <> '' WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
+            '_wei_ebay_sku',
+            ...$baseArgs
+        ));
+        $generated = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s AND m.meta_value = '1' WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
+            '_wei_ebay_sku_generated',
+            ...$baseArgs
+        ));
+
+        return [
+            'total_products' => $total,
+            'products_missing_wei_ebay_sku' => max(0, $total - $withSku),
+            'products_with_wei_ebay_sku' => $withSku,
+            'products_with_generated_ebay_sku' => $generated,
+        ];
     }
 }

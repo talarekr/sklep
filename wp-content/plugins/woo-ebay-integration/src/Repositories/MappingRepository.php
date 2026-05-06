@@ -48,4 +48,22 @@ class MappingRepository
         $row = $wpdb->get_row($sql, ARRAY_A);
         return is_array($row) ? $row : null;
     }
+
+    public function find_by_offer_id(string $offer_id): ?array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND remote_offer_id=%s LIMIT 1", 'ebay', $offer_id);
+        $row = $wpdb->get_row($sql, ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
+
+    public function find_by_listing_id(string $listing_id): ?array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND remote_listing_id=%s LIMIT 1", 'ebay', $listing_id);
+        $row = $wpdb->get_row($sql, ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
 }
