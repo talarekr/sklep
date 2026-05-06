@@ -521,6 +521,177 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $preflight;
     }
 
+    public function publish_product_offer_only(int $product_id, ?int $variation_id = null): array
+    {
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) {
+            return [
+                'result' => 'error',
+                'published' => false,
+                'status' => 'not_ready',
+                'message' => 'Product not found.',
+                'product_id' => $product_id,
+                'offer_id' => '',
+                'listing_id' => '',
+                'public_url' => '',
+                'wrote_woo_sku' => false,
+                'wrote_woo_price' => false,
+                'wrote_allegro' => false,
+            ];
+        }
+
+        $preflight = $this->preflight_product($product_id, $variation_id);
+        $metaProductId = $variation_id ?: $product_id;
+        $mapping = $this->repo->find_by_product($product_id, $variation_id);
+        $offerId = trim((string) ($mapping['remote_offer_id'] ?? ''));
+        if ($offerId === '') {
+            $offerId = trim((string) get_post_meta($metaProductId, '_wei_ebay_offer_id', true));
+        }
+        $listingId = trim((string) ($mapping['remote_listing_id'] ?? ''));
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($metaProductId, '_wei_ebay_item_id', true));
+        }
+
+        $marketplaceId = $this->marketplace_id();
+        $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : [];
+        $sku = (string) ($skuResolution['sku'] ?? $mapping['sku'] ?? get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $baseResult = [
+            'result' => 'error',
+            'published' => false,
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+            'public_url' => $this->listing_public_url($listingId, $marketplaceId),
+            'marketplace_id' => $marketplaceId,
+            'inventory_id' => $sku,
+            'status' => (string) ($preflight['status'] ?? 'not_ready'),
+            'preflight_ready' => !empty($preflight['ready']),
+            'preflight' => $preflight,
+            'ebay_response' => null,
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ];
+
+        if (empty($preflight['ready'])) {
+            $result = array_merge($baseResult, [
+                'message' => (string) ($preflight['message'] ?? 'Product not ready for eBay publish.'),
+            ]);
+            $this->record_manual_publish_result($product_id, $metaProductId, $result);
+            $this->logger->warning('Manual publishOffer skipped after preflight', $result);
+            return $result;
+        }
+
+        if ($offerId === '') {
+            $result = array_merge($baseResult, [
+                'status' => 'missing_offer_id',
+                'message' => 'Product is ready, but no eBay offer_id exists. Run the single-product export first; this action will not create or update offers.',
+            ]);
+            $this->record_manual_publish_result($product_id, $metaProductId, $result);
+            $this->logger->warning('Manual publishOffer skipped because offer_id is missing', $result);
+            return $result;
+        }
+
+        $this->logger->info('Manual publishOffer preflight passed; publishing one offer only', [
+            'stage' => 'manualPublishOfferOnly',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id_before' => $listingId,
+            'marketplace_id' => $marketplaceId,
+            'preflight_ready' => true,
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ]);
+
+        $published = $this->client->publish_offer($offerId, [
+            'stage' => 'manualPublishOfferOnly',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'marketplace_id' => $marketplaceId,
+        ]);
+
+        if (is_wp_error($published)) {
+            $blocked = $this->is_account_restriction_error($published);
+            $errorData = $published->get_error_data();
+            if ($blocked) {
+                update_option('wei_ebay_global_status', 'blocked_by_ebay_account_restriction', false);
+                update_option('wei_ebay_account_restriction_status', 'detected', false);
+            }
+            $result = array_merge($baseResult, [
+                'status' => $blocked ? 'blocked_by_ebay_account_restriction' : 'publish_error',
+                'message' => $published->get_error_message(),
+                'error' => $published->get_error_code(),
+                'error_details' => is_array($errorData) ? $errorData : [],
+                'ebay_response' => is_array($errorData) && isset($errorData['response_body']) ? $errorData['response_body'] : $errorData,
+                'blocked_by_ebay_account_restriction' => $blocked,
+            ]);
+            $this->record_manual_publish_result($product_id, $metaProductId, $result);
+            $this->logger->error($blocked ? 'blocked_by_ebay_account_restriction' : 'Manual publishOffer failed', $result);
+            return $result;
+        }
+
+        $listingId = trim((string) ($published['listingId'] ?? $listingId));
+        $result = array_merge($baseResult, [
+            'result' => 'success',
+            'published' => true,
+            'status' => 'published',
+            'message' => 'Manual publishOffer completed for one eBay offer only.',
+            'listing_id' => $listingId,
+            'public_url' => $this->listing_public_url($listingId, $marketplaceId),
+            'ebay_response' => $published,
+        ]);
+        update_post_meta($metaProductId, '_wei_ebay_offer_id', $offerId);
+        update_post_meta($metaProductId, '_wei_ebay_item_id', $listingId);
+        update_post_meta($product_id, '_wei_ebay_export_status', 'published');
+        $this->repo->upsert([
+            'marketplace' => 'ebay',
+            'woo_product_id' => $product_id,
+            'woo_variation_id' => $variation_id,
+            'sku' => $sku,
+            'remote_inventory_id' => (string) ($mapping['remote_inventory_id'] ?? $sku),
+            'remote_offer_id' => $offerId,
+            'remote_listing_id' => $listingId,
+            'marketplace_id' => $marketplaceId,
+            'status' => 'active',
+            'last_sync_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+        $this->record_manual_publish_result($product_id, $metaProductId, $result);
+        $this->logger->info('Manual publishOffer result: published=true', $result);
+
+        return $result;
+    }
+
+    private function record_manual_publish_result(int $product_id, int $metaProductId, array $result): void
+    {
+        update_post_meta($product_id, '_wei_ebay_manual_publish_result', wp_json_encode($result));
+        if ($metaProductId !== $product_id) {
+            update_post_meta($metaProductId, '_wei_ebay_manual_publish_result', wp_json_encode($result));
+        }
+        update_option('wei_ebay_last_manual_publish_result', $result, false);
+    }
+
+    private function listing_public_url(string $listingId, string $marketplaceId): string
+    {
+        if (trim($listingId) === '') {
+            return '';
+        }
+
+        $host = match ($marketplaceId) {
+            'EBAY_DE' => 'www.ebay.de',
+            'EBAY_GB' => 'www.ebay.co.uk',
+            'EBAY_US' => 'www.ebay.com',
+            default => 'www.ebay.com',
+        };
+
+        return 'https://' . $host . '/itm/' . rawurlencode($listingId);
+    }
+
     private function resolve_ebay_sku($product, int $product_id, ?int $variation_id, array $settings): array
     {
         $metaProductId = $variation_id ?: $product_id;

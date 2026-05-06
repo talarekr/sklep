@@ -25,6 +25,7 @@ class AdminPage
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
+        add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
@@ -255,6 +256,26 @@ class AdminPage
         $id = (int) ($_REQUEST['product_id'] ?? 0);
         $res = $id > 0 ? $this->adapter->preflight_product($id) : ['result' => 'error', 'error' => 'missing_product_id'];
         $this->set_status('Preflight: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function publish_product_offer_only(): void
+    {
+        check_admin_referer('wei_publish_product_offer_only');
+        $id = (int) ($_POST['product_id'] ?? 0);
+        $res = $id > 0 ? $this->adapter->publish_product_offer_only($id) : [
+            'result' => 'error',
+            'published' => false,
+            'status' => 'missing_product_id',
+            'offer_id' => '',
+            'listing_id' => '',
+            'public_url' => '',
+            'message' => 'Missing Woo product ID.',
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ];
+        $this->set_status('Manual publish offer only: ' . wp_json_encode($res));
         $this->go();
     }
 

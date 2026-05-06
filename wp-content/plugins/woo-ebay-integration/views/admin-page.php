@@ -558,6 +558,9 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" />
             <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Preflight only</button></form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px; border-left:4px solid #dba617; padding-left:10px;"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" />
+            <input type="number" name="product_id" placeholder="Woo product ID" value="43535" /> <button class="button button-secondary">Publish this eBay offer only</button>
+            <span class="description">Safe manual test: runs preflight first, requires ready=true and an existing offer_id, then calls publishOffer only for that offer. Does not create/update inventory, offers, Woo SKU, Woo price or Allegro.</span></form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" />
             <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Sync stock</button></form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><button class="button">Import one eBay order</button></form>
