@@ -67,7 +67,7 @@ class CategoryMappingSafety
     {
         return self::expected_path_keywords($wooPath) !== [] || self::contains_any(self::normalize($wooPath), [
             'turbiny', 'turbina', 'turbo', 'alternatory', 'alternator', 'rozruszniki', 'rozrusznik',
-            'chlodnice', 'chlodnica', 'klimatyzacja', 'wydech', 'wnetrze', 'fotele', 'fotel', 'lusterka', 'lusterko', 'lusterka', 'turbolader',
+            'chlodnice', 'chlodnica', 'klimatyzacja', 'klima', 'wydech', 'wnetrze', 'fotele', 'fotel', 'kanapa', 'siedzenie', 'glosnik', 'audio', 'panel nawiewu', 'dmuchawa', 'hak holowniczy', 'kolo zapasowe', 'lusterka', 'lusterko', 'lusterka', 'turbolader',
         ]);
     }
 
@@ -96,8 +96,13 @@ class CategoryMappingSafety
             [['chlodnica', 'chlodnice', 'kuhler', 'kuhlung'], ['kuhler', 'kuhlung']],
             [['lusterka', 'lusterko', 'spiegel'], ['spiegel', 'aussenspiegel']],
             [['wydech', 'auspuff'], ['auspuff', 'abgasanlage']],
+            [['przewody klimatyzacji', 'przewod klimatyzacji', 'waz klimatyzacji', 'klimaleitung'], self::expected_keywords_for_intent('ac_hose')],
             [['klimatyzacja', 'klima'], ['klimaanlage', 'klima']],
-            [['wnetrze', 'fotele', 'fotel', 'siedzenie'], ['innenausstattung', 'sitz', 'sitze']],
+            [['glosniki', 'glosnik', 'audio'], self::expected_keywords_for_intent('car_speaker')],
+            [['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitze'], self::expected_keywords_for_intent('seats')],
+            [['panel nawiewu', 'panel klimatyzacji', 'sterownik klimatyzacji'], self::expected_keywords_for_intent('hvac_control_panel')],
+            [['dmuchawa', 'wentylator nawiewu'], self::expected_keywords_for_intent('hvac_blower')],
+            [['wnetrze'], ['innenausstattung', 'sitz', 'sitze']],
         ];
 
         foreach ($rules as $rule) {
@@ -129,6 +134,10 @@ class CategoryMappingSafety
             return ['pass' => false, 'reason' => 'spare_wheel_mapped_to_complete_wheels'];
         }
 
+        if ($intent === 'seats' && self::contains_any($ebay, ['sitze', 'fahrzeugsitze', 'sitz', 'innenausstattung'])) {
+            return ['pass' => true, 'reason' => ''];
+        }
+
         if (self::is_complete_engine_intent($wooPath) && self::contains_any($ebay, self::complete_engine_part_negative_keywords())) {
             return ['pass' => false, 'reason' => 'complete_engine_candidate_is_engine_part'];
         }
@@ -158,21 +167,35 @@ class CategoryMappingSafety
         return ['pass' => true, 'reason' => ''];
     }
 
+    public static function detect_intent(string $sourceText): string
+    {
+        return self::category_intent($sourceText);
+    }
+
+    public static function normalized_intent_source_text(string $sourceText, int $limit = 200): string
+    {
+        return mb_substr(self::normalize($sourceText), 0, $limit);
+    }
+
     public static function category_intent(string $wooPath): string
     {
         $woo = self::normalize($wooPath);
         $rules = [
-            'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
-            'tow_hook' => ['hak holowniczy', 'holowniczy', 'abschlepphaken', 'anhangerkupplung', 'anhaengerkupplung', 'abschleppose', 'abschleppoese', 'tow hook', 'tow bar'],
+            'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'kolo dojazdowe', 'dojazdowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
+            'tow_hook' => ['hak holowniczy', 'holowniczy', 'nieodpinany 13 pin', '13 pin', 'abschlepphaken', 'anhangerkupplung', 'anhaengerkupplung', 'abschleppose', 'abschleppoese', 'tow hook', 'towbar', 'tow bar'],
             'sunroof' => ['szyberdach', 'dach panoramiczny', 'schiebedach', 'panoramadach', 'sunroof'],
             'gearbox_cover' => ['oslona dolna skrzyni', 'oslona skrzyni', 'unterfahrschutz', 'abdeckung', 'getriebeabdeckung', 'undertray', 'gearbox cover'],
             'adblue_hose' => ['przewod adblue', 'waz adblue', 'adblue leitung', 'adblue schlauch', 'harnstoffleitung'],
             'roof_rails' => ['relingi dachowe', 'reling dachowy', 'dachreling', 'reling', 'roof rails'],
-            'ac_hose' => ['przewod klimatyzacji', 'waz klimatyzacji', 'klimatyzacji', 'klimaleitung', 'klimaschlauch', 'kaltemittelleitung', 'kaeltemittelleitung', 'ac hose'],
+            'hvac_control_panel' => ['panel nawiewu', 'panel klimatyzacji', 'sterownik klimatyzacji', 'klimabedienteil', 'bedienfeld', 'klimasteuerung', 'heizungsbedienteil', 'hvac control panel'],
+            'hvac_blower' => ['dmuchawa', 'wentylator nawiewu', 'geblase', 'geblaese', 'innenraumgeblase', 'innenraumgeblaese', 'heizungsgeblase', 'heizungsgeblaese', 'blower motor'],
+            'ac_hose' => ['przewody klimatyzacji', 'przewod klimatyzacji', 'rurka klimatyzacji', 'waz klimatyzacji', 'przewod waz klimatyzacji', 'klima leitung', 'klimaleitung', 'klimaschlauch', 'kaltemittelleitung', 'kaeltemittelleitung', 'ac hose'],
             'glow_plug_relay' => ['przekaznik swiec zarowych', 'swiece zarowe', 'gluhkerzenrelais', 'gluehkerzenrelais', 'vorgluhrelais', 'vorgluehrelais', 'glow plug relay'],
             'hybrid_battery_converter' => ['konwerter baterii', 'bateria hybryda', 'hybryda', 'spannungswandler', 'dc dc wandler', 'dc-dc wandler', 'batterie konverter', 'hybrid battery converter'],
             'gearbox_mount' => ['poduszka skrzyni biegow', 'mocowanie skrzyni', 'getriebelager', 'getriebehalter', 'getriebeaufhangung', 'getriebeaufhaengung', 'gearbox mount'],
             'armrest_center_console' => ['podlokietnik', 'tunel srodkowy', 'armlehne', 'mittelarmlehne', 'mittelkonsole', 'center armrest'],
+            'car_speaker' => ['glosnik', 'glosniki', 'speaker', 'lautsprecher', 'turlautsprecher', 'tuerlautsprecher', 'audio'],
+            'seats' => ['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitz', 'sitze', 'seats'],
             'complete_engine' => ['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine'],
         ];
 
@@ -188,17 +211,21 @@ class CategoryMappingSafety
     public static function expected_keywords_for_intent(string $intent): array
     {
         return match ($intent) {
-            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'wheel spare', 'felgen', 'rader', 'raeder'],
+            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen', 'rader', 'raeder', 'reifen'],
             'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
             'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
             'gearbox_cover' => ['unterfahrschutz', 'abdeckung', 'getriebe', 'motorraum', 'spritzschutz'],
             'adblue_hose' => ['adblue', 'harnstoff', 'leitung', 'schlauch', 'abgasreinigung'],
             'roof_rails' => ['dachreling', 'reling', 'dachtrager', 'dachtraeger', 'trager', 'traeger'],
-            'ac_hose' => ['klimaanlage', 'klimaleitung', 'kaltemittel', 'kaeltemittel', 'leitung', 'schlauch'],
+            'ac_hose' => ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch', 'klimaschlauch', 'klimaanlage'],
             'glow_plug_relay' => ['gluhkerze', 'gluehkerze', 'vorgluhen', 'vorgluehen', 'relais', 'steuergerat', 'steuergeraet'],
             'hybrid_battery_converter' => ['hybrid', 'batterie', 'spannungswandler', 'wandler', 'dc-dc', 'hochvolt'],
             'gearbox_mount' => ['getriebelager', 'motorlager', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
             'armrest_center_console' => ['armlehne', 'mittelarmlehne', 'mittelkonsole', 'innenausstattung'],
+            'car_speaker' => ['lautsprecher', 'soundsystem', 'audio', 'autoradio', 'hi-fi', 'hifi'],
+            'seats' => ['sitze', 'fahrzeugsitze', 'sitz', 'innenausstattung'],
+            'hvac_control_panel' => ['klimabedienteil', 'klimaanlage', 'heizung', 'bedienelement', 'bedienfeld', 'schalter', 'kontrollelemente', 'innenausstattung'],
+            'hvac_blower' => ['geblase', 'geblaese', 'lufter', 'luefter', 'heizung', 'klimaanlage', 'innenraum'],
             'complete_engine' => self::complete_engine_preferred_keywords(),
             default => [],
         };
@@ -215,8 +242,25 @@ class CategoryMappingSafety
         if (in_array($intent, ['gearbox_mount', 'gearbox_cover'], true) && self::contains_any($ebay, ['schaltgetriebe', 'automatikgetriebe', 'komplettgetriebe']) && !self::contains_any($ebay, ['lager', 'halter', 'aufhangung', 'aufhaengung', 'abdeckung', 'unterfahrschutz', 'spritzschutz'])) {
             return $intent . '_candidate_is_complete_gearbox';
         }
-        if ($intent === 'ac_hose' && self::contains_any($ebay, ['kompressor', 'klimakompressor']) && !self::contains_any($ebay, ['leitung', 'schlauch'])) {
+        if ($intent === 'spare_wheel') {
+            if (self::contains_any($ebay, ['automobile', 'fahrzeuge', 'pkw', 'mercedes-benz']) && !self::contains_any($ebay, ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen', 'rader', 'raeder', 'reifen'])) {
+                return 'spare_wheel_candidate_is_vehicle_category';
+            }
+        }
+        if ($intent === 'ac_hose' && self::contains_any($ebay, ['kompressor', 'kompressoren', 'klimakompressor', 'klimakompressoren', 'kupplungen']) && !self::contains_any($ebay, ['leitung', 'schlauch'])) {
             return 'ac_hose_candidate_is_ac_compressor';
+        }
+        if ($intent === 'car_speaker' && self::contains_any($ebay, ['fensterheber', 'motoren']) && !self::contains_any($ebay, ['lautsprecher', 'audio', 'soundsystem', 'autoradio', 'hi-fi', 'hifi'])) {
+            return 'car_speaker_candidate_is_window_lifter_or_motor';
+        }
+        if ($intent === 'hvac_control_panel' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['klimaanlage', 'heizung', 'bedienelement', 'bedienfeld', 'schalter', 'kontrollelemente'])) {
+            return 'hvac_control_panel_candidate_is_engine_parts';
+        }
+        if ($intent === 'hvac_blower' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['geblase', 'geblaese', 'lufter', 'luefter', 'heizung', 'klimaanlage', 'innenraum'])) {
+            return 'hvac_blower_candidate_is_engine_parts';
+        }
+        if ($intent === 'tow_hook' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'])) {
+            return 'tow_hook_candidate_is_engine_parts';
         }
         return '';
     }

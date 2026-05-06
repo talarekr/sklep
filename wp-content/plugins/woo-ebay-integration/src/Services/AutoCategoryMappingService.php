@@ -187,7 +187,7 @@ class AutoCategoryMappingService
         $existingSafety = CategoryMappingSafety::sanity_check($wooPath, $mappingText);
         $shouldSearchAgain = in_array($status, ['category_sanity_failed', 'needs_category_review', 'low_confidence_auto'], true)
             || (CategoryMappingSafety::is_sonstige_category($mappingText) && CategoryMappingSafety::is_specific_woo_category($wooPath))
-            || (empty($existingSafety['pass']) && (string) ($existingSafety['reason'] ?? '') === 'complete_engine_candidate_is_engine_part');
+            || empty($existingSafety['pass']);
         if ($shouldSearchAgain && (int) ($mapping['woo_term_id'] ?? 0) > 0) {
             return $this->auto_map_term((int) $mapping['woo_term_id'], (string) ($mapping['marketplace_id'] ?? 'EBAY_DE'), $settings);
         }
@@ -222,7 +222,7 @@ class AutoCategoryMappingService
     {
         $parts = [$path];
         foreach ($samples as $sample) {
-            foreach (['title', 'mpn', 'manufacturer'] as $key) {
+            foreach (['title', 'description', 'mpn', 'manufacturer'] as $key) {
                 $value = trim((string) ($sample[$key] ?? ''));
                 if ($value !== '') {
                     $parts[] = $value;
@@ -354,7 +354,9 @@ class AutoCategoryMappingService
         }
 
         return [
-            'intent' => CategoryMappingSafety::category_intent($wooPath . ' ' . $query),
+            'intent' => CategoryMappingSafety::detect_intent($wooPath . ' ' . $query),
+            'intent_source_text_used' => CategoryMappingSafety::normalized_intent_source_text($wooPath . ' ' . $query),
+            'why_no_intent_match' => CategoryMappingSafety::detect_intent($wooPath . ' ' . $query) === '' ? 'no_keywords_matched' : '',
             'top_candidates' => array_slice(array_map(fn(array $candidate): array => $this->candidate_debug_summary($candidate), $candidates), 0, self::TOP_CANDIDATE_LIMIT),
             'rejected_candidates' => array_slice($rejectedCandidates, 0, self::TOP_CANDIDATE_LIMIT),
             'selected_candidate' => $selected,
@@ -449,8 +451,23 @@ class AutoCategoryMappingService
             }
         }
 
-        $intent = CategoryMappingSafety::category_intent($context);
-        if ($intent === 'spare_wheel' && $this->contains_any_text(strtolower(remove_accents(wp_strip_all_tags($suggestionText))), ['komplettrader', 'komplettraeder'])) {
+        $intent = CategoryMappingSafety::detect_intent($context);
+        $normalizedSuggestion = strtolower(remove_accents(wp_strip_all_tags($suggestionText)));
+        if ($intent === 'spare_wheel' && $this->contains_any_text($normalizedSuggestion, ['komplettrader', 'komplettraeder', 'automobile', 'fahrzeuge', 'mercedes-benz'])) {
+            $score -= 0.75;
+        }
+        if ($intent === 'ac_hose') {
+            if ($this->contains_any_text($normalizedSuggestion, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch', 'klimaschlauch'])) {
+                $score += 0.35;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['klimakompressor', 'kompressoren', 'kompressor', 'kupplungen']) && !$this->contains_any_text($normalizedSuggestion, ['leitung', 'schlauch'])) {
+                $score -= 0.75;
+            }
+        }
+        if ($intent === 'car_speaker' && $this->contains_any_text($normalizedSuggestion, ['fensterheber', 'motoren'])) {
+            $score -= 0.75;
+        }
+        if (in_array($intent, ['hvac_control_panel', 'hvac_blower', 'tow_hook'], true) && $this->contains_any_text($normalizedSuggestion, ['motoren', 'motorteile', 'pleuel', 'hauptlager'])) {
             $score -= 0.75;
         }
 
@@ -558,6 +575,8 @@ class AutoCategoryMappingService
             'query_source' => mb_substr($sourceQuery, 0, 500),
             'query_de' => mb_substr($translatedQuery, 0, 500),
             'intent' => (string) ($evaluation['intent'] ?? ''),
+            'intent_source_text_used' => (string) ($evaluation['intent_source_text_used'] ?? ''),
+            'why_no_intent_match' => (string) ($evaluation['why_no_intent_match'] ?? ''),
             'top_candidates' => (array) ($evaluation['top_candidates'] ?? []),
             'rejected_candidates' => (array) ($evaluation['rejected_candidates'] ?? []),
             'selected_candidate' => $this->candidate_debug_summary($best),

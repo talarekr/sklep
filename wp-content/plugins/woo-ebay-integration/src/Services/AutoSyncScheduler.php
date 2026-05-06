@@ -251,11 +251,12 @@ class AutoSyncScheduler
         $categoryPath = (string) ($category['category_path'] ?? $mapping['ebay_category_path'] ?? '');
         $categoryReason = (string) ($category['sanity_reason'] ?? $mapping['error_reason'] ?? '');
         $message = (string) ($result['message'] ?? '');
-        $suggestionDiagnostics = $this->category_suggestion_diagnostics($mapping);
+        $productTitle = $product ? (string) $product->get_name() : (string) get_the_title($productId);
+        $suggestionDiagnostics = $this->category_suggestion_diagnostics($mapping, $productTitle, $content);
 
         return [
             'product_id' => $productId,
-            'product_title' => $product ? (string) $product->get_name() : (string) get_the_title($productId),
+            'product_title' => $productTitle,
             'edit_url' => (string) get_edit_post_link($productId, ''),
             'status' => $status,
             'primary_reason' => $this->primary_readiness_reason($status, $errors, $missingAspects, $message, $categoryReason),
@@ -276,6 +277,8 @@ class AutoSyncScheduler
             'rejected_best_reason' => (string) ($suggestionDiagnostics['rejected_best_reason'] ?? ''),
             'top_candidates' => (array) ($suggestionDiagnostics['top_candidates'] ?? []),
             'detected_intent' => (string) ($suggestionDiagnostics['detected_intent'] ?? ''),
+            'intent_source_text_used' => (string) ($suggestionDiagnostics['intent_source_text_used'] ?? ''),
+            'why_no_intent_match' => (string) ($suggestionDiagnostics['why_no_intent_match'] ?? ''),
             'missing_aspects' => $missingAspects,
             'required_aspects' => $requiredAspects,
             'price_ready' => !empty($priceResolution['ready']),
@@ -286,11 +289,28 @@ class AutoSyncScheduler
     }
 
 
-    private function category_suggestion_diagnostics(array $mapping): array
+    private function category_suggestion_diagnostics(array $mapping, string $productTitle = '', array $content = []): array
     {
         $payload = json_decode((string) ($mapping['suggestion_payload'] ?? ''), true);
         if (!is_array($payload)) {
-            return [];
+            $payload = [];
+        }
+
+        $sourceText = trim(implode(' ', array_filter([
+            $productTitle,
+            (string) ($mapping['woo_category_path'] ?? ''),
+            (string) ($content['title'] ?? ''),
+            (string) ($content['description'] ?? ''),
+            (string) ($payload['query_de'] ?? ''),
+            (string) ($payload['query_source'] ?? ''),
+        ], static fn($value): bool => trim((string) $value) !== '')));
+        $detectedIntent = (string) ($payload['intent'] ?? '');
+        if ($detectedIntent === '') {
+            $detectedIntent = CategoryMappingSafety::detect_intent($sourceText);
+        }
+        $intentSource = (string) ($payload['intent_source_text_used'] ?? '');
+        if ($intentSource === '') {
+            $intentSource = CategoryMappingSafety::normalized_intent_source_text($sourceText);
         }
 
         $topCandidates = array_values(array_filter((array) ($payload['top_candidates'] ?? []), 'is_array'));
@@ -298,7 +318,9 @@ class AutoSyncScheduler
         $best = $topCandidates[0] ?? $selected;
 
         return [
-            'detected_intent' => (string) ($payload['intent'] ?? ''),
+            'detected_intent' => $detectedIntent,
+            'intent_source_text_used' => $intentSource,
+            'why_no_intent_match' => $detectedIntent === '' ? ((string) ($payload['why_no_intent_match'] ?? '') ?: 'no_keywords_matched') : '',
             'selected_candidate' => $selected,
             'rejected_best_reason' => (string) ($payload['rejected_best_reason'] ?? ''),
             'top_candidates' => array_slice(array_map(static function (array $candidate): array {
