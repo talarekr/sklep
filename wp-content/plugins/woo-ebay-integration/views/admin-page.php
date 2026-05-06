@@ -133,15 +133,15 @@ foreach ((array) ($category_mappings ?? []) as $row) {
     }
 
     $debug = json_decode((string) ($row['suggestion_payload'] ?? ''), true);
-    $best = is_array($debug) && is_array($debug['best'] ?? null) ? $debug['best'] : [];
-    $bestSuggestion = trim((string) (($best['category_id'] ?? '') . ' ' . ($best['category_path'] ?? $best['category_name'] ?? '')));
+    $best = is_array($debug) && is_array($debug['selected_candidate'] ?? null) ? $debug['selected_candidate'] : (is_array($debug) && is_array($debug['best'] ?? null) ? $debug['best'] : []);
+    $bestSuggestion = trim((string) (($best['category_id'] ?? '') . ' ' . ($best['category_path'] ?? $best['path'] ?? $best['category_name'] ?? $best['name'] ?? '')));
     $displayCategoryId = trim((string) ($row['ebay_category_id'] ?? ''));
     if ($displayCategoryId === '' && $statusValue === 'needs_category_review') {
         $displayCategoryId = trim((string) ($best['category_id'] ?? ''));
     }
     $displayCategoryPath = trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')));
     if ($displayCategoryPath === '' && $statusValue === 'needs_category_review') {
-        $displayCategoryPath = trim((string) (($best['category_path'] ?? '') . ' ' . ($best['category_name'] ?? '')));
+        $displayCategoryPath = trim((string) (($best['category_path'] ?? $best['path'] ?? '') . ' ' . ($best['category_name'] ?? $best['name'] ?? '')));
     }
 
     $row['_ui_status'] = $statusValue;
@@ -150,6 +150,8 @@ foreach ((array) ($category_mappings ?? []) as $row) {
     $row['_ui_category_id'] = $displayCategoryId;
     $row['_ui_category_path'] = $displayCategoryPath;
     $row['_ui_category_url'] = $buildEbayCategoryUrl($displayCategoryId, $best);
+    $row['_ui_top_candidates'] = is_array($debug) && is_array($debug['top_candidates'] ?? null) ? array_slice($debug['top_candidates'], 0, 3) : [];
+    $row['_ui_rejected_best_reason'] = is_array($debug) ? (string) ($debug['rejected_best_reason'] ?? '') : '';
     $categoryRows[] = $row;
 
     $categorySummary['total']++;
@@ -498,7 +500,7 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
             <span style="margin-left:12px;">Sort: <a href="<?php echo esc_url($sortUrl('confidence')); ?>">confidence</a> / <a href="<?php echo esc_url($sortUrl('products')); ?>">products</a></span>
         </p>
         <table class="widefat striped">
-            <thead><tr><th>Woo category</th><th><a href="<?php echo esc_url($sortUrl('products')); ?>">Products</a></th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th><a href="<?php echo esc_url($sortUrl('confidence')); ?>">Confidence</a></th><th>Threshold</th><th>Status</th><th>Sanity reason</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
+            <thead><tr><th>Woo category</th><th><a href="<?php echo esc_url($sortUrl('products')); ?>">Products</a></th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th><a href="<?php echo esc_url($sortUrl('confidence')); ?>">Confidence</a></th><th>Threshold</th><th>Status</th><th>Sanity reason</th><th>Last updated</th><th>Error / selected and alternatives</th><th>Manual fallback</th></tr></thead>
             <tbody>
             <?php foreach ($filteredCategoryRows as $row): ?>
                 <?php $statusValue = (string) ($row['_ui_status'] ?? ''); ?>
@@ -515,7 +517,19 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
                     <td><span style="color:<?php echo esc_attr($statusColor); ?>"><?php echo esc_html($statusValue); ?></span></td>
                     <td><?php echo esc_html((string) ($row['_ui_sanity_reason'] ?? '')); ?></td>
                     <td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td>
-                    <td><?php echo esc_html((string) ($row['error_reason'] ?? '')); ?><?php if ((string) ($row['_ui_best_suggestion'] ?? '') !== ''): ?><br /><span class="description"><?php echo esc_html((string) $row['_ui_best_suggestion']); ?></span><?php endif; ?></td>
+                    <td>
+                        <?php echo esc_html((string) ($row['error_reason'] ?? '')); ?>
+                        <?php if ((string) ($row['_ui_best_suggestion'] ?? '') !== ''): ?><br /><strong><?php echo esc_html('Selected:'); ?></strong> <span class="description"><?php echo esc_html((string) $row['_ui_best_suggestion']); ?></span><?php endif; ?>
+                        <?php if ((string) ($row['_ui_rejected_best_reason'] ?? '') !== ''): ?><br /><span class="description"><?php echo esc_html('Rejected first suggestion: ' . (string) $row['_ui_rejected_best_reason']); ?></span><?php endif; ?>
+                        <?php if (!empty($row['_ui_top_candidates'])): ?>
+                            <br /><strong><?php echo esc_html('Top alternatives:'); ?></strong>
+                            <ol style="margin:4px 0 0 18px;">
+                                <?php foreach ((array) $row['_ui_top_candidates'] as $candidate): ?>
+                                    <li><code><?php echo esc_html((string) ($candidate['category_id'] ?? '')); ?></code> <?php echo esc_html((string) ($candidate['name'] ?? '')); ?> <span class="description"><?php echo esc_html(number_format((float) ($candidate['score'] ?? 0), 4) . ' · ' . (string) ($candidate['source'] ?? '') . (!empty($candidate['sanity_pass']) ? ' · sanity OK' : ' · ' . (string) ($candidate['sanity_reason'] ?? 'sanity failed'))); ?></span></li>
+                                <?php endforeach; ?>
+                            </ol>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                             <?php wp_nonce_field('wei_save_category_mapping'); ?>

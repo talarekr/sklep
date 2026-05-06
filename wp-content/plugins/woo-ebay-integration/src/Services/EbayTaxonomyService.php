@@ -183,6 +183,134 @@ class EbayTaxonomyService
         return $required;
     }
 
+    public function search_local_category_index(string $marketplace_id, string $query, array $expectedKeywords = [], int $limit = 20): array
+    {
+        $index = $this->get_local_category_index($marketplace_id);
+        if ($index === []) {
+            return [];
+        }
+
+        $queryTokens = $this->tokens($query);
+        $expectedTokens = $this->tokens(implode(' ', $expectedKeywords));
+        $scored = [];
+        foreach ($index as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $text = (string) (($row['category_path'] ?? '') . ' ' . ($row['category_name'] ?? ''));
+            $tokens = $this->tokens($text);
+            $expectedMatches = $expectedTokens === [] ? [] : array_intersect($expectedTokens, $tokens);
+            $queryMatches = $queryTokens === [] ? [] : array_intersect($queryTokens, $tokens);
+            if ($expectedTokens !== [] && $expectedMatches === []) {
+                continue;
+            }
+
+            $score = (count($expectedMatches) * 3.0) + (count($queryMatches) * 0.5);
+            if (!empty($row['is_leaf'])) {
+                $score += 1.0;
+            }
+            if ($this->is_sonstige_text($text)) {
+                $score -= 5.0;
+            }
+            if ($score <= 0) {
+                continue;
+            }
+            $row['index_score'] = round($score, 4);
+            $scored[] = $row;
+        }
+
+        usort($scored, static fn(array $a, array $b): int => ((float) ($b['index_score'] ?? 0)) <=> ((float) ($a['index_score'] ?? 0)));
+        return array_slice($scored, 0, max(1, $limit));
+    }
+
+    public function get_local_category_index(string $marketplace_id): array
+    {
+        $cacheKey = 'wei_tax_local_index_' . sanitize_key($marketplace_id) . '_auto_parts_v1';
+        $cached = get_transient($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $treeId = $this->get_default_category_tree_id($marketplace_id);
+        if ($treeId === '') {
+            return [];
+        }
+
+        $index = [];
+        foreach ($this->local_index_root_category_ids($marketplace_id) as $rootId) {
+            $res = $this->client->get_category_subtree($treeId, $rootId);
+            if (is_wp_error($res)) {
+                $this->logger->error('Unable to load eBay local category index subtree', ['marketplace_id' => $marketplace_id, 'category_id' => $rootId, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()]);
+                continue;
+            }
+            $node = is_array($res['categorySubtreeNode'] ?? null) ? $res['categorySubtreeNode'] : (is_array($res['categoryTreeNode'] ?? null) ? $res['categoryTreeNode'] : []);
+            if ($node !== []) {
+                $this->flatten_category_node($node, [], $index);
+            }
+        }
+
+        $deduped = [];
+        foreach ($index as $row) {
+            $id = (string) ($row['category_id'] ?? '');
+            if ($id !== '') {
+                $deduped[$id] = $row;
+            }
+        }
+        $index = array_values($deduped);
+        if ($index !== []) {
+            set_transient($cacheKey, $index, DAY_IN_SECONDS * 7);
+        }
+        return $index;
+    }
+
+    private function local_index_root_category_ids(string $marketplace_id): array
+    {
+        if ($marketplace_id === 'EBAY_DE') {
+            return ['131090']; // Auto & Motorrad: Teile
+        }
+        return [];
+    }
+
+    private function flatten_category_node(array $node, array $pathNames, array &$index): void
+    {
+        $category = is_array($node['category'] ?? null) ? $node['category'] : [];
+        $id = trim((string) ($category['categoryId'] ?? $node['categoryId'] ?? ''));
+        $name = trim((string) ($category['categoryName'] ?? $node['categoryName'] ?? ''));
+        $children = is_array($node['childCategoryTreeNodes'] ?? null) ? $node['childCategoryTreeNodes'] : [];
+        $isLeaf = isset($category['leafCategoryTreeNode']) ? (bool) $category['leafCategoryTreeNode'] : (isset($node['leafCategoryTreeNode']) ? (bool) $node['leafCategoryTreeNode'] : $children === []);
+        $currentPath = $pathNames;
+        if ($name !== '') {
+            $currentPath[] = $name;
+        }
+        if ($id !== '' && $name !== '') {
+            $index[] = [
+                'category_id' => $id,
+                'category_name' => $name,
+                'category_path' => implode(' > ', array_values(array_unique($currentPath))),
+                'is_leaf' => $isLeaf,
+            ];
+        }
+        foreach ($children as $child) {
+            if (is_array($child)) {
+                $this->flatten_category_node($child, $currentPath, $index);
+            }
+        }
+    }
+
+    private function tokens(string $text): array
+    {
+        $text = function_exists('remove_accents') ? remove_accents($text) : iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+        $text = strtolower(str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], (string) $text));
+        $parts = preg_split('/[^a-z0-9]+/u', $text) ?: [];
+        $stop = ['und', 'oder', 'der', 'die', 'das', 'ein', 'eine', 'auto', 'motorrad', 'teile', 'zubehor'];
+        return array_values(array_unique(array_filter($parts, static fn(string $token): bool => mb_strlen($token) >= 3 && !in_array($token, $stop, true))));
+    }
+
+    private function is_sonstige_text(string $text): bool
+    {
+        return str_contains(strtolower((string) $text), 'sonstige');
+    }
+
     private function is_forbidden_error(\WP_Error $error): bool
     {
         $data = $error->get_error_data();

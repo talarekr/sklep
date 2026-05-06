@@ -9,6 +9,8 @@ use WEI\Services\Translation\GoogleCloudTranslateProvider;
 class AutoCategoryMappingService
 {
     private const REVIEW_CONFIDENCE_THRESHOLD = 0.60;
+    private const TOP_CANDIDATE_LIMIT = 10;
+
 
     public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
     {
@@ -104,34 +106,23 @@ class AutoCategoryMappingService
         }
 
         $suggestions = is_array($result['suggestions'] ?? null) ? $result['suggestions'] : [];
-        if ($suggestions === []) {
-            $this->categoryRepo->upsert(array_merge($base, [
-                'ebay_category_id' => '',
-                'ebay_category_name' => '',
-                'ebay_category_path' => '',
-                'source' => 'suggestion',
-                'confidence' => 0,
-                'status' => ($result['status'] ?? '') === 'ok' ? 'unmapped' : 'suggestion_failed',
-                'error_reason' => (string) ($result['error'] ?? 'No eBay category suggestions returned'),
-                'suggestion_payload' => $this->debug_payload($querySource, $query, [], $result),
-            ]));
-            return ['status' => ($result['status'] ?? '') === 'ok' ? 'unmapped' : 'suggestion_failed'];
-        }
-
-        $best = $this->pick_best_suggestion($suggestions, $query, $samples, $marketplaceId);
+        $evaluation = $this->evaluate_candidates($suggestions, $path, $query, $samples, $marketplaceId, $settings);
+        $best = is_array($evaluation['selected_candidate'] ?? null) ? $evaluation['selected_candidate'] : [];
         $categoryId = (string) ($best['category_id'] ?? '');
-        $confidence = (float) ($best['confidence'] ?? 0);
+        $confidence = (float) ($best['confidence'] ?? $best['score'] ?? 0);
         $status = 'unmapped';
-        $source = 'suggestion';
+        $source = (string) ($best['source'] ?? 'suggestion');
         $errorReason = '';
+        $safety = is_array($best['safety'] ?? null) ? $best['safety'] : ['threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => true, 'sanity_reason' => ''];
 
-        $safety = ['threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => true, 'sanity_reason' => ''];
-        if ($categoryId === '') {
+        if ($suggestions === [] && empty($evaluation['top_candidates'])) {
+            $status = ($result['status'] ?? '') === 'ok' ? 'unmapped' : 'suggestion_failed';
+            $errorReason = (string) ($result['error'] ?? 'No eBay category suggestions returned');
+        } elseif ($categoryId === '') {
             $status = 'suggestion_failed';
-            $errorReason = 'Suggestion payload did not include categoryId';
+            $errorReason = 'Suggestion payload did not include a usable categoryId';
         } else {
-            $source = 'auto_taxonomy';
-            $safety = CategoryMappingSafety::evaluate_auto_mapping($path, (string) ($best['category_path'] ?? $best['category_name'] ?? ''), $confidence, $settings);
+            $source = in_array($source, ['taxonomy_suggestion', 'local_tree_index'], true) ? 'auto_taxonomy' : $source;
             if (!empty($safety['accepted'])) {
                 $status = 'mapped_auto';
             } elseif (($safety['status'] ?? '') === 'category_sanity_failed') {
@@ -139,14 +130,18 @@ class AutoCategoryMappingService
                 $errorReason = (string) ($safety['sanity_reason'] ?? 'category mapping requires review');
             } elseif ($confidence >= self::REVIEW_CONFIDENCE_THRESHOLD) {
                 $status = 'low_confidence_auto';
-                $errorReason = 'Best suggestion confidence below auto-accept threshold';
+                $errorReason = 'Best candidate confidence below auto-accept threshold';
             } else {
                 $status = 'needs_category_review';
-                $errorReason = 'Best suggestion confidence below review threshold';
+                $errorReason = 'Best candidate confidence below review threshold';
             }
         }
 
         $best['safety'] = $safety;
+        $evaluation['selected_candidate'] = $best;
+        if ($errorReason === '' && !empty($evaluation['rejected_best_reason'])) {
+            $errorReason = (string) $evaluation['rejected_best_reason'];
+        }
 
         $this->categoryRepo->upsert(array_merge($base, [
             'ebay_category_id' => in_array($status, ['mapped_auto', 'low_confidence_auto', 'category_sanity_failed', 'needs_category_review'], true) ? $categoryId : '',
@@ -156,10 +151,10 @@ class AutoCategoryMappingService
             'confidence' => $confidence,
             'status' => $status,
             'error_reason' => $errorReason,
-            'suggestion_payload' => $this->debug_payload($querySource, $query, $best, $result),
+            'suggestion_payload' => $this->debug_payload($querySource, $query, $best, $result, $evaluation),
         ]));
 
-        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId]);
+        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'candidate_source' => $source]);
         return ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId];
     }
 
@@ -187,9 +182,17 @@ class AutoCategoryMappingService
             return null;
         }
 
+        $mappingText = trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? '')));
+        $wooPath = (string) ($mapping['woo_category_path'] ?? '');
+        $shouldSearchAgain = in_array($status, ['category_sanity_failed', 'needs_category_review', 'low_confidence_auto'], true)
+            || (CategoryMappingSafety::is_sonstige_category($mappingText) && CategoryMappingSafety::is_specific_woo_category($wooPath));
+        if ($shouldSearchAgain && (int) ($mapping['woo_term_id'] ?? 0) > 0) {
+            return $this->auto_map_term((int) $mapping['woo_term_id'], (string) ($mapping['marketplace_id'] ?? 'EBAY_DE'), $settings);
+        }
+
         $safety = CategoryMappingSafety::evaluate_auto_mapping(
-            (string) ($mapping['woo_category_path'] ?? ''),
-            trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
+            $wooPath,
+            $mappingText,
             (float) ($mapping['confidence'] ?? 0),
             $settings
         );
@@ -264,10 +267,12 @@ class AutoCategoryMappingService
         return $translated;
     }
 
-    private function pick_best_suggestion(array $suggestions, string $query, array $samples, string $marketplaceId): array
+    private function evaluate_candidates(array $suggestions, string $wooPath, string $query, array $samples, string $marketplaceId, array $settings): array
     {
-        $best = [];
-        foreach ($suggestions as $suggestion) {
+        $candidates = [];
+        $position = 0;
+        foreach (array_slice($suggestions, 0, 20) as $suggestion) {
+            $position++;
             if (!is_array($suggestion)) {
                 continue;
             }
@@ -275,43 +280,143 @@ class AutoCategoryMappingService
             $categoryId = trim((string) ($category['categoryId'] ?? ''));
             $categoryName = trim((string) ($category['categoryName'] ?? ''));
             $path = $this->suggestion_path($suggestion, $categoryName);
-            $required = $categoryId !== '' ? $this->taxonomy->get_required_aspects($marketplaceId, $categoryId) : [];
-            $confidence = $this->score_suggestion($query, $path . ' ' . $categoryName, $suggestion, $samples, $required);
-            if ($best === [] || $confidence > (float) ($best['confidence'] ?? 0)) {
-                $best = [
-                    'category_id' => $categoryId,
-                    'category_name' => $categoryName,
-                    'category_path' => $path,
-                    'confidence' => $confidence,
-                    'required_aspects' => $required,
-                    'raw_summary' => $this->summarize_suggestion($suggestion),
-                ];
+            $candidates[] = $this->build_candidate($categoryId, $categoryName, $path, $position, 'taxonomy_suggestion', $suggestion, $wooPath, $query, $samples, $marketplaceId, $settings, $this->suggestion_is_leaf($suggestion));
+        }
+
+        $needsLocalFallback = $candidates === [];
+        foreach ($candidates as $candidate) {
+            if (empty($candidate['sanity_pass']) || !empty($candidate['is_sonstige'])) {
+                $needsLocalFallback = true;
+                break;
+            }
+        }
+        if ($needsLocalFallback) {
+            $localPosition = 0;
+            foreach ($this->taxonomy->search_local_category_index($marketplaceId, $wooPath . ' ' . $query, CategoryMappingSafety::expected_path_keywords($wooPath), 20) as $local) {
+                $localPosition++;
+                if (!is_array($local)) {
+                    continue;
+                }
+                $candidates[] = $this->build_candidate(
+                    (string) ($local['category_id'] ?? ''),
+                    (string) ($local['category_name'] ?? ''),
+                    (string) ($local['category_path'] ?? ''),
+                    $localPosition,
+                    'local_tree_index',
+                    ['leafCategoryTreeNode' => !empty($local['is_leaf']), 'local_index_score' => (float) ($local['index_score'] ?? 0)],
+                    $wooPath,
+                    $query,
+                    $samples,
+                    $marketplaceId,
+                    $settings,
+                    !empty($local['is_leaf'])
+                );
             }
         }
 
-        return $best;
+        usort($candidates, static fn(array $a, array $b): int => ((float) ($b['score'] ?? 0)) <=> ((float) ($a['score'] ?? 0)));
+        $selected = [];
+        foreach ($candidates as $candidate) {
+            if (!empty($candidate['sanity_pass'])) {
+                $selected = $candidate;
+                break;
+            }
+        }
+        if ($selected === [] && $candidates !== []) {
+            $selected = $candidates[0];
+        }
+
+        $rawBest = [];
+        foreach ($candidates as $candidate) {
+            if (($candidate['source'] ?? '') === 'taxonomy_suggestion' && ((int) ($candidate['raw_position'] ?? 0)) === 1) {
+                $rawBest = $candidate;
+                break;
+            }
+        }
+
+        $rejectedBestReason = '';
+        if ($rawBest !== [] && $selected !== [] && (string) ($rawBest['category_id'] ?? '') !== (string) ($selected['category_id'] ?? '')) {
+            $rejectedBestReason = (string) ($rawBest['sanity_reason'] ?? 'lower_scored_candidate');
+            if (!empty($rawBest['is_sonstige'])) {
+                $rejectedBestReason = 'first_suggestion_was_sonstige';
+            } elseif (empty($rawBest['sanity_pass'])) {
+                $rejectedBestReason = 'first_suggestion_failed_sanity_' . $rejectedBestReason;
+            }
+        }
+
+        return [
+            'top_candidates' => array_slice(array_map(fn(array $candidate): array => $this->candidate_debug_summary($candidate), $candidates), 0, self::TOP_CANDIDATE_LIMIT),
+            'selected_candidate' => $selected,
+            'rejected_best_reason' => $rejectedBestReason,
+        ];
     }
 
-    private function score_suggestion(string $query, string $suggestionText, array $suggestion, array $samples, array $requiredAspects): float
+    private function build_candidate(string $categoryId, string $categoryName, string $path, int $position, string $source, array $raw, string $wooPath, string $query, array $samples, string $marketplaceId, array $settings, bool $isLeaf): array
     {
-        $queryTokens = $this->tokens($query);
+        $required = $categoryId !== '' ? $this->taxonomy->get_required_aspects($marketplaceId, $categoryId) : [];
+        $score = $this->score_suggestion($wooPath, $query, $path . ' ' . $categoryName, $raw, $samples, $required, $isLeaf);
+        $safety = CategoryMappingSafety::evaluate_auto_mapping($wooPath, $path . ' ' . $categoryName, $score, $settings);
+        $isSonstige = CategoryMappingSafety::is_sonstige_category($path . ' ' . $categoryName);
+
+        return [
+            'category_id' => $categoryId,
+            'category_name' => $categoryName,
+            'category_path' => $path,
+            'raw_position' => $position,
+            'score' => $score,
+            'confidence' => $score,
+            'sanity_pass' => !empty($safety['sanity_check_pass']),
+            'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''),
+            'is_sonstige' => $isSonstige,
+            'required_aspects' => $required,
+            'source' => $source,
+            'is_leaf' => $isLeaf,
+            'safety' => $safety,
+            'raw_summary' => $this->summarize_suggestion($raw),
+        ];
+    }
+
+    private function candidate_debug_summary(array $candidate): array
+    {
+        return [
+            'category_id' => (string) ($candidate['category_id'] ?? ''),
+            'name' => (string) ($candidate['category_name'] ?? ''),
+            'path' => (string) ($candidate['category_path'] ?? ''),
+            'raw_position' => (int) ($candidate['raw_position'] ?? 0),
+            'score' => (float) ($candidate['score'] ?? 0),
+            'sanity_pass' => !empty($candidate['sanity_pass']),
+            'sanity_reason' => (string) ($candidate['sanity_reason'] ?? ''),
+            'is_sonstige' => !empty($candidate['is_sonstige']),
+            'required_aspects' => (array) ($candidate['required_aspects'] ?? []),
+            'source' => (string) ($candidate['source'] ?? ''),
+        ];
+    }
+
+    private function score_suggestion(string $wooPath, string $query, string $suggestionText, array $suggestion, array $samples, array $requiredAspects, bool $isLeaf): float
+    {
+        $queryTokens = $this->tokens($wooPath . ' ' . $query);
         $suggestionTokens = $this->tokens($suggestionText);
         $overlapDenominator = max(1, min(count(array_unique($queryTokens)), count(array_unique($suggestionTokens))));
         $overlap = $queryTokens === [] ? 0 : count(array_intersect($queryTokens, $suggestionTokens)) / $overlapDenominator;
-        $score = 0.40 + min(0.30, $overlap * 0.45);
+        $score = 0.42 + min(0.24, $overlap * 0.40);
 
-        $automotiveTokens = ['auto', 'fahrzeug', 'kabel', 'leitung', 'kabelbaum', 'motor', 'teile', 'ersatzteile', 'oe', 'oem', 'mpn', 'hersteller'];
+        $automotiveTokens = ['auto', 'fahrzeug', 'kabel', 'leitung', 'kabelbaum', 'motor', 'motoren', 'teile', 'ersatzteile', 'oe', 'oem', 'mpn', 'hersteller'];
         if (array_intersect($queryTokens, $automotiveTokens) || array_intersect($suggestionTokens, $automotiveTokens)) {
-            $score += 0.15;
+            $score += 0.10;
         }
 
         $isSonstige = CategoryMappingSafety::is_sonstige_category($suggestionText);
-        $queryLooksSpecific = CategoryMappingSafety::is_specific_woo_category($query);
+        $queryLooksSpecific = CategoryMappingSafety::is_specific_woo_category($wooPath . ' ' . $query);
+        $expected = CategoryMappingSafety::expected_path_keywords($wooPath . ' ' . $query);
+        $expectedMatches = $expected === [] ? [] : array_intersect($expected, $suggestionTokens);
+        if ($expectedMatches !== []) {
+            $score += min(0.30, 0.14 + (count($expectedMatches) * 0.06));
+        }
 
-        if ($this->suggestion_is_leaf($suggestion) && !$isSonstige) {
-            $score += 0.15;
-        } elseif ($this->suggestion_is_leaf($suggestion)) {
-            $score += 0.03;
+        if ($isLeaf && !$isSonstige) {
+            $score += 0.10;
+        } elseif ($isLeaf) {
+            $score += 0.01;
         }
 
         $hasIdentifiers = false;
@@ -320,25 +425,43 @@ class AutoCategoryMappingService
             $hasIdentifiers = $hasIdentifiers || trim((string) ($sample['mpn'] ?? '')) !== '';
             $hasManufacturer = $hasManufacturer || trim((string) ($sample['manufacturer'] ?? '')) !== '';
         }
-        if ($hasIdentifiers) {
-            $score += 0.05;
-        }
-        if ($hasManufacturer) {
-            $score += 0.05;
-        }
         if ($requiredAspects !== [] && in_array('Hersteller', $requiredAspects, true) && $hasManufacturer) {
-            $score += 0.05;
+            $score += 0.08;
+        } elseif ($requiredAspects !== [] && $this->sample_aspects_look_resolvable($requiredAspects, $samples)) {
+            $score += 0.04;
         }
 
+        if ($requiredAspects === [] && $queryLooksSpecific && ($isSonstige || !CategoryMappingSafety::matched_expected_keywords($wooPath, $suggestionText))) {
+            $score -= 0.08;
+        }
         if ($isSonstige) {
-            $score -= $queryLooksSpecific ? 0.35 : 0.25;
+            $score -= $queryLooksSpecific ? 0.50 : 0.30;
         }
-
-        if ($queryLooksSpecific && !CategoryMappingSafety::matched_expected_keywords($query, $suggestionText)) {
+        if ($queryLooksSpecific && !CategoryMappingSafety::matched_expected_keywords($wooPath, $suggestionText)) {
+            $score -= 0.30;
+        }
+        $sanity = CategoryMappingSafety::sanity_check($wooPath, $suggestionText);
+        if (empty($sanity['pass'])) {
             $score -= 0.20;
         }
 
         return round(min(0.99, max(0.0, $score)), 4);
+    }
+
+    private function sample_aspects_look_resolvable(array $requiredAspects, array $samples): bool
+    {
+        foreach ($requiredAspects as $aspect) {
+            $aspect = mb_strtolower((string) $aspect);
+            foreach ($samples as $sample) {
+                if ((str_contains($aspect, 'hersteller') || str_contains($aspect, 'marke')) && trim((string) ($sample['manufacturer'] ?? '')) !== '') {
+                    return true;
+                }
+                if ((str_contains($aspect, 'referenz') || str_contains($aspect, 'nummer') || str_contains($aspect, 'oe')) && trim((string) ($sample['mpn'] ?? '')) !== '') {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private function suggestion_path(array $suggestion, string $categoryName): string
@@ -372,16 +495,20 @@ class AutoCategoryMappingService
     private function tokens(string $text): array
     {
         $text = strtolower(remove_accents(wp_strip_all_tags($text)));
-        $parts = preg_split('/[^a-z0-9äöüß]+/u', $text) ?: [];
-        $stop = ['und', 'oder', 'der', 'die', 'das', 'ein', 'eine', 'do', 'dla', 'oraz', 'w', 'z', 'na', 'the', 'and'];
+        $text = str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], $text);
+        $parts = preg_split('/[^a-z0-9]+/u', $text) ?: [];
+        $stop = ['und', 'oder', 'der', 'die', 'das', 'ein', 'eine', 'do', 'dla', 'oraz', 'motoryzacja', 'czesci', 'samochodowe', 'the', 'and'];
         return array_values(array_unique(array_filter($parts, static fn(string $token): bool => mb_strlen($token) >= 3 && !in_array($token, $stop, true))));
     }
 
-    private function debug_payload(string $sourceQuery, string $translatedQuery, array $best, array $result): string
+    private function debug_payload(string $sourceQuery, string $translatedQuery, array $best, array $result, array $evaluation = []): string
     {
         return wp_json_encode([
             'query_source' => mb_substr($sourceQuery, 0, 500),
             'query_de' => mb_substr($translatedQuery, 0, 500),
+            'top_candidates' => (array) ($evaluation['top_candidates'] ?? []),
+            'selected_candidate' => $this->candidate_debug_summary($best),
+            'rejected_best_reason' => (string) ($evaluation['rejected_best_reason'] ?? ''),
             'best' => $best,
             'taxonomy_status' => $result['status'] ?? '',
             'error' => $result['error'] ?? '',
