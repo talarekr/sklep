@@ -54,17 +54,19 @@ class OrderImporter
                 $oldStock = (int) $product->get_stock_quantity();
                 $settings = get_option(\WEI\Plugin::OPTION_KEY, []);
                 $settings = is_array($settings) ? $settings : [];
-                $mode = (string) ($settings['stock_sync_mode'] ?? 'set_zero');
+                $mode = (string) ($settings['ebay_order_stock_update_mode'] ?? $settings['stock_sync_mode'] ?? 'set_zero');
                 $newStock = $mode === 'reduce' ? max(0, $oldStock - $qty) : 0;
+                AutoSyncScheduler::mark_ebay_order_stock_context(true);
                 $product->set_stock_quantity($newStock);
                 if ($newStock <= 0) $product->set_stock_status('outofstock');
                 $product->save();
+                AutoSyncScheduler::mark_ebay_order_stock_context(false);
 
                 $processedOrders[] = $order_id;
                 update_post_meta($product_id, '_wei_processed_ebay_order_ids', array_values(array_unique($processedOrders)));
                 update_post_meta($product_id, '_wei_last_ebay_order_id', $order_id);
                 update_post_meta($product_id, '_wei_ebay_export_status', 'stock_synced_to_woo');
-                $this->logger->info('eBay order stock synced to WooCommerce only', ['product_id' => $product_id, 'sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode, 'resolved_by' => $resolution['resolved_by']]);
+                $this->logger->info('Woo stock updated from eBay order', ['product_id' => $product_id, 'ebay_sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode, 'resolved_by' => $resolution['resolved_by'], 'wrote_allegro' => false]);
                 $processed[] = ['order_id' => $order_id, 'product_id' => $product_id, 'result' => 'stock_synced_to_woo', 'old_stock' => $oldStock, 'new_stock' => $newStock, 'resolved_by' => $resolution['resolved_by']];
             }
         }

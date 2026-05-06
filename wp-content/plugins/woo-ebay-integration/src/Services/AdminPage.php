@@ -8,7 +8,7 @@ use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler)
     {
     }
 
@@ -28,6 +28,11 @@ class AdminPage
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
+        add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
+        add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
+        add_action('admin_post_wei_auto_sync_stock_now', [$this, 'auto_sync_stock_now']);
+        add_action('admin_post_wei_auto_sync_export_now', [$this, 'auto_sync_export_now']);
+        add_action('admin_post_wei_auto_sync_toggle_pause', [$this, 'auto_sync_toggle_pause']);
     }
 
     public function register_menu(): void
@@ -55,6 +60,7 @@ class AdminPage
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
         $nbp_rate_status = $this->priceResolver->get_rate_status($s);
         $connect_url = $this->auth->get_authorize_url();
+        $auto_sync_status = AutoSyncScheduler::status_summary();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -88,6 +94,17 @@ class AdminPage
         $s['ebay_sku_prefix'] = $this->sanitize_ebay_sku_prefix((string) ($_POST['ebay_sku_prefix'] ?? 'GPSW'));
         $s['write_generated_sku_to_woo'] = 0;
         $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
+        $s['auto_sync_mode'] = in_array(($_POST['auto_sync_mode'] ?? 'disabled'), ['disabled', 'preflight_only', 'export_ready_products', 'orders_stock_only', 'full_sync'], true) ? $_POST['auto_sync_mode'] : 'disabled';
+        $s['auto_sync_frequency'] = in_array(($_POST['auto_sync_frequency'] ?? 'hourly'), ['every_15_minutes', 'hourly', 'daily'], true) ? $_POST['auto_sync_frequency'] : 'hourly';
+        $s['auto_sync_export_batch_size'] = max(1, min(50, absint($_POST['auto_sync_export_batch_size'] ?? 20)));
+        $s['auto_sync_preflight_batch_size'] = max(1, min(300, absint($_POST['auto_sync_preflight_batch_size'] ?? 200)));
+        $s['auto_sync_stock_batch_size'] = max(1, min(300, absint($_POST['auto_sync_stock_batch_size'] ?? 100)));
+        $s['woo_to_ebay_stock_sync_enabled'] = !empty($_POST['woo_to_ebay_stock_sync_enabled']) ? 1 : 0;
+        $s['ebay_order_sync_enabled'] = !empty($_POST['ebay_order_sync_enabled']) ? 1 : 0;
+        $s['auto_export_enabled'] = !empty($_POST['auto_export_enabled']) ? 1 : 0;
+        $s['auto_publish_enabled'] = !empty($_POST['auto_publish_enabled']) ? 1 : 0;
+        $s['ebay_stock_sync_mode'] = in_array(($_POST['ebay_stock_sync_mode'] ?? 'max_one'), ['set_zero_only', 'max_one', 'exact_stock'], true) ? $_POST['ebay_stock_sync_mode'] : 'max_one';
+        $s['ebay_order_stock_update_mode'] = in_array(($_POST['ebay_order_stock_update_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['ebay_order_stock_update_mode'] : 'set_zero';
         $provider = strtolower(sanitize_text_field((string) ($_POST['translation_provider'] ?? 'disabled')));
         if ($provider === 'google') {
             $provider = 'google_cloud_translate';
@@ -174,6 +191,53 @@ class AdminPage
         $this->go();
     }
 
+
+    public function auto_sync_readiness_now(): void
+    {
+        check_admin_referer('wei_auto_sync_readiness_now');
+        $res = $this->scheduler->run_readiness_scan(max(1, min(300, absint($_POST['batch_size'] ?? 200))));
+        $this->set_status('Auto sync readiness scan: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function auto_sync_orders_now(): void
+    {
+        check_admin_referer('wei_auto_sync_orders_now');
+        $res = $this->orderImporter->import_once();
+        $this->set_status('Auto sync order import: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function auto_sync_stock_now(): void
+    {
+        check_admin_referer('wei_auto_sync_stock_now');
+        $res = $this->scheduler->process_stock_queue(max(1, min(300, absint($_POST['batch_size'] ?? 100))));
+        $this->set_status('Auto sync stock queue: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function auto_sync_export_now(): void
+    {
+        check_admin_referer('wei_auto_sync_export_now');
+        $s = $this->settings();
+        if (empty($s['auto_export_enabled'])) {
+            $this->set_status('Auto sync export skipped: auto export disabled');
+            $this->go();
+        }
+        $res = $this->scheduler->run_export_batch(max(1, min(50, absint($_POST['batch_size'] ?? 20))));
+        $this->set_status('Auto sync export batch: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function auto_sync_toggle_pause(): void
+    {
+        check_admin_referer('wei_auto_sync_toggle_pause');
+        $s = $this->settings();
+        $s['auto_sync_paused'] = empty($s['auto_sync_paused']) ? 1 : 0;
+        update_option(Plugin::OPTION_KEY, $s, false);
+        $this->set_status(!empty($s['auto_sync_paused']) ? 'Auto sync paused' : 'Auto sync resumed');
+        $this->go();
+    }
 
     public function preflight_product(): void
     {
@@ -320,6 +384,39 @@ class AdminPage
         $s['write_generated_sku_to_woo'] = 0;
         if (!isset($s['stock_sync_mode'])) {
             $s['stock_sync_mode'] = 'set_zero';
+        }
+        if (!isset($s['auto_sync_mode'])) {
+            $s['auto_sync_mode'] = 'disabled';
+        }
+        if (!isset($s['auto_sync_frequency'])) {
+            $s['auto_sync_frequency'] = 'hourly';
+        }
+        if (!isset($s['auto_sync_export_batch_size'])) {
+            $s['auto_sync_export_batch_size'] = 20;
+        }
+        if (!isset($s['auto_sync_preflight_batch_size'])) {
+            $s['auto_sync_preflight_batch_size'] = 200;
+        }
+        if (!isset($s['auto_sync_stock_batch_size'])) {
+            $s['auto_sync_stock_batch_size'] = 100;
+        }
+        if (!isset($s['woo_to_ebay_stock_sync_enabled'])) {
+            $s['woo_to_ebay_stock_sync_enabled'] = 1;
+        }
+        if (!isset($s['ebay_order_sync_enabled'])) {
+            $s['ebay_order_sync_enabled'] = 1;
+        }
+        if (!isset($s['auto_export_enabled'])) {
+            $s['auto_export_enabled'] = 0;
+        }
+        if (!isset($s['auto_publish_enabled'])) {
+            $s['auto_publish_enabled'] = 0;
+        }
+        if (!isset($s['ebay_stock_sync_mode'])) {
+            $s['ebay_stock_sync_mode'] = 'max_one';
+        }
+        if (!isset($s['ebay_order_stock_update_mode'])) {
+            $s['ebay_order_stock_update_mode'] = 'set_zero';
         }
         if (!isset($s['ebay_default_markup_percent'])) {
             $s['ebay_default_markup_percent'] = 25;

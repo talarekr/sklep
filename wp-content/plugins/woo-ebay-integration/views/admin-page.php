@@ -225,6 +225,20 @@ $skuActiveRun = is_array($ebay_sku_generation_status['active_run'] ?? null) ? $e
 $skuLastRun = is_array($ebay_sku_generation_status['last_run'] ?? null) ? $ebay_sku_generation_status['last_run'] : [];
 $skuLastTotals = is_array($skuLastRun['totals'] ?? null) ? $skuLastRun['totals'] : [];
 $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['totals'] : [];
+$autoSync = is_array($auto_sync_status ?? null) ? $auto_sync_status : [];
+$autoLastSummary = is_array($autoSync['last_summary'] ?? null) ? $autoSync['last_summary'] : [];
+$readinessSummary = is_array($autoSync['readiness_summary'] ?? null) ? $autoSync['readiness_summary'] : [];
+$exportSummary = is_array($autoSync['export_summary'] ?? null) ? $autoSync['export_summary'] : [];
+$stockSummary = is_array($autoSync['stock_summary'] ?? null) ? $autoSync['stock_summary'] : [];
+$autoStatus = (string) ($autoSync['status'] ?? 'disabled');
+$autoModeLabels = [
+    'disabled' => 'Disabled',
+    'preflight_only' => 'Preflight only / readiness only',
+    'export_ready_products' => 'Export ready products',
+    'orders_stock_only' => 'Orders & stock sync only',
+    'full_sync' => 'Full sync',
+];
+$frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourly', 'daily' => 'daily'];
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
@@ -241,6 +255,69 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
         .wei-admin .wei-actions form { display: inline-block; margin: 0 8px 8px 0; }
         .wei-admin .wei-technical pre { max-height: 260px; overflow: auto; white-space: pre-wrap; background: #f6f7f7; padding: 10px; border: 1px solid #dcdcde; }
     </style>
+
+    <div class="postbox">
+        <h2>eBay Auto Sync</h2>
+        <p class="description">Operational scheduler for eBay readiness, safe export preparation, order import, and Woo → eBay stock updates. WooCommerce remains the central source of stock; Allegro is not touched.</p>
+        <div class="wei-grid">
+            <div class="wei-metric"><span>Auto sync status</span><strong><?php echo esc_html(ucwords(str_replace('_', ' ', $autoStatus))); ?></strong></div>
+            <div class="wei-metric"><span>Mode</span><strong><?php echo esc_html($autoModeLabels[(string) ($autoSync['mode'] ?? 'disabled')] ?? (string) ($autoSync['mode'] ?? 'disabled')); ?></strong></div>
+            <div class="wei-metric"><span>Frequency</span><strong><?php echo esc_html($frequencyLabels[(string) ($autoSync['frequency'] ?? 'hourly')] ?? 'hourly'); ?></strong></div>
+            <div class="wei-metric"><span>Batch size</span><strong><?php echo esc_html((string) ($autoSync['batch_size'] ?? 20)); ?></strong></div>
+            <div class="wei-metric"><span>Last run</span><strong><?php echo esc_html((string) ($autoSync['last_run'] ?: '-')); ?></strong></div>
+            <div class="wei-metric"><span>Next scheduled run</span><strong><?php echo esc_html((string) ($autoSync['next_run'] ?? '-')); ?></strong></div>
+            <div class="wei-metric"><span>Pending stock sync items</span><strong><?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Woo → eBay stock sync</span><strong><?php echo !empty($autoSync['woo_to_ebay_stock_sync_enabled']) ? '<span class="wei-ok">enabled</span>' : '<span class="wei-warn">disabled</span>'; ?></strong></div>
+            <div class="wei-metric"><span>eBay stock sync mode</span><strong><?php echo esc_html((string) ($autoSync['ebay_stock_sync_mode'] ?? 'max_one')); ?></strong></div>
+            <div class="wei-metric"><span>eBay → Woo order sync</span><strong><?php echo !empty($autoSync['ebay_order_sync_enabled']) ? '<span class="wei-ok">enabled</span>' : '<span class="wei-warn">disabled</span>'; ?></strong></div>
+            <div class="wei-metric"><span>Account restriction status</span><strong><?php echo esc_html((string) ($autoSync['account_restriction_status'] ?: '-')); ?></strong></div>
+        </div>
+        <table class="widefat striped" style="max-width:900px;margin-top:12px;">
+            <tbody>
+                <tr><th scope="row">Last result summary</th><td><?php echo esc_html($autoLastSummary !== [] ? wp_json_encode($autoLastSummary) : 'No scheduler run yet'); ?></td></tr>
+            </tbody>
+        </table>
+        <div class="wei-actions" style="margin-top:12px;">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_readiness_now'); ?><input type="hidden" name="action" value="wei_auto_sync_readiness_now" /><button class="button">Run readiness scan now</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Run order sync now</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><button class="button">Run stock sync now</button></form>
+            <?php if (!empty($s['auto_export_enabled'])): ?><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_export_now'); ?><input type="hidden" name="action" value="wei_auto_sync_export_now" /><button class="button">Run export batch now</button></form><?php endif; ?>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_toggle_pause'); ?><input type="hidden" name="action" value="wei_auto_sync_toggle_pause" /><button class="button"><?php echo !empty($s['auto_sync_paused']) ? 'Resume auto sync' : 'Pause auto sync'; ?></button></form>
+        </div>
+    </div>
+
+    <div class="postbox">
+        <h2>Readiness Summary</h2>
+        <div class="wei-grid">
+            <div class="wei-metric"><span>Ready products</span><strong><?php echo esc_html((string) ($readinessSummary['ready'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Not ready products</span><strong><?php echo esc_html((string) ($readinessSummary['not_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Blocked by category</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_category'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Missing German content</span><strong><?php echo esc_html((string) ($readinessSummary['missing_german_content'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Missing required aspects</span><strong><?php echo esc_html((string) ($readinessSummary['missing_required_aspects'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Invalid price</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Missing image</span><strong><?php echo esc_html((string) ($readinessSummary['missing_image'] ?? 0)); ?></strong></div>
+        </div>
+    </div>
+
+    <div class="postbox">
+        <h2>Export Summary</h2>
+        <div class="wei-grid">
+            <div class="wei-metric"><span>Exported inventory</span><strong><?php echo esc_html((string) ($exportSummary['exported'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Published</span><strong><?php echo esc_html((string) ($exportSummary['published'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Account blocked</span><strong><?php echo esc_html($autoStatus === 'blocked_by_ebay_account_restriction' ? 'yes' : 'no'); ?></strong></div>
+        </div>
+    </div>
+
+    <div class="postbox">
+        <h2>Order / Stock Sync Summary</h2>
+        <div class="wei-grid">
+            <div class="wei-metric"><span>Orders imported</span><strong><?php echo esc_html((string) ($autoLastSummary['orders_imported'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Woo stock updates from eBay orders</span><strong><?php echo esc_html((string) ($autoLastSummary['woo_stock_updates'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Pending Woo → eBay stock sync</span><strong><?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>eBay stock updates done</span><strong><?php echo esc_html((string) ($stockSummary['updated'] ?? $autoLastSummary['ebay_stock_updates'] ?? 0)); ?></strong></div>
+            <div class="wei-metric"><span>Stock sync errors</span><strong><?php echo esc_html((string) ($stockSummary['errors'] ?? 0)); ?></strong></div>
+        </div>
+    </div>
 
     <div class="postbox">
         <h2>Connection &amp; readiness summary</h2>
@@ -404,6 +481,26 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
         <?php wp_nonce_field('wei_save_settings'); ?>
         <input type="hidden" name="action" value="wei_save_settings" />
 
+        <details class="postbox" open>
+            <summary>Advanced scheduler settings</summary>
+            <p>Mode: <select name="auto_sync_mode">
+                <?php foreach ($autoModeLabels as $modeKey => $modeLabel): ?><option value="<?php echo esc_attr($modeKey); ?>" <?php selected(($s['auto_sync_mode'] ?? 'disabled'), $modeKey); ?>><?php echo esc_html($modeLabel); ?></option><?php endforeach; ?>
+            </select></p>
+            <p>Frequency: <select name="auto_sync_frequency">
+                <?php foreach ($frequencyLabels as $frequencyKey => $frequencyLabel): ?><option value="<?php echo esc_attr($frequencyKey); ?>" <?php selected(($s['auto_sync_frequency'] ?? 'hourly'), $frequencyKey); ?>><?php echo esc_html($frequencyLabel); ?></option><?php endforeach; ?>
+            </select></p>
+            <p>Preflight batch size: <input type="number" min="1" max="300" name="auto_sync_preflight_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_preflight_batch_size'] ?? 200)); ?>" class="small-text" /></p>
+            <p>Export batch size: <input type="number" min="1" max="50" name="auto_sync_export_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_export_batch_size'] ?? 20)); ?>" class="small-text" /></p>
+            <p>Stock batch size: <input type="number" min="1" max="300" name="auto_sync_stock_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_stock_batch_size'] ?? 100)); ?>" class="small-text" /></p>
+            <p><label><input type="checkbox" name="woo_to_ebay_stock_sync_enabled" value="1" <?php checked(!empty($s['woo_to_ebay_stock_sync_enabled'])); ?> /> Woo → eBay stock sync enabled</label></p>
+            <p><label><input type="checkbox" name="ebay_order_sync_enabled" value="1" <?php checked(!empty($s['ebay_order_sync_enabled'])); ?> /> eBay → Woo order sync enabled</label></p>
+            <p><label><input type="checkbox" name="auto_export_enabled" value="1" <?php checked(!empty($s['auto_export_enabled'])); ?> /> Export ready products automatically</label></p>
+            <p><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> Publish offers automatically (keep off while account restriction exists)</label></p>
+            <p>eBay stock sync mode: <select name="ebay_stock_sync_mode"><option value="set_zero_only" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'set_zero_only'); ?>>set_zero_only</option><option value="max_one" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'max_one'); ?>>max_one</option><option value="exact_stock" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'exact_stock'); ?>>exact_stock</option></select></p>
+            <p>eBay order → Woo stock mode: <select name="ebay_order_stock_update_mode"><option value="set_zero" <?php selected(($s['ebay_order_stock_update_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['ebay_order_stock_update_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
+            <p class="description">Defaults are safe: auto sync disabled, auto export off, auto publish off. Stock mode <code>max_one</code> sends <code>availableQuantity=0</code> when Woo stock reaches zero.</p>
+        </details>
+
         <details class="postbox">
             <summary>Advanced: API credentials</summary>
             <table class="form-table" role="presentation">
@@ -462,7 +559,7 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
             <p>Default manufacturer / Hersteller fallback: <input type="text" name="default_hersteller_fallback" value="<?php echo esc_attr($s['default_hersteller_fallback'] ?? ''); ?>" class="regular-text" placeholder="SEAT" /></p>
             <p>Category aspect fallbacks:<br /><textarea name="category_aspect_fallbacks" class="large-text code" rows="3" placeholder="179847|Hersteller|SEAT"><?php echo esc_textarea((string) ($s['category_aspect_fallbacks'] ?? '')); ?></textarea></p>
             <p>Auto category confidence threshold: <input type="number" step="0.01" min="0.01" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) ($s['auto_category_confidence_threshold'] ?? \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" class="small-text" /></p>
-            <p>Stock sync mode: <select name="stock_sync_mode"><option value="set_zero" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
+            <p>Legacy eBay order stock mode: <select name="stock_sync_mode"><option value="set_zero" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
         </details>
 
         <details class="postbox">

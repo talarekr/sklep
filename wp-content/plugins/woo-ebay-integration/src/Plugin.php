@@ -16,6 +16,7 @@ use WEI\Services\OrderImporter;
 use WEI\Services\SyncService;
 use WEI\Services\AdminPage;
 use WEI\Services\AutoCategoryMappingService;
+use WEI\Services\AutoSyncScheduler;
 
 class Plugin
 {
@@ -35,14 +36,14 @@ class Plugin
         $adapter = new EbayAdapter($client, $repo, $categoryRepo, $taxonomy, $logger, $skuGenerator, $priceResolver);
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy);
+        $scheduler = new AutoSyncScheduler($adapter, $orders, $logger);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();
+        $scheduler->hooks();
 
         add_action('admin_init', [$auth, 'handle_oauth_callback']);
-        add_action('woocommerce_product_set_stock', [$sync, 'handle_stock_change'], 10, 1);
-        add_action('woocommerce_variation_set_stock', [$sync, 'handle_stock_change'], 10, 1);
         add_action('wei_ebay_sync_stock_batch', [$sync, 'sync_stock_batch']);
         add_action('wei_ebay_import_orders', [$orders, 'import_once']);
     }
