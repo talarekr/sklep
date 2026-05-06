@@ -4,9 +4,11 @@ namespace WEI;
 
 use WEI\Adapters\EbayAdapter;
 use WEI\Database\Migrations;
+use WEI\Repositories\CategoryMappingRepository;
 use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayAuth;
 use WEI\Services\EbayClient;
+use WEI\Services\EbayTaxonomyService;
 use WEI\Services\Logger;
 use WEI\Services\OrderImporter;
 use WEI\Services\SyncService;
@@ -20,12 +22,14 @@ class Plugin
     {
         $logger = new Logger();
         $repo = new MappingRepository($logger);
+        $categoryRepo = new CategoryMappingRepository($logger);
         $auth = new EbayAuth($logger);
         $client = new EbayClient($auth, $logger);
-        $adapter = new EbayAdapter($client, $repo, $logger);
+        $taxonomy = new EbayTaxonomyService($client, $logger);
+        $adapter = new EbayAdapter($client, $repo, $categoryRepo, $taxonomy, $logger);
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();

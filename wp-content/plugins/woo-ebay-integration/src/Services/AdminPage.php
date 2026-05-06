@@ -4,10 +4,11 @@ namespace WEI\Services;
 
 use WEI\Adapters\EbayAdapter;
 use WEI\Plugin;
+use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo)
     {
     }
 
@@ -23,6 +24,8 @@ class AdminPage
         add_action('admin_post_wei_import_order', [$this, 'import_order']);
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
+        add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
+        add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
     }
 
     public function register_menu(): void
@@ -45,6 +48,7 @@ class AdminPage
         $s = $this->settings();
         $status = get_option('wei_last_status', []);
         $logs = get_option('wei_logs', []);
+        $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
         $connect_url = $this->auth->get_authorize_url();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -61,6 +65,11 @@ class AdminPage
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
+        $s['category_aspect_fallbacks'] = sanitize_textarea_field((string) ($_POST['category_aspect_fallbacks'] ?? ''));
+        $s['default_hersteller_fallback'] = sanitize_text_field((string) ($_POST['default_hersteller_fallback'] ?? ''));
+        $s['use_woo_sku_for_ebay'] = !empty($_POST['use_woo_sku_for_ebay']) ? 1 : 0;
+        $s['write_generated_sku_to_woo'] = !empty($_POST['write_generated_sku_to_woo']) ? 1 : 0;
+        $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
         $s['inventory_location_country'] = sanitize_text_field((string) ($_POST['inventory_location_country'] ?? 'PL'));
@@ -110,6 +119,40 @@ class AdminPage
         check_admin_referer('wei_import_order');
         $res = $this->orderImporter->import_once();
         $this->set_status('Import order: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+
+    public function preflight_product(): void
+    {
+        check_admin_referer('wei_preflight');
+        $id = (int) ($_POST['product_id'] ?? 0);
+        $res = $id > 0 ? $this->adapter->preflight_product($id) : ['result' => 'error', 'error' => 'missing_product_id'];
+        $this->set_status('Preflight: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function save_category_mapping(): void
+    {
+        check_admin_referer('wei_save_category_mapping');
+        $termId = (int) ($_POST['woo_term_id'] ?? 0);
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $ebayCategoryId = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
+        if ($termId > 0 && $ebayCategoryId !== '') {
+            $this->categoryRepo->upsert([
+                'marketplace_id' => $marketplaceId,
+                'woo_term_id' => $termId,
+                'woo_category_path' => $this->categoryRepo->woo_category_path($termId),
+                'ebay_category_id' => $ebayCategoryId,
+                'ebay_category_name' => sanitize_text_field((string) ($_POST['ebay_category_name'] ?? '')),
+                'ebay_category_path' => sanitize_text_field((string) ($_POST['ebay_category_path'] ?? '')),
+                'source' => 'manual',
+                'confidence' => 1,
+            ]);
+            $this->set_status('Category mapping saved for Woo term ' . $termId . ' → eBay ' . $ebayCategoryId);
+        } else {
+            $this->set_status('Category mapping skipped: missing Woo term or eBay category ID');
+        }
         $this->go();
     }
 
@@ -172,7 +215,7 @@ class AdminPage
             $s['wei_cached_policies'] = [];
         }
         if (!isset($s['sku_category_overrides'])) {
-            $s['sku_category_overrides'] = "CFM-001=33665";
+            $s['sku_category_overrides'] = "CFM-001=179847";
         }
         if (!isset($s['sku_aspect_overrides'])) {
             $s['sku_aspect_overrides'] = wp_json_encode([
@@ -180,6 +223,21 @@ class AdminPage
                     'Hersteller' => ['SEAT'],
                 ],
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
+        if (!isset($s['category_aspect_fallbacks'])) {
+            $s['category_aspect_fallbacks'] = "179847|Hersteller|SEAT";
+        }
+        if (!isset($s['default_hersteller_fallback'])) {
+            $s['default_hersteller_fallback'] = '';
+        }
+        if (!isset($s['use_woo_sku_for_ebay'])) {
+            $s['use_woo_sku_for_ebay'] = 1;
+        }
+        if (!isset($s['write_generated_sku_to_woo'])) {
+            $s['write_generated_sku_to_woo'] = 0;
+        }
+        if (!isset($s['stock_sync_mode'])) {
+            $s['stock_sync_mode'] = 'set_zero';
         }
         return $s;
     }

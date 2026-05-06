@@ -90,6 +90,18 @@ class EbayClient
         return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_suggestions', null, ['q' => $query]);
     }
 
+
+    public function get_item_aspects_for_category(string $category_tree_id, string $category_id)
+    {
+        $category_tree_id = trim($category_tree_id);
+        $category_id = trim($category_id);
+        if ($category_tree_id === '' || $category_id === '') {
+            return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and category_id are required when loading eBay category aspects');
+        }
+
+        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_item_aspects_for_category', null, ['category_id' => $category_id]);
+    }
+
     public function get_orders(array $query = [])
     {
         return $this->request('GET', '/sell/fulfillment/v1/order', null, $query);
