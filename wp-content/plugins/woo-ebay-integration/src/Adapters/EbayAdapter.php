@@ -10,6 +10,7 @@ use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayClient;
 use WEI\Services\EbayTaxonomyService;
 use WEI\Services\EbaySkuGenerator;
+use WEI\Services\CategoryMappingSafety;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
 use WEI\Services\Translation\OpenAiTranslationProvider;
@@ -93,21 +94,51 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function category_mapping_readiness(string $marketplaceId): array
     {
+        $settings = $this->settings();
         $rows = $this->categoryRepo->list_used_woo_categories($marketplaceId, 200);
-        $summary = ['ready' => true, 'mapped' => 0, 'needs_category_review' => 0, 'unmapped' => 0, 'taxonomy_api_forbidden' => 0, 'suggestion_failed' => 0, 'total' => count($rows)];
+        $summary = [
+            'ready' => true,
+            'total_categories' => count($rows),
+            'total_products_counted' => 0,
+            'products_ready_manual_or_product_categories' => 0,
+            'products_ready_accepted_auto_category' => 0,
+            'products_blocked_low_confidence_category' => 0,
+            'products_blocked_sanity_guard' => 0,
+            'products_needs_category_review' => 0,
+            'unmapped' => 0,
+            'taxonomy_api_forbidden' => 0,
+            'suggestion_failed' => 0,
+            'threshold' => CategoryMappingSafety::threshold($settings),
+        ];
         foreach ($rows as $row) {
-            $status = (string) ($row['status'] ?? '');
-            $source = (string) ($row['source'] ?? '');
-            $categoryId = trim((string) ($row['ebay_category_id'] ?? ''));
-            $confidence = (float) ($row['confidence'] ?? 0);
-            $mapped = $categoryId !== '' && ($status === 'mapped_manual' || ($status === 'mapped_auto' && $confidence >= 0.85) || ($status === '' && $source === 'manual'));
+            $productCount = max(0, (int) ($row['product_count'] ?? 0));
+            $summary['total_products_counted'] += $productCount;
+            $evaluation = $this->evaluate_category_mapping_row($row, $settings);
+            $finalStatus = (string) ($evaluation['final_status'] ?? 'needs_category_review');
             $fallback = $this->static_category_fallback((int) ($row['term_id'] ?? 0), $marketplaceId);
-            if ($mapped || $fallback['category_id'] !== '') {
-                $summary['mapped']++;
+            if ($finalStatus === 'ready_manual' || $fallback['category_id'] !== '') {
+                $summary['products_ready_manual_or_product_categories'] += $productCount;
                 continue;
             }
-            $status = in_array($status, ['needs_category_review', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $status : 'unmapped';
-            $summary[$status]++;
+            if ($finalStatus === 'ready_auto') {
+                $summary['products_ready_accepted_auto_category'] += $productCount;
+                continue;
+            }
+            if ($finalStatus === 'low_confidence_auto') {
+                $summary['products_blocked_low_confidence_category'] += $productCount;
+                $summary['ready'] = false;
+                continue;
+            }
+            if ($finalStatus === 'category_sanity_failed') {
+                $summary['products_blocked_sanity_guard'] += $productCount;
+                $summary['ready'] = false;
+                continue;
+            }
+            $status = in_array($finalStatus, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $finalStatus : 'needs_category_review';
+            if (isset($summary[$status])) {
+                $summary[$status] += $productCount;
+            }
+            $summary['products_needs_category_review'] += $productCount;
             $summary['ready'] = false;
         }
 
@@ -792,29 +823,29 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => 'woo_category_mapping_manual', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
                 }
 
-                if ($status === 'mapped_auto') {
-                    $autoCandidate = ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
-                    $autoCandidates[] = $autoCandidate;
-                    if ($confidence < 0.85) {
-                        $reviewCandidate ??= ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_auto_below_threshold', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                if ($status === 'mapped_auto' || $source === 'auto_taxonomy') {
+                    $evaluation = $this->evaluate_category_mapping_row($mapping, $settings);
+                    if (!empty($evaluation['accepted'])) {
+                        $autoCandidates[] = ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => (float) ($evaluation['threshold'] ?? 0), 'sanity_check_pass' => !empty($evaluation['sanity_check_pass']), 'sanity_reason' => (string) ($evaluation['sanity_reason'] ?? ''), 'product_override_found' => false];
+                    } else {
+                        $blockedStatus = (string) ($evaluation['final_status'] ?? 'needs_category_review');
+                        $reviewCandidate ??= ['category_id' => '', 'status' => $blockedStatus, 'source' => $blockedStatus === 'category_sanity_failed' ? 'woo_category_mapping_sanity_failed' : 'woo_category_mapping_auto_below_threshold', 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => (float) ($evaluation['threshold'] ?? 0), 'sanity_check_pass' => !empty($evaluation['sanity_check_pass']), 'sanity_reason' => (string) ($evaluation['sanity_reason'] ?? ''), 'product_override_found' => false];
                     }
                     continue;
                 }
 
-                if ($status === 'needs_category_review') {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_suggestion', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                if ($status === 'needs_category_review' || $status === 'low_confidence_auto' || $status === 'category_sanity_failed') {
+                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'product_override_found' => false];
                     continue;
                 }
 
                 if (in_array($status, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'product_override_found' => false];
                 }
             }
 
             foreach ($autoCandidates as $candidate) {
-                if ((float) ($candidate['confidence'] ?? 0) >= 0.85) {
-                    return $candidate;
-                }
+                return $candidate;
             }
 
             foreach ((array) $terms as $term) {
@@ -831,6 +862,32 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing_category_mapping', 'confidence' => 0.0, 'product_override_found' => false];
+    }
+
+    private function evaluate_category_mapping_row(array $mapping, array $settings): array
+    {
+        $status = (string) ($mapping['status'] ?? '');
+        $source = (string) ($mapping['source'] ?? '');
+        $categoryId = trim((string) ($mapping['ebay_category_id'] ?? ''));
+        $confidence = (float) ($mapping['confidence'] ?? 0);
+        $threshold = CategoryMappingSafety::threshold($settings);
+
+        if ($categoryId !== '' && ($status === 'mapped_manual' || ($status === '' && $source === 'manual') || $source === 'manual')) {
+            return ['accepted' => true, 'final_status' => 'ready_manual', 'ui_status' => 'accepted_manual', 'threshold' => $threshold, 'sanity_check_pass' => true, 'sanity_reason' => ''];
+        }
+
+        if ($categoryId !== '' && ($status === 'mapped_auto' || $source === 'auto_taxonomy')) {
+            $safety = CategoryMappingSafety::evaluate_auto_mapping(
+                (string) ($mapping['woo_category_path'] ?? ''),
+                trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
+                $confidence,
+                $settings
+            );
+            $safety['final_status'] = !empty($safety['accepted']) ? 'ready_auto' : (string) ($safety['status'] ?? 'needs_category_review');
+            return $safety;
+        }
+
+        return ['accepted' => false, 'final_status' => $status !== '' ? $status : 'unmapped', 'ui_status' => 'needs_category_review', 'threshold' => $threshold, 'sanity_check_pass' => true, 'sanity_reason' => ''];
     }
 
     private function resolve_product_category_override(int $product_id, array $settings): array
@@ -918,6 +975,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'category_id' => $categoryId,
             'category_source' => (string) ($category['source'] ?? ''),
             'category_confidence' => (float) ($category['confidence'] ?? 0),
+            'auto_category_confidence_threshold' => CategoryMappingSafety::threshold($settings),
+            'category_sanity_check_pass' => array_key_exists('sanity_check_pass', $category) ? !empty($category['sanity_check_pass']) : true,
+            'category_sanity_reason' => (string) ($category['sanity_reason'] ?? ''),
             'category_status' => (string) ($category['status'] ?? ''),
             'product_override_found' => !empty($category['product_override_found']) ? 'yes' : 'no',
         ]);
@@ -925,7 +985,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($skuResolution['sku'] === '') $errors[] = 'final eBay SKU missing';
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
-        if ($categoryId === '') { $errors[] = 'eBay leaf category missing'; $status = in_array((string) ($category['status'] ?? ''), ['needs_category_review', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? (string) $category['status'] : 'needs_category_review'; }
+        if ($categoryId === '') { $errors[] = 'category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
         if ($missingAspects !== []) { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
         if ((float) $product->get_price() <= 0) $errors[] = 'price invalid';
@@ -1622,6 +1682,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['auto_generate_german_content_preflight'])) {
             $settings['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($settings['auto_category_confidence_threshold'])) {
+            $settings['auto_category_confidence_threshold'] = CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
         }
         if (!isset($settings['regenerate_german_content_on_hash_change'])) {
             $settings['regenerate_german_content_on_hash_change'] = 0;

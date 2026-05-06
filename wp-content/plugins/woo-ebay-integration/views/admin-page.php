@@ -16,6 +16,8 @@
         <p>eBay RuName: <input type="text" name="runame" value="<?php echo esc_attr($s['runame'] ?? ''); ?>" class="regular-text" /></p>
         <p>Marketplace ID: <input type="text" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" class="regular-text" /></p>
         <p>Default eBay Category ID: <input type="text" name="default_category_id" value="<?php echo esc_attr($s['default_category_id'] ?? ''); ?>" class="regular-text" /></p>
+        <p>Auto category confidence threshold: <input type="number" step="0.01" min="0.01" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) ($s['auto_category_confidence_threshold'] ?? \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" class="small-text" />
+            <span class="description">Auto taxonomy mappings below this threshold are blocked for export and require category review.</span></p>
         <p>Product Category Overrides (dev/debug):<br />
             <textarea name="product_category_overrides" class="large-text code" rows="3" placeholder="43582=179847"><?php echo esc_textarea((string) ($s['product_category_overrides'] ?? '')); ?></textarea><br />
             <span class="description">Dev/debug exception list: one product per line as product_id=categoryId. Saved to <code>_wei_ebay_category_*</code> meta with source <code>manual_product_override</code>; high-level exception review UI can replace this later.</span>
@@ -173,13 +175,33 @@
     };
     ?>
     <table class="widefat striped">
-        <thead><tr><th>Woo category</th><th>Products</th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th>Confidence</th><th>Status</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
+        <thead><tr><th>Woo category</th><th>Products</th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th>Confidence</th><th>Threshold</th><th>Status</th><th>Sanity reason</th><th>Last updated</th><th>Error / best suggestion</th><th>Manual fallback</th></tr></thead>
         <tbody>
         <?php foreach ((array) ($category_mappings ?? []) as $row): ?>
             <?php
             $statusValue = (string) ($row['status'] ?? '');
             if ($statusValue === '') {
                 $statusValue = empty($row['ebay_category_id']) ? 'unmapped' : 'mapped_manual';
+            }
+            $confidenceValue = (float) ($row['confidence'] ?? 0);
+            $thresholdValue = \WEI\Services\CategoryMappingSafety::threshold((array) ($s ?? []));
+            $sanityReason = '';
+            if ($statusValue === 'mapped_auto' || (string) ($row['source'] ?? '') === 'auto_taxonomy') {
+                $safety = \WEI\Services\CategoryMappingSafety::evaluate_auto_mapping(
+                    (string) ($row['woo_category_path'] ?? $row['name'] ?? ''),
+                    trim((string) (($row['ebay_category_path'] ?? '') . ' ' . ($row['ebay_category_name'] ?? ''))),
+                    $confidenceValue,
+                    (array) ($s ?? [])
+                );
+                $statusValue = (string) ($safety['ui_status'] ?? $statusValue);
+                $sanityReason = (string) ($safety['sanity_reason'] ?? '');
+            } elseif ($statusValue === 'low_confidence_auto') {
+                $statusValue = 'blocked_by_threshold';
+            } elseif ($statusValue === 'category_sanity_failed') {
+                $statusValue = 'blocked_by_sanity';
+                $sanityReason = (string) ($row['error_reason'] ?? '');
+            } elseif ($statusValue === 'mapped_manual') {
+                $statusValue = 'accepted_manual';
             }
             $debug = json_decode((string) ($row['suggestion_payload'] ?? ''), true);
             $best = [];
@@ -197,7 +219,7 @@
                 $displayCategoryPath = trim((string) (($best['category_path'] ?? '') . ' ' . ($best['category_name'] ?? '')));
             }
             $categoryUrl = $buildEbayCategoryUrl($displayCategoryId, $best);
-            $statusColor = in_array($statusValue, ['mapped_manual', 'mapped_auto'], true) ? '#008a20' : (in_array($statusValue, ['needs_category_review'], true) ? '#996800' : '#b32d2e');
+            $statusColor = in_array($statusValue, ['accepted_manual', 'accepted_auto'], true) ? '#008a20' : (in_array($statusValue, ['blocked_by_threshold', 'needs_category_review'], true) ? '#996800' : '#b32d2e');
             ?>
             <tr>
                 <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
@@ -207,7 +229,9 @@
                 <td><?php if ($categoryUrl !== ''): ?><a href="<?php echo esc_url($categoryUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html('Open on eBay DE'); ?></a><?php endif; ?></td>
                 <td><?php echo esc_html((string) ($row['source'] ?? '')); ?></td>
                 <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
+                <td><?php echo esc_html(number_format($thresholdValue, 4)); ?></td>
                 <td><span style="color:<?php echo esc_attr($statusColor); ?>"><?php echo esc_html($statusValue); ?></span></td>
+                <td><?php echo esc_html($sanityReason); ?></td>
                 <td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td>
                 <td><?php echo esc_html((string) ($row['error_reason'] ?? '')); ?><?php if ($bestSuggestion !== ''): ?><br /><span class="description"><?php echo esc_html($bestSuggestion); ?></span><?php endif; ?></td>
                 <td>
