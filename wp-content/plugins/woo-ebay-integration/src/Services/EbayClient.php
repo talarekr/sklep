@@ -57,6 +57,39 @@ class EbayClient
         return $this->request('GET', '/sell/account/v1/' . $type, null, ['marketplace_id' => $marketplace_id]);
     }
 
+
+    public function get_default_category_tree_id(string $marketplace_id = 'EBAY_DE')
+    {
+        $marketplace_id = trim($marketplace_id);
+        if ($marketplace_id === '') {
+            return new \WP_Error('wei_marketplace_id_missing', 'marketplace_id is required when loading eBay category taxonomy');
+        }
+
+        return $this->request('GET', '/commerce/taxonomy/v1/get_default_category_tree_id', null, ['marketplace_id' => $marketplace_id]);
+    }
+
+    public function get_category_subtree(string $category_tree_id, string $category_id)
+    {
+        $category_tree_id = trim($category_tree_id);
+        $category_id = trim($category_id);
+        if ($category_tree_id === '' || $category_id === '') {
+            return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and category_id are required when loading eBay category subtree');
+        }
+
+        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_subtree', null, ['category_id' => $category_id]);
+    }
+
+    public function get_category_suggestions(string $category_tree_id, string $query)
+    {
+        $category_tree_id = trim($category_tree_id);
+        $query = trim($query);
+        if ($category_tree_id === '' || $query === '') {
+            return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and q are required when loading eBay category suggestions');
+        }
+
+        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_suggestions', null, ['q' => $query]);
+    }
+
     public function get_orders(array $query = [])
     {
         return $this->request('GET', '/sell/fulfillment/v1/order', null, $query);

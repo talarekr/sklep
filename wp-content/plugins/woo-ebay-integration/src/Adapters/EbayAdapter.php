@@ -133,20 +133,20 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ],
         ];
         $marketplaceId = $this->marketplace_id();
+        $settings = $this->settings();
+        $categoryId = $this->resolve_category_id($product_id, $sku, $settings);
+        if ($categoryId === '') {
+            return ['result' => 'error', 'message' => 'Missing eBay category ID'];
+        }
 
         $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
             'stage' => 'createOrReplaceInventoryItem',
             'product_id' => $product_id,
             'sku' => $sku,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId ?? null,
         ]);
         if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
-
-        $settings = $this->settings();
-        $defaultCategoryId = trim((string) ($settings['default_category_id'] ?? ''));
-        if ($defaultCategoryId === '') {
-            return ['result' => 'error', 'message' => 'Missing eBay category ID'];
-        }
 
         $policyValidation = $this->validate_selected_policies($settings);
         if (!$policyValidation['valid']) {
@@ -175,7 +175,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'sku' => $sku,
             'marketplaceId' => $marketplaceId,
             'merchantLocationKey' => $this->merchant_location_key(),
-            'categoryId' => $defaultCategoryId,
+            'categoryId' => $categoryId,
             'listingPolicies' => $listingPolicies,
             'format' => 'FIXED_PRICE',
             'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
@@ -191,6 +191,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'product_id' => $product_id,
                 'sku' => $sku,
                 'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
                 'offer_payload' => $offerPayload,
             ]);
 
@@ -199,6 +200,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'product_id' => $product_id,
                 'sku' => $sku,
                 'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
             ]);
 
             if (is_wp_error($offer)) {
@@ -245,6 +247,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'product_id' => $product_id,
                     'sku' => $sku,
                     'marketplace_id' => $marketplaceId,
+                    'category_id' => $categoryId,
                 ]);
             } else {
                 $offer_id = (string) ($offer['offerId'] ?? '');
@@ -265,6 +268,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'sku' => $sku,
             'offer_id' => $offer_id,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
             'offer_payload' => $offerPayload,
         ]);
 
@@ -273,6 +277,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'product_id' => $product_id,
             'sku' => $sku,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
         ]);
         if (is_wp_error($updated)) return $this->export_error_response('updateOffer', $updated, $product_id, $sku);
 
@@ -291,6 +296,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'product_id' => $product_id,
             'sku' => $sku,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
         ]);
         if (is_wp_error($published)) return $this->export_error_response('publishOffer', $published, $product_id, $sku);
 
@@ -300,6 +306,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'sku' => $sku,
             'offer_id' => $offer_id,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
             'response' => $published,
         ]);
 
@@ -383,6 +390,107 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['result' => 'success', 'marketplace_id' => $marketplaceId, 'counts' => $counts];
     }
 
+
+    private function resolve_category_id(int $product_id, string $sku, array $settings): string
+    {
+        $productCategoryId = trim((string) get_post_meta($product_id, '_wei_ebay_category_id', true));
+        if ($productCategoryId !== '') {
+            return $productCategoryId;
+        }
+
+        $skuOverrides = $this->parse_sku_category_overrides((string) ($settings['sku_category_overrides'] ?? ''));
+        if (isset($skuOverrides[$sku]) && $skuOverrides[$sku] !== '') {
+            return $skuOverrides[$sku];
+        }
+
+        return trim((string) ($settings['default_category_id'] ?? ''));
+    }
+
+    private function parse_sku_category_overrides(string $raw): array
+    {
+        $overrides = [];
+        foreach (preg_split('/\R/', $raw) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $parts = preg_split('/\s*[=:,]\s*/', $line, 2);
+            if (!is_array($parts) || count($parts) !== 2) {
+                continue;
+            }
+
+            $sku = trim((string) $parts[0]);
+            $categoryId = trim((string) $parts[1]);
+            if ($sku !== '' && $categoryId !== '') {
+                $overrides[$sku] = $categoryId;
+            }
+        }
+
+        return $overrides;
+    }
+
+    private function export_error_response(string $stage, \WP_Error $error, int $product_id, string $sku): array
+    {
+        $errorData = $error->get_error_data();
+        $details = is_array($errorData) ? $errorData : [];
+        $responseBody = is_array($details['response_body'] ?? null) ? $details['response_body'] : [];
+        $ebayErrors = $this->extract_ebay_errors($responseBody);
+        $primaryEbayError = $ebayErrors[0] ?? [];
+        $errorId = (string) ($primaryEbayError['errorId'] ?? '');
+        $marketplaceId = (string) ($details['marketplace_id'] ?? $this->marketplace_id());
+        $requestPayload = is_array($details['request_payload'] ?? null) ? $details['request_payload'] : [];
+        $categoryId = (string) ($details['category_id'] ?? $requestPayload['categoryId'] ?? '');
+        $message = $this->admin_error_message($errorId, (string) ($primaryEbayError['message'] ?? $error->get_error_message()));
+
+        $logContext = [
+            'stage' => $stage,
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
+            'wp_error_code' => $error->get_error_code(),
+            'wp_error_message' => $error->get_error_message(),
+            'ebay_error_id' => $errorId,
+            'ebay_error_message' => (string) ($primaryEbayError['message'] ?? ''),
+            'ebay_errors' => $ebayErrors,
+            'error_details' => $details,
+        ];
+        $this->logger->error('eBay export failed without fatal error', $logContext);
+
+        return [
+            'result' => 'error',
+            'stage' => $stage,
+            'error' => $error->get_error_code(),
+            'message' => $message,
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
+            'ebay_error_id' => $errorId,
+            'ebay_errors' => $ebayErrors,
+            'error_details' => $details,
+        ];
+    }
+
+    private function extract_ebay_errors(array $responseBody): array
+    {
+        $errors = is_array($responseBody['errors'] ?? null) ? $responseBody['errors'] : [];
+        if ($errors === [] && $responseBody !== []) {
+            $errors[] = $responseBody;
+        }
+
+        return array_values(array_filter($errors, 'is_array'));
+    }
+
+    private function admin_error_message(string $errorId, string $fallback): string
+    {
+        if ($errorId === '25005') {
+            return 'Invalid category ID. Selected eBay category is not a leaf category. Choose a final EBAY_DE category.';
+        }
+
+        return $fallback !== '' ? $fallback : 'eBay export failed. Check logs for the full API response.';
+    }
 
     private function validate_selected_policies(array $settings): array
     {
@@ -476,7 +584,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function settings(): array
     {
         $settings = get_option(Plugin::OPTION_KEY, []);
-        return is_array($settings) ? $settings : [];
+        $settings = is_array($settings) ? $settings : [];
+        if (!isset($settings['sku_category_overrides'])) {
+            $settings['sku_category_overrides'] = "CFM-001=33665";
+        }
+        return $settings;
     }
 
     private function policy_id_exists(array $policies, string $requiredId): bool
