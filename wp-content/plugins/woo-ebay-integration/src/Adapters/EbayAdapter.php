@@ -9,6 +9,7 @@ use WEI\Repositories\CategoryMappingRepository;
 use WEI\Repositories\MappingRepository;
 use WEI\Services\EbayClient;
 use WEI\Services\EbayTaxonomyService;
+use WEI\Services\EbaySkuGenerator;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
 use WEI\Services\Translation\OpenAiTranslationProvider;
@@ -18,7 +19,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 {
     private const EBAY_SKU_MAX_LENGTH = 50;
 
-    public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
+    public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbaySkuGenerator $skuGenerator = null)
     {
     }
 
@@ -475,16 +476,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         if ($existingWeiEbaySku !== '') {
             $final = $this->sanitize_ebay_sku($existingWeiEbaySku);
-        } elseif ($useWooSkuSetting && $wooSku !== '') {
-            $final = $this->sanitize_ebay_sku($wooSku);
         } else {
-            $final = $this->generated_ebay_sku($product_id, $variation_id, $settings);
-            if ($final !== '') {
-                update_post_meta($metaProductId, '_wei_ebay_sku', $final);
-                update_post_meta($metaProductId, '_wei_ebay_sku_generated', 1);
-                update_post_meta($metaProductId, '_wei_ebay_sku_generated_at', gmdate('Y-m-d H:i:s'));
-                $generated = true;
-            }
+            $skuGeneration = $this->skuGenerator
+                ? $this->skuGenerator->ensure_product_ebay_sku($product_id, $variation_id, $settings)
+                : ['sku' => $this->generated_ebay_sku($product_id, $variation_id, $settings), 'generated' => false, 'conflict' => false, 'wrote_woo_sku' => false];
+            $final = (string) ($skuGeneration['sku'] ?? '');
+            $generated = !empty($skuGeneration['generated']);
         }
 
         $weiEbaySku = $existingWeiEbaySku !== '' ? $existingWeiEbaySku : ($generated ? $final : '');

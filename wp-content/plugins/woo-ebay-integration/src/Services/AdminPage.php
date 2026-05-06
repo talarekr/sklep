@@ -8,7 +8,7 @@ use WEI\Repositories\CategoryMappingRepository;
 
 class AdminPage
 {
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator)
     {
     }
 
@@ -27,6 +27,7 @@ class AdminPage
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
+        add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
     }
 
     public function register_menu(): void
@@ -50,7 +51,8 @@ class AdminPage
         $status = get_option('wei_last_status', []);
         $logs = get_option('wei_logs', []);
         $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
-        $ebay_sku_status = $this->ebay_sku_status_counts();
+        $ebay_sku_status = $this->skuGenerator->status_counts();
+        $ebay_sku_generation_status = $this->skuGenerator->current_status();
         $connect_url = $this->auth->get_authorize_url();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -70,7 +72,7 @@ class AdminPage
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
         $s['category_aspect_fallbacks'] = sanitize_textarea_field((string) ($_POST['category_aspect_fallbacks'] ?? ''));
         $s['default_hersteller_fallback'] = sanitize_text_field((string) ($_POST['default_hersteller_fallback'] ?? ''));
-        $s['use_woo_sku_for_ebay'] = !empty($_POST['use_woo_sku_for_ebay']) ? 1 : 0;
+        $s['use_woo_sku_for_ebay'] = 0;
         $s['ebay_sku_prefix'] = $this->sanitize_ebay_sku_prefix((string) ($_POST['ebay_sku_prefix'] ?? 'GPSW'));
         $s['write_generated_sku_to_woo'] = 0;
         $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
@@ -100,6 +102,16 @@ class AdminPage
     public function disconnect(): void { check_admin_referer('wei_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
     public function test_connection(): void { check_admin_referer('wei_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }
     public function run_readiness(): void { check_admin_referer('wei_readiness'); $res = $this->adapter->readiness_check(); $this->set_status('Readiness: '.wp_json_encode($res)); $this->go(); }
+
+    public function generate_ebay_skus(): void
+    {
+        check_admin_referer('wei_generate_ebay_skus');
+        $batchSize = absint($_POST['batch_size'] ?? 200);
+        $runId = sanitize_text_field((string) ($_POST['run_id'] ?? ''));
+        $res = $this->skuGenerator->generate_missing_batch($runId !== '' ? $runId : null, $batchSize);
+        $this->set_status('Generate missing eBay SKUs: ' . wp_json_encode($res));
+        $this->go();
+    }
 
     public function auto_map_categories(): void
     {
@@ -358,36 +370,4 @@ class AdminPage
         return $prefix !== '' ? substr($prefix, 0, 20) : 'GPSW';
     }
 
-    private function ebay_sku_status_counts(): array
-    {
-        global $wpdb;
-
-        $postTypes = ['product', 'product_variation'];
-        $placeholders = implode(',', array_fill(0, count($postTypes), '%s'));
-        $publishedStatuses = ['publish', 'private', 'draft'];
-        $statusPlaceholders = implode(',', array_fill(0, count($publishedStatuses), '%s'));
-
-        $baseArgs = array_merge($postTypes, $publishedStatuses);
-        $total = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(1) FROM {$wpdb->posts} p WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
-            ...$baseArgs
-        ));
-        $withSku = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s AND m.meta_value <> '' WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
-            '_wei_ebay_sku',
-            ...$baseArgs
-        ));
-        $generated = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s AND m.meta_value = '1' WHERE p.post_type IN ($placeholders) AND p.post_status IN ($statusPlaceholders)",
-            '_wei_ebay_sku_generated',
-            ...$baseArgs
-        ));
-
-        return [
-            'total_products' => $total,
-            'products_missing_wei_ebay_sku' => max(0, $total - $withSku),
-            'products_with_wei_ebay_sku' => $withSku,
-            'products_with_generated_ebay_sku' => $generated,
-        ];
-    }
 }
