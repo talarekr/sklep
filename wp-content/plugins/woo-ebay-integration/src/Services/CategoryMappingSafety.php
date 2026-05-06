@@ -76,7 +76,8 @@ class CategoryMappingSafety
         $woo = self::normalize($wooPath);
         $rules = [
             [['drzwi', 'tuer', 'tueren', 'turen'], ['tuer', 'tueren', 'turen', 'karosserie', 'karosserieteile']],
-            [['silniki kompletne', 'silnik kompletny', 'silniki', 'silnik', 'motor', 'motoren', 'komplettmotor'], ['motor', 'motoren', 'komplettmotor']],
+            [['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine'], ['motoren', 'komplettmotor', 'complete engine']],
+            [['silniki', 'silnik', 'motor', 'motoren'], ['motor', 'motoren', 'motorteile', 'komplettmotor']],
             [['skrzynie biegow', 'skrzynia biegow', 'kompletne skrzynie', 'getriebe'], ['getriebe', 'schaltgetriebe', 'automatikgetriebe']],
             [['lampy', 'reflektor', 'oswietlenie', 'beleuchtung', 'scheinwerfer', 'leuchte'], ['beleuchtung', 'scheinwerfer', 'ruckleuchte', 'ruckleuchten', 'blinker', 'leuchte']],
             [['zderzak', 'zderzaki', 'stossstange', 'stosstange'], ['stossstange', 'stosstange', 'karosserie']],
@@ -119,6 +120,10 @@ class CategoryMappingSafety
         $woo = self::normalize($wooPath);
         $ebay = self::normalize($ebayPath);
 
+        if (self::is_complete_engine_intent($wooPath) && self::contains_any($ebay, self::complete_engine_part_negative_keywords())) {
+            return ['pass' => false, 'reason' => 'complete_engine_candidate_is_engine_part'];
+        }
+
         if (self::is_sonstige_category($ebayPath) && self::is_specific_woo_category($wooPath)) {
             return ['pass' => false, 'reason' => 'auto_mapping_to_sonstige_for_specific_woo_category'];
         }
@@ -137,6 +142,26 @@ class CategoryMappingSafety
         }
 
         return ['pass' => true, 'reason' => ''];
+    }
+
+    public static function category_intent(string $wooPath): string
+    {
+        return self::is_complete_engine_intent($wooPath) ? 'complete_engine' : '';
+    }
+
+    public static function is_complete_engine_intent(string $wooPath): bool
+    {
+        return self::contains_any(self::normalize($wooPath), ['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine']);
+    }
+
+    public static function complete_engine_part_negative_keywords(): array
+    {
+        return ['ventile', 'olfilter', 'oelfilter', 'filter', 'olpumpen', 'oelpumpen', 'kurbelwellen', 'zylinderkopfe', 'zylinderkoepfe', 'kolben', 'lager', 'reparatursatze', 'reparatursaetze', 'dichtungen', 'nockenwellen', 'zahnriemen', 'steuerketten', 'einspritzdusen', 'einspritzduesen', 'pleuel', 'kleinteile'];
+    }
+
+    public static function complete_engine_preferred_keywords(): array
+    {
+        return ['motoren', 'komplettmotor', 'complete engine'];
     }
 
     private static function normalize(string $text): string

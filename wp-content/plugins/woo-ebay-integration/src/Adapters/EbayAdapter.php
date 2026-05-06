@@ -982,7 +982,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $path = mb_strtolower($this->categoryRepo->woo_category_path($termId));
         $normalized = remove_accents($path);
         if (str_contains($normalized, 'wiazki przewodow') || str_contains($path, 'wiązki przewodów')) {
-            return ['category_id' => '179847', 'status' => 'ready_auto', 'source' => 'static_fallback', 'confidence' => 0.9, 'woo_term_id' => $termId];
+            return ['category_id' => '179847', 'category_name' => $this->static_category_name('179847'), 'category_path' => $this->static_category_path('179847'), 'status' => 'ready_auto', 'source' => 'static_fallback', 'confidence' => 0.9, 'woo_term_id' => $termId, 'sanity_check_pass' => true];
+        }
+
+        if (CategoryMappingSafety::is_complete_engine_intent($path)) {
+            return ['category_id' => '33615', 'category_name' => $this->static_category_name('33615'), 'category_path' => $this->static_category_path('33615'), 'status' => 'ready_auto', 'source' => 'static_fallback_complete_engine', 'confidence' => 0.95, 'woo_term_id' => $termId, 'sanity_check_pass' => true];
         }
 
         return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'static_fallback', 'confidence' => 0.0];
@@ -1083,7 +1087,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $aspects = [];
 
-        $mpn = $this->resolve_mpn_aspect_value($product, $product_id, $sku);
+        $mpn = $this->resolve_mpn_aspect_value($product, $product_id, $sku, $content);
         if ($mpn !== '') {
             $aspects['MPN'] = [$mpn];
         }
@@ -1124,6 +1128,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $resolved = $this->merge_aspects($aspects, $settingsOverrides, $productOverrides);
         $required = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
+        $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpn);
         $missing = array_values(array_filter($required, static fn($name) => empty($resolved[$name])));
         $this->logger->info('Required aspects for category ' . $categoryId . ': ' . implode(', ', $required), [
             'product_id' => $product_id,
@@ -1137,26 +1142,138 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $resolved;
     }
 
-    private function resolve_mpn_aspect_value($product, int $product_id, string $sku): string
+    private function resolve_mpn_aspect_value($product, int $product_id, string $sku, array $content = []): string
     {
-        foreach (['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number'] as $metaKey) {
-            $value = trim((string) get_post_meta($product_id, $metaKey, true));
+        foreach (['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number', '_catalog_number', 'catalog_number'] as $metaKey) {
+            $value = $this->normalize_part_number_value((string) get_post_meta($product_id, $metaKey, true));
             if ($value !== '') {
                 return $value;
             }
         }
 
-        foreach (['MPN', 'Herstellernummer', 'OEM', 'Numer części', 'Numer czesci'] as $attributeName) {
+        foreach (['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'] as $attributeName) {
             if (!method_exists($product, 'get_attribute')) {
                 continue;
             }
-            $value = trim(wp_strip_all_tags((string) $product->get_attribute($attributeName)));
+            $value = $this->normalize_part_number_value((string) $product->get_attribute($attributeName));
             if ($value !== '') {
                 return $value;
             }
         }
 
-        return $sku;
+        $texts = [];
+        if (method_exists($product, 'get_name')) {
+            $texts[] = (string) $product->get_name();
+        }
+        if (method_exists($product, 'get_description')) {
+            $texts[] = (string) $product->get_description();
+        }
+        if (method_exists($product, 'get_short_description')) {
+            $texts[] = (string) $product->get_short_description();
+        }
+        foreach (['title', 'description'] as $contentKey) {
+            if (!empty($content[$contentKey])) {
+                $texts[] = (string) $content[$contentKey];
+            }
+        }
+        foreach ($texts as $text) {
+            $value = $this->extract_part_number_from_text($text);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        if (method_exists($product, 'get_sku')) {
+            $wooSku = $this->normalize_part_number_value((string) $product->get_sku());
+            if ($wooSku !== '' && !$this->is_generated_ebay_sku($wooSku)) {
+                return $wooSku;
+            }
+        }
+
+        return '';
+    }
+
+    private function apply_part_number_aspect_aliases(array $aspects, array $requiredAspects, string $resolvedPartNumber): array
+    {
+        if ($this->marketplace_id() !== 'EBAY_DE') {
+            return $aspects;
+        }
+
+        $partNumber = $this->normalize_part_number_value($resolvedPartNumber);
+        foreach ($this->part_number_aspect_aliases() as $alias) {
+            if ($partNumber === '' && !empty($aspects[$alias][0])) {
+                $partNumber = $this->normalize_part_number_value((string) $aspects[$alias][0]);
+            }
+        }
+
+        if ($partNumber === '') {
+            return $aspects;
+        }
+
+        foreach ($requiredAspects as $requiredAspect) {
+            if ($this->is_part_number_aspect_alias((string) $requiredAspect) && empty($aspects[$requiredAspect])) {
+                $aspects[$requiredAspect] = [$partNumber];
+            }
+        }
+
+        if (empty($aspects['MPN'])) {
+            $aspects['MPN'] = [$partNumber];
+        }
+
+        return $aspects;
+    }
+
+    private function part_number_aspect_aliases(): array
+    {
+        return ['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'];
+    }
+
+    private function is_part_number_aspect_alias(string $name): bool
+    {
+        $normalized = $this->normalize_aspect_alias_name($name);
+        foreach ($this->part_number_aspect_aliases() as $alias) {
+            if ($normalized === $this->normalize_aspect_alias_name($alias)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function normalize_aspect_alias_name(string $name): string
+    {
+        $name = function_exists('remove_accents') ? remove_accents($name) : (string) iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name);
+        return strtolower((string) preg_replace('/[^a-z0-9]+/i', '', $name));
+    }
+
+    private function normalize_part_number_value(string $value): string
+    {
+        $value = strtoupper(wp_strip_all_tags(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $value = preg_replace('/\s+/', '', $value) ?: '';
+        $value = preg_replace('/[^A-Z0-9]/', '', $value) ?: '';
+        $genericValues = ['ORYGINALNE', 'ORYGINALNY', 'UŻYWANY', 'UZYWANY', 'BRAK', 'NA', 'NIEDOTYCZY', 'UNIVERSAL', 'UNIWERSALNY'];
+        if ($value === '' || in_array($value, $genericValues, true) || $this->is_generated_ebay_sku($value)) {
+            return '';
+        }
+        return $value;
+    }
+
+    private function extract_part_number_from_text(string $text): string
+    {
+        $text = strtoupper(wp_strip_all_tags(html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        if (preg_match_all('/\b(?:[A-Z0-9]{2,4}\s*){2,5}[A-Z]{0,3}\b/u', $text, $matches)) {
+            foreach ((array) ($matches[0] ?? []) as $match) {
+                $value = $this->normalize_part_number_value((string) $match);
+                if ($value !== '' && preg_match('/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{7,18}$/', $value)) {
+                    return $value;
+                }
+            }
+        }
+        return '';
+    }
+
+    private function is_generated_ebay_sku(string $value): bool
+    {
+        return (bool) preg_match('/^GPSW[\-_]?[0-9]+(?:[\-_]?[0-9]+)?$/i', trim($value));
     }
 
     private function resolve_manufacturer_aspect_value($product, int $product_id, string $categoryId, array $settings, array $content = []): string
@@ -1487,6 +1604,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($categoryId === '179847') {
             return 'Kabel, Kabelbäume & Steckverbinder';
         }
+        if ($categoryId === '33615') {
+            return 'Motoren';
+        }
 
         return '';
     }
@@ -1495,6 +1615,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         if ($categoryId === '179847') {
             return 'Auto & Motorrad: Teile > Autoteile & Zubehör > Kabel, Kabelbäume & Steckverbinder';
+        }
+        if ($categoryId === '33615') {
+            return 'Auto & Motorrad: Teile > Autoteile & Zubehör > Motoren & Motorenteile > Motoren';
         }
 
         return '';

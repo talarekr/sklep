@@ -326,6 +326,9 @@ class EbayTaxonomyService
         if ($marketplace_id === 'EBAY_DE' && $category_id === '179847') {
             return ['Hersteller'];
         }
+        if ($marketplace_id === 'EBAY_DE' && $category_id === '138858') {
+            return ['Hersteller', 'Herstellernummer'];
+        }
 
         return [];
     }
