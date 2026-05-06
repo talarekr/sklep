@@ -67,7 +67,7 @@ class CategoryMappingSafety
     {
         return self::expected_path_keywords($wooPath) !== [] || self::contains_any(self::normalize($wooPath), [
             'turbiny', 'turbina', 'turbo', 'alternatory', 'alternator', 'rozruszniki', 'rozrusznik',
-            'chlodnice', 'chlodnica', 'klimatyzacja', 'wydech', 'wnetrze', 'fotele', 'fotel', 'lusterka', 'lusterko',
+            'chlodnice', 'chlodnica', 'klimatyzacja', 'wydech', 'wnetrze', 'fotele', 'fotel', 'lusterka', 'lusterko', 'lusterka', 'turbolader',
         ]);
     }
 
@@ -75,7 +75,7 @@ class CategoryMappingSafety
     {
         $woo = self::normalize($wooPath);
         $rules = [
-            [['drzwi', 'tur', 'turen'], ['tur', 'turen', 'karosserie', 'karosserieteile']],
+            [['drzwi', 'tuer', 'tueren', 'turen'], ['tuer', 'tueren', 'turen', 'karosserie', 'karosserieteile']],
             [['silniki kompletne', 'silnik kompletny', 'silniki', 'silnik', 'motor', 'motoren', 'komplettmotor'], ['motor', 'motoren', 'komplettmotor']],
             [['skrzynie biegow', 'skrzynia biegow', 'kompletne skrzynie', 'getriebe'], ['getriebe', 'schaltgetriebe', 'automatikgetriebe']],
             [['lampy', 'reflektor', 'oswietlenie', 'beleuchtung', 'scheinwerfer', 'leuchte'], ['beleuchtung', 'scheinwerfer', 'ruckleuchte', 'ruckleuchten', 'blinker', 'leuchte']],
@@ -89,6 +89,10 @@ class CategoryMappingSafety
             [['alternator', 'alternatory', 'lichtmaschine', 'generator'], ['lichtmaschine', 'generator']],
             [['rozrusznik', 'rozruszniki', 'anlasser', 'starter'], ['anlasser', 'starter']],
             [['chlodnica', 'chlodnice', 'kuhler', 'kuhlung'], ['kuhler', 'kuhlung']],
+            [['lusterka', 'lusterko', 'spiegel'], ['spiegel', 'aussenspiegel']],
+            [['wydech', 'auspuff'], ['auspuff', 'abgasanlage']],
+            [['klimatyzacja', 'klima'], ['klimaanlage', 'klima']],
+            [['wnetrze', 'fotele', 'fotel', 'siedzenie'], ['innenausstattung', 'sitz', 'sitze']],
         ];
 
         foreach ($rules as $rule) {
@@ -139,6 +143,7 @@ class CategoryMappingSafety
     {
         $text = function_exists('wp_strip_all_tags') ? wp_strip_all_tags($text) : strip_tags($text);
         $text = function_exists('remove_accents') ? remove_accents($text) : iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+        $text = str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], (string) $text);
         return strtolower((string) preg_replace('/\s+/', ' ', $text));
     }
 
