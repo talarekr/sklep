@@ -8,6 +8,7 @@ class EbayAuth
 {
     private const AUTH_URL = 'https://auth.ebay.com/oauth2/authorize';
     private const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
+    public const APP_SCOPE = 'https://api.ebay.com/oauth/api_scope';
     private const SCOPES = 'https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
 
     public function __construct(private Logger $logger)
@@ -37,6 +38,8 @@ class EbayAuth
         $s['access_token'] = '';
         $s['refresh_token'] = '';
         $s['expires_at'] = 0;
+        $s['app_access_token'] = '';
+        $s['app_access_token_expires_at'] = 0;
         update_option(Plugin::OPTION_KEY, $s, false);
     }
 
@@ -88,6 +91,29 @@ class EbayAuth
         return $this->refresh_access_token($refresh);
     }
 
+
+    public function get_valid_application_access_token(): string|\WP_Error
+    {
+        $s = $this->settings();
+        $token = (string) ($s['app_access_token'] ?? '');
+        $exp = (int) ($s['app_access_token_expires_at'] ?? 0);
+        if ($token !== '' && $exp > (time() + 120)) {
+            return $token;
+        }
+
+        return $this->request_application_access_token();
+    }
+
+    public function get_taxonomy_oauth_context(): array
+    {
+        return [
+            'token_type' => 'application',
+            'grant_type' => 'client_credentials',
+            'scope' => self::APP_SCOPE,
+            'scope_requested' => self::APP_SCOPE,
+        ];
+    }
+
     private function exchange_code(string $code): void
     {
         $s = $this->settings();
@@ -120,6 +146,54 @@ class EbayAuth
         $this->persist_token($data);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&ebay_connected=1'));
         exit;
+    }
+
+
+    private function request_application_access_token(): string|\WP_Error
+    {
+        $s = $this->settings();
+        $clientId = (string) ($s['client_id'] ?? '');
+        $clientSecret = (string) ($s['client_secret'] ?? '');
+        if ($clientId === '' || $clientSecret === '') {
+            return new \WP_Error('wei_missing_app_credentials', 'Missing eBay App client_id or client_secret for application access token');
+        }
+
+        $this->logger->info('Requesting eBay application access token', $this->get_taxonomy_oauth_context());
+
+        $r = wp_remote_post(self::TOKEN_URL, [
+            'timeout' => 20,
+            'headers' => [
+                'Authorization' => 'Basic ' . base64_encode($clientId . ':' . $clientSecret),
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
+            'body' => [
+                'grant_type' => 'client_credentials',
+                'scope' => self::APP_SCOPE,
+            ],
+        ]);
+
+        if (is_wp_error($r)) {
+            return $r;
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($r);
+        $data = (array) json_decode((string) wp_remote_retrieve_body($r), true);
+        if ($status < 200 || $status >= 300 || empty($data['access_token'])) {
+            return new \WP_Error('wei_app_oauth_http_error', 'eBay application OAuth HTTP error', [
+                'status' => $status,
+                'response' => $data,
+                'token_type' => 'application',
+                'grant_type' => 'client_credentials',
+                'scope' => self::APP_SCOPE,
+                'scope_requested' => self::APP_SCOPE,
+            ]);
+        }
+
+        $s['app_access_token'] = (string) $data['access_token'];
+        $s['app_access_token_expires_at'] = time() + max(0, (int) ($data['expires_in'] ?? 0));
+        update_option(Plugin::OPTION_KEY, $s, false);
+
+        return (string) $data['access_token'];
     }
 
     private function redirect_with_error(string $error): void

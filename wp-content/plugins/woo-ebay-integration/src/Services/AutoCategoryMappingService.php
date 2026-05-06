@@ -22,6 +22,29 @@ class AutoCategoryMappingService
         $rows = $this->categoryRepo->list_used_woo_categories($marketplaceId, $limit);
         $summary = ['marketplace_id' => $marketplaceId, 'processed' => 0, 'mapped_auto' => 0, 'needs_category_review' => 0, 'unmapped' => 0, 'taxonomy_api_forbidden' => 0, 'suggestion_failed' => 0, 'skipped_confirmed' => 0];
 
+        $tree = $this->taxonomy->get_default_category_tree_id_result($marketplaceId);
+        if (($tree['status'] ?? '') === 'taxonomy_api_forbidden') {
+            $summary['taxonomy_api_forbidden'] = 1;
+            $summary['global_status'] = 'taxonomy_api_forbidden';
+            $summary['error'] = (string) ($tree['error'] ?? 'eBay Taxonomy API forbidden');
+            $summary['category_tree_id'] = '';
+            $this->logger->error('Auto category mapping stopped before processing categories because eBay Taxonomy API is forbidden', [
+                'marketplace_id' => $marketplaceId,
+                'processed' => 0,
+                'status' => 'taxonomy_api_forbidden',
+                'error' => $summary['error'],
+                'category_tree_id' => '',
+                'token_type' => (string) ($tree['token_type'] ?? 'application'),
+                'scope' => (string) ($tree['scope'] ?? EbayAuth::APP_SCOPE),
+                'scope_requested' => (string) ($tree['scope_requested'] ?? EbayAuth::APP_SCOPE),
+            ]);
+            return $summary;
+        }
+
+        if (($tree['status'] ?? '') === 'ok') {
+            $summary['category_tree_id'] = (string) ($tree['category_tree_id'] ?? '');
+        }
+
         foreach ($rows as $row) {
             $termId = (int) ($row['term_id'] ?? 0);
             if ($termId <= 0) {
