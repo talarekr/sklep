@@ -21,6 +21,15 @@ class Logger
 
     private function log(string $level, string $message, array $context): void
     {
-        error_log('[WEI][' . $level . '] ' . $message . ' ' . wp_json_encode($context));
+        $encodedContext = wp_json_encode($context);
+        error_log('[WEI][' . $level . '] ' . $message . ' ' . $encodedContext);
+
+        $logs = get_option('wei_logs', []);
+        $logs = is_array($logs) ? $logs : [];
+        array_unshift($logs, [
+            'at' => gmdate('Y-m-d H:i:s'),
+            'message' => '[' . $level . '] ' . $message . ' ' . $encodedContext,
+        ]);
+        update_option('wei_logs', array_slice($logs, 0, 100), false);
     }
 }

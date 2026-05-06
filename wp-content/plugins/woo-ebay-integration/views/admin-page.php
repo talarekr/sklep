@@ -30,7 +30,7 @@
         <?php $returnPolicies = is_array($cached['returnPolicies'] ?? null) ? $cached['returnPolicies'] : []; ?>
 
         <p>Fulfillment policy:
-            <select name="ebay_fulfillment_policy_id">
+            <select name="fulfillmentPolicyId">
                 <option value="">-- select --</option>
                 <?php foreach ($fulfillmentPolicies as $policy): ?>
                     <?php $policyId = (string) ($policy['fulfillmentPolicyId'] ?? ''); ?>
@@ -41,7 +41,7 @@
             </select>
         </p>
         <p>Payment policy:
-            <select name="ebay_payment_policy_id">
+            <select name="paymentPolicyId">
                 <option value="">-- select --</option>
                 <?php foreach ($paymentPolicies as $policy): ?>
                     <?php $policyId = (string) ($policy['paymentPolicyId'] ?? ''); ?>
@@ -52,7 +52,7 @@
             </select>
         </p>
         <p>Return policy:
-            <select name="ebay_return_policy_id">
+            <select name="returnPolicyId">
                 <option value="">-- select --</option>
                 <?php foreach ($returnPolicies as $policy): ?>
                     <?php $policyId = (string) ($policy['returnPolicyId'] ?? ''); ?>
