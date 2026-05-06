@@ -65,7 +65,7 @@ class EbayClient
             return new \WP_Error('wei_marketplace_id_missing', 'marketplace_id is required when loading eBay category taxonomy');
         }
 
-        return $this->request('GET', '/commerce/taxonomy/v1/get_default_category_tree_id', null, ['marketplace_id' => $marketplace_id]);
+        return $this->taxonomy_request('GET', '/commerce/taxonomy/v1/get_default_category_tree_id', null, ['marketplace_id' => $marketplace_id]);
     }
 
     public function get_category_subtree(string $category_tree_id, string $category_id)
@@ -76,7 +76,7 @@ class EbayClient
             return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and category_id are required when loading eBay category subtree');
         }
 
-        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_subtree', null, ['category_id' => $category_id]);
+        return $this->taxonomy_request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_subtree', null, ['category_id' => $category_id]);
     }
 
     public function get_category_suggestions(string $category_tree_id, string $query)
@@ -87,7 +87,7 @@ class EbayClient
             return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and q are required when loading eBay category suggestions');
         }
 
-        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_suggestions', null, ['q' => $query]);
+        return $this->taxonomy_request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_category_suggestions', null, ['q' => $query]);
     }
 
 
@@ -99,7 +99,7 @@ class EbayClient
             return new \WP_Error('wei_taxonomy_params_missing', 'category_tree_id and category_id are required when loading eBay category aspects');
         }
 
-        return $this->request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_item_aspects_for_category', null, ['category_id' => $category_id]);
+        return $this->taxonomy_request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_item_aspects_for_category', null, ['category_id' => $category_id]);
     }
 
     public function get_orders(array $query = [])
@@ -117,9 +117,21 @@ class EbayClient
         return $this->request('POST', '/sell/inventory/v1/location/' . rawurlencode($merchant_location_key), $payload);
     }
 
-    private function request(string $method, string $path, ?array $body = null, array $query = [], array $context = [])
+
+    public function taxonomy_oauth_context(): array
     {
-        $token = $this->auth->get_valid_access_token();
+        return $this->auth->get_taxonomy_oauth_context();
+    }
+
+    private function taxonomy_request(string $method, string $path, ?array $body = null, array $query = [], array $context = [])
+    {
+        $context = array_merge($this->taxonomy_oauth_context(), $context, ['stage' => (string) ($context['stage'] ?? 'taxonomy')]);
+        return $this->request($method, $path, $body, $query, $context, 'application');
+    }
+
+    private function request(string $method, string $path, ?array $body = null, array $query = [], array $context = [], string $tokenType = 'user')
+    {
+        $token = $tokenType === 'application' ? $this->auth->get_valid_application_access_token() : $this->auth->get_valid_access_token();
         if (is_wp_error($token)) {
             return $token;
         }
@@ -198,6 +210,7 @@ class EbayClient
                 'response_body' => is_array($decoded) ? $decoded : $raw_body,
                 'request_payload' => $request_payload,
                 'request_headers' => $sanitized_headers,
+                'token_type' => $tokenType === 'application' ? 'application' : 'user',
                 'correlation_headers' => $correlation_headers,
                 'response_headers' => $normalized_headers,
             ], $this->sanitize_sensitive_data($context));

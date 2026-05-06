@@ -4,6 +4,9 @@ namespace WEI\Services;
 
 class EbayTaxonomyService
 {
+    /** @var array<string, array> */
+    private array $treeResults = [];
+
     public function __construct(private EbayClient $client, private Logger $logger)
     {
     }
@@ -16,26 +19,40 @@ class EbayTaxonomyService
 
     public function get_default_category_tree_id_result(string $marketplace_id = 'EBAY_DE'): array
     {
+        $marketplace_id = trim($marketplace_id);
+        $memoryKey = sanitize_key($marketplace_id);
+        if (isset($this->treeResults[$memoryKey])) {
+            return $this->treeResults[$memoryKey];
+        }
+
+        $oauthContext = $this->client->taxonomy_oauth_context();
         $cacheKey = 'wei_taxonomy_tree_' . sanitize_key($marketplace_id);
         $cached = get_transient($cacheKey);
         if (is_string($cached) && $cached !== '') {
-            return ['status' => 'ok', 'category_tree_id' => $cached, 'source' => 'cache'];
+            $result = ['status' => 'ok', 'category_tree_id' => $cached, 'source' => 'cache'] + $oauthContext;
+            $this->logger->info('Loaded eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'category_tree_id' => $cached, 'source' => 'cache'] + $oauthContext);
+            return $this->treeResults[$memoryKey] = $result;
         }
 
         $res = $this->client->get_default_category_tree_id($marketplace_id);
         if (is_wp_error($res)) {
             $status = $this->is_forbidden_error($res) ? 'taxonomy_api_forbidden' : 'taxonomy_tree_failed';
-            $this->logger->error('Unable to load eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'status' => $status, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()]);
-            return ['status' => $status, 'category_tree_id' => '', 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()];
+            $result = ['status' => $status, 'category_tree_id' => '', 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()] + $oauthContext;
+            $this->logger->error('Unable to load eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'status' => $status, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()] + $oauthContext);
+            return $this->treeResults[$memoryKey] = $result;
         }
 
         $treeId = (string) ($res['categoryTreeId'] ?? '');
         if ($treeId !== '') {
             set_transient($cacheKey, $treeId, DAY_IN_SECONDS * 7);
-            return ['status' => 'ok', 'category_tree_id' => $treeId, 'source' => 'api'];
+            $result = ['status' => 'ok', 'category_tree_id' => $treeId, 'source' => 'api'] + $oauthContext;
+            $this->logger->info('Loaded eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'category_tree_id' => $treeId, 'source' => 'api'] + $oauthContext);
+            return $this->treeResults[$memoryKey] = $result;
         }
 
-        return ['status' => 'taxonomy_tree_failed', 'category_tree_id' => '', 'error' => 'eBay response did not include categoryTreeId'];
+        $result = ['status' => 'taxonomy_tree_failed', 'category_tree_id' => '', 'error' => 'eBay response did not include categoryTreeId'] + $oauthContext;
+        $this->logger->error('Unable to load eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'status' => 'taxonomy_tree_failed', 'error' => 'eBay response did not include categoryTreeId'] + $oauthContext);
+        return $this->treeResults[$memoryKey] = $result;
     }
 
     public function get_category_suggestions(string $marketplace_id, string $query): array
@@ -64,7 +81,7 @@ class EbayTaxonomyService
         $res = $this->client->get_category_suggestions($treeId, $query);
         if (is_wp_error($res)) {
             $status = $this->is_forbidden_error($res) ? 'taxonomy_api_forbidden' : 'suggestion_failed';
-            $this->logger->error('Unable to load eBay category suggestions', ['marketplace_id' => $marketplace_id, 'query' => $query, 'status' => $status, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()]);
+            $this->logger->error('Unable to load eBay category suggestions', ['marketplace_id' => $marketplace_id, 'category_tree_id' => $treeId, 'query' => $query, 'status' => $status, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()] + $this->client->taxonomy_oauth_context());
             return ['status' => $status, 'suggestions' => [], 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data(), 'tree' => $tree];
         }
 
