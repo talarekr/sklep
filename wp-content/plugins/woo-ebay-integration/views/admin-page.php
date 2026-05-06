@@ -16,10 +16,17 @@
         <p>eBay RuName: <input type="text" name="runame" value="<?php echo esc_attr($s['runame'] ?? ''); ?>" class="regular-text" /></p>
         <p>Marketplace ID: <input type="text" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" class="regular-text" /></p>
         <p>Default eBay Category ID: <input type="text" name="default_category_id" value="<?php echo esc_attr($s['default_category_id'] ?? ''); ?>" class="regular-text" /></p>
-        <p>SKU Category Overrides:<br />
-            <textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=179847"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea><br />
-            <span class="description">One SKU per line as SKU=categoryId. MVP fallback for EBAY_DE while Taxonomy API validation is added.</span>
+        <p>Product Category Overrides (dev/debug):<br />
+            <textarea name="product_category_overrides" class="large-text code" rows="3" placeholder="43582=179847"><?php echo esc_textarea((string) ($s['product_category_overrides'] ?? '')); ?></textarea><br />
+            <span class="description">Dev/debug exception list: one product per line as product_id=categoryId. Saved to <code>_wei_ebay_category_*</code> meta with source <code>manual_product_override</code>; high-level exception review UI can replace this later.</span>
         </p>
+        <details>
+            <summary>Developer/debug SKU category fallback</summary>
+            <p>SKU Category Overrides:<br />
+                <textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=179847"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea><br />
+                <span class="description">Legacy debug-only fallback. Do not use SKU as the durable category override mechanism because eBay SKU can differ from WooCommerce SKU.</span>
+            </p>
+        </details>
         <h3>Safe SKU / aspect defaults</h3>
         <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" <?php checked(!empty($s['use_woo_sku_for_ebay'])); ?> /> Use WooCommerce SKU for eBay when present</label><br />
             <span class="description"><strong>Default OFF.</strong> When disabled, eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
@@ -243,7 +250,8 @@
         <li><strong>eBay-only SKU prefix:</strong> <code><?php echo esc_html((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?></code></li>
         <li><strong>Products missing _wei_ebay_sku:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></code></li>
         <li><strong>Products with generated eBay SKU:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_with_generated_ebay_sku'] ?? '0')); ?></code></li>
-        <li><strong>SKU Category Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_category_overrides'] ?? '')); ?></code></li>
+        <li><strong>Product Category Overrides (dev/debug):</strong> <code><?php echo esc_html((string) ($s['product_category_overrides'] ?? '')); ?></code></li>
+        <li><strong>SKU Category Overrides (legacy/debug):</strong> <code><?php echo esc_html((string) ($s['sku_category_overrides'] ?? '')); ?></code></li>
         <li><strong>SKU Aspect Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_aspect_overrides'] ?? '')); ?></code></li>
         <li><strong>Translation Provider:</strong> <code><?php echo esc_html((string) ($s['translation_provider'] ?? 'disabled')); ?></code></li>
         <li><strong>Auto German Content:</strong> <code><?php echo !empty($s['auto_generate_german_content_preflight']) ? 'on' : 'off'; ?></code></li>
