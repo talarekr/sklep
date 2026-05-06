@@ -352,6 +352,13 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                     $mappingDiagnosticParts = [];
                     if ((string) ($item['detected_intent'] ?? '') !== '') {
                         $mappingDiagnosticParts[] = 'Intent: ' . (string) $item['detected_intent'];
+                    } else {
+                        if ((string) ($item['why_no_intent_match'] ?? '') !== '') {
+                            $mappingDiagnosticParts[] = 'No intent: ' . (string) $item['why_no_intent_match'];
+                        }
+                        if ((string) ($item['intent_source_text_used'] ?? '') !== '') {
+                            $mappingDiagnosticParts[] = 'Intent text: ' . (string) $item['intent_source_text_used'];
+                        }
                     }
                     if ($bestCandidate !== '') {
                         $mappingDiagnosticParts[] = 'Best: ' . $bestCandidate;
