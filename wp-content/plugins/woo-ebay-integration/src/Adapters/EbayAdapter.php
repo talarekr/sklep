@@ -122,22 +122,34 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $sku = (string) $product->get_sku();
         if ($sku === '') return ['result' => 'error', 'error' => 'missing_sku'];
 
+        $marketplaceId = $this->marketplace_id();
+        $settings = $this->settings();
+        $aspects = $this->resolve_product_aspects($product, $product_id, $sku, $settings);
         $itemPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
             'condition' => 'NEW',
             'product' => [
                 'title' => $product->get_name(),
                 'description' => (string) $product->get_description(),
-                'aspects' => ['MPN' => [(string) get_post_meta($product_id, '_part_number', true)]],
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
             ],
         ];
-        $marketplaceId = $this->marketplace_id();
-        $settings = $this->settings();
+        if ($aspects !== []) {
+            $itemPayload['product']['aspects'] = $aspects;
+        }
         $categoryId = $this->resolve_category_id($product_id, $sku, $settings);
         if ($categoryId === '') {
             return ['result' => 'error', 'message' => 'Missing eBay category ID'];
         }
+
+        $this->logger->info('eBay product.aspects before createOrReplaceInventoryItem', [
+            'stage' => 'createOrReplaceInventoryItem',
+            'product_id' => $product_id,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+            'category_id' => $categoryId,
+            'product_aspects' => $aspects,
+        ]);
 
         $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
             'stage' => 'createOrReplaceInventoryItem',
@@ -391,6 +403,185 @@ class EbayAdapter implements MarketplaceAdapterInterface
     }
 
 
+    private function resolve_product_aspects($product, int $product_id, string $sku, array $settings): array
+    {
+        $aspects = [];
+
+        $partNumber = trim((string) get_post_meta($product_id, '_part_number', true));
+        if ($partNumber !== '') {
+            $aspects['MPN'] = [$partNumber];
+        }
+
+        if (method_exists($product, 'get_attributes')) {
+            foreach ((array) $product->get_attributes() as $attribute) {
+                $name = '';
+                $values = [];
+
+                if (is_object($attribute) && method_exists($attribute, 'get_name')) {
+                    $name = wc_attribute_label((string) $attribute->get_name(), $product);
+                    if (method_exists($attribute, 'is_taxonomy') && $attribute->is_taxonomy() && method_exists($attribute, 'get_terms')) {
+                        foreach ((array) $attribute->get_terms() as $term) {
+                            if (is_object($term) && isset($term->name)) {
+                                $values[] = (string) $term->name;
+                            }
+                        }
+                    } elseif (method_exists($attribute, 'get_options')) {
+                        $values = array_map('strval', (array) $attribute->get_options());
+                    }
+                }
+
+                $name = trim(wp_strip_all_tags($name));
+                $values = $this->normalize_aspect_values($values);
+                if ($name !== '' && $values !== []) {
+                    $aspects[$name] = $values;
+                }
+            }
+        }
+
+        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id);
+        if ($manufacturer !== '') {
+            $aspects['Hersteller'] = [$manufacturer];
+        }
+
+        $productOverrides = $this->parse_aspects_json((string) get_post_meta($product_id, '_wei_ebay_aspects_json', true));
+        $settingsOverrides = $this->resolve_configured_aspect_overrides($sku, $settings);
+
+        return $this->merge_aspects($aspects, $productOverrides, $settingsOverrides);
+    }
+
+    private function resolve_manufacturer_aspect_value($product, int $product_id): string
+    {
+        foreach (['_wei_ebay_hersteller', '_ebay_hersteller', '_manufacturer', 'manufacturer', '_brand', 'brand'] as $metaKey) {
+            $value = trim((string) get_post_meta($product_id, $metaKey, true));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        foreach (['Hersteller', 'Manufacturer', 'Producent', 'Marke', 'Brand'] as $attributeName) {
+            if (!method_exists($product, 'get_attribute')) {
+                continue;
+            }
+
+            $value = trim(wp_strip_all_tags((string) $product->get_attribute($attributeName)));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function resolve_configured_aspect_overrides(string $sku, array $settings): array
+    {
+        $configured = $this->parse_aspects_json((string) ($settings['sku_aspect_overrides'] ?? ''));
+        if ($configured === []) {
+            return [];
+        }
+
+        $overrides = [];
+        foreach (['*', '_global', 'global'] as $globalKey) {
+            if (isset($configured[$globalKey]) && is_array($configured[$globalKey])) {
+                $overrides = $this->merge_aspects($overrides, $configured[$globalKey]);
+            }
+        }
+
+        if (isset($configured[$sku]) && is_array($configured[$sku])) {
+            $overrides = $this->merge_aspects($overrides, $configured[$sku]);
+        }
+
+        return $overrides;
+    }
+
+    private function parse_aspects_json(string $raw): array
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($decoded as $name => $values) {
+            $name = trim((string) $name);
+            if ($name === '') {
+                continue;
+            }
+
+            if (is_array($values) && $this->is_assoc($values)) {
+                $normalized[$name] = $this->normalize_aspects($values);
+                continue;
+            }
+
+            $valueList = $this->normalize_aspect_values($values);
+            if ($valueList !== []) {
+                $normalized[$name] = $valueList;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function normalize_aspects(array $aspects): array
+    {
+        $normalized = [];
+        foreach ($aspects as $name => $values) {
+            $name = trim((string) $name);
+            $valueList = $this->normalize_aspect_values($values);
+            if ($name !== '' && $valueList !== []) {
+                $normalized[$name] = $valueList;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function normalize_aspect_values($values): array
+    {
+        if (!is_array($values)) {
+            $values = [$values];
+        }
+
+        $normalized = [];
+        foreach ($values as $value) {
+            if (is_array($value) || is_object($value)) {
+                continue;
+            }
+
+            $value = trim(wp_strip_all_tags((string) $value));
+            if ($value !== '') {
+                $normalized[] = $value;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    private function merge_aspects(array ...$aspectSets): array
+    {
+        $merged = [];
+        foreach ($aspectSets as $aspectSet) {
+            foreach ($aspectSet as $name => $values) {
+                $name = trim((string) $name);
+                $valueList = $this->normalize_aspect_values($values);
+                if ($name !== '' && $valueList !== []) {
+                    $merged[$name] = $valueList;
+                }
+            }
+        }
+
+        return $merged;
+    }
+
+    private function is_assoc(array $value): bool
+    {
+        return array_keys($value) !== range(0, count($value) - 1);
+    }
+
     private function resolve_category_id(int $product_id, string $sku, array $settings): string
     {
         $productCategoryId = trim((string) get_post_meta($product_id, '_wei_ebay_category_id', true));
@@ -441,7 +632,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $marketplaceId = (string) ($details['marketplace_id'] ?? $this->marketplace_id());
         $requestPayload = is_array($details['request_payload'] ?? null) ? $details['request_payload'] : [];
         $categoryId = (string) ($details['category_id'] ?? $requestPayload['categoryId'] ?? '');
-        $message = $this->admin_error_message($errorId, (string) ($primaryEbayError['message'] ?? $error->get_error_message()));
+        $missingAspects = $this->extract_missing_aspects($ebayErrors);
+        $message = $this->admin_error_message($errorId, (string) ($primaryEbayError['message'] ?? $error->get_error_message()), $missingAspects);
 
         $logContext = [
             'stage' => $stage,
@@ -454,6 +646,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'ebay_error_id' => $errorId,
             'ebay_error_message' => (string) ($primaryEbayError['message'] ?? ''),
             'ebay_errors' => $ebayErrors,
+            'missing_aspects' => $missingAspects,
             'error_details' => $details,
         ];
         $this->logger->error('eBay export failed without fatal error', $logContext);
@@ -469,6 +662,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'category_id' => $categoryId,
             'ebay_error_id' => $errorId,
             'ebay_errors' => $ebayErrors,
+            'missing_aspects' => $missingAspects,
             'error_details' => $details,
         ];
     }
@@ -483,13 +677,59 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return array_values(array_filter($errors, 'is_array'));
     }
 
-    private function admin_error_message(string $errorId, string $fallback): string
+    private function admin_error_message(string $errorId, string $fallback, array $missingAspects = []): string
     {
+        if ($missingAspects !== []) {
+            return 'Missing required eBay item specifics/aspects: ' . implode(', ', $missingAspects) . '. Add them in eBay Aspects / Item specifics JSON, e.g. "Hersteller": ["SEAT"].';
+        }
+
         if ($errorId === '25005') {
             return 'Invalid category ID. Selected eBay category is not a leaf category. Choose a final EBAY_DE category.';
         }
 
         return $fallback !== '' ? $fallback : 'eBay export failed. Check logs for the full API response.';
+    }
+
+    private function extract_missing_aspects(array $ebayErrors): array
+    {
+        $missing = [];
+        foreach ($ebayErrors as $ebayError) {
+            $messages = [
+                (string) ($ebayError['message'] ?? ''),
+                (string) ($ebayError['longMessage'] ?? ''),
+            ];
+
+            foreach ($messages as $message) {
+                if (preg_match_all('/Artikelmerkmal\s+(.+?)\s+fehlt/iu', $message, $matches)) {
+                    foreach ($matches[1] as $match) {
+                        $missing[] = trim((string) $match, " \t\n\r\0\x0B.:");
+                    }
+                }
+
+                if (preg_match_all('/(?:item specific|aspect)\s+["“]?(.+?)["”]?\s+(?:is\s+)?missing/iu', $message, $matches)) {
+                    foreach ($matches[1] as $match) {
+                        $missing[] = trim((string) $match, " \t\n\r\0\x0B.:");
+                    }
+                }
+            }
+
+            $parameters = is_array($ebayError['parameters'] ?? null) ? $ebayError['parameters'] : [];
+            foreach ($parameters as $parameter) {
+                if (!is_array($parameter)) {
+                    continue;
+                }
+
+                $name = strtolower((string) ($parameter['name'] ?? ''));
+                if (str_contains($name, 'aspect') || str_contains($name, 'specific')) {
+                    $value = trim((string) ($parameter['value'] ?? ''));
+                    if ($value !== '') {
+                        $missing[] = $value;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique(array_filter($missing)));
     }
 
     private function validate_selected_policies(array $settings): array
@@ -587,6 +827,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings = is_array($settings) ? $settings : [];
         if (!isset($settings['sku_category_overrides'])) {
             $settings['sku_category_overrides'] = "CFM-001=33665";
+        }
+        if (!isset($settings['sku_aspect_overrides'])) {
+            $settings['sku_aspect_overrides'] = wp_json_encode([
+                'CFM-001' => [
+                    'Hersteller' => ['SEAT'],
+                ],
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         }
         return $settings;
     }

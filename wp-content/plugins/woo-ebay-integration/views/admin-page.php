@@ -20,6 +20,10 @@
             <textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=33665"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea><br />
             <span class="description">One SKU per line as SKU=categoryId. MVP fallback for EBAY_DE while Taxonomy API validation is added.</span>
         </p>
+        <p>eBay Aspects / Item specifics (JSON):<br />
+            <textarea name="sku_aspect_overrides" class="large-text code" rows="7" placeholder='{&quot;CFM-001&quot;:{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}}'><?php echo esc_textarea((string) ($s['sku_aspect_overrides'] ?? '')); ?></textarea><br />
+            <span class="description">SKU overrides for eBay product.aspects. Aspect names must match the marketplace language exactly, e.g. EBAY_DE uses Hersteller, and values are arrays of strings.</span>
+        </p>
         <h3>Inventory Location</h3>
         <p>Merchant Location Key: <input type="text" name="inventory_location_key" value="<?php echo esc_attr($s['inventory_location_key'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
         <p>Name: <input type="text" name="inventory_location_name" value="<?php echo esc_attr($s['inventory_location_name'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
@@ -98,8 +102,10 @@
 
     <h2>4. MVP actions</h2>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" />
-        <input type="number" name="product_id" placeholder="Woo product ID" />
-        <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" />
+        <p><input type="number" name="product_id" placeholder="Woo product ID" />
+        <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" /></p>
+        <p><textarea name="ebay_aspects_json" class="large-text code" rows="4" placeholder='{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}'></textarea><br />
+        <span class="description">Optional per-product eBay aspects JSON saved before export.</span></p>
         <button class="button">Export product</button></form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" />
         <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Sync stock</button></form>
@@ -113,6 +119,7 @@
         <li><strong>Marketplace ID:</strong> <code><?php echo esc_html((string) ($s['marketplace_id'] ?? 'EBAY_DE')); ?></code></li>
         <li><strong>Default eBay Category ID:</strong> <code><?php echo esc_html((string) ($s['default_category_id'] ?? '')); ?></code></li>
         <li><strong>SKU Category Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_category_overrides'] ?? '')); ?></code></li>
+        <li><strong>SKU Aspect Overrides:</strong> <code><?php echo esc_html((string) ($s['sku_aspect_overrides'] ?? '')); ?></code></li>
         <li><strong>RuName:</strong> <code><?php echo esc_html((string) ($s['runame'] ?? '')); ?></code></li>
         <li><strong>Callback URL:</strong> <code><?php echo esc_html(admin_url('admin.php?page=ebay-auth-callback')); ?></code></li>
         <li><strong>Authorize URL:</strong> <code style="word-break:break-all"><?php echo esc_html($connect_url); ?></code></li>
