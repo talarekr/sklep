@@ -59,6 +59,7 @@ class AdminPage
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
+        $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
         $s['inventory_location_country'] = sanitize_text_field((string) ($_POST['inventory_location_country'] ?? 'PL'));
@@ -81,6 +82,10 @@ class AdminPage
     {
         check_admin_referer('wei_export');
         $id = (int) ($_POST['product_id'] ?? 0);
+        $category_id = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
+        if ($id > 0 && $category_id !== '') {
+            update_post_meta($id, '_wei_ebay_category_id', $category_id);
+        }
         $res = $this->adapter->export_product($id);
         $this->set_status('Export: ' . wp_json_encode($res));
         $this->go();
@@ -160,6 +165,9 @@ class AdminPage
         }
         if (!isset($s['wei_cached_policies'])) {
             $s['wei_cached_policies'] = [];
+        }
+        if (!isset($s['sku_category_overrides'])) {
+            $s['sku_category_overrides'] = "CFM-001=33665";
         }
         return $s;
     }
