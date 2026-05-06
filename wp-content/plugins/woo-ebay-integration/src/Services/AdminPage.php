@@ -60,6 +60,7 @@ class AdminPage
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
+        $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
         $s['inventory_location_country'] = sanitize_text_field((string) ($_POST['inventory_location_country'] ?? 'PL'));
@@ -83,8 +84,12 @@ class AdminPage
         check_admin_referer('wei_export');
         $id = (int) ($_POST['product_id'] ?? 0);
         $category_id = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
+        $aspects_json = sanitize_textarea_field((string) ($_POST['ebay_aspects_json'] ?? ''));
         if ($id > 0 && $category_id !== '') {
             update_post_meta($id, '_wei_ebay_category_id', $category_id);
+        }
+        if ($id > 0 && trim($aspects_json) !== '') {
+            update_post_meta($id, '_wei_ebay_aspects_json', $aspects_json);
         }
         $res = $this->adapter->export_product($id);
         $this->set_status('Export: ' . wp_json_encode($res));
@@ -168,6 +173,13 @@ class AdminPage
         }
         if (!isset($s['sku_category_overrides'])) {
             $s['sku_category_overrides'] = "CFM-001=33665";
+        }
+        if (!isset($s['sku_aspect_overrides'])) {
+            $s['sku_aspect_overrides'] = wp_json_encode([
+                'CFM-001' => [
+                    'Hersteller' => ['SEAT'],
+                ],
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         }
         return $s;
     }
