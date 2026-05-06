@@ -35,11 +35,16 @@ class Migrations
             ebay_category_path TEXT NULL,
             source VARCHAR(32) NOT NULL DEFAULT 'manual',
             confidence DECIMAL(5,4) NOT NULL DEFAULT 1.0000,
+            status VARCHAR(32) NOT NULL DEFAULT 'mapped_manual',
+            sample_product_ids TEXT NULL,
+            suggestion_payload LONGTEXT NULL,
+            error_reason TEXT NULL,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY uniq_marketplace_woo_term (marketplace_id, woo_term_id),
-            KEY idx_ebay_category (marketplace_id, ebay_category_id)
+            KEY idx_ebay_category (marketplace_id, ebay_category_id),
+            KEY idx_status (marketplace_id, status)
         ) {$charset};";
 
         dbDelta($sql);

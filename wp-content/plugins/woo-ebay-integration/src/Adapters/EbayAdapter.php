@@ -29,9 +29,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['ready' => false, 'failed' => 'marketplace_id_missing'];
         }
 
-        if (trim((string) ($settings['default_category_id'] ?? '')) === '') {
-            return ['ready' => false, 'failed' => 'category_id_missing'];
-        }
 
         $token = $this->client->get_access_token();
         if (is_wp_error($token)) {
@@ -83,7 +80,35 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        return ['ready' => true, 'details' => $checks];
+        $categoryReadiness = $this->category_mapping_readiness($marketplaceId);
+        if (!$categoryReadiness['ready']) {
+            return ['ready' => false, 'failed' => 'category_mapping_review_required', 'details' => $checks, 'category_mappings' => $categoryReadiness];
+        }
+
+        return ['ready' => true, 'details' => $checks, 'category_mappings' => $categoryReadiness];
+    }
+
+    private function category_mapping_readiness(string $marketplaceId): array
+    {
+        $rows = $this->categoryRepo->list_used_woo_categories($marketplaceId, 200);
+        $summary = ['ready' => true, 'mapped' => 0, 'needs_category_review' => 0, 'unmapped' => 0, 'taxonomy_api_forbidden' => 0, 'suggestion_failed' => 0, 'total' => count($rows)];
+        foreach ($rows as $row) {
+            $status = (string) ($row['status'] ?? '');
+            $source = (string) ($row['source'] ?? '');
+            $categoryId = trim((string) ($row['ebay_category_id'] ?? ''));
+            $confidence = (float) ($row['confidence'] ?? 0);
+            $mapped = $categoryId !== '' && ($status === 'mapped_manual' || ($status === 'mapped_auto' && $confidence >= 0.85) || ($status === '' && $source === 'manual'));
+            $fallback = $this->static_category_fallback((int) ($row['term_id'] ?? 0), $marketplaceId);
+            if ($mapped || $fallback['category_id'] !== '') {
+                $summary['mapped']++;
+                continue;
+            }
+            $status = in_array($status, ['needs_category_review', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $status : 'unmapped';
+            $summary[$status]++;
+            $summary['ready'] = false;
+        }
+
+        return $summary;
     }
 
     public function upsert_inventory_location(): array
@@ -703,8 +728,31 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!is_wp_error($terms)) {
             foreach ((array) $terms as $term) {
                 $mapping = $this->categoryRepo->find($marketplaceId, (int) $term->term_id);
-                if ($mapping && trim((string) ($mapping['ebay_category_id'] ?? '')) !== '') {
-                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => 'woo_category_mapping', 'mapping' => $mapping, 'confidence' => (float) $mapping['confidence']];
+                if (!$mapping || trim((string) ($mapping['ebay_category_id'] ?? '')) === '') {
+                    continue;
+                }
+
+                $status = (string) ($mapping['status'] ?? '');
+                $source = (string) ($mapping['source'] ?? '');
+                $confidence = (float) ($mapping['confidence'] ?? 0);
+                if ($status === 'mapped_manual' || ($status === '' && $source === 'manual')) {
+                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => 'woo_category_mapping_manual', 'mapping' => $mapping, 'confidence' => $confidence];
+                }
+                if ($status === 'mapped_auto' && $confidence >= 0.85) {
+                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence];
+                }
+                if ($status === 'needs_category_review') {
+                    return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_suggestion', 'mapping' => $mapping, 'confidence' => $confidence];
+                }
+                if (in_array($status, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
+                    return ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence];
+                }
+            }
+
+            foreach ((array) $terms as $term) {
+                $fallback = $this->static_category_fallback((int) $term->term_id, $marketplaceId);
+                if ($fallback['category_id'] !== '') {
+                    return $fallback;
                 }
             }
         }
@@ -714,24 +762,22 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['category_id' => $skuOverrides[$sku], 'status' => 'ready_manual', 'source' => 'debug_sku_override', 'confidence' => 1.0];
         }
 
-        if (!is_wp_error($terms) && !empty($terms[0])) {
-            $query = $this->categoryRepo->woo_category_path((int) $terms[0]->term_id) . ' ' . $product->get_name();
-            $suggestions = $this->taxonomy->get_category_suggestions($marketplaceId, $query);
-            $first = $suggestions[0] ?? [];
-            $category = is_array($first['category'] ?? null) ? $first['category'] : [];
-            $categoryId = trim((string) ($category['categoryId'] ?? ''));
-            $score = isset($first['categoryTreeNodeAncestors']) ? 0.6 : 0.5;
-            if ($categoryId !== '' && $score >= 0.75) {
-                return ['category_id' => $categoryId, 'status' => 'ready_auto', 'source' => 'taxonomy_suggestion', 'confidence' => $score, 'suggestion' => $first];
-            }
+        return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing_category_mapping', 'confidence' => 0.0];
+    }
+
+    private function static_category_fallback(int $termId, string $marketplaceId): array
+    {
+        if ($marketplaceId !== 'EBAY_DE') {
+            return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'static_fallback', 'confidence' => 0.0];
         }
 
-        $default = trim((string) ($settings['default_category_id'] ?? ''));
-        if ($default !== '') {
-            return ['category_id' => $default, 'status' => 'ready_manual', 'source' => 'default_category', 'confidence' => 1.0];
+        $path = mb_strtolower($this->categoryRepo->woo_category_path($termId));
+        $normalized = remove_accents($path);
+        if (str_contains($normalized, 'wiazki przewodow') || str_contains($path, 'wiązki przewodów')) {
+            return ['category_id' => '179847', 'status' => 'ready_auto', 'source' => 'static_fallback', 'confidence' => 0.9, 'woo_term_id' => $termId];
         }
 
-        return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing', 'confidence' => 0.0];
+        return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'static_fallback', 'confidence' => 0.0];
     }
 
     private function preflight_validate($product, int $product_id, array $skuResolution, array $content, array $category, array $aspects, array $settings): array
@@ -741,11 +787,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $categoryId = (string) ($category['category_id'] ?? '');
         $requiredAspects = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
         $missingAspects = array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name])));
+        $this->logger->info('Resolved eBay category for preflight/export', [
+            'product_id' => $product_id,
+            'category_id' => $categoryId,
+            'category_source' => (string) ($category['source'] ?? ''),
+            'category_confidence' => (float) ($category['confidence'] ?? 0),
+            'category_status' => (string) ($category['status'] ?? ''),
+        ]);
 
         if ($skuResolution['sku'] === '') $errors[] = 'final eBay SKU missing';
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
-        if ($categoryId === '') { $errors[] = 'eBay leaf category missing'; $status = 'needs_category_review'; }
+        if ($categoryId === '') { $errors[] = 'eBay leaf category missing'; $status = in_array((string) ($category['status'] ?? ''), ['needs_category_review', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? (string) $category['status'] : 'needs_category_review'; }
         if ($missingAspects !== []) { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
         if ((float) $product->get_price() <= 0) $errors[] = 'price invalid';

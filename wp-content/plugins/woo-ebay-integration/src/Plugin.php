@@ -13,6 +13,7 @@ use WEI\Services\Logger;
 use WEI\Services\OrderImporter;
 use WEI\Services\SyncService;
 use WEI\Services\AdminPage;
+use WEI\Services\AutoCategoryMappingService;
 
 class Plugin
 {
@@ -26,10 +27,11 @@ class Plugin
         $auth = new EbayAuth($logger);
         $client = new EbayClient($auth, $logger);
         $taxonomy = new EbayTaxonomyService($client, $logger);
+        $autoCategoryMapper = new AutoCategoryMappingService($categoryRepo, $taxonomy, $logger);
         $adapter = new EbayAdapter($client, $repo, $categoryRepo, $taxonomy, $logger);
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();

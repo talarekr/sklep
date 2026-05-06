@@ -23,18 +23,44 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
 
     public function translate_product_content(\WC_Product $product, array $context): array
     {
+        $sourceTitle = (string) ($context['source_title'] ?? $product->get_name());
+        $sourceDescription = (string) ($context['source_description'] ?? $product->get_description());
+        $translations = $this->translate_texts([$sourceTitle, $sourceDescription], 'pl', 'de', 'html');
+
+        if (count($translations) < 2) {
+            throw new \RuntimeException('Google Translation API response was missing translated title or description.');
+        }
+
+        $title = $this->sanitize_title((string) ($translations[0] ?? ''));
+        $description = $this->sanitize_description((string) ($translations[1] ?? ''));
+
+        if ($title === '' || $description === '') {
+            throw new \RuntimeException('Google Translation API returned empty German title or description.');
+        }
+
+        return ['title_de' => $title, 'description_de' => $description];
+    }
+
+    /**
+     * @param array<int,string> $texts
+     * @return array<int,string>
+     */
+    public function translate_texts(array $texts, string $source = 'pl', string $target = 'de', string $format = 'text'): array
+    {
         if (!$this->is_configured()) {
             throw new \RuntimeException('Google Translation provider is not configured.');
         }
 
-        $sourceTitle = (string) ($context['source_title'] ?? $product->get_name());
-        $sourceDescription = (string) ($context['source_description'] ?? $product->get_description());
+        $texts = array_values(array_filter(array_map('strval', $texts), static fn(string $text): bool => trim($text) !== ''));
+        if ($texts === []) {
+            return [];
+        }
 
         $payload = [
-            'q' => [$sourceTitle, $sourceDescription],
-            'source' => 'pl',
-            'target' => 'de',
-            'format' => 'html',
+            'q' => $texts,
+            'source' => $source,
+            'target' => $target,
+            'format' => $format === 'html' ? 'html' : 'text',
         ];
 
         $response = wp_remote_post(
@@ -71,18 +97,16 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
         }
 
         $translations = $decoded['data']['translations'] ?? [];
-        if (!is_array($translations) || count($translations) < 2) {
-            throw new \RuntimeException('Google Translation API response was missing translated title or description.');
+        if (!is_array($translations) || count($translations) < count($texts)) {
+            throw new \RuntimeException('Google Translation API response was missing translated text.');
         }
 
-        $title = $this->sanitize_title((string) ($translations[0]['translatedText'] ?? ''));
-        $description = $this->sanitize_description((string) ($translations[1]['translatedText'] ?? ''));
-
-        if ($title === '' || $description === '') {
-            throw new \RuntimeException('Google Translation API returned empty German title or description.');
+        $values = [];
+        foreach ($translations as $translation) {
+            $values[] = wp_specialchars_decode((string) ($translation['translatedText'] ?? ''), ENT_QUOTES);
         }
 
-        return ['title_de' => $title, 'description_de' => $description];
+        return $values;
     }
 
     private function sanitize_title(string $title): string
