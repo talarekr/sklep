@@ -251,6 +251,7 @@ class AutoSyncScheduler
         $categoryPath = (string) ($category['category_path'] ?? $mapping['ebay_category_path'] ?? '');
         $categoryReason = (string) ($category['sanity_reason'] ?? $mapping['error_reason'] ?? '');
         $message = (string) ($result['message'] ?? '');
+        $suggestionDiagnostics = $this->category_suggestion_diagnostics($mapping);
 
         return [
             'product_id' => $productId,
@@ -264,12 +265,54 @@ class AutoSyncScheduler
             'category_path' => $categoryPath,
             'category_status' => (string) ($category['status'] ?? $mapping['status'] ?? ''),
             'category_sanity_reason' => $categoryReason,
+            'woo_category_path' => (string) ($mapping['woo_category_path'] ?? ''),
+            'mapping_id' => (int) ($mapping['id'] ?? 0),
+            'mapping_status' => (string) ($mapping['status'] ?? ''),
+            'mapping_error_reason' => (string) ($mapping['error_reason'] ?? ''),
+            'best_candidate_category_id' => (string) ($suggestionDiagnostics['best_candidate_category_id'] ?? ''),
+            'best_candidate_name' => (string) ($suggestionDiagnostics['best_candidate_name'] ?? ''),
+            'best_candidate_path' => (string) ($suggestionDiagnostics['best_candidate_path'] ?? ''),
+            'selected_candidate' => (array) ($suggestionDiagnostics['selected_candidate'] ?? []),
+            'rejected_best_reason' => (string) ($suggestionDiagnostics['rejected_best_reason'] ?? ''),
+            'top_candidates' => (array) ($suggestionDiagnostics['top_candidates'] ?? []),
+            'detected_intent' => (string) ($suggestionDiagnostics['detected_intent'] ?? ''),
             'missing_aspects' => $missingAspects,
             'required_aspects' => $requiredAspects,
             'price_ready' => !empty($priceResolution['ready']),
             'content_ready' => !empty($content['title']) && !empty($content['description']),
             'sku' => $product ? (string) $product->get_sku() : '',
             'ebay_sku' => (string) ($skuResolution['sku'] ?? ''),
+        ];
+    }
+
+
+    private function category_suggestion_diagnostics(array $mapping): array
+    {
+        $payload = json_decode((string) ($mapping['suggestion_payload'] ?? ''), true);
+        if (!is_array($payload)) {
+            return [];
+        }
+
+        $topCandidates = array_values(array_filter((array) ($payload['top_candidates'] ?? []), 'is_array'));
+        $selected = is_array($payload['selected_candidate'] ?? null) ? $payload['selected_candidate'] : [];
+        $best = $topCandidates[0] ?? $selected;
+
+        return [
+            'detected_intent' => (string) ($payload['intent'] ?? ''),
+            'selected_candidate' => $selected,
+            'rejected_best_reason' => (string) ($payload['rejected_best_reason'] ?? ''),
+            'top_candidates' => array_slice(array_map(static function (array $candidate): array {
+                return [
+                    'category_id' => (string) ($candidate['category_id'] ?? ''),
+                    'name' => (string) ($candidate['name'] ?? $candidate['category_name'] ?? ''),
+                    'path' => (string) ($candidate['path'] ?? $candidate['category_path'] ?? ''),
+                    'score' => (float) ($candidate['score'] ?? 0),
+                    'sanity_reason' => (string) ($candidate['sanity_reason'] ?? ''),
+                ];
+            }, $topCandidates), 0, 3),
+            'best_candidate_category_id' => (string) ($best['category_id'] ?? ''),
+            'best_candidate_name' => (string) ($best['name'] ?? $best['category_name'] ?? ''),
+            'best_candidate_path' => (string) ($best['path'] ?? $best['category_path'] ?? ''),
         ];
     }
 

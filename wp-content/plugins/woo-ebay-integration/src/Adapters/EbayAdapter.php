@@ -837,7 +837,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!is_wp_error($terms)) {
             foreach ((array) $terms as $term) {
                 $mapping = $this->categoryRepo->find($marketplaceId, (int) $term->term_id);
-                if (!$mapping || trim((string) ($mapping['ebay_category_id'] ?? '')) === '') {
+                if (!$mapping) {
                     continue;
                 }
 
@@ -849,7 +849,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 }
 
                 if ($status === 'mapped_auto' || $source === 'auto_taxonomy') {
-                    $evaluation = $this->evaluate_category_mapping_row($mapping, $settings);
+                    $evaluation = $this->evaluate_category_mapping_row($mapping, $settings, (string) $product->get_name());
                     if (!empty($evaluation['accepted'])) {
                         $autoCandidates[] = ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => (float) ($evaluation['threshold'] ?? 0), 'sanity_check_pass' => !empty($evaluation['sanity_check_pass']), 'sanity_reason' => (string) ($evaluation['sanity_reason'] ?? ''), 'product_override_found' => false];
                     } else {
@@ -889,7 +889,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing_category_mapping', 'confidence' => 0.0, 'product_override_found' => false];
     }
 
-    private function evaluate_category_mapping_row(array $mapping, array $settings): array
+    private function evaluate_category_mapping_row(array $mapping, array $settings, string $productTitle = ''): array
     {
         $status = (string) ($mapping['status'] ?? '');
         $source = (string) ($mapping['source'] ?? '');
@@ -902,9 +902,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         if ($categoryId !== '' && ($status === 'mapped_auto' || $source === 'auto_taxonomy')) {
+            $mappingText = trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? '')));
+            $safetyContext = trim((string) ($mapping['woo_category_path'] ?? '') . ' ' . $productTitle);
             $safety = CategoryMappingSafety::evaluate_auto_mapping(
-                (string) ($mapping['woo_category_path'] ?? ''),
-                trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? ''))),
+                $safetyContext,
+                $mappingText,
                 $confidence,
                 $settings
             );

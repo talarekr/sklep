@@ -338,7 +338,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <?php endforeach; ?>
             </p>
             <table class="widefat striped" style="clear:both;">
-                <thead><tr><th>Product ID</th><th>Product title</th><th>Reason</th><th>Missing aspects</th><th>Category</th><th>eBay category</th><th>Status</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Product ID</th><th>Product title</th><th>Reason</th><th>Mapping diagnostics</th><th>Missing aspects</th><th>Category</th><th>eBay category</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
                 <?php foreach ($notReadyItems as $item): ?>
                     <?php
@@ -348,6 +348,20 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                     $categoryLabel = trim($categoryStatus . ($categoryReason !== '' ? ': ' . $categoryReason : ''));
                     $ebayCategory = trim((string) ($item['category_id'] ?? '') . ' ' . (string) ($item['category_name'] ?? '') . ' ' . (string) ($item['category_path'] ?? ''));
                     $missingAspects = implode(', ', array_map('strval', (array) ($item['missing_aspects'] ?? [])));
+                    $bestCandidate = trim((string) ($item['best_candidate_category_id'] ?? '') . ' ' . (string) ($item['best_candidate_name'] ?? '') . ' ' . (string) ($item['best_candidate_path'] ?? ''));
+                    $mappingDiagnosticParts = [];
+                    if ((string) ($item['detected_intent'] ?? '') !== '') {
+                        $mappingDiagnosticParts[] = 'Intent: ' . (string) $item['detected_intent'];
+                    }
+                    if ($bestCandidate !== '') {
+                        $mappingDiagnosticParts[] = 'Best: ' . $bestCandidate;
+                    }
+                    if ((string) ($item['rejected_best_reason'] ?? '') !== '') {
+                        $mappingDiagnosticParts[] = 'Reason: ' . (string) $item['rejected_best_reason'];
+                    } elseif ((string) ($item['mapping_error_reason'] ?? '') !== '') {
+                        $mappingDiagnosticParts[] = 'Reason: ' . (string) $item['mapping_error_reason'];
+                    }
+                    $mappingDiagnostics = implode(' | ', $mappingDiagnosticParts);
                     $preflightUrl = add_query_arg(['action' => 'wei_preflight_product', 'product_id' => $itemProductId, '_wpnonce' => wp_create_nonce('wei_preflight')], admin_url('admin-post.php'));
                     $categoryReviewUrl = add_query_arg(['page' => 'woo-ebay', 'category_status' => 'needs_review'], admin_url('admin.php')) . '#category-mapping-summary';
                     ?>
@@ -355,6 +369,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                         <td><code><?php echo esc_html((string) $itemProductId); ?></code></td>
                         <td><?php echo esc_html((string) ($item['product_title'] ?? '')); ?></td>
                         <td><?php echo esc_html((string) ($item['primary_reason'] ?? '')); ?></td>
+                        <td><?php echo esc_html($mappingDiagnostics !== '' ? $mappingDiagnostics : '-'); ?></td>
                         <td><?php echo esc_html($missingAspects !== '' ? $missingAspects : '-'); ?></td>
                         <td><?php echo esc_html($categoryLabel !== '' ? $categoryLabel : '-'); ?></td>
                         <td><?php echo esc_html($ebayCategory !== '' ? $ebayCategory : '-'); ?></td>
@@ -366,7 +381,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                         </td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if ($notReadyItems === []): ?><tr><td colspan="8">No not-ready products in this filter for the latest readiness scan.</td></tr><?php endif; ?>
+                <?php if ($notReadyItems === []): ?><tr><td colspan="9">No not-ready products in this filter for the latest readiness scan.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </details>
