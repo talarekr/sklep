@@ -66,6 +66,7 @@ class AdminPage
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
+        $s['product_category_overrides'] = sanitize_textarea_field((string) ($_POST['product_category_overrides'] ?? ''));
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
         $s['category_aspect_fallbacks'] = sanitize_textarea_field((string) ($_POST['category_aspect_fallbacks'] ?? ''));
         $s['default_hersteller_fallback'] = sanitize_text_field((string) ($_POST['default_hersteller_fallback'] ?? ''));
@@ -90,6 +91,7 @@ class AdminPage
         $s['ebay_fulfillment_policy_id'] = sanitize_text_field((string) ($_POST['fulfillmentPolicyId'] ?? $_POST['ebay_fulfillment_policy_id'] ?? ''));
         $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['paymentPolicyId'] ?? $_POST['ebay_payment_policy_id'] ?? ''));
         $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['returnPolicyId'] ?? $_POST['ebay_return_policy_id'] ?? ''));
+        $this->sync_product_category_overrides($s['product_category_overrides']);
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
@@ -116,6 +118,9 @@ class AdminPage
         $aspects_json = sanitize_textarea_field((string) ($_POST['ebay_aspects_json'] ?? ''));
         if ($id > 0 && $category_id !== '') {
             update_post_meta($id, '_wei_ebay_category_id', $category_id);
+            update_post_meta($id, '_wei_ebay_category_source', 'manual_product_override');
+            update_post_meta($id, '_wei_ebay_category_name', $this->static_category_name($category_id));
+            update_post_meta($id, '_wei_ebay_category_path', $this->static_category_path($category_id));
         }
         if ($id > 0 && trim($aspects_json) !== '') {
             update_post_meta($id, '_wei_ebay_aspects_json', $aspects_json);
@@ -255,6 +260,9 @@ class AdminPage
         if (!isset($s['sku_category_overrides'])) {
             $s['sku_category_overrides'] = "CFM-001=179847";
         }
+        if (!isset($s['product_category_overrides'])) {
+            $s['product_category_overrides'] = '';
+        }
         if (!isset($s['sku_aspect_overrides'])) {
             $s['sku_aspect_overrides'] = wp_json_encode([
                 'CFM-001' => [
@@ -279,6 +287,67 @@ class AdminPage
             $s['stock_sync_mode'] = 'set_zero';
         }
         return $s;
+    }
+
+
+    private function sync_product_category_overrides(string $raw): int
+    {
+        $synced = 0;
+        foreach ($this->parse_product_category_overrides($raw) as $productId => $categoryId) {
+            if (get_post_type($productId) !== 'product') {
+                continue;
+            }
+
+            update_post_meta($productId, '_wei_ebay_category_id', $categoryId);
+            update_post_meta($productId, '_wei_ebay_category_source', 'manual_product_override');
+            update_post_meta($productId, '_wei_ebay_category_name', $this->static_category_name($categoryId));
+            update_post_meta($productId, '_wei_ebay_category_path', $this->static_category_path($categoryId));
+            $synced++;
+        }
+
+        return $synced;
+    }
+
+    private function parse_product_category_overrides(string $raw): array
+    {
+        $overrides = [];
+        foreach (preg_split('/\R/', $raw) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $parts = preg_split('/\s*[=:,]\s*/', $line, 2);
+            if (!is_array($parts) || count($parts) !== 2) {
+                continue;
+            }
+
+            $productId = absint($parts[0]);
+            $categoryId = trim((string) $parts[1]);
+            if ($productId > 0 && $categoryId !== '') {
+                $overrides[$productId] = $categoryId;
+            }
+        }
+
+        return $overrides;
+    }
+
+    private function static_category_name(string $categoryId): string
+    {
+        if ($categoryId === '179847') {
+            return 'Kabel, Kabelbäume & Steckverbinder';
+        }
+
+        return '';
+    }
+
+    private function static_category_path(string $categoryId): string
+    {
+        if ($categoryId === '179847') {
+            return 'Auto & Motorrad: Teile > Autoteile & Zubehör > Kabel, Kabelbäume & Steckverbinder';
+        }
+
+        return '';
     }
 
     private function sanitize_ebay_sku_prefix(string $prefix): string

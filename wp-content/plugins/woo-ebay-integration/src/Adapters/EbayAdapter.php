@@ -768,11 +768,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_category($product, int $product_id, string $sku, string $marketplaceId, array $settings): array
     {
-        $override = trim((string) get_post_meta($product_id, '_wei_ebay_category_id', true));
-        if ($override !== '') {
-            return ['category_id' => $override, 'status' => 'ready_manual', 'source' => 'product_override', 'confidence' => 1.0];
+        $productOverride = $this->resolve_product_category_override($product_id, $settings);
+        if ($productOverride['category_id'] !== '') {
+            return $productOverride;
         }
 
+        $skuOverride = $this->resolve_debug_sku_category_override($product, $sku, $settings);
+        if ($skuOverride['category_id'] !== '') {
+            return $skuOverride;
+        }
+
+        $autoCandidates = [];
+        $reviewCandidate = null;
         $terms = wp_get_post_terms($product_id, 'product_cat');
         if (!is_wp_error($terms)) {
             foreach ((array) $terms as $term) {
@@ -785,33 +792,106 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $source = (string) ($mapping['source'] ?? '');
                 $confidence = (float) ($mapping['confidence'] ?? 0);
                 if ($status === 'mapped_manual' || ($status === '' && $source === 'manual')) {
-                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => 'woo_category_mapping_manual', 'mapping' => $mapping, 'confidence' => $confidence];
+                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => 'woo_category_mapping_manual', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
                 }
-                if ($status === 'mapped_auto' && $confidence >= 0.85) {
-                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence];
+
+                if ($status === 'mapped_auto') {
+                    $autoCandidate = ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                    $autoCandidates[] = $autoCandidate;
+                    if ($confidence < 0.85) {
+                        $reviewCandidate ??= ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_auto_below_threshold', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                    }
+                    continue;
                 }
+
                 if ($status === 'needs_category_review') {
-                    return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_suggestion', 'mapping' => $mapping, 'confidence' => $confidence];
+                    $reviewCandidate ??= ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'woo_category_mapping_suggestion', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                    continue;
                 }
+
                 if (in_array($status, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
-                    return ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence];
+                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                }
+            }
+
+            foreach ($autoCandidates as $candidate) {
+                if ((float) ($candidate['confidence'] ?? 0) >= 0.85) {
+                    return $candidate;
                 }
             }
 
             foreach ((array) $terms as $term) {
                 $fallback = $this->static_category_fallback((int) $term->term_id, $marketplaceId);
                 if ($fallback['category_id'] !== '') {
+                    $fallback['product_override_found'] = false;
                     return $fallback;
                 }
             }
         }
 
-        $skuOverrides = $this->parse_sku_category_overrides((string) ($settings['sku_category_overrides'] ?? ''));
-        if (isset($skuOverrides[$sku]) && $skuOverrides[$sku] !== '') {
-            return ['category_id' => $skuOverrides[$sku], 'status' => 'ready_manual', 'source' => 'debug_sku_override', 'confidence' => 1.0];
+        if ($reviewCandidate !== null) {
+            return $reviewCandidate;
         }
 
-        return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing_category_mapping', 'confidence' => 0.0];
+        return ['category_id' => '', 'status' => 'needs_category_review', 'source' => 'missing_category_mapping', 'confidence' => 0.0, 'product_override_found' => false];
+    }
+
+    private function resolve_product_category_override(int $product_id, array $settings): array
+    {
+        $metaCategoryId = trim((string) get_post_meta($product_id, '_wei_ebay_category_id', true));
+        if ($metaCategoryId !== '') {
+            return [
+                'category_id' => $metaCategoryId,
+                'category_name' => trim((string) get_post_meta($product_id, '_wei_ebay_category_name', true)),
+                'category_path' => trim((string) get_post_meta($product_id, '_wei_ebay_category_path', true)),
+                'status' => 'ready_manual',
+                'source' => 'product_override',
+                'meta_source' => trim((string) get_post_meta($product_id, '_wei_ebay_category_source', true)) ?: 'manual_product_override',
+                'confidence' => 1.0,
+                'product_override_found' => true,
+            ];
+        }
+
+        $settingsOverrides = $this->parse_product_category_overrides((string) ($settings['product_category_overrides'] ?? ''));
+        if (isset($settingsOverrides[$product_id]) && $settingsOverrides[$product_id] !== '') {
+            return [
+                'category_id' => $settingsOverrides[$product_id],
+                'category_name' => $this->static_category_name($settingsOverrides[$product_id]),
+                'category_path' => $this->static_category_path($settingsOverrides[$product_id]),
+                'status' => 'ready_manual',
+                'source' => 'product_override',
+                'meta_source' => 'manual_product_override',
+                'override_config_source' => 'settings_dev_debug_product_category_overrides',
+                'confidence' => 1.0,
+                'product_override_found' => true,
+            ];
+        }
+
+        return ['category_id' => '', 'product_override_found' => false];
+    }
+
+    private function resolve_debug_sku_category_override($product, string $sku, array $settings): array
+    {
+        $skuOverrides = $this->parse_sku_category_overrides((string) ($settings['sku_category_overrides'] ?? ''));
+        if ($skuOverrides === []) {
+            return ['category_id' => ''];
+        }
+
+        $candidateSkus = [$sku];
+        if (is_object($product) && method_exists($product, 'get_sku')) {
+            $wooSku = trim((string) $product->get_sku());
+            if ($wooSku !== '') {
+                $candidateSkus[] = $wooSku;
+            }
+        }
+
+        foreach (array_values(array_unique(array_filter($candidateSkus))) as $candidateSku) {
+            if (isset($skuOverrides[$candidateSku]) && $skuOverrides[$candidateSku] !== '') {
+                return ['category_id' => $skuOverrides[$candidateSku], 'status' => 'ready_manual', 'source' => 'debug_sku_override', 'override_sku' => $candidateSku, 'confidence' => 1.0, 'product_override_found' => false];
+            }
+        }
+
+        return ['category_id' => ''];
     }
 
     private function static_category_fallback(int $termId, string $marketplaceId): array
@@ -842,6 +922,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'category_source' => (string) ($category['source'] ?? ''),
             'category_confidence' => (float) ($category['confidence'] ?? 0),
             'category_status' => (string) ($category['status'] ?? ''),
+            'product_override_found' => !empty($category['product_override_found']) ? 'yes' : 'no',
         ]);
 
         if ($skuResolution['sku'] === '') $errors[] = 'final eBay SKU missing';
@@ -1114,6 +1195,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return $productCategoryId;
         }
 
+        $productOverrides = $this->parse_product_category_overrides((string) ($settings['product_category_overrides'] ?? ''));
+        if (isset($productOverrides[$product_id]) && $productOverrides[$product_id] !== '') {
+            return $productOverrides[$product_id];
+        }
+
         $skuOverrides = $this->parse_sku_category_overrides((string) ($settings['sku_category_overrides'] ?? ''));
         if (isset($skuOverrides[$sku]) && $skuOverrides[$sku] !== '') {
             return $skuOverrides[$sku];
@@ -1144,6 +1230,48 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return $overrides;
+    }
+
+    private function parse_product_category_overrides(string $raw): array
+    {
+        $overrides = [];
+        foreach (preg_split('/\R/', $raw) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $parts = preg_split('/\s*[=:,]\s*/', $line, 2);
+            if (!is_array($parts) || count($parts) !== 2) {
+                continue;
+            }
+
+            $productId = absint($parts[0]);
+            $categoryId = trim((string) $parts[1]);
+            if ($productId > 0 && $categoryId !== '') {
+                $overrides[$productId] = $categoryId;
+            }
+        }
+
+        return $overrides;
+    }
+
+    private function static_category_name(string $categoryId): string
+    {
+        if ($categoryId === '179847') {
+            return 'Kabel, Kabelbäume & Steckverbinder';
+        }
+
+        return '';
+    }
+
+    private function static_category_path(string $categoryId): string
+    {
+        if ($categoryId === '179847') {
+            return 'Auto & Motorrad: Teile > Autoteile & Zubehör > Kabel, Kabelbäume & Steckverbinder';
+        }
+
+        return '';
     }
 
     private function export_error_response(string $stage, \WP_Error $error, int $product_id, string $sku): array
@@ -1352,6 +1480,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings = is_array($settings) ? $settings : [];
         if (!isset($settings['sku_category_overrides'])) {
             $settings['sku_category_overrides'] = "CFM-001=179847";
+        }
+        if (!isset($settings['product_category_overrides'])) {
+            $settings['product_category_overrides'] = '';
         }
         if (!isset($settings['sku_aspect_overrides'])) {
             $settings['sku_aspect_overrides'] = wp_json_encode([
