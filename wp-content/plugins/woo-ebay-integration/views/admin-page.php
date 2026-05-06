@@ -228,6 +228,37 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
 $autoSync = is_array($auto_sync_status ?? null) ? $auto_sync_status : [];
 $autoLastSummary = is_array($autoSync['last_summary'] ?? null) ? $autoSync['last_summary'] : [];
 $readinessSummary = is_array($autoSync['readiness_summary'] ?? null) ? $autoSync['readiness_summary'] : [];
+$readinessFilter = sanitize_key((string) ($_GET['readiness_filter'] ?? 'all'));
+$readinessBucketMap = [
+    'all' => 'not_ready_items',
+    'blocked_by_category' => 'blocked_by_category_items',
+    'missing_required_aspects' => 'missing_required_aspects_items',
+    'invalid_price' => 'invalid_price_items',
+    'missing_content_image_stock' => 'not_ready_items',
+];
+if (!isset($readinessBucketMap[$readinessFilter])) {
+    $readinessFilter = 'all';
+}
+$notReadyItems = is_array($readinessSummary[$readinessBucketMap[$readinessFilter]] ?? null) ? $readinessSummary[$readinessBucketMap[$readinessFilter]] : [];
+if ($readinessFilter === 'missing_content_image_stock') {
+    $notReadyItems = array_values(array_filter($notReadyItems, static function (array $item): bool {
+        $status = (string) ($item['status'] ?? '');
+        $reason = strtolower((string) ($item['primary_reason'] ?? ''));
+        $errors = strtolower(implode(' ', array_map('strval', (array) ($item['errors'] ?? []))));
+        return $status === 'not_ready_missing_german_content'
+            || str_contains($reason . ' ' . $errors, 'content')
+            || str_contains($reason . ' ' . $errors, 'german')
+            || str_contains($reason . ' ' . $errors, 'image')
+            || str_contains($reason . ' ' . $errors, 'stock');
+    }));
+}
+$readinessFilterLabels = [
+    'all' => 'All not ready',
+    'blocked_by_category' => 'Blocked by category',
+    'missing_required_aspects' => 'Missing required aspects',
+    'invalid_price' => 'Invalid price',
+    'missing_content_image_stock' => 'Missing content/image/stock',
+];
 $exportSummary = is_array($autoSync['export_summary'] ?? null) ? $autoSync['export_summary'] : [];
 $stockSummary = is_array($autoSync['stock_summary'] ?? null) ? $autoSync['stock_summary'] : [];
 $autoStatus = (string) ($autoSync['status'] ?? 'disabled');
@@ -297,6 +328,52 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <div class="wei-metric"><span>Invalid price</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Missing image</span><strong><?php echo esc_html((string) ($readinessSummary['missing_image'] ?? 0)); ?></strong></div>
         </div>
+        <details class="wei-not-ready-products" style="margin-top:12px;" <?php echo !empty($notReadyItems) ? 'open' : ''; ?>>
+            <summary>Not ready products</summary>
+            <p class="description">Shows up to 50 products from the latest readiness scan, with each bucket capped to keep the admin page and logs compact.</p>
+            <p class="subsubsub">
+                <?php foreach ($readinessFilterLabels as $filterKey => $filterLabel): ?>
+                    <?php $filterUrl = add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => $filterKey], admin_url('admin.php')); ?>
+                    <a href="<?php echo esc_url($filterUrl); ?>" class="<?php echo $readinessFilter === $filterKey ? 'current' : ''; ?>"><?php echo esc_html($filterLabel); ?></a><?php echo $filterKey !== array_key_last($readinessFilterLabels) ? ' | ' : ''; ?>
+                <?php endforeach; ?>
+            </p>
+            <table class="widefat striped" style="clear:both;">
+                <thead><tr><th>Product ID</th><th>Product title</th><th>Reason</th><th>Missing aspects</th><th>Category</th><th>eBay category</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                <?php foreach ($notReadyItems as $item): ?>
+                    <?php
+                    $itemProductId = (int) ($item['product_id'] ?? 0);
+                    $categoryStatus = (string) ($item['category_status'] ?? '');
+                    $categoryReason = (string) ($item['category_sanity_reason'] ?? '');
+                    $categoryLabel = trim($categoryStatus . ($categoryReason !== '' ? ': ' . $categoryReason : ''));
+                    $ebayCategory = trim((string) ($item['category_id'] ?? '') . ' ' . (string) ($item['category_name'] ?? '') . ' ' . (string) ($item['category_path'] ?? ''));
+                    $missingAspects = implode(', ', array_map('strval', (array) ($item['missing_aspects'] ?? [])));
+                    $preflightUrl = add_query_arg(['action' => 'wei_preflight_product', 'product_id' => $itemProductId, '_wpnonce' => wp_create_nonce('wei_preflight')], admin_url('admin-post.php'));
+                    $categoryReviewUrl = add_query_arg(['page' => 'woo-ebay', 'category_status' => 'needs_review'], admin_url('admin.php')) . '#category-mapping-summary';
+                    ?>
+                    <tr>
+                        <td><code><?php echo esc_html((string) $itemProductId); ?></code></td>
+                        <td><?php echo esc_html((string) ($item['product_title'] ?? '')); ?></td>
+                        <td><?php echo esc_html((string) ($item['primary_reason'] ?? '')); ?></td>
+                        <td><?php echo esc_html($missingAspects !== '' ? $missingAspects : '-'); ?></td>
+                        <td><?php echo esc_html($categoryLabel !== '' ? $categoryLabel : '-'); ?></td>
+                        <td><?php echo esc_html($ebayCategory !== '' ? $ebayCategory : '-'); ?></td>
+                        <td><code><?php echo esc_html((string) ($item['status'] ?? 'not_ready')); ?></code></td>
+                        <td>
+                            <?php if ((string) ($item['edit_url'] ?? '') !== ''): ?><a href="<?php echo esc_url((string) $item['edit_url']); ?>">Edit product</a><?php endif; ?>
+                            <?php if ($itemProductId > 0): ?> | <a href="<?php echo esc_url($preflightUrl); ?>">Preflight only</a><?php endif; ?>
+                            <?php if (str_contains((string) ($item['primary_reason'] ?? ''), 'blocked_by_category')): ?> | <a href="<?php echo esc_url($categoryReviewUrl); ?>">Open category mapping review</a><?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if ($notReadyItems === []): ?><tr><td colspan="8">No not-ready products in this filter for the latest readiness scan.</td></tr><?php endif; ?>
+                </tbody>
+            </table>
+        </details>
+        <details class="wei-technical" style="margin-top:12px;">
+            <summary>Technical details</summary>
+            <pre><?php echo esc_html($redactTechnical(wp_json_encode($readinessSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
+        </details>
     </div>
 
     <div class="postbox">
@@ -394,7 +471,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
     </div>
 
     <div class="postbox">
-        <h2>Category mapping summary</h2>
+        <h2 id="category-mapping-summary">Category mapping summary</h2>
         <div class="wei-grid">
             <div class="wei-metric"><span>Total categories</span><strong><?php echo esc_html((string) $categorySummary['total']); ?></strong></div>
             <div class="wei-metric"><span>Mapped manual</span><strong><?php echo esc_html((string) $categorySummary['mapped_manual']); ?></strong></div>

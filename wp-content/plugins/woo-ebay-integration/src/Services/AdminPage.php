@@ -196,7 +196,17 @@ class AdminPage
     {
         check_admin_referer('wei_auto_sync_readiness_now');
         $res = $this->scheduler->run_readiness_scan(max(1, min(300, absint($_POST['batch_size'] ?? 200))));
-        $this->set_status('Auto sync readiness scan: ' . wp_json_encode($res));
+        $status = [
+            'processed' => (int) ($res['processed'] ?? 0),
+            'ready' => (int) ($res['ready'] ?? 0),
+            'not_ready' => (int) ($res['not_ready'] ?? 0),
+            'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
+            'missing_required_aspects' => (int) ($res['missing_required_aspects'] ?? 0),
+            'not_ready_sample_ids' => (array) ($res['not_ready_sample_ids'] ?? []),
+            'blocked_by_category_sample_ids' => (array) ($res['blocked_by_category_sample_ids'] ?? []),
+            'missing_required_aspects_sample_ids' => (array) ($res['missing_required_aspects_sample_ids'] ?? []),
+        ];
+        $this->set_status('Auto sync readiness scan: ' . wp_json_encode($status));
         $this->go();
     }
 
@@ -242,7 +252,7 @@ class AdminPage
     public function preflight_product(): void
     {
         check_admin_referer('wei_preflight');
-        $id = (int) ($_POST['product_id'] ?? 0);
+        $id = (int) ($_REQUEST['product_id'] ?? 0);
         $res = $id > 0 ? $this->adapter->preflight_product($id) : ['result' => 'error', 'error' => 'missing_product_id'];
         $this->set_status('Preflight: ' . wp_json_encode($res));
         $this->go();
