@@ -17,13 +17,31 @@
         <p>Marketplace ID: <input type="text" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" class="regular-text" /></p>
         <p>Default eBay Category ID: <input type="text" name="default_category_id" value="<?php echo esc_attr($s['default_category_id'] ?? ''); ?>" class="regular-text" /></p>
         <p>SKU Category Overrides:<br />
-            <textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=33665"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea><br />
+            <textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=179847"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea><br />
             <span class="description">One SKU per line as SKU=categoryId. MVP fallback for EBAY_DE while Taxonomy API validation is added.</span>
         </p>
-        <p>eBay Aspects / Item specifics (JSON):<br />
-            <textarea name="sku_aspect_overrides" class="large-text code" rows="7" placeholder='{&quot;CFM-001&quot;:{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}}'><?php echo esc_textarea((string) ($s['sku_aspect_overrides'] ?? '')); ?></textarea><br />
-            <span class="description">SKU overrides for eBay product.aspects. Aspect names must match the marketplace language exactly, e.g. EBAY_DE uses Hersteller, and values are arrays of strings.</span>
+        <h3>Safe SKU / aspect defaults</h3>
+        <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" <?php checked(!empty($s['use_woo_sku_for_ebay'])); ?> /> Use WooCommerce SKU for eBay when present</label><br />
+            <span class="description">If Woo SKU is empty, the plugin stores a stable eBay-only SKU in <code>_wei_ebay_sku</code> and does not touch <code>_sku</code>.</span></p>
+        <p><label><input type="checkbox" name="write_generated_sku_to_woo" value="1" <?php checked(!empty($s['write_generated_sku_to_woo'])); ?> /> Write generated eBay SKU to WooCommerce SKU</label><br />
+            <span class="description"><strong>Default OFF for Allegro safety.</strong> Enable only if you know Woo SKU is not managed by Allegro sync.</span></p>
+        <p>Default manufacturer / Hersteller fallback: <input type="text" name="default_hersteller_fallback" value="<?php echo esc_attr($s['default_hersteller_fallback'] ?? ''); ?>" class="regular-text" placeholder="SEAT" /></p>
+        <p>Category aspect fallbacks:<br />
+            <textarea name="category_aspect_fallbacks" class="large-text code" rows="3" placeholder="179847|Hersteller|SEAT"><?php echo esc_textarea((string) ($s['category_aspect_fallbacks'] ?? '')); ?></textarea><br />
+            <span class="description">One fallback per line: eBay category ID | aspect name | value. Used after Woo attributes/meta/taxonomies.</span></p>
+        <p>Stock sync mode:
+            <select name="stock_sync_mode">
+                <option value="set_zero" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option>
+                <option value="reduce" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option>
+            </select>
         </p>
+        <details>
+            <summary>Developer/debug JSON aspects fallback</summary>
+            <p>eBay Aspects / Item specifics (JSON):<br />
+                <textarea name="sku_aspect_overrides" class="large-text code" rows="7" placeholder='{&quot;CFM-001&quot;:{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}}'><?php echo esc_textarea((string) ($s['sku_aspect_overrides'] ?? '')); ?></textarea><br />
+                <span class="description">Debug-only fallback. Main UX should use mappings/fallbacks above, not manual JSON per product.</span>
+            </p>
+        </details>
         <h3>Inventory Location</h3>
         <p>Merchant Location Key: <input type="text" name="inventory_location_key" value="<?php echo esc_attr($s['inventory_location_key'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
         <p>Name: <input type="text" name="inventory_location_name" value="<?php echo esc_attr($s['inventory_location_name'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
@@ -100,13 +118,43 @@
     <h2>3. Readiness check</h2>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run readiness check</button></form>
 
-    <h2>4. MVP actions</h2>
+    <h2>4. Category Mapping (Woo/Allegro → eBay DE)</h2>
+    <p>Map WooCommerce product categories (currently mirroring Allegro) to eBay DE leaf categories. This stores data only in WEI tables/meta and does not change Allegro plugin settings or product SKU.</p>
+    <table class="widefat striped">
+        <thead><tr><th>Woo category</th><th>Products</th><th>eBay categoryId</th><th>eBay name/path</th><th>Status</th><th>Confirm mapping</th></tr></thead>
+        <tbody>
+        <?php foreach ((array) ($category_mappings ?? []) as $row): ?>
+            <tr>
+                <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
+                <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
+                <td><code><?php echo esc_html((string) ($row['ebay_category_id'] ?? '')); ?></code></td>
+                <td><?php echo esc_html(trim((string) (($row['ebay_category_name'] ?? '') . ' ' . ($row['ebay_category_path'] ?? '')))); ?></td>
+                <td><?php echo empty($row['ebay_category_id']) ? '<span style="color:#b32d2e">unmapped</span>' : '<span style="color:#008a20">mapped</span>'; ?></td>
+                <td>
+                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <?php wp_nonce_field('wei_save_category_mapping'); ?>
+                        <input type="hidden" name="action" value="wei_save_category_mapping" />
+                        <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+                        <input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" />
+                        <input type="text" name="ebay_category_id" placeholder="179847" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" />
+                        <input type="text" name="ebay_category_name" placeholder="eBay category name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" />
+                        <button class="button">Save</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <h2>5. Preflight / export actions</h2>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" />
         <p><input type="number" name="product_id" placeholder="Woo product ID" />
         <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" /></p>
         <p><textarea name="ebay_aspects_json" class="large-text code" rows="4" placeholder='{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}'></textarea><br />
         <span class="description">Optional per-product eBay aspects JSON saved before export.</span></p>
-        <button class="button">Export product</button></form>
+        <button class="button button-primary">Preflight + export product</button></form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" />
+        <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Preflight only</button></form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" />
         <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Sync stock</button></form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><button class="button">Import one eBay order</button></form>
@@ -125,7 +173,7 @@
         <li><strong>Authorize URL:</strong> <code style="word-break:break-all"><?php echo esc_html($connect_url); ?></code></li>
     </ul>
 
-    <h2>5. Logs</h2>
+    <h2>6. Logs</h2>
     <p>Last status: <?php echo esc_html(($status['at'] ?? '-') . ' ' . ($status['message'] ?? '')); ?></p>
     <ul>
         <?php foreach ((array) $logs as $log): ?>
