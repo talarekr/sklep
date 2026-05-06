@@ -28,8 +28,8 @@
             </p>
         </details>
         <h3>Safe SKU / aspect defaults</h3>
-        <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" <?php checked(!empty($s['use_woo_sku_for_ebay'])); ?> /> Use WooCommerce SKU for eBay when present</label><br />
-            <span class="description"><strong>Default OFF.</strong> When disabled, eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
+        <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" disabled="disabled" /> Use WooCommerce SKU for eBay when present</label><br />
+            <span class="description"><strong>Disabled.</strong> eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
         <p>eBay-only SKU prefix: <input type="text" name="ebay_sku_prefix" value="<?php echo esc_attr((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?>" class="regular-text" placeholder="GPSW" /><br />
             <span class="description">Generated format: <code>{prefix}-{product_id}</code>; future variants: <code>{prefix}-{product_id}-{variation_id}</code>. Stored in <code>_wei_ebay_sku</code> only.</span></p>
         <p><strong>WooCommerce SKU write-back:</strong> <code>disabled</code><br />
@@ -226,7 +226,37 @@
         </tbody>
     </table>
 
-    <h2>5. Preflight / export actions</h2>
+
+    <h2>5. eBay-only SKU preparation</h2>
+    <?php
+    $skuActiveRun = is_array($ebay_sku_generation_status['active_run'] ?? null) ? $ebay_sku_generation_status['active_run'] : [];
+    $skuLastRun = is_array($ebay_sku_generation_status['last_run'] ?? null) ? $ebay_sku_generation_status['last_run'] : [];
+    $skuLastTotals = is_array($skuLastRun['totals'] ?? null) ? $skuLastRun['totals'] : [];
+    $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['totals'] : [];
+    ?>
+    <p class="description">Generates plugin-owned <code>_wei_ebay_sku</code> values only. WooCommerce <code>_sku</code> is never written, Allegro data is untouched, and no eBay publish/export is started.</p>
+    <table class="widefat striped" style="max-width:900px">
+        <tbody>
+            <tr><th scope="row">Products total eligible</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_total_eligible'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Products with _wei_ebay_sku</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_with_wei_ebay_sku'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Products missing _wei_ebay_sku</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Generated in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['generated_in_last_run'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Skipped existing in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['skipped_existing_in_last_run'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Conflicts in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['conflicts_in_last_run'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Errors in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['errors_in_last_run'] ?? '0')); ?></code></td></tr>
+            <tr><th scope="row">Active run</th><td><code><?php echo esc_html((string) ($skuActiveRun['run_id'] ?? '-')); ?></code><?php if ($skuActiveRun): ?> processed <code><?php echo esc_html((string) ($skuActiveTotals['processed'] ?? '0')); ?></code>, remaining <code><?php echo esc_html((string) ($skuActiveRun['remaining_missing'] ?? '0')); ?></code><?php endif; ?></td></tr>
+            <tr><th scope="row">Last run</th><td><code><?php echo esc_html((string) ($skuLastRun['run_id'] ?? '-')); ?></code><?php if ($skuLastRun): ?> processed <code><?php echo esc_html((string) ($skuLastTotals['processed'] ?? '0')); ?></code>, wrote_woo_sku <code>false</code><?php endif; ?></td></tr>
+        </tbody>
+    </table>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:1em">
+        <?php wp_nonce_field('wei_generate_ebay_skus'); ?>
+        <input type="hidden" name="action" value="wei_generate_ebay_skus" />
+        <?php if (!empty($skuActiveRun['run_id'])): ?><input type="hidden" name="run_id" value="<?php echo esc_attr((string) $skuActiveRun['run_id']); ?>" /><?php endif; ?>
+        <label>Batch size <input type="number" name="batch_size" value="200" min="1" max="500" /></label>
+        <button class="button button-primary"><?php echo !empty($skuActiveRun['run_id']) ? 'Continue eBay SKU generation' : 'Generate missing eBay SKUs'; ?></button>
+    </form>
+
+    <h2>6. Preflight / export actions</h2>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" />
         <p><input type="number" name="product_id" placeholder="Woo product ID" />
         <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" /></p>
@@ -248,6 +278,7 @@
         <li><strong>Default eBay Category ID:</strong> <code><?php echo esc_html((string) ($s['default_category_id'] ?? '')); ?></code></li>
         <li><strong>Use Woo SKU for eBay:</strong> <code><?php echo !empty($s['use_woo_sku_for_ebay']) ? 'on' : 'off'; ?></code></li>
         <li><strong>eBay-only SKU prefix:</strong> <code><?php echo esc_html((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?></code></li>
+        <li><strong>Products total eligible:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_total_eligible'] ?? '0')); ?></code></li>
         <li><strong>Products missing _wei_ebay_sku:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></code></li>
         <li><strong>Products with generated eBay SKU:</strong> <code><?php echo esc_html((string) ($ebay_sku_status['products_with_generated_ebay_sku'] ?? '0')); ?></code></li>
         <li><strong>Product Category Overrides (dev/debug):</strong> <code><?php echo esc_html((string) ($s['product_category_overrides'] ?? '')); ?></code></li>
@@ -261,7 +292,7 @@
         <li><strong>Authorize URL:</strong> <code style="word-break:break-all"><?php echo esc_html($connect_url); ?></code></li>
     </ul>
 
-    <h2>6. Logs</h2>
+    <h2>7. Logs</h2>
     <p>Last status: <?php echo esc_html(($status['at'] ?? '-') . ' ' . ($status['message'] ?? '')); ?></p>
     <ul>
         <?php foreach ((array) $logs as $log): ?>
