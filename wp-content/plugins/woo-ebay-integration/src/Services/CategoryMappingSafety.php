@@ -73,10 +73,14 @@ class CategoryMappingSafety
 
     public static function expected_path_keywords(string $wooPath): array
     {
+        $intent = self::category_intent($wooPath);
+        if ($intent !== '') {
+            return self::expected_keywords_for_intent($intent);
+        }
+
         $woo = self::normalize($wooPath);
         $rules = [
             [['drzwi', 'tuer', 'tueren', 'turen'], ['tuer', 'tueren', 'turen', 'karosserie', 'karosserieteile']],
-            [['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine'], ['motoren', 'komplettmotor', 'complete engine']],
             [['silniki', 'silnik', 'motor', 'motoren'], ['motor', 'motoren', 'motorteile', 'komplettmotor']],
             [['skrzynie biegow', 'skrzynia biegow', 'kompletne skrzynie', 'getriebe'], ['getriebe', 'schaltgetriebe', 'automatikgetriebe']],
             [['lampy', 'reflektor', 'oswietlenie', 'beleuchtung', 'scheinwerfer', 'leuchte'], ['beleuchtung', 'scheinwerfer', 'ruckleuchte', 'ruckleuchten', 'blinker', 'leuchte']],
@@ -119,9 +123,19 @@ class CategoryMappingSafety
     {
         $woo = self::normalize($wooPath);
         $ebay = self::normalize($ebayPath);
+        $intent = self::category_intent($wooPath);
+
+        if ($intent === 'spare_wheel' && self::contains_any($ebay, ['komplettrader', 'komplettraeder'])) {
+            return ['pass' => false, 'reason' => 'spare_wheel_mapped_to_complete_wheels'];
+        }
 
         if (self::is_complete_engine_intent($wooPath) && self::contains_any($ebay, self::complete_engine_part_negative_keywords())) {
             return ['pass' => false, 'reason' => 'complete_engine_candidate_is_engine_part'];
+        }
+
+        $negativeReason = self::strong_negative_reason($intent, $ebay);
+        if ($negativeReason !== '') {
+            return ['pass' => false, 'reason' => $negativeReason];
         }
 
         if (self::is_sonstige_category($ebayPath) && self::is_specific_woo_category($wooPath)) {
@@ -146,7 +160,65 @@ class CategoryMappingSafety
 
     public static function category_intent(string $wooPath): string
     {
-        return self::is_complete_engine_intent($wooPath) ? 'complete_engine' : '';
+        $woo = self::normalize($wooPath);
+        $rules = [
+            'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
+            'tow_hook' => ['hak holowniczy', 'holowniczy', 'abschlepphaken', 'anhangerkupplung', 'anhaengerkupplung', 'abschleppose', 'abschleppoese', 'tow hook', 'tow bar'],
+            'sunroof' => ['szyberdach', 'dach panoramiczny', 'schiebedach', 'panoramadach', 'sunroof'],
+            'gearbox_cover' => ['oslona dolna skrzyni', 'oslona skrzyni', 'unterfahrschutz', 'abdeckung', 'getriebeabdeckung', 'undertray', 'gearbox cover'],
+            'adblue_hose' => ['przewod adblue', 'waz adblue', 'adblue leitung', 'adblue schlauch', 'harnstoffleitung'],
+            'roof_rails' => ['relingi dachowe', 'reling dachowy', 'dachreling', 'reling', 'roof rails'],
+            'ac_hose' => ['przewod klimatyzacji', 'waz klimatyzacji', 'klimatyzacji', 'klimaleitung', 'klimaschlauch', 'kaltemittelleitung', 'kaeltemittelleitung', 'ac hose'],
+            'glow_plug_relay' => ['przekaznik swiec zarowych', 'swiece zarowe', 'gluhkerzenrelais', 'gluehkerzenrelais', 'vorgluhrelais', 'vorgluehrelais', 'glow plug relay'],
+            'hybrid_battery_converter' => ['konwerter baterii', 'bateria hybryda', 'hybryda', 'spannungswandler', 'dc dc wandler', 'dc-dc wandler', 'batterie konverter', 'hybrid battery converter'],
+            'gearbox_mount' => ['poduszka skrzyni biegow', 'mocowanie skrzyni', 'getriebelager', 'getriebehalter', 'getriebeaufhangung', 'getriebeaufhaengung', 'gearbox mount'],
+            'armrest_center_console' => ['podlokietnik', 'tunel srodkowy', 'armlehne', 'mittelarmlehne', 'mittelkonsole', 'center armrest'],
+            'complete_engine' => ['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine'],
+        ];
+
+        foreach ($rules as $intent => $keywords) {
+            if (self::contains_any($woo, $keywords)) {
+                return $intent;
+            }
+        }
+
+        return '';
+    }
+
+    public static function expected_keywords_for_intent(string $intent): array
+    {
+        return match ($intent) {
+            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'wheel spare', 'felgen', 'rader', 'raeder'],
+            'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
+            'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
+            'gearbox_cover' => ['unterfahrschutz', 'abdeckung', 'getriebe', 'motorraum', 'spritzschutz'],
+            'adblue_hose' => ['adblue', 'harnstoff', 'leitung', 'schlauch', 'abgasreinigung'],
+            'roof_rails' => ['dachreling', 'reling', 'dachtrager', 'dachtraeger', 'trager', 'traeger'],
+            'ac_hose' => ['klimaanlage', 'klimaleitung', 'kaltemittel', 'kaeltemittel', 'leitung', 'schlauch'],
+            'glow_plug_relay' => ['gluhkerze', 'gluehkerze', 'vorgluhen', 'vorgluehen', 'relais', 'steuergerat', 'steuergeraet'],
+            'hybrid_battery_converter' => ['hybrid', 'batterie', 'spannungswandler', 'wandler', 'dc-dc', 'hochvolt'],
+            'gearbox_mount' => ['getriebelager', 'motorlager', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
+            'armrest_center_console' => ['armlehne', 'mittelarmlehne', 'mittelkonsole', 'innenausstattung'],
+            'complete_engine' => self::complete_engine_preferred_keywords(),
+            default => [],
+        };
+    }
+
+    private static function strong_negative_reason(string $intent, string $ebay): string
+    {
+        if ($intent === 'roof_rails' && self::contains_any($ebay, ['schiebedach', 'panoramadach', 'glasdach']) && !self::contains_any($ebay, ['reling', 'trager', 'traeger'])) {
+            return 'roof_rails_candidate_is_sunroof_or_roof';
+        }
+        if ($intent === 'sunroof' && self::contains_any($ebay, ['reling', 'dachtrager', 'dachtraeger'])) {
+            return 'sunroof_candidate_is_roof_rails';
+        }
+        if (in_array($intent, ['gearbox_mount', 'gearbox_cover'], true) && self::contains_any($ebay, ['schaltgetriebe', 'automatikgetriebe', 'komplettgetriebe']) && !self::contains_any($ebay, ['lager', 'halter', 'aufhangung', 'aufhaengung', 'abdeckung', 'unterfahrschutz', 'spritzschutz'])) {
+            return $intent . '_candidate_is_complete_gearbox';
+        }
+        if ($intent === 'ac_hose' && self::contains_any($ebay, ['kompressor', 'klimakompressor']) && !self::contains_any($ebay, ['leitung', 'schlauch'])) {
+            return 'ac_hose_candidate_is_ac_compressor';
+        }
+        return '';
     }
 
     public static function is_complete_engine_intent(string $wooPath): bool

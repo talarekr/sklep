@@ -294,7 +294,7 @@ class AutoCategoryMappingService
         }
         if ($needsLocalFallback) {
             $localPosition = 0;
-            foreach ($this->taxonomy->search_local_category_index($marketplaceId, $wooPath . ' ' . $query, CategoryMappingSafety::expected_path_keywords($wooPath), 20) as $local) {
+            foreach ($this->taxonomy->search_local_category_index($marketplaceId, $wooPath . ' ' . $query, CategoryMappingSafety::expected_path_keywords($wooPath . ' ' . $query), 20) as $local) {
                 $localPosition++;
                 if (!is_array($local)) {
                     continue;
@@ -348,7 +348,7 @@ class AutoCategoryMappingService
 
         $rejectedCandidates = [];
         foreach ($candidates as $candidate) {
-            if ((string) ($candidate['sanity_reason'] ?? '') === 'complete_engine_candidate_is_engine_part') {
+            if ((string) ($candidate['sanity_reason'] ?? '') !== '') {
                 $rejectedCandidates[] = $this->candidate_debug_summary($candidate);
             }
         }
@@ -365,8 +365,10 @@ class AutoCategoryMappingService
     private function build_candidate(string $categoryId, string $categoryName, string $path, int $position, string $source, array $raw, string $wooPath, string $query, array $samples, string $marketplaceId, array $settings, bool $isLeaf): array
     {
         $required = $categoryId !== '' ? $this->taxonomy->get_required_aspects($marketplaceId, $categoryId) : [];
-        $score = $this->score_suggestion($wooPath, $query, $path . ' ' . $categoryName, $raw, $samples, $required, $isLeaf);
-        $safety = CategoryMappingSafety::evaluate_auto_mapping($wooPath, $path . ' ' . $categoryName, $score, $settings);
+        $scoringRaw = $raw + ['category' => ['categoryName' => $categoryName]];
+        $score = $this->score_suggestion($wooPath, $query, $path . ' ' . $categoryName, $scoringRaw, $samples, $required, $isLeaf);
+        $safetyContext = trim($wooPath . ' ' . $query);
+        $safety = CategoryMappingSafety::evaluate_auto_mapping($safetyContext, $path . ' ' . $categoryName, $score, $settings);
         $isSonstige = CategoryMappingSafety::is_sonstige_category($path . ' ' . $categoryName);
 
         return [
@@ -418,20 +420,38 @@ class AutoCategoryMappingService
 
         $isSonstige = CategoryMappingSafety::is_sonstige_category($suggestionText);
         $queryLooksSpecific = CategoryMappingSafety::is_specific_woo_category($wooPath . ' ' . $query);
-        $expected = CategoryMappingSafety::expected_path_keywords($wooPath . ' ' . $query);
+        $context = $wooPath . ' ' . $query;
+        $expected = CategoryMappingSafety::expected_path_keywords($context);
         $expectedMatches = $expected === [] ? [] : array_intersect($expected, $suggestionTokens);
-        if ($expectedMatches !== []) {
-            $score += min(0.30, 0.14 + (count($expectedMatches) * 0.06));
+        if ($expected !== []) {
+            $normalizedSuggestionText = strtolower(remove_accents(wp_strip_all_tags($suggestionText)));
+            $categoryNameText = strtolower(remove_accents(wp_strip_all_tags((string) ($suggestion['category']['categoryName'] ?? ''))));
+            foreach ($expected as $keyword) {
+                if ($keyword !== '' && str_contains($categoryNameText, $keyword)) {
+                    $score += 0.24;
+                    break;
+                }
+            }
+            if ($expectedMatches !== []) {
+                $score += min(0.30, 0.14 + (count($expectedMatches) * 0.06));
+            } elseif ($this->contains_any_text($normalizedSuggestionText, $expected)) {
+                $score += 0.10;
+            }
         }
 
-        if (CategoryMappingSafety::is_complete_engine_intent($wooPath . ' ' . $query)) {
-            if (CategoryMappingSafety::matched_expected_keywords($wooPath . ' ' . $query, $suggestionText)) {
+        if (CategoryMappingSafety::is_complete_engine_intent($context)) {
+            if (CategoryMappingSafety::matched_expected_keywords($context, $suggestionText)) {
                 $score += 0.20;
             }
             $normalizedSuggestion = strtolower(remove_accents(wp_strip_all_tags($suggestionText)));
             if ($this->contains_any_text($normalizedSuggestion, CategoryMappingSafety::complete_engine_part_negative_keywords())) {
                 $score -= 0.65;
             }
+        }
+
+        $intent = CategoryMappingSafety::category_intent($context);
+        if ($intent === 'spare_wheel' && $this->contains_any_text(strtolower(remove_accents(wp_strip_all_tags($suggestionText))), ['komplettrader', 'komplettraeder'])) {
+            $score -= 0.75;
         }
 
         if ($isLeaf && !$isSonstige) {
@@ -452,16 +472,16 @@ class AutoCategoryMappingService
             $score += 0.04;
         }
 
-        if ($requiredAspects === [] && $queryLooksSpecific && ($isSonstige || !CategoryMappingSafety::matched_expected_keywords($wooPath, $suggestionText))) {
+        if ($requiredAspects === [] && $queryLooksSpecific && ($isSonstige || !CategoryMappingSafety::matched_expected_keywords($context, $suggestionText))) {
             $score -= 0.08;
         }
         if ($isSonstige) {
             $score -= $queryLooksSpecific ? 0.50 : 0.30;
         }
-        if ($queryLooksSpecific && !CategoryMappingSafety::matched_expected_keywords($wooPath, $suggestionText)) {
+        if ($queryLooksSpecific && !CategoryMappingSafety::matched_expected_keywords($context, $suggestionText)) {
             $score -= 0.30;
         }
-        $sanity = CategoryMappingSafety::sanity_check($wooPath, $suggestionText);
+        $sanity = CategoryMappingSafety::sanity_check($context, $suggestionText);
         if (empty($sanity['pass'])) {
             $score -= 0.20;
         }
