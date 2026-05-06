@@ -70,6 +70,15 @@ class AdminPage
         $s['use_woo_sku_for_ebay'] = !empty($_POST['use_woo_sku_for_ebay']) ? 1 : 0;
         $s['write_generated_sku_to_woo'] = !empty($_POST['write_generated_sku_to_woo']) ? 1 : 0;
         $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
+        $provider = strtolower(sanitize_text_field((string) ($_POST['translation_provider'] ?? 'disabled')));
+        $s['translation_api_key'] = sanitize_text_field((string) ($_POST['translation_api_key'] ?? ''));
+        $s['translation_provider'] = in_array($provider, ['disabled', 'openai', 'deepl', 'google'], true) ? $provider : 'disabled';
+        if ($s['translation_provider'] !== 'disabled' && $s['translation_api_key'] === '') {
+            $s['translation_provider'] = 'disabled';
+        }
+        $s['auto_generate_german_content_preflight'] = !empty($_POST['auto_generate_german_content_preflight']) ? 1 : 0;
+        $s['regenerate_german_content_on_hash_change'] = !empty($_POST['regenerate_german_content_on_hash_change']) ? 1 : 0;
+        $s['translation_openai_model'] = sanitize_text_field((string) ($_POST['translation_openai_model'] ?? 'gpt-4o-mini'));
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
         $s['inventory_location_country'] = sanitize_text_field((string) ($_POST['inventory_location_country'] ?? 'PL'));
@@ -207,6 +216,21 @@ class AdminPage
         }
         if (empty($s['inventory_location_city'])) {
             $s['inventory_location_city'] = 'Sobolew';
+        }
+        if (!isset($s['translation_provider'])) {
+            $s['translation_provider'] = 'disabled';
+        }
+        if (!isset($s['translation_api_key'])) {
+            $s['translation_api_key'] = '';
+        }
+        if (!isset($s['auto_generate_german_content_preflight'])) {
+            $s['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($s['regenerate_german_content_on_hash_change'])) {
+            $s['regenerate_german_content_on_hash_change'] = 0;
+        }
+        if (!isset($s['translation_openai_model'])) {
+            $s['translation_openai_model'] = 'gpt-4o-mini';
         }
         if (!isset($s['inventory_location_address_line_1'])) {
             $s['inventory_location_address_line_1'] = '';
