@@ -47,14 +47,11 @@
             <select name="translation_provider">
                 <?php $provider = (string) ($s['translation_provider'] ?? 'disabled'); ?>
                 <option value="disabled" <?php selected($provider, 'disabled'); ?>>Disabled</option>
-                <option value="openai" <?php selected($provider, 'openai'); ?>>OpenAI</option>
-                <option value="deepl" <?php selected($provider, 'deepl'); ?>>DeepL (placeholder)</option>
-                <option value="google" <?php selected($provider, 'google'); ?>>Google (placeholder)</option>
+                <option value="google_cloud_translate" <?php selected($provider, 'google_cloud_translate'); ?>>Google Cloud Translate</option>
             </select><br />
             <span class="description">Used only for generated eBay DE meta content. WooCommerce title/description and Allegro data are not changed.</span>
         </p>
-        <p>Translation API key: <input type="password" name="translation_api_key" value="<?php echo esc_attr((string) ($s['translation_api_key'] ?? '')); ?>" class="regular-text" autocomplete="off" /></p>
-        <p>OpenAI model: <input type="text" name="translation_openai_model" value="<?php echo esc_attr((string) ($s['translation_openai_model'] ?? 'gpt-4o-mini')); ?>" class="regular-text" placeholder="gpt-4o-mini" /></p>
+        <p>Google Translation API key: <input type="password" name="translation_api_key" value="<?php echo esc_attr((string) ($s['translation_api_key'] ?? '')); ?>" class="regular-text" autocomplete="off" /></p>
         <p><label><input type="checkbox" name="auto_generate_german_content_preflight" value="1" <?php checked(!empty($s['auto_generate_german_content_preflight'])); ?> /> Auto-generate missing German content during preflight</label><br />
             <span class="description">Preflight writes only <code>_wei_ebay_de_*</code> meta and does not call eBay inventory/offer/publish APIs.</span></p>
         <p><label><input type="checkbox" name="regenerate_german_content_on_hash_change" value="1" <?php checked(!empty($s['regenerate_german_content_on_hash_change'])); ?> /> Regenerate German content when source hash changes</label><br />
