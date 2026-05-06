@@ -184,8 +184,10 @@ class AutoCategoryMappingService
 
         $mappingText = trim((string) (($mapping['ebay_category_path'] ?? '') . ' ' . ($mapping['ebay_category_name'] ?? '')));
         $wooPath = (string) ($mapping['woo_category_path'] ?? '');
+        $existingSafety = CategoryMappingSafety::sanity_check($wooPath, $mappingText);
         $shouldSearchAgain = in_array($status, ['category_sanity_failed', 'needs_category_review', 'low_confidence_auto'], true)
-            || (CategoryMappingSafety::is_sonstige_category($mappingText) && CategoryMappingSafety::is_specific_woo_category($wooPath));
+            || (CategoryMappingSafety::is_sonstige_category($mappingText) && CategoryMappingSafety::is_specific_woo_category($wooPath))
+            || (empty($existingSafety['pass']) && (string) ($existingSafety['reason'] ?? '') === 'complete_engine_candidate_is_engine_part');
         if ($shouldSearchAgain && (int) ($mapping['woo_term_id'] ?? 0) > 0) {
             return $this->auto_map_term((int) $mapping['woo_term_id'], (string) ($mapping['marketplace_id'] ?? 'EBAY_DE'), $settings);
         }
@@ -344,8 +346,17 @@ class AutoCategoryMappingService
             }
         }
 
+        $rejectedCandidates = [];
+        foreach ($candidates as $candidate) {
+            if ((string) ($candidate['sanity_reason'] ?? '') === 'complete_engine_candidate_is_engine_part') {
+                $rejectedCandidates[] = $this->candidate_debug_summary($candidate);
+            }
+        }
+
         return [
+            'intent' => CategoryMappingSafety::category_intent($wooPath . ' ' . $query),
             'top_candidates' => array_slice(array_map(fn(array $candidate): array => $this->candidate_debug_summary($candidate), $candidates), 0, self::TOP_CANDIDATE_LIMIT),
+            'rejected_candidates' => array_slice($rejectedCandidates, 0, self::TOP_CANDIDATE_LIMIT),
             'selected_candidate' => $selected,
             'rejected_best_reason' => $rejectedBestReason,
         ];
@@ -413,6 +424,16 @@ class AutoCategoryMappingService
             $score += min(0.30, 0.14 + (count($expectedMatches) * 0.06));
         }
 
+        if (CategoryMappingSafety::is_complete_engine_intent($wooPath . ' ' . $query)) {
+            if (CategoryMappingSafety::matched_expected_keywords($wooPath . ' ' . $query, $suggestionText)) {
+                $score += 0.20;
+            }
+            $normalizedSuggestion = strtolower(remove_accents(wp_strip_all_tags($suggestionText)));
+            if ($this->contains_any_text($normalizedSuggestion, CategoryMappingSafety::complete_engine_part_negative_keywords())) {
+                $score -= 0.65;
+            }
+        }
+
         if ($isLeaf && !$isSonstige) {
             $score += 0.10;
         } elseif ($isLeaf) {
@@ -446,6 +467,16 @@ class AutoCategoryMappingService
         }
 
         return round(min(0.99, max(0.0, $score)), 4);
+    }
+
+    private function contains_any_text(string $haystack, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if ($needle !== '' && str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function sample_aspects_look_resolvable(array $requiredAspects, array $samples): bool
@@ -506,7 +537,9 @@ class AutoCategoryMappingService
         return wp_json_encode([
             'query_source' => mb_substr($sourceQuery, 0, 500),
             'query_de' => mb_substr($translatedQuery, 0, 500),
+            'intent' => (string) ($evaluation['intent'] ?? ''),
             'top_candidates' => (array) ($evaluation['top_candidates'] ?? []),
+            'rejected_candidates' => (array) ($evaluation['rejected_candidates'] ?? []),
             'selected_candidate' => $this->candidate_debug_summary($best),
             'rejected_best_reason' => (string) ($evaluation['rejected_best_reason'] ?? ''),
             'best' => $best,
