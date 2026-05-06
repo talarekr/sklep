@@ -100,10 +100,11 @@ $categoryRows = [];
 $categorySummary = [
     'total' => 0,
     'mapped_manual' => 0,
-    'mapped_auto' => 0,
+    'accepted_auto' => 0,
     'needs_category_review' => 0,
+    'blocked_by_sonstige' => 0,
+    'blocked_by_expected_keyword' => 0,
     'blocked_by_threshold' => 0,
-    'blocked_by_sanity' => 0,
     'last_auto_map_run' => '-',
 ];
 foreach ((array) ($category_mappings ?? []) as $row) {
@@ -155,13 +156,19 @@ foreach ((array) ($category_mappings ?? []) as $row) {
     if ($statusValue === 'accepted_manual') {
         $categorySummary['mapped_manual']++;
     } elseif ($statusValue === 'accepted_auto') {
-        $categorySummary['mapped_auto']++;
+        $categorySummary['accepted_auto']++;
     } elseif ($statusValue === 'needs_category_review') {
         $categorySummary['needs_category_review']++;
     } elseif ($statusValue === 'blocked_by_threshold') {
         $categorySummary['blocked_by_threshold']++;
     } elseif ($statusValue === 'blocked_by_sanity') {
-        $categorySummary['blocked_by_sanity']++;
+        if ($sanityReason === 'auto_mapping_to_sonstige_for_specific_woo_category') {
+            $categorySummary['blocked_by_sonstige']++;
+        } elseif ($sanityReason === 'expected_path_keyword_missing') {
+            $categorySummary['blocked_by_expected_keyword']++;
+        } else {
+            $categorySummary['needs_category_review']++;
+        }
     }
     if ((string) ($row['source'] ?? '') === 'auto_taxonomy' && !empty($row['updated_at'])) {
         $categorySummary['last_auto_map_run'] = max((string) $categorySummary['last_auto_map_run'], (string) $row['updated_at']);
@@ -205,6 +212,12 @@ if ($currentSort === 'confidence') {
 }
 $filterUrl = static fn (string $filter): string => add_query_arg(['page' => 'woo-ebay', 'category_status' => $filter], admin_url('admin.php'));
 $sortUrl = static fn (string $sort): string => add_query_arg(['page' => 'woo-ebay', 'category_status' => $currentFilter, 'category_sort' => $sort], admin_url('admin.php'));
+
+$riskyCategoryRows = array_values(array_filter($categoryRows, static function (array $row): bool {
+    return !in_array((string) ($row['_ui_status'] ?? ''), ['accepted_manual', 'accepted_auto'], true);
+}));
+usort($riskyCategoryRows, static fn (array $a, array $b): int => ((int) ($b['product_count'] ?? 0)) <=> ((int) ($a['product_count'] ?? 0)) ?: ((float) ($b['confidence'] ?? 0)) <=> ((float) ($a['confidence'] ?? 0)));
+$riskyCategoryRows = array_slice($riskyCategoryRows, 0, 10);
 
 $skuActiveRun = is_array($ebay_sku_generation_status['active_run'] ?? null) ? $ebay_sku_generation_status['active_run'] : [];
 $skuLastRun = is_array($ebay_sku_generation_status['last_run'] ?? null) ? $ebay_sku_generation_status['last_run'] : [];
@@ -306,19 +319,38 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
         <div class="wei-grid">
             <div class="wei-metric"><span>Total categories</span><strong><?php echo esc_html((string) $categorySummary['total']); ?></strong></div>
             <div class="wei-metric"><span>Mapped manual</span><strong><?php echo esc_html((string) $categorySummary['mapped_manual']); ?></strong></div>
-            <div class="wei-metric"><span>Mapped auto accepted</span><strong><?php echo esc_html((string) $categorySummary['mapped_auto']); ?></strong></div>
+            <div class="wei-metric"><span>Accepted auto</span><strong><?php echo esc_html((string) $categorySummary['accepted_auto']); ?></strong></div>
             <div class="wei-metric"><span>Needs category review</span><strong><?php echo esc_html((string) $categorySummary['needs_category_review']); ?></strong></div>
+            <div class="wei-metric"><span>Blocked by Sonstige</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_sonstige']); ?></strong></div>
+            <div class="wei-metric"><span>Blocked by expected keyword</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_expected_keyword']); ?></strong></div>
             <div class="wei-metric"><span>Blocked by threshold</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_threshold']); ?></strong></div>
-            <div class="wei-metric"><span>Blocked by sanity</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_sanity']); ?></strong></div>
             <div class="wei-metric"><span>Last auto-map run</span><strong><?php echo esc_html((string) $categorySummary['last_auto_map_run']); ?></strong></div>
         </div>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 12px 0 0;">
             <?php wp_nonce_field('wei_auto_map_categories'); ?>
             <input type="hidden" name="action" value="wei_auto_map_categories" />
             <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-            <button class="button button-primary">Auto-map unmapped categories</button>
-            <span class="description">Runs in WP Admin only; it does not export or publish offers.</span>
+            <button class="button button-primary">Re-evaluate category mappings</button>
+            <span class="description">Re-evaluates auto mappings and maps unmapped categories; manual mappings are not overwritten. Runs in WP Admin only; it does not export or publish offers.</span>
         </form>
+        <h3>Top 10 risky mappings</h3>
+        <table class="widefat striped">
+            <thead><tr><th>Woo category path</th><th>eBay categoryId</th><th>eBay category path</th><th>Confidence</th><th>Reason</th><th>Product count</th><th>eBay DE</th></tr></thead>
+            <tbody>
+            <?php foreach ($riskyCategoryRows as $row): ?>
+                <tr>
+                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
+                    <td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code></td>
+                    <td><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td>
+                    <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
+                    <td><?php echo esc_html((string) (($row['_ui_sanity_reason'] ?? '') !== '' ? $row['_ui_sanity_reason'] : (($row['error_reason'] ?? '') !== '' ? $row['error_reason'] : ($row['_ui_status'] ?? '')))); ?></td>
+                    <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
+                    <td><?php if ((string) ($row['_ui_category_url'] ?? '') !== ''): ?><a href="<?php echo esc_url((string) $row['_ui_category_url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html('Open on eBay DE'); ?></a><?php endif; ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if ($riskyCategoryRows === []): ?><tr><td colspan="7">No risky mappings found.</td></tr><?php endif; ?>
+            </tbody>
+        </table>
     </div>
 
     <div class="postbox">
@@ -492,7 +524,8 @@ $skuActiveTotals = is_array($skuActiveRun['totals'] ?? null) ? $skuActiveRun['to
                             <input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" />
                             <input type="text" name="ebay_category_id" placeholder="179847" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" />
                             <input type="text" name="ebay_category_name" placeholder="eBay category name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" />
-                            <button class="button">Save fallback</button>
+                            <input type="text" name="ebay_category_path" placeholder="eBay category path (optional)" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" />
+                            <button class="button">Save mapping</button>
                         </form>
                     </td>
                 </tr>

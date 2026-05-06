@@ -90,6 +90,54 @@ class EbayTaxonomyService
         return ['status' => 'ok', 'suggestions' => $suggestions, 'source' => 'api', 'tree' => $tree];
     }
 
+
+    public function get_category_details_result(string $marketplace_id, string $category_id): array
+    {
+        $category_id = trim($category_id);
+        if ($category_id === '') {
+            return ['status' => 'category_details_failed', 'category_id' => '', 'category_name' => 'unknown', 'category_path' => 'unknown', 'error' => 'Missing category_id'];
+        }
+
+        $cacheKey = 'wei_cat_details_' . sanitize_key($marketplace_id) . '_' . sanitize_key($category_id);
+        $cached = get_transient($cacheKey);
+        if (is_array($cached)) {
+            return $cached + ['source' => 'cache'];
+        }
+
+        $tree = $this->get_default_category_tree_id_result($marketplace_id);
+        $treeId = (string) ($tree['category_tree_id'] ?? '');
+        if (($tree['status'] ?? '') === 'taxonomy_api_forbidden' || $treeId === '') {
+            return ['status' => (string) ($tree['status'] ?? 'category_details_failed'), 'category_id' => $category_id, 'category_name' => 'unknown', 'category_path' => 'unknown', 'error' => (string) ($tree['error'] ?? 'Missing eBay category_tree_id')];
+        }
+
+        $res = $this->client->get_category_subtree($treeId, $category_id);
+        if (is_wp_error($res)) {
+            $status = $this->is_forbidden_error($res) ? 'taxonomy_api_forbidden' : 'category_details_failed';
+            $this->logger->error('Unable to load eBay category details', ['marketplace_id' => $marketplace_id, 'category_id' => $category_id, 'status' => $status, 'error' => $res->get_error_message(), 'error_details' => $res->get_error_data()]);
+            return ['status' => $status, 'category_id' => $category_id, 'category_name' => 'unknown', 'category_path' => 'unknown', 'error' => $res->get_error_message()];
+        }
+
+        $node = is_array($res['categorySubtreeNode'] ?? null) ? $res['categorySubtreeNode'] : (is_array($res['categoryTreeNode'] ?? null) ? $res['categoryTreeNode'] : []);
+        $category = is_array($node['category'] ?? null) ? $node['category'] : [];
+        $name = trim((string) ($category['categoryName'] ?? $node['categoryName'] ?? 'unknown'));
+        $names = [];
+        foreach ((array) ($node['categoryTreeNodeAncestors'] ?? []) as $ancestor) {
+            if (is_array($ancestor)) {
+                $ancestorName = trim((string) ($ancestor['categoryName'] ?? $ancestor['category']['categoryName'] ?? ''));
+                if ($ancestorName !== '') {
+                    $names[] = $ancestorName;
+                }
+            }
+        }
+        if ($name !== '' && $name !== 'unknown') {
+            $names[] = $name;
+        }
+
+        $result = ['status' => 'ok', 'category_id' => $category_id, 'category_name' => $name !== '' ? $name : 'unknown', 'category_path' => $names !== [] ? implode(' > ', array_values(array_unique($names))) : 'unknown'];
+        set_transient($cacheKey, $result, DAY_IN_SECONDS * 7);
+        return $result;
+    }
+
     public function get_required_aspects(string $marketplace_id, string $category_id): array
     {
         $category_id = trim($category_id);

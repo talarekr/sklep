@@ -57,29 +57,79 @@ class CategoryMappingSafety
         ];
     }
 
+
+    public static function is_sonstige_category(string $ebayText): bool
+    {
+        return self::contains_any(self::normalize($ebayText), ['sonstige']);
+    }
+
+    public static function is_specific_woo_category(string $wooPath): bool
+    {
+        return self::expected_path_keywords($wooPath) !== [] || self::contains_any(self::normalize($wooPath), [
+            'turbiny', 'turbina', 'turbo', 'alternatory', 'alternator', 'rozruszniki', 'rozrusznik',
+            'chlodnice', 'chlodnica', 'klimatyzacja', 'wydech', 'wnetrze', 'fotele', 'fotel', 'lusterka', 'lusterko',
+        ]);
+    }
+
+    public static function expected_path_keywords(string $wooPath): array
+    {
+        $woo = self::normalize($wooPath);
+        $rules = [
+            [['drzwi', 'tur', 'turen'], ['tur', 'turen', 'karosserie', 'karosserieteile']],
+            [['silniki kompletne', 'silnik kompletny', 'silniki', 'silnik', 'motor', 'motoren', 'komplettmotor'], ['motor', 'motoren', 'komplettmotor']],
+            [['skrzynie biegow', 'skrzynia biegow', 'kompletne skrzynie', 'getriebe'], ['getriebe', 'schaltgetriebe', 'automatikgetriebe']],
+            [['lampy', 'reflektor', 'oswietlenie', 'beleuchtung', 'scheinwerfer', 'leuchte'], ['beleuchtung', 'scheinwerfer', 'ruckleuchte', 'ruckleuchten', 'blinker', 'leuchte']],
+            [['zderzak', 'zderzaki', 'stossstange', 'stosstange'], ['stossstange', 'stosstange', 'karosserie']],
+            [['blotnik', 'blotniki', 'kotflugel'], ['kotflugel', 'karosserie']],
+            [['maska', 'motorhaube'], ['motorhaube', 'karosserie']],
+            [['klapa', 'heckklappe', 'kofferraum'], ['heckklappe', 'kofferraum', 'karosserie']],
+            [['hamulce', 'uklad hamulcowy', 'bremse', 'bremsen'], ['bremse', 'bremsen', 'brems']],
+            [['zawieszenie', 'fahrwerk', 'federung'], ['fahrwerk', 'federung', 'achse', 'lenkung']],
+            [['turbo', 'turbina', 'turbiny'], ['turbolader', 'turbo']],
+            [['alternator', 'alternatory', 'lichtmaschine', 'generator'], ['lichtmaschine', 'generator']],
+            [['rozrusznik', 'rozruszniki', 'anlasser', 'starter'], ['anlasser', 'starter']],
+            [['chlodnica', 'chlodnice', 'kuhler', 'kuhlung'], ['kuhler', 'kuhlung']],
+        ];
+
+        foreach ($rules as $rule) {
+            if (self::contains_any($woo, $rule[0])) {
+                return $rule[1];
+            }
+        }
+
+        return [];
+    }
+
+    public static function matched_expected_keywords(string $wooPath, string $ebayPath): bool
+    {
+        $expected = self::expected_path_keywords($wooPath);
+        if ($expected === []) {
+            return true;
+        }
+
+        return self::contains_any(self::normalize($ebayPath), $expected);
+    }
+
     public static function sanity_check(string $wooPath, string $ebayPath): array
     {
         $woo = self::normalize($wooPath);
         $ebay = self::normalize($ebayPath);
 
-        if (self::contains_any($woo, ['karoserii', 'drzwi', 'maska', 'zderzak', 'blotnik', 'klapa']) && self::contains_any($ebay, ['autoelektrik'])) {
-            return ['pass' => false, 'reason' => 'Woo body/door category cannot be auto-mapped to eBay Autoelektrik.'];
+        if (self::is_sonstige_category($ebayPath) && self::is_specific_woo_category($wooPath)) {
+            return ['pass' => false, 'reason' => 'auto_mapping_to_sonstige_for_specific_woo_category'];
         }
 
-        if (self::contains_any($woo, ['oswietlenie', 'lampy', 'reflektor']) && !self::contains_any($ebay, ['beleuchtung', 'scheinwerfer', 'ruckleuchten', 'blinker'])) {
-            return ['pass' => false, 'reason' => 'Woo lighting category must auto-map to an eBay lighting category.'];
+        $expected = self::expected_path_keywords($wooPath);
+        if ($expected !== [] && !self::contains_any($ebay, $expected)) {
+            return ['pass' => false, 'reason' => 'expected_path_keyword_missing'];
+        }
+
+        if (self::contains_any($woo, ['karoserii', 'drzwi', 'maska', 'zderzak', 'blotnik', 'klapa']) && self::contains_any($ebay, ['autoelektrik'])) {
+            return ['pass' => false, 'reason' => 'expected_path_keyword_missing'];
         }
 
         if (self::contains_any($woo, ['silnik', 'osprzet silnika']) && self::contains_any($ebay, ['innenausstattung', 'karosserie', 'beleuchtung'])) {
-            return ['pass' => false, 'reason' => 'Woo engine category cannot be auto-mapped to eBay interior, body, or lighting categories.'];
-        }
-
-        if (self::contains_any($woo, ['uklad hamulcowy', 'hamulce']) && !self::contains_any($ebay, ['brems'])) {
-            return ['pass' => false, 'reason' => 'Woo brake category must auto-map to an eBay brake category.'];
-        }
-
-        if (self::contains_any($woo, ['zawieszenie']) && !self::contains_any($ebay, ['fahrwerk', 'federung', 'lenkung', 'achse'])) {
-            return ['pass' => false, 'reason' => 'Woo suspension category must auto-map to an eBay chassis, suspension, steering, or axle category.'];
+            return ['pass' => false, 'reason' => 'expected_path_keyword_missing'];
         }
 
         return ['pass' => true, 'reason' => ''];
