@@ -145,7 +145,7 @@ class CategoryMappingRepository
     }
 
 
-    public function upsert_teaching_rule(array $data): void
+    public function upsert_teaching_rule(array $data): string
     {
         global $wpdb;
         $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
@@ -178,11 +178,12 @@ class CategoryMappingRepository
         ), ARRAY_A);
         if (is_array($existing)) {
             $wpdb->update($table, $row, ['id' => (int) $existing['id']]);
-            return;
+            return 'updated';
         }
 
         $row['created_at'] = $now;
         $wpdb->insert($table, $row);
+        return 'inserted';
     }
 
     public function find_teaching_rule(string $marketplaceId, string $wooCategoryPath, string $detectedIntent = '', string $title = '', string $keywordFamily = ''): ?array
@@ -224,7 +225,75 @@ class CategoryMappingRepository
             }
         }
 
-        return null;
+        foreach ($families as $family) {
+            if ($family === '') {
+                continue;
+            }
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s AND title_keyword_family=%s ORDER BY updated_at DESC LIMIT 1",
+                $marketplaceId,
+                $pathHash,
+                $family
+            ), ARRAY_A);
+            if (is_array($row)) {
+                return $row;
+            }
+        }
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s ORDER BY updated_at DESC LIMIT 1",
+            $marketplaceId,
+            $pathHash
+        ), ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
+
+    public function nearest_teaching_rules(string $marketplaceId, string $wooCategoryPath = '', string $detectedIntent = '', int $limit = 10): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
+        $limit = max(1, min(20, $limit));
+        $pathHash = $wooCategoryPath !== '' ? $this->woo_category_path_hash($wooCategoryPath) : '';
+        $intent = trim($detectedIntent);
+        if ($pathHash !== '') {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT *, 'same_woo_category_path' AS nearest_reason FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s ORDER BY updated_at DESC LIMIT %d",
+                $marketplaceId,
+                $pathHash,
+                $limit
+            ), ARRAY_A);
+            if (is_array($rows) && count($rows) >= $limit) {
+                return $rows;
+            }
+            $found = is_array($rows) ? $rows : [];
+        } else {
+            $found = [];
+        }
+        if ($intent !== '') {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT *, 'same_detected_intent' AS nearest_reason FROM {$table} WHERE marketplace_id=%s AND detected_intent=%s ORDER BY updated_at DESC LIMIT %d",
+                $marketplaceId,
+                $intent,
+                $limit
+            ), ARRAY_A);
+            foreach ((array) $rows as $row) {
+                $id = (int) ($row['id'] ?? 0);
+                $already = false;
+                foreach ($found as $existing) {
+                    if ((int) ($existing['id'] ?? 0) === $id) {
+                        $already = true;
+                        break;
+                    }
+                }
+                if (!$already) {
+                    $found[] = $row;
+                }
+                if (count($found) >= $limit) {
+                    break;
+                }
+            }
+        }
+        return array_slice($found, 0, $limit);
     }
 
     public function list_teaching_rules(string $marketplaceId = 'EBAY_DE', int $limit = 200): array
@@ -268,11 +337,16 @@ class CategoryMappingRepository
         return trim($family, '_-');
     }
 
-    private function normalize_rule_text(string $text): string
+    public function normalize_rule_text(string $text): string
     {
         $text = strtolower(remove_accents(wp_strip_all_tags($text)));
         $text = str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], $text);
         return trim((string) preg_replace('/\s+/', ' ', $text));
+    }
+
+    public function woo_category_path_hash(string $wooCategoryPath): string
+    {
+        return hash('sha256', $this->normalize_rule_text($wooCategoryPath));
     }
 
     public function woo_category_path(int $term_id): string
