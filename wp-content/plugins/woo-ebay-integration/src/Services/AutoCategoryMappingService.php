@@ -74,6 +74,85 @@ class AutoCategoryMappingService
         return $summary;
     }
 
+    public function repair_blocked_category_mappings_from_audit_problem_groups(string $problemsCsv, string $marketplaceId = 'EBAY_DE', array $targetReasons = []): array
+    {
+        $defaultReasons = [
+            'car_speaker_candidate_is_motorcycle_parts_family',
+            'interior_trim_candidate_is_audio_or_motorcycle',
+            'expected_path_keyword_missing',
+            'interior_trim_candidate_is_motorcycle_parts_family',
+            'power_steering_hose_candidate_is_engine_parts',
+            'gearbox_mount_candidate_is_motorcycle_parts_family',
+            'engine_bearing_category_mismatch',
+        ];
+        $targetReasons = $targetReasons !== [] ? array_values(array_unique(array_map('strval', $targetReasons))) : $defaultReasons;
+        $groups = $this->problem_product_ids_by_reason($problemsCsv, $targetReasons);
+        $summary = [
+            'source_problems_csv' => $problemsCsv,
+            'marketplace_id' => $marketplaceId,
+            'target_reasons' => $targetReasons,
+            'groups' => [],
+            'processed' => 0,
+            'fixed_count' => 0,
+            'still_blocked_count' => 0,
+            'no_candidate_count' => 0,
+            'low_confidence_count' => 0,
+            'reports' => [],
+        ];
+        $diagnosticRows = [];
+
+        foreach ($targetReasons as $reason) {
+            $ids = array_values(array_unique(array_map('intval', $groups[$reason] ?? [])));
+            if ($ids === []) {
+                $summary['groups'][$reason] = ['input_products' => 0, 'processed' => 0, 'fixed_count' => 0, 'still_blocked_count' => 0];
+                continue;
+            }
+            $res = $this->repair_blocked_category_mappings($ids, $marketplaceId, count($ids));
+            $groupSummary = [
+                'input_products' => count($ids),
+                'processed' => (int) ($res['processed'] ?? 0),
+                'fixed_count' => (int) ($res['fixed_count'] ?? 0),
+                'still_blocked_count' => (int) ($res['still_blocked_count'] ?? 0),
+                'no_candidate_count' => (int) ($res['no_candidate_count'] ?? 0),
+                'low_confidence_count' => (int) ($res['low_confidence_count'] ?? 0),
+                'top_block_reasons' => (array) ($res['top_block_reasons'] ?? []),
+            ];
+            $summary['groups'][$reason] = $groupSummary;
+            foreach (['processed', 'fixed_count', 'still_blocked_count', 'no_candidate_count', 'low_confidence_count'] as $key) {
+                $summary[$key] += (int) ($groupSummary[$key] ?? 0);
+            }
+            foreach ((array) ($res['repair_details'] ?? []) as $detail) {
+                if (!is_array($detail)) {
+                    continue;
+                }
+                $diagnosticRows[] = [
+                    'audit_reason_group' => $reason,
+                    'product_id' => (int) ($detail['product_id'] ?? 0),
+                    'result' => empty($detail['reason']) ? 'fixed' : 'still_blocked',
+                    'reason' => (string) ($detail['reason'] ?? ''),
+                    'fallback_used' => !empty($detail['fallback_used']) ? 'true' : 'false',
+                    'fallback_category_id' => (string) ($detail['fallback_category_id'] ?? ''),
+                    'fallback_reason' => (string) ($detail['fallback_reason'] ?? ''),
+                ];
+            }
+        }
+
+        $summary['reports'] = $this->write_repair_group_reports($summary, $diagnosticRows);
+        update_option('wei_ebay_category_mapping_repair_audit_group_report', $summary, false);
+        $this->logger->info('Category mapping audit-group repair completed', [
+            'processed' => (int) $summary['processed'],
+            'fixed_count' => (int) $summary['fixed_count'],
+            'still_blocked_count' => (int) $summary['still_blocked_count'],
+            'groups' => array_map(static fn(array $group): array => [
+                'input_products' => (int) ($group['input_products'] ?? 0),
+                'fixed_count' => (int) ($group['fixed_count'] ?? 0),
+                'still_blocked_count' => (int) ($group['still_blocked_count'] ?? 0),
+            ], (array) $summary['groups']),
+            'reports' => $summary['reports'],
+        ]);
+        return $summary;
+    }
+
     public function repair_blocked_category_mappings(array $productIds = [], string $marketplaceId = 'EBAY_DE', int $fallbackSampleSize = 200): array
     {
         $settings = $this->settings();
@@ -166,8 +245,81 @@ class AutoCategoryMappingService
         arsort($reasonCounts);
         $summary['top_block_reasons'] = array_slice($reasonCounts, 0, 5, true);
         update_option('wei_ebay_category_mapping_repair_report', $summary, false);
-        $this->logger->info('Category mapping repair report', $summary);
+        $this->logger->info('Category mapping repair report', [
+            'processed' => (int) $summary['processed'],
+            'fixed_count' => (int) $summary['fixed_count'],
+            'still_blocked_count' => (int) $summary['still_blocked_count'],
+            'no_candidate_count' => (int) $summary['no_candidate_count'],
+            'low_confidence_count' => (int) $summary['low_confidence_count'],
+            'top_block_reasons' => (array) $summary['top_block_reasons'],
+        ]);
         return $summary;
+    }
+
+    private function problem_product_ids_by_reason(string $path, array $targetReasons): array
+    {
+        $groups = array_fill_keys($targetReasons, []);
+        if (!is_readable($path)) {
+            return $groups;
+        }
+        $fh = fopen($path, 'rb');
+        if (!$fh) {
+            return $groups;
+        }
+        $headers = fgetcsv($fh);
+        if (!is_array($headers)) {
+            fclose($fh);
+            return $groups;
+        }
+        $headers = array_map(static fn($header): string => trim((string) $header), $headers);
+        while (($values = fgetcsv($fh)) !== false) {
+            if (!is_array($values)) {
+                continue;
+            }
+            $row = [];
+            foreach ($headers as $index => $header) {
+                $row[$header] = (string) ($values[$index] ?? '');
+            }
+            $status = (string) ($row['status'] ?? '');
+            $reason = trim((string) ($row['reason'] ?? ''));
+            if (!in_array($status, ['blocked_by_category', 'missing_category'], true) || !isset($groups[$reason])) {
+                continue;
+            }
+            $productId = absint($row['product_id'] ?? 0);
+            if ($productId > 0) {
+                $groups[$reason][] = $productId;
+            }
+        }
+        fclose($fh);
+        foreach ($groups as $reason => $ids) {
+            $groups[$reason] = array_values(array_unique(array_map('intval', $ids)));
+        }
+        return $groups;
+    }
+
+    private function write_repair_group_reports(array $summary, array $rows): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $slug = 'wei-ebay-category-group-repair-' . gmdate('Ymd-His');
+        $csvPath = trailingslashit($baseDir) . $slug . '-diagnostics.csv';
+        $jsonPath = trailingslashit($baseDir) . $slug . '-summary.json';
+        $fh = fopen($csvPath, 'wb');
+        if ($fh) {
+            $headers = $rows !== [] ? array_keys($rows[0]) : ['audit_reason_group', 'product_id', 'result', 'reason', 'fallback_used', 'fallback_category_id', 'fallback_reason'];
+            fputcsv($fh, $headers);
+            foreach ($rows as $row) {
+                fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers));
+            }
+            fclose($fh);
+        }
+        file_put_contents($jsonPath, wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        return [
+            'diagnostics_csv' => ['path' => $csvPath, 'url' => trailingslashit($baseUrl) . basename($csvPath), 'rows' => count($rows)],
+            'summary_json' => ['path' => $jsonPath, 'url' => trailingslashit($baseUrl) . basename($jsonPath)],
+        ];
     }
 
     private function repair_result_diagnostics(array $result): array

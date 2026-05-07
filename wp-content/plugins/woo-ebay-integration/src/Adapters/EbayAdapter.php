@@ -1074,6 +1074,71 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $sku;
     }
 
+    public function generate_german_content_meta_only(int $product_id): array
+    {
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            return ['result' => 'skipped', 'product_id' => $product_id, 'reason' => 'product_not_found'];
+        }
+
+        $settings = $this->settings();
+        $settings['_wei_german_content_only_action'] = true;
+        $beforeTitle = trim((string) get_post_meta($product_id, '_wei_ebay_de_title', true));
+        $beforeDescription = trim((string) get_post_meta($product_id, '_wei_ebay_de_description', true));
+        if ($beforeTitle !== '' && $beforeDescription !== '') {
+            return [
+                'result' => 'already_ready',
+                'product_id' => $product_id,
+                'title_length' => mb_strlen($beforeTitle),
+                'description_length' => mb_strlen($beforeDescription),
+                'source' => trim((string) get_post_meta($product_id, '_wei_ebay_de_content_source', true)) ?: 'custom_meta',
+                'ebay_api_calls' => false,
+                'published' => false,
+                'offer_write_calls' => false,
+                'wrote_woo_sku' => false,
+                'wrote_woo_price' => false,
+                'wrote_allegro' => false,
+            ];
+        }
+
+        $previousSuppress = $this->suppressVerboseLogs;
+        $this->suppressVerboseLogs = true;
+        try {
+            $content = $this->resolve_german_content($product, $product_id, 'EBAY_DE', $settings);
+        } finally {
+            $this->suppressVerboseLogs = $previousSuppress;
+        }
+
+        $ready = !empty($content['ready']);
+        if ($ready) {
+            $title = trim((string) ($content['title'] ?? ''));
+            $description = trim((string) ($content['description'] ?? ''));
+            if ($title !== '' && $description !== '') {
+                update_post_meta($product_id, '_wei_ebay_de_title', $title);
+                update_post_meta($product_id, '_wei_ebay_de_description', $description);
+                update_post_meta($product_id, '_wei_ebay_de_content_source', (string) ($content['source'] ?? 'generated'));
+                update_post_meta($product_id, '_wei_ebay_de_content_generated_at', gmdate('c'));
+                update_post_meta($product_id, '_wei_ebay_de_content_hash', $this->german_content_source_hash($product));
+            }
+        }
+
+        return [
+            'result' => $ready ? 'generated' : 'failed',
+            'product_id' => $product_id,
+            'source' => (string) ($content['source'] ?? ''),
+            'provider' => (string) ($content['provider'] ?? ''),
+            'title_length' => (int) ($content['title_length'] ?? 0),
+            'description_length' => (int) ($content['description_length'] ?? 0),
+            'error_message' => (string) ($content['error_message'] ?? ''),
+            'ebay_api_calls' => false,
+            'published' => false,
+            'offer_write_calls' => false,
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ];
+    }
+
     private function resolve_german_content($product, int $product_id, string $marketplaceId, array $settings): array
     {
         if ($marketplaceId !== 'EBAY_DE') {
@@ -1709,6 +1774,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $resolved = $this->merge_aspects($aspects, $settingsOverrides, $productOverrides);
         $required = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
         $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpn);
+        $resolved = $this->apply_safe_required_aspect_repairs($resolved, $required, $product, $product_id, $categoryId, $settings, $content);
         $missing = array_values(array_filter($required, static fn($name) => empty($resolved[$name])));
         if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
             $this->logger->info('Required aspects for category ' . $categoryId . ': ' . implode(', ', $required), [
@@ -1722,6 +1788,106 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return $resolved;
+    }
+
+    private function apply_safe_required_aspect_repairs(array $aspects, array $requiredAspects, $product, int $product_id, string $categoryId, array $settings, array $content = []): array
+    {
+        if ($this->marketplace_id() !== 'EBAY_DE' || $requiredAspects === []) {
+            return $aspects;
+        }
+
+        $sourceText = $this->aspect_repair_source_text($product, $content);
+        $categoryText = strtolower(trim($categoryId . ' ' . $sourceText));
+        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, $categoryId, $settings, $content);
+        foreach ($requiredAspects as $requiredAspect) {
+            $aspect = (string) $requiredAspect;
+            if ($aspect === '' || !empty($aspects[$aspect])) {
+                continue;
+            }
+            $normalized = $this->normalize_aspect_alias_name($aspect);
+
+            if (in_array($normalized, ['hersteller', 'marke'], true) && $manufacturer !== '') {
+                if ($normalized === 'hersteller' || $this->looks_like_ac_condenser_or_refrigerant_case($categoryText)) {
+                    $aspects[$aspect] = [$manufacturer];
+                }
+                continue;
+            }
+
+            if ($this->looks_like_spare_wheel_or_rim_case($categoryText)) {
+                if (in_array($normalized, ['felgenbreite', 'rimwidth'], true)) {
+                    $width = $this->infer_rim_width($sourceText);
+                    if ($width !== '') {
+                        $aspects[$aspect] = [$width];
+                    }
+                    continue;
+                }
+                if (in_array($normalized, ['zollgrosse', 'zollgroesse', 'zoll', 'durchmesser'], true)) {
+                    $diameter = $this->infer_rim_diameter($sourceText);
+                    if ($diameter !== '') {
+                        $aspects[$aspect] = [$diameter];
+                    }
+                    continue;
+                }
+            }
+        }
+
+        return $aspects;
+    }
+
+    private function aspect_repair_source_text($product, array $content = []): string
+    {
+        $parts = [];
+        foreach (['title', 'description'] as $key) {
+            if (!empty($content[$key])) {
+                $parts[] = (string) $content[$key];
+            }
+        }
+        foreach (['get_name', 'get_description', 'get_short_description'] as $method) {
+            if (is_object($product) && method_exists($product, $method)) {
+                $parts[] = (string) $product->{$method}();
+            }
+        }
+        return wp_strip_all_tags(html_entity_decode(implode(' ', $parts), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    private function looks_like_spare_wheel_or_rim_case(string $text): bool
+    {
+        $text = strtolower(remove_accents($text));
+        return str_contains($text, 'ersatzrad') || str_contains($text, 'notrad') || str_contains($text, 'reserverad') || str_contains($text, 'felge') || str_contains($text, 'felgen') || str_contains($text, 'kolo zapasowe') || str_contains($text, 'dojazdowe');
+    }
+
+    private function looks_like_ac_condenser_or_refrigerant_case(string $text): bool
+    {
+        $text = strtolower(remove_accents($text));
+        return str_contains($text, 'kondensator') || str_contains($text, 'klimakondensator') || str_contains($text, 'klimaanlage') || str_contains($text, 'kaeltemittel') || str_contains($text, 'kaltemittel') || str_contains($text, 'chlodnica klimatyzacji') || str_contains($text, 'osuszacz klimatyzacji');
+    }
+
+    private function infer_rim_width(string $text): string
+    {
+        $plain = strtoupper(wp_strip_all_tags($text));
+        if (preg_match('/(?<!\d)([3-9](?:[.,]5)?)\s*J\b/u', $plain, $matches)) {
+            return str_replace(',', '.', (string) $matches[1]) . 'J';
+        }
+        if (preg_match('/\bFELGENBREITE\s*[:=]?\s*([3-9](?:[.,]5)?)/iu', $plain, $matches)) {
+            return str_replace(',', '.', (string) $matches[1]) . 'J';
+        }
+        return '';
+    }
+
+    private function infer_rim_diameter(string $text): string
+    {
+        $plain = strtoupper(wp_strip_all_tags($text));
+        foreach ([
+            '/\bR\s*(1[0-9]|2[0-4])\b/u',
+            '/\b(1[0-9]|2[0-4])\s*(?:ZOLL|CAL|\")\b/u',
+            '/\b(?:ZOLLGRO(?:S|SS|ß)E|FELGENDURCHMESSER)\s*[:=]?\s*(1[0-9]|2[0-4])\b/iu',
+            '/\b[3-9](?:[.,]5)?J\s*[Xx]\s*(1[0-9]|2[0-4])\b/u',
+        ] as $pattern) {
+            if (preg_match($pattern, $plain, $matches)) {
+                return (string) $matches[1];
+            }
+        }
+        return '';
     }
 
     private function resolve_mpn_aspect_value($product, int $product_id, string $sku, array $content = []): string
