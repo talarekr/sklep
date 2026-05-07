@@ -191,6 +191,65 @@ class CategoryMappingSafety
         return ['pass' => true, 'reason' => ''];
     }
 
+
+    public static function manual_woo_category_mapping_check(string $sourceText, string $categoryId, string $categoryText, array $requiredAspects = []): array
+    {
+        $normalizedSource = self::normalize($sourceText);
+        $normalizedCategory = self::normalize(trim($categoryText . ' ' . $categoryId));
+        $hardReason = self::manual_mapping_hard_reject_reason($normalizedSource, $normalizedCategory, trim($categoryId));
+        if ($hardReason !== '') {
+            return ['pass' => false, 'reason' => $hardReason, 'warning' => ''];
+        }
+
+        $selected = self::selected_category_check($sourceText, $categoryId, $categoryText, $requiredAspects);
+        if (empty($selected['pass'])) {
+            return ['pass' => false, 'reason' => (string) ($selected['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'warning' => ''];
+        }
+
+        $auto = self::evaluate_auto_mapping($sourceText, $categoryText, 1.0, ['auto_category_confidence_threshold' => 0.0]);
+        $reason = (string) ($auto['sanity_reason'] ?? '');
+        if ($reason !== '' && $reason !== 'expected_path_keyword_missing') {
+            $hardReason = self::manual_mapping_hard_reject_reason($normalizedSource, $normalizedCategory, trim($categoryId));
+            if ($hardReason !== '') {
+                return ['pass' => false, 'reason' => $hardReason, 'warning' => ''];
+            }
+        }
+
+        return ['pass' => true, 'reason' => '', 'warning' => $reason === 'expected_path_keyword_missing' ? $reason : ''];
+    }
+
+    private static function manual_mapping_hard_reject_reason(string $source, string $category, string $categoryId): string
+    {
+        $sourceLooksMotorcycle = self::contains_any($source, ['motocykl', 'motocyklowe', 'motorcycle', 'motorrad', 'quad', 'atv']);
+        if (!$sourceLooksMotorcycle && self::contains_any($category, ['motorradteile', 'motorrad- & rollerteile', 'rollerteile', 'quad', 'atv'])) {
+            return 'manual_mapping_motorcycle_or_quad_category_for_non_motorcycle_woo_path';
+        }
+
+        $sourceLooksWholeVehicle = self::contains_any($source, ['samochody', 'pojazdy', 'automobile', 'fahrzeuge', 'vehicle', 'vehicles'])
+            && !self::contains_any($source, ['czesci', 'części', 'teile', 'parts', 'ersatzteile']);
+        if (!$sourceLooksWholeVehicle && self::contains_any($category, ['automobile', 'fahrzeuge', 'pkw']) && !self::contains_any($category, ['teile', 'ersatzteile', 'autoteile'])) {
+            return 'manual_mapping_vehicle_category_for_normal_parts';
+        }
+
+        $sourceLooksCompleteEngine = self::contains_any($source, ['silniki kompletne', 'silnik kompletny', 'komplettmotor', 'complete engine', 'motor kompletny']);
+        $sourceLooksEngineBearing = self::is_engine_bearing_intent($source);
+        $sourceLooksUnrelatedToEngineBlock = self::contains_any($source, ['wnetrze', 'wnętrze', 'innenausstattung', 'audio', 'glosnik', 'głośnik', 'speaker', 'lautsprecher', 'kierownic', 'lenkung', 'steering', 'karoseria', 'karosserie', 'zderzak', 'drzwi', 'tapicerka', 'dekor', 'listwa', 'fotel', 'siedzenie']);
+        if (!$sourceLooksCompleteEngine && !$sourceLooksEngineBearing && $sourceLooksUnrelatedToEngineBlock && self::contains_any($category, ['motorblock', 'motorblocke', 'motorbloecke', 'motoren & motorenteile', 'motoren und motorenteile', 'pleuel', 'hauptlager'])) {
+            return 'manual_mapping_engine_or_motor_block_for_unrelated_parts';
+        }
+
+        $sourceLooksWindowLifter = self::contains_any($source, ['fensterheber', 'window lifter', 'window regulator', 'podnosnik szyby', 'podnośnik szyby', 'mechanizm szyby']);
+        if (!$sourceLooksWindowLifter && self::contains_any($category, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor'])) {
+            return 'manual_mapping_window_lifter_family_for_unrelated_products';
+        }
+
+        if ($categoryId === '33619' && !self::is_engine_bearing_intent($source)) {
+            return 'engine_bearing_category_mismatch';
+        }
+
+        return '';
+    }
+
     public static function detect_intent(string $sourceText): string
     {
         return self::category_intent($sourceText);

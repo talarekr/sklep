@@ -70,7 +70,7 @@ class Migrations
             title_keyword_family VARCHAR(191) NOT NULL DEFAULT '',
             ebay_category_id VARCHAR(64) NOT NULL,
             ebay_category_path TEXT NULL,
-            source VARCHAR(64) NOT NULL DEFAULT 'manual_teaching_csv',
+            source VARCHAR(64) NOT NULL DEFAULT 'manual_woo_category_mapping',
             rule_note TEXT NULL,
             import_group_id VARCHAR(64) NULL,
             sample_product_ids TEXT NULL,

@@ -140,17 +140,19 @@ class AutoCategoryMappingService
                 continue;
             }
 
+            $rowMarketplaceId = trim((string) ($row['marketplace_id'] ?? ''));
+            $ruleMarketplaceId = $rowMarketplaceId !== '' ? $rowMarketplaceId : $marketplaceId;
             $manualPath = trim((string) ($row['manual_ebay_category_path'] ?? $row['suggested_manual_ebay_category_path'] ?? ''));
             if ($manualPath === '') {
-                $details = $this->taxonomy->get_category_details_result($marketplaceId, $manualId);
+                $details = $this->taxonomy->get_category_details_result($ruleMarketplaceId, $manualId);
                 $manualPath = trim((string) ($details['category_path'] ?? $details['category_name'] ?? ''));
             }
 
-            $safety = CategoryMappingSafety::sanity_check($wooPath . ' ' . (string) ($row['detected_intent'] ?? '') . ' ' . (string) ($row['sample_titles'] ?? ''), trim($manualPath . ' ' . $manualId));
+            $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath . ' ' . (string) ($row['detected_intent'] ?? '') . ' ' . (string) ($row['sample_titles'] ?? ''), $manualId, $manualPath);
             if (empty($safety['pass'])) {
-                $reason = (string) ($safety['reason'] ?? 'manual_teaching_rule_failed_safety');
+                $reason = (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety');
                 $summary['rows_rejected_by_safety']++;
-                $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => 'safety_failed', 'reason' => $reason, 'category_id' => $manualId, 'woo_category_path' => $wooPath];
+                $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => 'safety_failed', 'reason' => $reason, 'category_id' => $manualId, 'woo_category_path' => $wooPath, 'marketplace_id' => $ruleMarketplaceId];
                 $this->append_validation_error($summary, "row {$rowNumber}: safety rejected category {$manualId}: {$reason}");
                 continue;
             }
@@ -158,13 +160,13 @@ class AutoCategoryMappingService
             $keywordFamily = $this->keyword_family_from_rule_row($row);
             $detectedIntent = trim((string) ($row['detected_intent'] ?? ''));
             $writeResult = $this->categoryRepo->upsert_teaching_rule([
-                'marketplace_id' => $marketplaceId,
+                'marketplace_id' => $ruleMarketplaceId,
                 'woo_category_path' => $wooPath,
                 'detected_intent' => $detectedIntent,
                 'title_keyword_family' => $keywordFamily,
                 'ebay_category_id' => $manualId,
                 'ebay_category_path' => $manualPath,
-                'source' => 'manual_teaching_csv',
+                'source' => 'manual_woo_category_mapping',
                 'rule_note' => (string) ($row['rule_note'] ?? ''),
                 'import_group_id' => (string) ($row['group_id'] ?? ''),
                 'sample_product_ids' => (string) ($row['sample_product_ids'] ?? ''),
@@ -176,7 +178,7 @@ class AutoCategoryMappingService
             }
             $summary['imported_rules']++;
             $key = [
-                'marketplace_id' => $marketplaceId,
+                'marketplace_id' => $ruleMarketplaceId,
                 'woo_category_path' => $wooPath,
                 'woo_category_path_hash' => $this->categoryRepo->woo_category_path_hash($wooPath),
                 'detected_intent' => $detectedIntent,
@@ -186,7 +188,7 @@ class AutoCategoryMappingService
             if (count($summary['imported_rule_keys']) < 10) {
                 $summary['imported_rule_keys'][] = $key;
             }
-            $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => $writeResult, 'keyword_family' => $keywordFamily, 'category_id' => $manualId] + $key;
+            $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => $writeResult, 'keyword_family' => $keywordFamily, 'category_id' => $manualId, 'safety_warning' => (string) ($safety['warning'] ?? '')] + $key;
         }
 
         $summary['skipped_rows'] = (int) $summary['rows_skipped'];
@@ -426,7 +428,20 @@ class AutoCategoryMappingService
                 }
                 $existing = $this->categoryRepo->find($marketplaceId, $termId);
                 if ($this->is_manual_mapping($existing)) {
-                    continue;
+                    $fixed = true;
+                    $fixedResult = [
+                        'status' => (string) ($existing['status'] ?? 'mapped_manual'),
+                        'category_id' => (string) ($existing['ebay_category_id'] ?? ''),
+                        'manual_teaching_applied' => (string) ($existing['source'] ?? '') === 'manual_woo_category_mapping',
+                        'manual_teaching_lookup_attempted' => false,
+                        'manual_teaching_rule_found' => false,
+                        'manual_teaching_rule_id' => 0,
+                        'manual_teaching_category_id' => (string) ($existing['ebay_category_id'] ?? ''),
+                        'manual_teaching_rejected_reason' => '',
+                        'mapping_write_attempted' => false,
+                        'mapping_write_result' => 'already_mapped_manual',
+                    ];
+                    break;
                 }
                 $status = $existing ? (string) ($existing['status'] ?? 'missing_category_mapping') : 'missing_category_mapping';
                 if (!in_array($status, $eligibleStatuses, true)) {
@@ -435,7 +450,7 @@ class AutoCategoryMappingService
 
                 $result = $this->auto_map_term($termId, $marketplaceId, $settings);
                 $newStatus = (string) ($result['status'] ?? 'suggestion_failed');
-                if (in_array($newStatus, ['mapped_auto', 'mapped_manual_teaching'], true)) {
+                if (in_array($newStatus, ['mapped_auto', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true)) {
                     $fixed = true;
                     $fixedResult = $result;
                     break;
@@ -685,8 +700,8 @@ class AutoCategoryMappingService
             'suggestion_payload' => $this->debug_payload($querySource, $query, $best, $result, $evaluation),
         ]));
 
-        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'candidate_source' => $source]);
-        return array_merge($manualLookupDiagnostics, ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'fallback_used' => !empty($evaluation['fallback_used']), 'fallback_category_id' => (string) ($evaluation['fallback_category_id'] ?? ''), 'fallback_reason' => (string) ($evaluation['fallback_reason'] ?? ''), 'rejected_original_candidate' => (array) ($evaluation['rejected_original_candidate'] ?? [])]);
+        $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'candidate_source' => $source]);
+        return array_merge($manualLookupDiagnostics, ['status' => $status, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'fallback_used' => !empty($evaluation['fallback_used']), 'fallback_category_id' => (string) ($evaluation['fallback_category_id'] ?? ''), 'fallback_reason' => (string) ($evaluation['fallback_reason'] ?? ''), 'rejected_original_candidate' => (array) ($evaluation['rejected_original_candidate'] ?? [])]);
     }
 
 
@@ -717,11 +732,11 @@ class AutoCategoryMappingService
             $categoryPath = (string) ($details['category_path'] ?? '');
         }
         $categoryText = trim($categoryPath . ' ' . $categoryName . ' ' . $categoryId);
-        $safety = CategoryMappingSafety::evaluate_auto_mapping(trim($path . ' ' . $query . ' ' . $sampleTitle), $categoryText, 1.0, $settings);
-        if (empty($safety['sanity_check_pass'])) {
-            $reason = (string) ($safety['sanity_reason'] ?? 'manual_teaching_rule_failed_safety');
-            $this->logger->warning('Manual teaching category rule failed safety checks', ['woo_term_id' => $termId, 'category_id' => $categoryId, 'sanity_reason' => $reason]);
-            return array_merge($lookupDiagnostics, ['status' => 'category_sanity_failed', 'confidence' => 1.0, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => false, 'sanity_reason' => $reason, 'category_id' => $categoryId, 'manual_teaching_applied' => false, 'manual_teaching_rejected_reason' => $reason, 'mapping_write_result' => 'rejected_by_safety']);
+        $safety = CategoryMappingSafety::manual_woo_category_mapping_check(trim($path . ' ' . $query . ' ' . $sampleTitle), $categoryId, $categoryText);
+        if (empty($safety['pass'])) {
+            $reason = (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety');
+            $this->logger->warning('Manual Woo category mapping failed hard safety checks', ['woo_term_id' => $termId, 'category_id' => $categoryId, 'sanity_reason' => $reason]);
+            return array_merge($lookupDiagnostics, ['status' => 'category_sanity_failed', 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => false, 'sanity_reason' => $reason, 'category_id' => $categoryId, 'manual_teaching_applied' => false, 'manual_teaching_rejected_reason' => $reason, 'mapping_write_result' => 'rejected_by_safety']);
         }
 
         $payload = wp_json_encode([
@@ -736,14 +751,14 @@ class AutoCategoryMappingService
             'ebay_category_id' => $categoryId,
             'ebay_category_name' => $categoryName,
             'ebay_category_path' => $categoryPath,
-            'source' => 'manual_teaching_csv',
+            'source' => 'manual_woo_category_mapping',
             'confidence' => 1,
-            'status' => 'mapped_manual_teaching',
+            'status' => 'mapped_manual_woo_category',
             'error_reason' => '',
             'suggestion_payload' => $payload,
         ]));
         $this->logger->info('Manual teaching category mapping applied', ['woo_term_id' => $termId, 'category_id' => $categoryId, 'intent' => $intent, 'rule_id' => (int) ($rule['id'] ?? 0)]);
-        return array_merge($lookupDiagnostics, ['status' => 'mapped_manual_teaching', 'confidence' => 1.0, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => true, 'sanity_reason' => '', 'category_id' => $categoryId, 'manual_teaching_applied' => true, 'fallback_used' => false, 'fallback_category_id' => '', 'fallback_reason' => '', 'mapping_write_attempted' => true, 'mapping_write_result' => 'written_mapped_manual_teaching']);
+        return array_merge($lookupDiagnostics, ['status' => 'mapped_manual_woo_category', 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => true, 'sanity_reason' => '', 'category_id' => $categoryId, 'manual_teaching_applied' => true, 'fallback_used' => false, 'fallback_category_id' => '', 'fallback_reason' => '', 'mapping_write_attempted' => true, 'mapping_write_result' => 'written_mapped_manual_woo_category']);
     }
 
     private function is_manual_mapping(?array $mapping): bool
@@ -754,7 +769,7 @@ class AutoCategoryMappingService
 
         $status = (string) ($mapping['status'] ?? '');
         $source = (string) ($mapping['source'] ?? '');
-        return in_array($status, ['mapped_manual', 'mapped_manual_teaching'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv'], true);
+        return in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping'], true);
     }
 
     private function reevaluate_existing_mapping(?array $mapping, array $settings): ?array
