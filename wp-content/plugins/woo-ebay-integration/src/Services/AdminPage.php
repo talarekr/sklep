@@ -31,6 +31,8 @@ class AdminPage
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
+        add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
+        add_action('admin_post_wei_import_category_teaching_csv', [$this, 'import_category_teaching_csv']);
         add_action('admin_post_wei_generate_missing_german_content_audit', [$this, 'generate_missing_german_content_audit']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
@@ -73,6 +75,10 @@ class AdminPage
         $german_content_audit_summary = is_array($german_content_audit_summary) ? $german_content_audit_summary : [];
         $category_group_repair_summary = get_option('wei_ebay_category_mapping_repair_audit_group_report', []);
         $category_group_repair_summary = is_array($category_group_repair_summary) ? $category_group_repair_summary : [];
+        $category_teaching_export_summary = get_option('wei_ebay_category_mapping_teaching_export', []);
+        $category_teaching_export_summary = is_array($category_teaching_export_summary) ? $category_teaching_export_summary : [];
+        $category_teaching_import_summary = get_option('wei_ebay_category_mapping_teaching_import', []);
+        $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -200,6 +206,52 @@ class AdminPage
             'still_blocked_count' => (int) ($res['still_blocked_count'] ?? 0),
             'groups' => (array) ($res['groups'] ?? []),
             'reports' => (array) ($res['reports'] ?? []),
+        ]));
+        $this->go();
+    }
+
+
+    public function export_category_teaching_csv(): void
+    {
+        check_admin_referer('wei_export_category_teaching_csv');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $path = $this->latest_audit_report_path('problems_only_csv');
+        if ($path === '') {
+            $this->set_status('Category teaching export failed: problems CSV not found. Run the full category audit first.');
+            $this->go();
+        }
+        $res = $this->autoCategoryMapper->export_category_mapping_teaching_csv($path, $marketplaceId);
+        $this->set_status('Category teaching export: ' . wp_json_encode([
+            'groups_exported' => (int) ($res['groups_exported'] ?? 0),
+            'reports' => (array) ($res['reports'] ?? []),
+        ]));
+        $this->go();
+    }
+
+    public function import_category_teaching_csv(): void
+    {
+        check_admin_referer('wei_import_category_teaching_csv');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $file = is_array($_FILES['teaching_csv'] ?? null) ? $_FILES['teaching_csv'] : [];
+        $tmp = (string) ($file['tmp_name'] ?? '');
+        if ($tmp === '' || !is_uploaded_file($tmp)) {
+            $this->set_status('Category teaching import failed: upload a filled teaching CSV.');
+            $this->go();
+        }
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $dest = trailingslashit($baseDir) . 'wei-ebay-category-teaching-import-' . gmdate('Ymd-His') . '.csv';
+        if (!move_uploaded_file($tmp, $dest)) {
+            $this->set_status('Category teaching import failed: could not store uploaded CSV.');
+            $this->go();
+        }
+        $res = $this->autoCategoryMapper->import_category_mapping_teaching_csv($dest, $marketplaceId);
+        $this->set_status('Category teaching import: ' . wp_json_encode([
+            'rows' => (int) ($res['rows'] ?? 0),
+            'imported_rules' => (int) ($res['imported_rules'] ?? 0),
+            'skipped_rows' => (int) ($res['skipped_rows'] ?? 0),
+            'safety_failed_rows' => (int) ($res['safety_failed_rows'] ?? 0),
         ]));
         $this->go();
     }

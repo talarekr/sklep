@@ -128,7 +128,7 @@ foreach ((array) ($category_mappings ?? []) as $row) {
     } elseif ($statusValue === 'category_sanity_failed') {
         $statusValue = 'blocked_by_sanity';
         $sanityReason = (string) ($row['error_reason'] ?? '');
-    } elseif ($statusValue === 'mapped_manual') {
+    } elseif (in_array($statusValue, ['mapped_manual', 'mapped_manual_teaching'], true)) {
         $statusValue = 'accepted_manual';
     }
 
@@ -577,8 +577,40 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <input type="hidden" name="action" value="wei_repair_audit_category_groups" />
             <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
             <button class="button button-primary">Repair category issues from audit reason groups</button>
-            <span class="description">Uses the latest problems CSV and targets the high-volume reason groups: car speaker motorcycle family, interior trim audio/motorcycle, expected keyword missing, power steering hose engine parts, gearbox mount motorcycle family, and engine-bearing mismatch. Detailed diagnostics are written to CSV/JSON, not the main log.</span>
+            <span class="description">Uses the latest problems CSV reason groups and applies imported manual teaching rules before retrying automatic candidates. Detailed diagnostics are written to CSV/JSON, not the main log.</span>
         </form>
+
+        <div style="margin: 10px 0 0; border-left:4px solid #46b450; padding-left:10px;">
+            <h3 style="margin:0 0 8px;">Category mapping teaching export/import</h3>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px;">
+                <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
+                <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+                <button class="button">Export teaching CSV from latest audit problems</button>
+                <span class="description">Groups products by Woo category path, detected intent, sanity reason, bad category, and optional keyword family so you can fill one manual category per pattern.</span>
+            </form>
+            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px;">
+                <?php wp_nonce_field('wei_import_category_teaching_csv'); ?>
+                <input type="hidden" name="action" value="wei_import_category_teaching_csv" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+                <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
+                <button class="button button-primary">Import filled teaching CSV</button>
+                <span class="description">Rows with manual_ebay_category_id create manual_teaching_csv rules that outrank automatic taxonomy candidates and are still checked by category safety guards.</span>
+            </form>
+            <?php if (!empty($category_teaching_export_summary)): ?>
+                <?php $teachingReports = is_array($category_teaching_export_summary['reports'] ?? null) ? $category_teaching_export_summary['reports'] : []; ?>
+                <p class="description">Last teaching export: <?php echo esc_html((string) ($category_teaching_export_summary['groups_exported'] ?? 0)); ?> grouped rows.</p>
+                <ul>
+                    <?php foreach ($teachingReports as $label => $report): ?>
+                        <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a><?php echo isset($report['rows']) ? esc_html(' (' . (string) $report['rows'] . ' rows)') : ''; ?></li><?php endif; ?>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+            <?php if (!empty($category_teaching_import_summary)): ?>
+                <p class="description">Last teaching import: imported <?php echo esc_html((string) ($category_teaching_import_summary['imported_rules'] ?? 0)); ?> rules, skipped <?php echo esc_html((string) ($category_teaching_import_summary['skipped_rows'] ?? 0)); ?> rows, safety failed <?php echo esc_html((string) ($category_teaching_import_summary['safety_failed_rows'] ?? 0)); ?> rows.</p>
+            <?php endif; ?>
+        </div>
+
         <?php if (!empty($category_group_repair_summary)): ?>
             <?php $repairReports = is_array($category_group_repair_summary['reports'] ?? null) ? $category_group_repair_summary['reports'] : []; ?>
             <p class="description">Last audit group repair: processed <?php echo esc_html((string) ($category_group_repair_summary['processed'] ?? 0)); ?>, fixed <?php echo esc_html((string) ($category_group_repair_summary['fixed_count'] ?? 0)); ?>, still blocked <?php echo esc_html((string) ($category_group_repair_summary['still_blocked_count'] ?? 0)); ?>.</p>
