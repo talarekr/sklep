@@ -253,6 +253,7 @@ class AutoSyncScheduler
         $message = (string) ($result['message'] ?? '');
         $productTitle = $product ? (string) $product->get_name() : (string) get_the_title($productId);
         $suggestionDiagnostics = $this->category_suggestion_diagnostics($mapping, $productTitle, $content);
+        $expectedCategoryKeywords = $this->expected_category_keywords_for_readiness_item($productTitle, $mapping, $content, (string) ($suggestionDiagnostics['detected_intent'] ?? ''));
 
         return [
             'product_id' => $productId,
@@ -279,6 +280,7 @@ class AutoSyncScheduler
             'detected_intent' => (string) ($suggestionDiagnostics['detected_intent'] ?? ''),
             'intent_source_text_used' => (string) ($suggestionDiagnostics['intent_source_text_used'] ?? ''),
             'why_no_intent_match' => (string) ($suggestionDiagnostics['why_no_intent_match'] ?? ''),
+            'expected_category_keywords' => $expectedCategoryKeywords,
             'missing_aspects' => $missingAspects,
             'required_aspects' => $requiredAspects,
             'price_ready' => !empty($priceResolution['ready']),
@@ -288,6 +290,22 @@ class AutoSyncScheduler
         ];
     }
 
+
+    private function expected_category_keywords_for_readiness_item(string $productTitle, array $mapping, array $content, string $detectedIntent): array
+    {
+        if ($detectedIntent !== '') {
+            return CategoryMappingSafety::expected_keywords_for_intent($detectedIntent);
+        }
+
+        $sourceText = trim(implode(' ', array_filter([
+            $productTitle,
+            (string) ($mapping['woo_category_path'] ?? ''),
+            (string) ($content['title'] ?? ''),
+            (string) ($content['description'] ?? ''),
+        ], static fn($value): bool => trim((string) $value) !== '')));
+
+        return CategoryMappingSafety::expected_path_keywords($sourceText);
+    }
 
     private function category_suggestion_diagnostics(array $mapping, string $productTitle = '', array $content = []): array
     {
@@ -392,8 +410,25 @@ class AutoSyncScheduler
             'missing_required_aspects' => (int) ($summary['missing_required_aspects'] ?? 0),
             'not_ready_sample_ids' => (array) ($summary['not_ready_sample_ids'] ?? []),
             'blocked_by_category_sample_ids' => (array) ($summary['blocked_by_category_sample_ids'] ?? []),
+            'blocked_by_category_diagnostics' => $this->blocked_by_category_log_diagnostics((array) ($summary['blocked_by_category_items'] ?? [])),
             'missing_required_aspects_sample_ids' => (array) ($summary['missing_required_aspects_sample_ids'] ?? []),
         ];
+    }
+
+    private function blocked_by_category_log_diagnostics(array $items): array
+    {
+        return array_map(static function (array $item): array {
+            return [
+                'product_id' => (int) ($item['product_id'] ?? 0),
+                'title' => (string) ($item['product_title'] ?? ''),
+                'detected_intent' => (string) ($item['detected_intent'] ?? ''),
+                'category_id' => (string) ($item['category_id'] ?? ''),
+                'ebay_category_path' => (string) ($item['category_path'] ?? ''),
+                'category_sanity_reason' => (string) ($item['category_sanity_reason'] ?? ''),
+                'why_no_intent_match' => (string) ($item['why_no_intent_match'] ?? ''),
+                'expected_keywords' => array_values(array_map('strval', (array) ($item['expected_category_keywords'] ?? []))),
+            ];
+        }, $items);
     }
 
     public function run_export_batch(int $batchSize = 20): array

@@ -25,6 +25,9 @@ $cases = [
     ['DMUCHAWA KLIMATYZACJI AUDI A3 8V', 'hvac_blower'],
     ['Anlasser Audi A4 8K 2.0 TDI', 'starter'],
     ['Anlasserkabelbaum für Lichtmaschine Audi A6', 'wiring_harness'],
+    ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228 Anlasserkabelbaum für Lichtmaschine', 'wiring_harness'],
+    ['starter alternator harness Audi A4', 'wiring_harness'],
+    ['wiązka rozrusznik alternator Audi A4', 'wiring_harness'],
     ['Antriebswelle links Audi A5', 'driveshaft'],
     ['Półoś napędowa Audi A4', 'driveshaft'],
     ['Motorsteuergerät Audi A6 4G', 'control_module'],
@@ -57,6 +60,7 @@ $negativeChecks = [
     ['Servolenkungsschlauch Audi A4', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['Dachhimmelleuchte Audi Q7', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['Anlasserkabelbaum Audi A6', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
 ];
 
 foreach ($negativeChecks as [$source, $candidate, $expectedReason]) {
@@ -71,6 +75,7 @@ $positiveChecks = [
     ['PANEL NAWIEWU KLIMATYZACJI', 'Innenausstattung > Schalter, Kontrollelemente & Zündschlösser', true],
     ['Przewód klimatyzacji', 'Klimaanlage > Klimaleitung', true],
     ['Pleuellager Hauptlager Audi 2.0 TDI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', true],
+    ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228 Anlasserkabelbaum für Lichtmaschine', 'Auto & Motorrad: Teile > Autoelektrik > Kabelbäume & Leitungssätze > Bordnetz', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {
