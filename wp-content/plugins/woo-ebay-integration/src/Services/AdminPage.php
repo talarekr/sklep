@@ -31,6 +31,7 @@ class AdminPage
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
+        add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
         add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
         add_action('admin_post_wei_import_category_teaching_csv', [$this, 'import_category_teaching_csv']);
         add_action('admin_post_wei_test_category_teaching_rule_match', [$this, 'test_category_teaching_rule_match']);
@@ -76,6 +77,8 @@ class AdminPage
         $german_content_audit_summary = is_array($german_content_audit_summary) ? $german_content_audit_summary : [];
         $category_group_repair_summary = get_option('wei_ebay_category_mapping_repair_audit_group_report', []);
         $category_group_repair_summary = is_array($category_group_repair_summary) ? $category_group_repair_summary : [];
+        $manual_woo_category_apply_summary = get_option('wei_ebay_manual_woo_category_mapping_apply_report', []);
+        $manual_woo_category_apply_summary = is_array($manual_woo_category_apply_summary) ? $manual_woo_category_apply_summary : [];
         $category_teaching_export_summary = get_option('wei_ebay_category_mapping_teaching_export', []);
         $category_teaching_export_summary = is_array($category_teaching_export_summary) ? $category_teaching_export_summary : [];
         $category_teaching_import_summary = get_option('wei_ebay_category_mapping_teaching_import', []);
@@ -189,6 +192,24 @@ class AdminPage
             'fixed_count' => (int) ($res['fixed_count'] ?? 0),
             'still_blocked_count' => (int) ($res['still_blocked_count'] ?? 0),
             'top_block_reasons' => (array) ($res['top_block_reasons'] ?? []),
+        ]));
+        $this->go();
+    }
+
+    public function apply_manual_woo_category_mappings(): void
+    {
+        check_admin_referer('wei_apply_manual_woo_category_mappings');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $res = $this->autoCategoryMapper->apply_manual_woo_category_mappings_to_all_products($marketplaceId);
+        $this->set_status('Manual Woo category mappings apply: ' . wp_json_encode([
+            'manual_rules_loaded' => (int) ($res['manual_rules_loaded'] ?? 0),
+            'woo_categories_matched' => (int) ($res['woo_categories_matched'] ?? 0),
+            'products_scanned' => (int) ($res['products_scanned'] ?? 0),
+            'products_matching_manual_categories' => (int) ($res['products_matching_manual_categories'] ?? 0),
+            'mappings_written' => (int) ($res['mappings_written'] ?? 0),
+            'already_mapped' => (int) ($res['already_mapped'] ?? 0),
+            'skipped_by_hard_safety' => (int) ($res['skipped_by_hard_safety'] ?? 0),
+            'errors_sample' => (array) ($res['errors_sample'] ?? []),
         ]));
         $this->go();
     }

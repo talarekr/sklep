@@ -198,6 +198,75 @@ class AutoCategoryMappingService
         return $summary;
     }
 
+    public function apply_manual_woo_category_mappings_to_all_products(string $marketplaceId = 'EBAY_DE'): array
+    {
+        $settings = $this->settings();
+        $marketplaceId = trim($marketplaceId) !== '' ? trim($marketplaceId) : (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
+        $rules = $this->categoryRepo->list_manual_woo_category_rules($marketplaceId, 5000);
+        $summary = [
+            'marketplace_id' => $marketplaceId,
+            'manual_rules_loaded' => count($rules),
+            'woo_categories_matched' => 0,
+            'products_scanned' => 0,
+            'products_matching_manual_categories' => 0,
+            'mappings_written' => 0,
+            'already_mapped' => 0,
+            'skipped_by_hard_safety' => 0,
+            'errors_sample' => [],
+        ];
+
+        $rulesByPath = [];
+        foreach ($rules as $rule) {
+            $path = trim((string) ($rule['woo_category_path'] ?? ''));
+            if ($path === '' || trim((string) ($rule['ebay_category_id'] ?? '')) === '') {
+                $this->append_apply_error($summary, 'manual rule ' . (string) ($rule['id'] ?? '?') . ' missing Woo path or eBay category ID');
+                continue;
+            }
+            $rulesByPath[$this->categoryRepo->woo_category_path_hash($path)][] = $rule;
+        }
+
+        $matchedTerms = [];
+        $matchedProducts = [];
+        foreach ($rulesByPath as $pathRules) {
+            $firstRule = $pathRules[0];
+            $wooPath = (string) ($firstRule['woo_category_path'] ?? '');
+            $termIds = $this->product_category_term_ids_for_exact_path($wooPath);
+            if ($termIds === []) {
+                $this->append_apply_error($summary, 'No Woo product category matched path: ' . $wooPath);
+                continue;
+            }
+
+            foreach ($termIds as $termId) {
+                if (!isset($matchedTerms[$termId])) {
+                    $matchedTerms[$termId] = true;
+                    $summary['woo_categories_matched']++;
+                }
+                $productIds = $this->published_product_ids_for_exact_category($termId);
+                foreach ($productIds as $productId) {
+                    $summary['products_scanned']++;
+                    $matchedProducts[$productId] = true;
+                }
+
+                $applyResult = $this->apply_manual_rule_to_term($termId, $marketplaceId, $wooPath, $pathRules, $productIds, $settings);
+                if (($applyResult['status'] ?? '') === 'written') {
+                    $summary['mappings_written']++;
+                } elseif (($applyResult['status'] ?? '') === 'already_mapped') {
+                    $summary['already_mapped']++;
+                } elseif (($applyResult['status'] ?? '') === 'skipped_by_hard_safety') {
+                    $summary['skipped_by_hard_safety'] += max(1, count($productIds));
+                    $this->append_apply_error($summary, (string) ($applyResult['reason'] ?? 'manual mapping failed hard safety'));
+                } elseif (($applyResult['status'] ?? '') === 'error') {
+                    $this->append_apply_error($summary, (string) ($applyResult['reason'] ?? 'manual mapping failed'));
+                }
+            }
+        }
+
+        $summary['products_matching_manual_categories'] = count($matchedProducts);
+        update_option('wei_ebay_manual_woo_category_mapping_apply_report', $summary, false);
+        $this->logger->info('Manual Woo category mappings applied to all products', $summary);
+        return $summary;
+    }
+
     public function test_teaching_rule_match_for_product(int $productId, string $marketplaceId = 'EBAY_DE'): array
     {
         $settings = $this->settings();
@@ -426,6 +495,18 @@ class AutoCategoryMappingService
                 if ($termId <= 0) {
                     continue;
                 }
+                $manualRuleResult = $this->manual_rule_repair_result_for_product_term($productId, $termId, $marketplaceId, $settings);
+                if ($manualRuleResult !== null && (string) ($manualRuleResult['status'] ?? '') === 'mapped_manual_woo_category') {
+                    $fixed = true;
+                    $fixedResult = $manualRuleResult;
+                    break;
+                }
+                if ($manualRuleResult !== null && (string) ($manualRuleResult['status'] ?? '') === 'category_sanity_failed') {
+                    $lastResult = $manualRuleResult;
+                    $lastReason = (string) ($manualRuleResult['sanity_reason'] ?? 'manual_woo_category_mapping_failed_safety');
+                    continue;
+                }
+
                 $existing = $this->categoryRepo->find($marketplaceId, $termId);
                 if ($this->is_manual_mapping($existing)) {
                     $fixed = true;
@@ -494,6 +575,149 @@ class AutoCategoryMappingService
         return $summary;
     }
 
+
+    private function apply_manual_rule_to_term(int $termId, string $marketplaceId, string $wooPath, array $rules, array $productIds, array $settings): array
+    {
+        $sampleTitle = $this->sample_title_for_products($productIds);
+        $rule = count($rules) === 1 ? $rules[0] : $this->categoryRepo->find_manual_woo_category_rule($marketplaceId, $wooPath, $sampleTitle);
+        if (!$rule || trim((string) ($rule['ebay_category_id'] ?? '')) === '') {
+            return ['status' => 'error', 'reason' => 'no_matching_manual_woo_category_mapping_rule'];
+        }
+
+        $categoryId = (string) $rule['ebay_category_id'];
+        $categoryPath = (string) ($rule['ebay_category_path'] ?? '');
+        $categoryText = trim($categoryPath . ' ' . $categoryId);
+        $safety = CategoryMappingSafety::manual_woo_category_mapping_check(trim($wooPath . ' ' . $sampleTitle), $categoryId, $categoryText);
+        if (empty($safety['pass'])) {
+            return ['status' => 'skipped_by_hard_safety', 'reason' => 'Woo path ' . $wooPath . ' rule ' . (string) ($rule['id'] ?? '?') . ' rejected: ' . (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'rule' => $rule];
+        }
+
+        $existing = $this->categoryRepo->find($marketplaceId, $termId);
+        if ($existing && (string) ($existing['ebay_category_id'] ?? '') === $categoryId && (string) ($existing['source'] ?? '') === 'manual_woo_category_mapping' && (string) ($existing['status'] ?? '') === 'mapped_manual_woo_category') {
+            return ['status' => 'already_mapped', 'rule' => $rule];
+        }
+
+        $this->categoryRepo->upsert([
+            'marketplace_id' => $marketplaceId,
+            'woo_term_id' => $termId,
+            'woo_category_path' => $wooPath,
+            'ebay_category_id' => $categoryId,
+            'ebay_category_name' => $this->last_path_segment($categoryPath),
+            'ebay_category_path' => $categoryPath,
+            'source' => 'manual_woo_category_mapping',
+            'confidence' => 1,
+            'status' => 'mapped_manual_woo_category',
+            'sample_product_ids' => wp_json_encode(array_slice($productIds, 0, 25)),
+            'suggestion_payload' => wp_json_encode([
+                'manual_apply' => true,
+                'manual_teaching_rule_id' => (int) ($rule['id'] ?? 0),
+                'title_keyword_family' => count($rules) > 1 ? $this->categoryRepo->keyword_family_from_title($sampleTitle) : '',
+                'safety' => $safety,
+            ], JSON_UNESCAPED_UNICODE),
+            'error_reason' => '',
+        ]);
+
+        return ['status' => 'written', 'rule' => $rule];
+    }
+
+    private function manual_rule_repair_result_for_product_term(int $productId, int $termId, string $marketplaceId, array $settings): ?array
+    {
+        $path = $this->categoryRepo->woo_category_path($termId);
+        $title = get_the_title($productId) ?: '';
+        $rules = $this->categoryRepo->manual_woo_category_rules_for_path($marketplaceId, $path);
+        if ($rules === []) {
+            return null;
+        }
+
+        $applyResult = $this->apply_manual_rule_to_term($termId, $marketplaceId, $path, $rules, [$productId], $settings);
+        if (($applyResult['status'] ?? '') === 'skipped_by_hard_safety') {
+            return ['status' => 'category_sanity_failed', 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => false, 'sanity_reason' => (string) ($applyResult['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'category_id' => (string) (($applyResult['rule']['ebay_category_id'] ?? '') ?: ''), 'manual_teaching_applied' => false, 'manual_teaching_lookup_attempted' => true, 'manual_teaching_rule_found' => true, 'manual_teaching_rule_id' => (int) (($applyResult['rule']['id'] ?? 0) ?: 0), 'manual_teaching_category_id' => (string) (($applyResult['rule']['ebay_category_id'] ?? '') ?: ''), 'manual_teaching_rejected_reason' => (string) ($applyResult['reason'] ?? ''), 'mapping_write_attempted' => true, 'mapping_write_result' => 'rejected_by_safety'];
+        }
+
+        if (!in_array((string) ($applyResult['status'] ?? ''), ['written', 'already_mapped'], true)) {
+            return null;
+        }
+
+        $rule = is_array($applyResult['rule'] ?? null) ? $applyResult['rule'] : $this->categoryRepo->find_manual_woo_category_rule($marketplaceId, $path, $title);
+        return [
+            'status' => 'mapped_manual_woo_category',
+            'confidence' => 1.0,
+            'threshold' => CategoryMappingSafety::threshold($settings),
+            'sanity_check_pass' => true,
+            'sanity_reason' => '',
+            'category_id' => (string) ($rule['ebay_category_id'] ?? ''),
+            'manual_teaching_applied' => true,
+            'manual_teaching_lookup_attempted' => true,
+            'manual_teaching_rule_found' => true,
+            'manual_teaching_rule_id' => (int) ($rule['id'] ?? 0),
+            'manual_teaching_category_id' => (string) ($rule['ebay_category_id'] ?? ''),
+            'manual_teaching_rejected_reason' => '',
+            'mapping_write_attempted' => true,
+            'mapping_write_result' => (string) ($applyResult['status'] ?? '') === 'already_mapped' ? 'already_mapped_manual_woo_category' : 'written_mapped_manual_woo_category',
+        ];
+    }
+
+    private function product_category_term_ids_for_exact_path(string $wooPath): array
+    {
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        if (is_wp_error($terms) || !is_array($terms)) {
+            return [];
+        }
+        $target = $this->categoryRepo->normalize_rule_text($wooPath);
+        $ids = [];
+        foreach ($terms as $term) {
+            $termId = (int) ($term->term_id ?? 0);
+            if ($termId > 0 && $this->categoryRepo->normalize_rule_text($this->categoryRepo->woo_category_path($termId)) === $target) {
+                $ids[] = $termId;
+            }
+        }
+        return array_values(array_unique($ids));
+    }
+
+    private function published_product_ids_for_exact_category(int $termId): array
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => ['publish'],
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'tax_query' => [[
+                'taxonomy' => 'product_cat',
+                'field' => 'term_id',
+                'terms' => [$termId],
+                'include_children' => false,
+            ]],
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'no_found_rows' => true,
+        ]);
+        return array_values(array_map('intval', (array) $query->posts));
+    }
+
+    private function sample_title_for_products(array $productIds): string
+    {
+        $titles = [];
+        foreach (array_slice(array_values(array_unique(array_map('intval', $productIds))), 0, 10) as $productId) {
+            $title = trim((string) get_the_title($productId));
+            if ($title !== '') {
+                $titles[] = $title;
+            }
+        }
+        return implode(' ', $titles);
+    }
+
+    private function append_apply_error(array &$summary, string $message): void
+    {
+        if (count((array) ($summary['errors_sample'] ?? [])) < 20) {
+            $summary['errors_sample'][] = $message;
+        }
+    }
+
+    private function last_path_segment(string $path): string
+    {
+        $parts = array_values(array_filter(array_map('trim', explode('>', $path)), static fn(string $part): bool => $part !== ''));
+        return $parts !== [] ? (string) end($parts) : '';
+    }
 
     private function problem_reasons_from_csv(string $path): array
     {
