@@ -1320,18 +1320,21 @@ class EbayAdapter implements MarketplaceAdapterInterface
                         $autoCandidates[] = ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_auto', 'source' => 'woo_category_mapping_auto', 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => (float) ($evaluation['threshold'] ?? 0), 'sanity_check_pass' => !empty($evaluation['sanity_check_pass']), 'sanity_reason' => (string) ($evaluation['sanity_reason'] ?? ''), 'product_override_found' => false];
                     } else {
                         $blockedStatus = (string) ($evaluation['final_status'] ?? 'needs_category_review');
-                        $reviewCandidate ??= ['category_id' => '', 'status' => $blockedStatus, 'source' => $blockedStatus === 'category_sanity_failed' ? 'woo_category_mapping_sanity_failed' : 'woo_category_mapping_auto_below_threshold', 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => (float) ($evaluation['threshold'] ?? 0), 'sanity_check_pass' => !empty($evaluation['sanity_check_pass']), 'sanity_reason' => (string) ($evaluation['sanity_reason'] ?? ''), 'product_override_found' => false];
+                        $reviewCandidate ??= $this->blocked_mapping_review_candidate($mapping, $blockedStatus, $blockedStatus === 'category_sanity_failed' ? 'woo_category_mapping_sanity_failed' : 'woo_category_mapping_auto_below_threshold', $confidence, $settings, !empty($evaluation['sanity_check_pass']), (string) ($evaluation['sanity_reason'] ?? ''));
+                        if ($reviewCandidate !== null && isset($evaluation['threshold'])) {
+                            $reviewCandidate['threshold'] = (float) $evaluation['threshold'];
+                        }
                     }
                     continue;
                 }
 
                 if ($status === 'needs_category_review' || $status === 'low_confidence_auto' || $status === 'category_sanity_failed') {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => $status !== 'category_sanity_failed', 'sanity_reason' => (string) ($mapping['error_reason'] ?? ''), 'product_override_found' => false];
+                    $reviewCandidate ??= $this->blocked_mapping_review_candidate($mapping, $status, 'woo_category_mapping_' . $status, $confidence, $settings, $status !== 'category_sanity_failed', (string) ($mapping['error_reason'] ?? ''));
                     continue;
                 }
 
                 if (in_array($status, ['taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
-                    $reviewCandidate ??= ['category_id' => '', 'status' => $status, 'source' => 'woo_category_mapping_' . $status, 'mapping' => $mapping, 'confidence' => $confidence, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => $status !== 'category_sanity_failed', 'sanity_reason' => (string) ($mapping['error_reason'] ?? ''), 'product_override_found' => false];
+                    $reviewCandidate ??= $this->blocked_mapping_review_candidate($mapping, $status, 'woo_category_mapping_' . $status, $confidence, $settings, $status !== 'category_sanity_failed', (string) ($mapping['error_reason'] ?? ''));
                 }
             }
 
@@ -1381,6 +1384,29 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return ['accepted' => false, 'final_status' => $status !== '' ? $status : 'unmapped', 'ui_status' => 'needs_category_review', 'threshold' => $threshold, 'sanity_check_pass' => true, 'sanity_reason' => ''];
+    }
+
+
+    private function blocked_mapping_review_candidate(array $mapping, string $status, string $source, float $confidence, array $settings, bool $sanityPass = true, string $sanityReason = ''): array
+    {
+        return [
+            'category_id' => '',
+            'selected_candidate_category_id' => (string) ($mapping['ebay_category_id'] ?? ''),
+            'selected_candidate_category_name' => (string) ($mapping['ebay_category_name'] ?? ''),
+            'selected_candidate_category_path' => (string) ($mapping['ebay_category_path'] ?? ''),
+            'selected_candidate_confidence' => $confidence,
+            'selected_candidate_source' => (string) ($mapping['source'] ?? $source),
+            'category_name' => (string) ($mapping['ebay_category_name'] ?? ''),
+            'category_path' => (string) ($mapping['ebay_category_path'] ?? ''),
+            'status' => $status,
+            'source' => $source,
+            'mapping' => $mapping,
+            'confidence' => $confidence,
+            'threshold' => CategoryMappingSafety::threshold($settings),
+            'sanity_check_pass' => $sanityPass,
+            'sanity_reason' => $sanityReason,
+            'product_override_found' => false,
+        ];
     }
 
     private function resolve_product_category_override(int $product_id, array $settings): array
@@ -1478,6 +1504,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             (string) ($content['description'] ?? ''),
             (string) ($category['mapping']['woo_category_path'] ?? ''),
         ], static fn($value): bool => trim((string) $value) !== '')));
+        $selectedCandidateCategoryId = $categoryId;
+        $selectedCandidateCategoryName = (string) ($category['category_name'] ?? $category['selected_candidate_category_name'] ?? '');
+        $selectedCandidateCategoryPath = (string) ($category['category_path'] ?? $category['selected_candidate_category_path'] ?? '');
+        $selectedCandidateConfidence = (float) ($category['confidence'] ?? $category['selected_candidate_confidence'] ?? 0);
+        $selectedCandidateSource = (string) ($category['source'] ?? $category['selected_candidate_source'] ?? '');
         $selectedCategorySafety = CategoryMappingSafety::selected_category_check($sourceText, $categoryId, $categoryText, $requiredAspects);
         if (empty($selectedCategorySafety['pass'])) {
             $category['status'] = 'category_sanity_failed';
@@ -1496,6 +1527,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'category_sanity_check_pass' => array_key_exists('sanity_check_pass', $category) ? !empty($category['sanity_check_pass']) : true,
             'category_sanity_reason' => (string) ($category['sanity_reason'] ?? ''),
             'category_status' => (string) ($category['status'] ?? ''),
+            'selected_candidate_category_id' => $selectedCandidateCategoryId,
+            'selected_candidate_category_name' => $selectedCandidateCategoryName,
+            'selected_candidate_category_path' => $selectedCandidateCategoryPath,
+            'selected_candidate_confidence' => $selectedCandidateConfidence,
+            'selected_candidate_source' => $selectedCandidateSource,
             'product_override_found' => !empty($category['product_override_found']) ? 'yes' : 'no',
         ]);
 

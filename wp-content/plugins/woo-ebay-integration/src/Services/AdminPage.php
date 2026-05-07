@@ -29,6 +29,7 @@ class AdminPage
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
+        add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
         add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
@@ -153,6 +154,18 @@ class AdminPage
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $res = $this->autoCategoryMapper->auto_map_used_categories($marketplaceId, 200);
         $this->set_status('Auto category mapping: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+
+    public function repair_blocked_category_mappings(): void
+    {
+        check_admin_referer('wei_repair_blocked_category_mappings');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $readiness = get_option('wei_ebay_readiness_summary', []);
+        $productIds = is_array($readiness) ? array_values(array_map('intval', (array) ($readiness['blocked_by_category_sample_ids'] ?? []))) : [];
+        $res = $this->autoCategoryMapper->repair_blocked_category_mappings($productIds, $marketplaceId, 200);
+        $this->set_status('Category mapping repair report: ' . wp_json_encode($res));
         $this->go();
     }
 

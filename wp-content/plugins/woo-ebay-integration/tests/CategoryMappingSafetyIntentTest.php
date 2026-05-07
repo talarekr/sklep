@@ -40,6 +40,18 @@ $cases = [
     ['AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'power_steering_hose'],
     ['Dachhimmelleuchte Audi Q7', 'roof_light'],
     ['Pleuellager Hauptlager Audi 2.0 TDI', 'engine_bearing'],
+    ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', 'bumper_grille'],
+    ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'bumper_reinforcement'],
+    ['2181 AUDI Q5 SQ5 8R LIFT 3.0 TDI DEH BELKA WZMOCNIENIE ZDERZAKA TYŁ 8R0807313C', 'bumper_reinforcement'],
+    ['2284 AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'wiring_harness'],
+    ['2085 AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'power_steering_hose'],
+    ['2122 AUDI A6 WĄŻ WSPOMAGANIA HYDRAULIK SERVOLENKUNGSSCHLAUCH', 'power_steering_hose'],
+    ['2123 VW PASSAT PRZEWÓD WSPOMAGANIA SERVOLEITUNG', 'power_steering_hose'],
+    ['2279 AUDI Q5 PRZEWÓD WSPOMAGANIA SERVOLENKUNG SCHLAUCH', 'power_steering_hose'],
+    ['2217 AUDI A3 DMUCHAWA WENTYLATOR NAWIEWU HVAC BLOWER', 'hvac_blower'],
+    ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'ac_hose'],
+    ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'ac_hose'],
+    ['2155 AUDI KOŁO ZAPASOWE DOJAZDOWE NOTRAD', 'spare_wheel'],
     ['Panewki silnika Audi 2.0 TDI', 'engine_bearing'],
 ];
 
@@ -70,6 +82,13 @@ $negativeChecks = [
     ['Dachhimmelleuchte Audi Q7', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['Anlasserkabelbaum Audi A6', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
+    ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', 'expected_path_keyword_missing'],
+    ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', 'expected_path_keyword_missing'],
+    ['2284 AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Innenausstattung > Fensterheber & -motoren', 'wiring_harness_candidate_is_window_lifter_or_motor'],
+    ['2217 AUDI A3 DMUCHAWA WENTYLATOR NAWIEWU HVAC BLOWER', 'Motoren & Motorenteile > Motorteile', 'hvac_blower_candidate_is_engine_parts'],
+    ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
+    ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
+    ['2155 AUDI KOŁO ZAPASOWE DOJAZDOWE NOTRAD', 'Automobile > Fahrzeuge', 'spare_wheel_candidate_is_vehicle_category'],
 ];
 
 foreach ($negativeChecks as [$source, $candidate, $expectedReason]) {
@@ -89,6 +108,13 @@ $positiveChecks = [
     ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228 Anlasserkabelbaum für Lichtmaschine', 'Auto & Motorrad: Teile > Autoelektrik > Kabelbäume & Leitungssätze > Bordnetz', true],
     ['AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Autoelektrik > Kabelbäume & Leitungssätze > Anlasser Lichtmaschine Generator', true],
     ['Scheibenwaschflüssigkeitsbehälter Audi A3', 'Scheiben- & Scheinwerferreinigung > Wischwasserbehälter, -pumpen & -düsen', true],
+    ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', 'Karosserie > Stoßstange > Stoßstangengitter Blende Abdeckung', true],
+    ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'Karosserie > Stoßstange > Prallträger Verstärkung', true],
+    ['2181 AUDI Q5 SQ5 8R LIFT 3.0 TDI DEH BELKA WZMOCNIENIE ZDERZAKA TYŁ 8R0807313C', 'Karosserie > Stoßstange > Stoßstangenträger Aufpralldämpfer', true],
+    ['2284 AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Autoelektrik > Kabelbäume & Leitungssätze > Anlasser Lichtmaschine Generator', true],
+    ['2217 AUDI A3 DMUCHAWA WENTYLATOR NAWIEWU HVAC BLOWER', 'Heizung & Klimaanlage > Gebläse Lüfter Innenraum', true],
+    ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Klimaanlage > Kältemittelleitung & Schlauch', true],
+    ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'Klimaanlage > Klimaleitung Schlauch', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {

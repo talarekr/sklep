@@ -511,6 +511,13 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <button class="button button-primary">Re-evaluate category mappings</button>
             <span class="description">Re-evaluates auto mappings and maps unmapped categories; manual mappings are not overwritten. Runs in WP Admin only; it does not export or publish offers.</span>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 8px 0 0;">
+            <?php wp_nonce_field('wei_repair_blocked_category_mappings'); ?>
+            <input type="hidden" name="action" value="wei_repair_blocked_category_mappings" />
+            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+            <button class="button">Re-evaluate blocked category mappings only</button>
+            <span class="description">Repairs only products from the last blocked_by_category readiness sample (or a fresh 200-product sample). It runs category mapping only and does not export or publish offers.</span>
+        </form>
         <h3>Top 10 risky mappings</h3>
         <table class="widefat striped">
             <thead><tr><th>Woo category path</th><th>eBay categoryId</th><th>eBay category path</th><th>Confidence</th><th>Reason</th><th>Product count</th><th>eBay DE</th></tr></thead>
