@@ -169,6 +169,8 @@ $manualWooMappingChecks = [
     ['Części samochodowe > Wnętrze > Fotele', '33333', 'Automobile > Fahrzeuge', false, 'manual_mapping_vehicle_category_for_normal_parts'],
     ['Części samochodowe > Wnętrze > Fotele', '22222', 'Motoren & Motorenteile > Motorblöcke', false, 'manual_mapping_engine_or_motor_block_for_unrelated_parts'],
     ['Części samochodowe > Podnośniki szyby', '11111', 'Innenausstattung > Fensterheber & -motoren', true, ''],
+    ['Motoryzacja > Części samochodowe > Układ elektryczny, zapłon > Wyposażenie elektryczne > Silniczki szyb', '33706', 'Fensterheber & -motoren', true, ''],
+    ['Motoryzacja > Części samochodowe > Układ elektryczny, zapłon > Wyposażenie elektryczne > Podnośniki szyb', '33706', 'Fensterheber & -motoren', true, ''],
 ];
 
 foreach ($manualWooMappingChecks as [$source, $categoryId, $categoryText, $expectedPass, $expectedReasonOrWarning]) {

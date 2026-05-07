@@ -232,7 +232,7 @@ class CategoryMappingSafety
             return 'manual_mapping_engine_or_motor_block_for_unrelated_parts';
         }
 
-        $sourceLooksWindowLifter = self::contains_any($source, ['fensterheber', 'window lifter', 'window regulator', 'podnosnik szyby', 'podnośnik szyby', 'podnosniki szyby', 'podnośniki szyby', 'mechanizm szyby']);
+        $sourceLooksWindowLifter = self::contains_any($source, ['silniczki szyb', 'podnosniki szyb', 'podnośniki szyb', 'podnosniki szyby', 'podnośniki szyby', 'szyby', 'window motor', 'window lifter', 'fensterheber', 'fenstermotor', 'window regulator', 'podnosnik szyby', 'podnośnik szyby', 'mechanizm szyby']);
         if (!$sourceLooksWindowLifter && self::contains_any($category, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor'])) {
             return 'manual_mapping_window_lifter_family_for_unrelated_products';
         }
