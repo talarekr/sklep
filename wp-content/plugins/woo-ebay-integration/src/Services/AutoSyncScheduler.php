@@ -16,6 +16,8 @@ class AutoSyncScheduler
     private const READINESS_BUCKET_LIMIT = 25;
     private const FULL_CATEGORY_AUDIT_BATCH_SIZE = 150;
     private const FULL_CATEGORY_AUDIT_STATE_OPTION = 'wei_ebay_full_category_audit_state';
+    private const GERMAN_CONTENT_AUDIT_STATE_OPTION = 'wei_ebay_german_content_audit_state';
+    private const GERMAN_CONTENT_AUDIT_BATCH_SIZE = 50;
 
 
 
@@ -893,6 +895,229 @@ class AutoSyncScheduler
             }
         }
         return false;
+    }
+
+    public function generate_missing_german_content_from_audit(int $batchSize = self::GERMAN_CONTENT_AUDIT_BATCH_SIZE, bool $restart = false): array
+    {
+        $batchSize = max(1, min(200, $batchSize));
+        $state = get_option(self::GERMAN_CONTENT_AUDIT_STATE_OPTION, []);
+        $state = is_array($state) ? $state : [];
+        $problemsCsv = $this->latest_audit_report_path('problems_only_csv');
+        if ($problemsCsv === '') {
+            return ['result' => 'error', 'error' => 'problems_csv_not_found', 'message' => 'Run the full category audit first so the problems CSV can be used as the source of truth.'];
+        }
+
+        $fingerprint = md5($problemsCsv . '|' . (string) @filemtime($problemsCsv) . '|' . (string) @filesize($problemsCsv));
+        if ($restart || ($state['status'] ?? '') !== 'in_progress' || (string) ($state['source_fingerprint'] ?? '') !== $fingerprint) {
+            $state = $this->new_german_content_audit_state($problemsCsv, $fingerprint, $batchSize);
+        } else {
+            $state['batch_size'] = $batchSize;
+        }
+
+        $ids = $this->problem_csv_product_ids($problemsCsv, static function (array $row): bool {
+            return (string) ($row['status'] ?? '') === 'content_not_ready'
+                && trim((string) ($row['reason'] ?? '')) === 'missing_german_content';
+        });
+        $state['eligible_total'] = count($ids);
+        $offset = max(0, (int) ($state['offset'] ?? 0));
+        $batchIds = array_slice($ids, $offset, $batchSize);
+        $diagnostics = [];
+        $processedThisBatch = 0;
+
+        foreach ($batchIds as $productId) {
+            $result = $this->adapter->generate_german_content_meta_only((int) $productId);
+            $processedThisBatch++;
+            $state['processed'] = (int) ($state['processed'] ?? 0) + 1;
+            $bucket = match ((string) ($result['result'] ?? 'failed')) {
+                'generated' => 'generated',
+                'already_ready' => 'already_ready',
+                'skipped' => 'skipped',
+                default => 'failed',
+            };
+            $state[$bucket] = (int) ($state[$bucket] ?? 0) + 1;
+            $diagnostics[] = [
+                'product_id' => (int) $productId,
+                'result' => (string) ($result['result'] ?? 'failed'),
+                'source' => (string) ($result['source'] ?? ''),
+                'provider' => (string) ($result['provider'] ?? ''),
+                'title_length' => (int) ($result['title_length'] ?? 0),
+                'description_length' => (int) ($result['description_length'] ?? 0),
+                'error_message' => (string) ($result['error_message'] ?? $result['reason'] ?? ''),
+                'ebay_api_calls' => 'false',
+                'published' => 'false',
+                'offer_write_calls' => 'false',
+                'wrote_woo_sku' => 'false',
+                'wrote_woo_price' => 'false',
+                'wrote_allegro' => 'false',
+            ];
+        }
+
+        $state['offset'] = $offset + $processedThisBatch;
+        $state['processed_this_batch'] = $processedThisBatch;
+        $state['updated_at'] = gmdate('Y-m-d H:i:s');
+
+        if ($processedThisBatch === 0 || (int) ($state['offset'] ?? 0) >= (int) ($state['eligible_total'] ?? 0)) {
+            $state['status'] = 'completed';
+            $state['result'] = ((int) ($state['failed'] ?? 0)) > 0 ? 'completed_with_errors' : 'success';
+            $state['completed_at'] = gmdate('Y-m-d H:i:s');
+        }
+
+        $state['reports'] = $this->write_german_content_diagnostics($state, $diagnostics);
+        update_option(self::GERMAN_CONTENT_AUDIT_STATE_OPTION, $state, false);
+        $summary = $this->german_content_audit_summary($state);
+        update_option('wei_ebay_german_content_audit_summary', $summary, false);
+        $this->logger->info('German content audit batch completed', [
+            'processed_this_batch' => $processedThisBatch,
+            'processed' => (int) ($summary['processed'] ?? 0),
+            'eligible_total' => (int) ($summary['eligible_total'] ?? 0),
+            'generated' => (int) ($summary['generated'] ?? 0),
+            'failed' => (int) ($summary['failed'] ?? 0),
+            'status' => (string) ($summary['status'] ?? ''),
+            'ebay_api_calls' => false,
+            'published' => false,
+            'offer_write_calls' => false,
+            'wrote_woo_sku' => false,
+            'wrote_woo_price' => false,
+            'wrote_allegro' => false,
+        ]);
+
+        return $summary;
+    }
+
+    private function latest_audit_report_path(string $key): string
+    {
+        $summary = get_option('wei_ebay_full_category_audit_summary', []);
+        $summary = is_array($summary) ? $summary : [];
+        $reports = is_array($summary['reports'] ?? null) ? $summary['reports'] : [];
+        $report = is_array($reports[$key] ?? null) ? $reports[$key] : [];
+        $path = trim((string) ($report['path'] ?? ''));
+        return $path !== '' && is_readable($path) ? $path : '';
+    }
+
+    private function new_german_content_audit_state(string $problemsCsv, string $fingerprint, int $batchSize): array
+    {
+        $startedAt = gmdate('Y-m-d H:i:s');
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $runSlug = 'wei-ebay-german-content-' . gmdate('Ymd-His');
+        return [
+            'status' => 'in_progress',
+            'result' => 'in_progress',
+            'started_at' => $startedAt,
+            'completed_at' => '',
+            'updated_at' => $startedAt,
+            'run_slug' => $runSlug,
+            'source_problems_csv' => $problemsCsv,
+            'source_fingerprint' => $fingerprint,
+            'batch_size' => $batchSize,
+            'offset' => 0,
+            'eligible_total' => 0,
+            'processed' => 0,
+            'processed_this_batch' => 0,
+            'generated' => 0,
+            'already_ready' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'diagnostics_csv_path' => trailingslashit($baseDir) . $runSlug . '-diagnostics.csv',
+            'diagnostics_json_path' => trailingslashit($baseDir) . $runSlug . '-summary.json',
+            'reports' => [],
+        ];
+    }
+
+    private function german_content_audit_summary(array $state): array
+    {
+        return [
+            'result' => (string) ($state['result'] ?? ''),
+            'status' => (string) ($state['status'] ?? ''),
+            'started_at' => (string) ($state['started_at'] ?? ''),
+            'completed_at' => (string) ($state['completed_at'] ?? ''),
+            'updated_at' => (string) ($state['updated_at'] ?? ''),
+            'source_problems_csv' => (string) ($state['source_problems_csv'] ?? ''),
+            'batch_size' => (int) ($state['batch_size'] ?? 0),
+            'eligible_total' => (int) ($state['eligible_total'] ?? 0),
+            'processed' => (int) ($state['processed'] ?? 0),
+            'processed_this_batch' => (int) ($state['processed_this_batch'] ?? 0),
+            'generated' => (int) ($state['generated'] ?? 0),
+            'already_ready' => (int) ($state['already_ready'] ?? 0),
+            'failed' => (int) ($state['failed'] ?? 0),
+            'skipped' => (int) ($state['skipped'] ?? 0),
+            'reports' => (array) ($state['reports'] ?? []),
+            'safety' => [
+                'ebay_api_calls' => false,
+                'publish' => false,
+                'offer_write_calls' => false,
+                'woo_sku_changes' => false,
+                'woo_price_changes' => false,
+                'allegro_changes' => false,
+            ],
+        ];
+    }
+
+    private function write_german_content_diagnostics(array $state, array $rows): array
+    {
+        $csvPath = (string) ($state['diagnostics_csv_path'] ?? '');
+        $jsonPath = (string) ($state['diagnostics_json_path'] ?? '');
+        if ($csvPath !== '' && $rows !== []) {
+            $exists = file_exists($csvPath) && filesize($csvPath) > 0;
+            $fh = fopen($csvPath, 'ab');
+            if ($fh) {
+                $headers = array_keys($rows[0]);
+                if (!$exists) {
+                    fputcsv($fh, $headers);
+                }
+                foreach ($rows as $row) {
+                    fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers));
+                }
+                fclose($fh);
+            }
+        }
+        if ($jsonPath !== '') {
+            file_put_contents($jsonPath, wp_json_encode($this->german_content_audit_summary($state), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        return [
+            'diagnostics_csv' => ['path' => $csvPath, 'url' => $csvPath !== '' ? trailingslashit($baseUrl) . basename($csvPath) : ''],
+            'summary_json' => ['path' => $jsonPath, 'url' => $jsonPath !== '' ? trailingslashit($baseUrl) . basename($jsonPath) : ''],
+        ];
+    }
+
+    private function problem_csv_product_ids(string $path, callable $filter): array
+    {
+        if (!is_readable($path)) {
+            return [];
+        }
+        $ids = [];
+        $fh = fopen($path, 'rb');
+        if (!$fh) {
+            return [];
+        }
+        $headers = fgetcsv($fh);
+        if (!is_array($headers)) {
+            fclose($fh);
+            return [];
+        }
+        $headers = array_map(static fn($header): string => trim((string) $header), $headers);
+        while (($values = fgetcsv($fh)) !== false) {
+            if (!is_array($values)) {
+                continue;
+            }
+            $row = [];
+            foreach ($headers as $index => $header) {
+                $row[$header] = (string) ($values[$index] ?? '');
+            }
+            if (!$filter($row)) {
+                continue;
+            }
+            $productId = absint($row['product_id'] ?? 0);
+            if ($productId > 0) {
+                $ids[] = $productId;
+            }
+        }
+        fclose($fh);
+        return array_values(array_unique($ids));
     }
 
     public function run_export_batch(int $batchSize = 20): array

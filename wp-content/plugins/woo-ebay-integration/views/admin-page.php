@@ -355,6 +355,33 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <p class="description">Audit scans published WooCommerce products in safe dry-run batches, resumes an in-progress run on the next click, and writes final CSV/JSON files only after the last batch. It does not generate German content, write translated content/meta, export, publish, change Woo SKU, change Woo price, or touch Allegro.</p>
             </details>
         <?php endif; ?>
+
+        <details style="margin-top:12px;" <?php echo !empty($german_content_audit_summary) ? 'open' : ''; ?>>
+            <summary>Audit-driven German content generation</summary>
+            <p class="description">Uses the latest problems CSV as the source of truth and processes only rows where <code>status=content_not_ready</code> and <code>reason=missing_german_content</code>. It writes only <code>_wei_ebay_de_title</code>, <code>_wei_ebay_de_description</code>, and related WEI German content meta; it does not call eBay APIs, publish, create/update offers, change Woo SKU/price, or touch Allegro.</p>
+            <?php if (!empty($german_content_audit_summary)): ?>
+                <?php $germanReports = is_array($german_content_audit_summary['reports'] ?? null) ? $german_content_audit_summary['reports'] : []; ?>
+                <div class="wei-grid" style="margin-top:8px;">
+                    <div class="wei-metric"><span>Status</span><strong><?php echo esc_html((string) ($german_content_audit_summary['status'] ?? '-')); ?></strong></div>
+                    <div class="wei-metric"><span>Progress</span><strong><?php echo esc_html((string) ($german_content_audit_summary['processed'] ?? 0) . ' / ' . (string) ($german_content_audit_summary['eligible_total'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Generated</span><strong><?php echo esc_html((string) ($german_content_audit_summary['generated'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Already ready</span><strong><?php echo esc_html((string) ($german_content_audit_summary['already_ready'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Failed</span><strong><?php echo esc_html((string) ($german_content_audit_summary['failed'] ?? 0)); ?></strong></div>
+                </div>
+                <ul>
+                    <?php foreach ($germanReports as $label => $report): ?>
+                        <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a></li><?php endif; ?>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;">
+                <?php wp_nonce_field('wei_generate_missing_german_content_audit'); ?>
+                <input type="hidden" name="action" value="wei_generate_missing_german_content_audit" />
+                <label>Batch size <input type="number" name="batch_size" value="50" min="1" max="200" /></label>
+                <label><input type="checkbox" name="restart" value="1" /> restart from first eligible audit row</label>
+                <button class="button button-primary">Generate missing German content only</button>
+            </form>
+        </details>
         <details class="wei-not-ready-products" style="margin-top:12px;" <?php echo !empty($notReadyItems) ? 'open' : ''; ?>>
             <summary>Not ready products</summary>
             <p class="description">Shows up to 50 products from the latest readiness scan, with each bucket capped to keep the admin page and logs compact.</p>
@@ -543,8 +570,24 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <input type="hidden" name="action" value="wei_repair_blocked_category_mappings" />
             <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
             <button class="button">Re-evaluate blocked category mappings only</button>
-            <span class="description">Repairs only products from the last blocked_by_category readiness sample (or a fresh 200-product sample). It runs category mapping only and does not export or publish offers.</span>
+            <span class="description">Legacy sample-based repair. Prefer the audit group repair below now that the full CSV audit is available.</span>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 8px 0 0; border-left:4px solid #2271b1; padding-left:10px;">
+            <?php wp_nonce_field('wei_repair_audit_category_groups'); ?>
+            <input type="hidden" name="action" value="wei_repair_audit_category_groups" />
+            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+            <button class="button button-primary">Repair category issues from audit reason groups</button>
+            <span class="description">Uses the latest problems CSV and targets the high-volume reason groups: car speaker motorcycle family, interior trim audio/motorcycle, expected keyword missing, power steering hose engine parts, gearbox mount motorcycle family, and engine-bearing mismatch. Detailed diagnostics are written to CSV/JSON, not the main log.</span>
+        </form>
+        <?php if (!empty($category_group_repair_summary)): ?>
+            <?php $repairReports = is_array($category_group_repair_summary['reports'] ?? null) ? $category_group_repair_summary['reports'] : []; ?>
+            <p class="description">Last audit group repair: processed <?php echo esc_html((string) ($category_group_repair_summary['processed'] ?? 0)); ?>, fixed <?php echo esc_html((string) ($category_group_repair_summary['fixed_count'] ?? 0)); ?>, still blocked <?php echo esc_html((string) ($category_group_repair_summary['still_blocked_count'] ?? 0)); ?>.</p>
+            <ul>
+                <?php foreach ($repairReports as $label => $report): ?>
+                    <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a><?php echo isset($report['rows']) ? esc_html(' (' . (string) $report['rows'] . ' rows)') : ''; ?></li><?php endif; ?>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
         <h3>Top 10 risky mappings</h3>
         <table class="widefat striped">
             <thead><tr><th>Woo category path</th><th>eBay categoryId</th><th>eBay category path</th><th>Confidence</th><th>Reason</th><th>Product count</th><th>eBay DE</th></tr></thead>

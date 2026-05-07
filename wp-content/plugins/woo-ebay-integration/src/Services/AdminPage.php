@@ -30,6 +30,8 @@ class AdminPage
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
+        add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
+        add_action('admin_post_wei_generate_missing_german_content_audit', [$this, 'generate_missing_german_content_audit']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
         add_action('admin_post_wei_full_category_audit', [$this, 'full_category_audit']);
@@ -67,6 +69,10 @@ class AdminPage
         $auto_sync_status = AutoSyncScheduler::status_summary();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
+        $german_content_audit_summary = get_option('wei_ebay_german_content_audit_summary', []);
+        $german_content_audit_summary = is_array($german_content_audit_summary) ? $german_content_audit_summary : [];
+        $category_group_repair_summary = get_option('wei_ebay_category_mapping_repair_audit_group_report', []);
+        $category_group_repair_summary = is_array($category_group_repair_summary) ? $category_group_repair_summary : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -169,7 +175,52 @@ class AdminPage
         $readiness = get_option('wei_ebay_readiness_summary', []);
         $productIds = is_array($readiness) ? array_values(array_map('intval', (array) ($readiness['blocked_by_category_sample_ids'] ?? []))) : [];
         $res = $this->autoCategoryMapper->repair_blocked_category_mappings($productIds, $marketplaceId, 200);
-        $this->set_status('Category mapping repair report: ' . wp_json_encode($res));
+        $this->set_status('Category mapping repair: ' . wp_json_encode([
+            'processed' => (int) ($res['processed'] ?? 0),
+            'fixed_count' => (int) ($res['fixed_count'] ?? 0),
+            'still_blocked_count' => (int) ($res['still_blocked_count'] ?? 0),
+            'top_block_reasons' => (array) ($res['top_block_reasons'] ?? []),
+        ]));
+        $this->go();
+    }
+
+    public function repair_audit_category_groups(): void
+    {
+        check_admin_referer('wei_repair_audit_category_groups');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $path = $this->latest_audit_report_path('problems_only_csv');
+        if ($path === '') {
+            $this->set_status('Audit category group repair failed: problems CSV not found. Run the full category audit first.');
+            $this->go();
+        }
+        $res = $this->autoCategoryMapper->repair_blocked_category_mappings_from_audit_problem_groups($path, $marketplaceId);
+        $this->set_status('Audit category group repair: ' . wp_json_encode([
+            'processed' => (int) ($res['processed'] ?? 0),
+            'fixed_count' => (int) ($res['fixed_count'] ?? 0),
+            'still_blocked_count' => (int) ($res['still_blocked_count'] ?? 0),
+            'groups' => (array) ($res['groups'] ?? []),
+            'reports' => (array) ($res['reports'] ?? []),
+        ]));
+        $this->go();
+    }
+
+    public function generate_missing_german_content_audit(): void
+    {
+        check_admin_referer('wei_generate_missing_german_content_audit');
+        $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
+        $restart = !empty($_POST['restart']);
+        $res = $this->scheduler->generate_missing_german_content_from_audit($batchSize, $restart);
+        $this->set_status('Generate missing German content from audit: ' . wp_json_encode([
+            'status' => (string) ($res['status'] ?? ''),
+            'processed_this_batch' => (int) ($res['processed_this_batch'] ?? 0),
+            'processed' => (int) ($res['processed'] ?? 0),
+            'eligible_total' => (int) ($res['eligible_total'] ?? 0),
+            'generated' => (int) ($res['generated'] ?? 0),
+            'already_ready' => (int) ($res['already_ready'] ?? 0),
+            'failed' => (int) ($res['failed'] ?? 0),
+            'reports' => (array) ($res['reports'] ?? []),
+            'safety' => (array) ($res['safety'] ?? []),
+        ]));
         $this->go();
     }
 
@@ -403,6 +454,16 @@ class AdminPage
         $logs = get_option('wei_logs', []);
         array_unshift($logs, ['at' => gmdate('Y-m-d H:i:s'), 'message' => $message]);
         update_option('wei_logs', array_slice($logs, 0, 100), false);
+    }
+
+    private function latest_audit_report_path(string $key): string
+    {
+        $summary = get_option('wei_ebay_full_category_audit_summary', []);
+        $summary = is_array($summary) ? $summary : [];
+        $reports = is_array($summary['reports'] ?? null) ? $summary['reports'] : [];
+        $report = is_array($reports[$key] ?? null) ? $reports[$key] : [];
+        $path = trim((string) ($report['path'] ?? ''));
+        return $path !== '' && is_readable($path) ? $path : '';
     }
 
     private function settings(): array
