@@ -453,14 +453,40 @@ class AutoCategoryMappingService
 
         $intent = CategoryMappingSafety::detect_intent($context);
         $normalizedSuggestion = strtolower(remove_accents(wp_strip_all_tags($suggestionText)));
-        if ($intent === 'spare_wheel' && $this->contains_any_text($normalizedSuggestion, ['komplettrader', 'komplettraeder', 'automobile', 'fahrzeuge', 'mercedes-benz'])) {
-            $score -= 0.75;
-        }
-        if ($intent === 'ac_hose') {
-            if ($this->contains_any_text($normalizedSuggestion, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch', 'klimaschlauch'])) {
+        if ($intent === 'spare_wheel') {
+            if ($this->contains_any_text($normalizedSuggestion, ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen'])) {
                 $score += 0.35;
             }
-            if ($this->contains_any_text($normalizedSuggestion, ['klimakompressor', 'kompressoren', 'kompressor', 'kupplungen']) && !$this->contains_any_text($normalizedSuggestion, ['leitung', 'schlauch'])) {
+            if ($this->contains_any_text($normalizedSuggestion, ['komplettrader', 'komplettraeder', 'automobile', 'fahrzeuge', 'mercedes-benz'])) {
+                $score -= 0.75;
+            }
+        }
+        if ($intent === 'wiring_harness') {
+            if ($this->contains_any_text($normalizedSuggestion, ['kabelbaum', 'leitungssatz', 'kabel', 'elektrik', 'bordnetz', 'steckverbinder', 'anlasser', 'lichtmaschine', 'generator'])) {
+                $score += 0.35;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor'])) {
+                $score -= 0.85;
+            }
+        }
+        if ($intent === 'power_steering_hose') {
+            if ($this->contains_any_text($normalizedSuggestion, ['servolenkung']) && $this->contains_any_text($normalizedSuggestion, ['leitung', 'schlauch'])) {
+                $score += 0.40;
+            } elseif ($this->contains_any_text($normalizedSuggestion, ['servolenkung', 'leitung', 'schlauch'])) {
+                $score += 0.20;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke']) && !$this->contains_any_text($normalizedSuggestion, ['servolenkung', 'leitung', 'schlauch'])) {
+                $score -= 0.85;
+            }
+        }
+        if ($intent === 'ac_hose') {
+            if ($this->contains_any_text($normalizedSuggestion, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch', 'klimaschlauch', 'klimaanlage'])) {
+                $score += 0.35;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['motoren', 'motorenteile', 'motorteile']) && !$this->contains_any_text($normalizedSuggestion, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'schlauch', 'klimaanlage'])) {
+                $score -= 0.85;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['klimakompressor', 'kompressoren', 'kompressor', 'kupplungen']) && !$this->contains_any_text($normalizedSuggestion, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch'])) {
                 $score -= 0.75;
             }
         }
