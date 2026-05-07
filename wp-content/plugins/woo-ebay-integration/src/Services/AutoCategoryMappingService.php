@@ -471,8 +471,18 @@ class AutoCategoryMappingService
         $scoringRaw = $raw + ['category' => ['categoryName' => $categoryName]];
         $score = $this->score_suggestion($wooPath, $query, $path . ' ' . $categoryName, $scoringRaw, $samples, $required, $isLeaf);
         $safetyContext = trim($wooPath . ' ' . $query);
-        $safety = CategoryMappingSafety::evaluate_auto_mapping($safetyContext, $path . ' ' . $categoryName, $score, $settings);
-        $isSonstige = CategoryMappingSafety::is_sonstige_category($path . ' ' . $categoryName);
+        $categoryText = trim($path . ' ' . $categoryName);
+        $safety = CategoryMappingSafety::evaluate_auto_mapping($safetyContext, $categoryText, $score, $settings);
+        $intent = CategoryMappingSafety::detect_intent($safetyContext);
+        $matchedIntentKeywords = $intent !== '' ? CategoryMappingSafety::matched_keywords_for_intent($intent, $categoryText) : [];
+        if ($intent !== '' && CategoryMappingSafety::expected_keywords_for_intent($intent) !== [] && $matchedIntentKeywords === []) {
+            $safety['accepted'] = false;
+            $safety['status'] = 'category_sanity_failed';
+            $safety['ui_status'] = 'blocked_by_sanity';
+            $safety['sanity_check_pass'] = false;
+            $safety['sanity_reason'] = 'expected_path_keyword_missing';
+        }
+        $isSonstige = CategoryMappingSafety::is_sonstige_category($categoryText);
 
         return [
             'category_id' => $categoryId,
@@ -486,7 +496,8 @@ class AutoCategoryMappingService
             'is_sonstige' => $isSonstige,
             'required_aspects' => $required,
             'source' => $source,
-            'detected_intent' => CategoryMappingSafety::detect_intent($safetyContext),
+            'detected_intent' => $intent,
+            'matched_intent_keywords' => $matchedIntentKeywords,
             'is_leaf' => $isLeaf,
             'safety' => $safety,
             'raw_summary' => $this->summarize_suggestion($raw),
@@ -498,7 +509,15 @@ class AutoCategoryMappingService
         $intent = (string) ($candidate['detected_intent'] ?? '');
         $categoryText = trim((string) (($candidate['category_path'] ?? '') . ' ' . ($candidate['category_name'] ?? '')));
         $sanityReason = (string) ($candidate['sanity_reason'] ?? '');
-        $accepted = !empty($candidate['sanity_pass']) && $sanityReason === '';
+        $matchedKeywords = array_values(array_map('strval', (array) ($candidate['matched_intent_keywords'] ?? [])));
+        if ($intent !== '' && $matchedKeywords === []) {
+            $matchedKeywords = CategoryMappingSafety::matched_keywords_for_intent($intent, $categoryText);
+        }
+        $zeroIntentKeywordMatch = $intent !== '' && CategoryMappingSafety::expected_keywords_for_intent($intent) !== [] && $matchedKeywords === [];
+        $accepted = !empty($candidate['sanity_pass']) && $sanityReason === '' && !$zeroIntentKeywordMatch;
+        if ($zeroIntentKeywordMatch && $sanityReason === '') {
+            $sanityReason = 'expected_path_keyword_missing';
+        }
         return [
             'category_id' => (string) ($candidate['category_id'] ?? ''),
             'category_name' => (string) ($candidate['category_name'] ?? ''),
@@ -511,7 +530,7 @@ class AutoCategoryMappingService
             'reason' => $accepted ? 'accepted' : ($sanityReason !== '' ? 'rejected: ' . $sanityReason : 'rejected: lower_scored_candidate'),
             'sanity_pass' => !empty($candidate['sanity_pass']),
             'sanity_reason' => $sanityReason,
-            'matched_keywords' => $intent !== '' ? CategoryMappingSafety::matched_keywords_for_intent($intent, $categoryText) : [],
+            'matched_keywords' => $matchedKeywords,
             'rejected_by_guard_reason' => $sanityReason,
             'is_sonstige' => !empty($candidate['is_sonstige']),
             'required_aspects' => (array) ($candidate['required_aspects'] ?? []),
@@ -573,6 +592,17 @@ class AutoCategoryMappingService
                 $score -= 0.75;
             }
         }
+        if ($intent !== '' && CategoryMappingSafety::expected_keywords_for_intent($intent) !== []) {
+            $matchedIntentKeywords = CategoryMappingSafety::matched_keywords_for_intent($intent, $suggestionText);
+            if ($matchedIntentKeywords !== []) {
+                $score += min(0.42, 0.22 + (count($matchedIntentKeywords) * 0.05));
+            } else {
+                $score -= 0.95;
+            }
+        }
+        if ($this->contains_any_text($normalizedSuggestion, ['motorrad- & rollerteile', 'motorradteile', 'rollerteile']) && $intent !== 'motorcycle') {
+            $score -= 1.00;
+        }
         if ($intent === 'wiring_harness') {
             if ($this->contains_any_text($normalizedSuggestion, ['kabelbaum', 'leitungssatz', 'kabel', 'elektrik', 'bordnetz', 'steckverbinder', 'anlasser', 'lichtmaschine', 'generator'])) {
                 $score += 0.35;
@@ -587,7 +617,7 @@ class AutoCategoryMappingService
             } elseif ($this->contains_any_text($normalizedSuggestion, ['servolenkung', 'leitung', 'schlauch'])) {
                 $score += 0.20;
             }
-            if ($this->contains_any_text($normalizedSuggestion, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke']) && !$this->contains_any_text($normalizedSuggestion, ['servolenkung', 'leitung', 'schlauch'])) {
+            if ($this->contains_any_text($normalizedSuggestion, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke', 'komplettmotoren', 'komplettmotor', 'motorrad'])) {
                 $score -= 0.85;
             }
         }
@@ -605,7 +635,23 @@ class AutoCategoryMappingService
         if ($intent === 'car_speaker' && $this->contains_any_text($normalizedSuggestion, ['fensterheber', 'motoren'])) {
             $score -= 0.75;
         }
-        if (in_array($intent, ['hvac_control_panel', 'hvac_blower', 'tow_hook'], true) && $this->contains_any_text($normalizedSuggestion, ['motoren', 'motorteile', 'pleuel', 'hauptlager'])) {
+        if ($intent === 'tow_hook') {
+            if ($this->contains_any_text($normalizedSuggestion, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
+                $score += 0.35;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['wischerarme', 'wischerarm', 'motoren', 'motorblock', 'motorblocke', 'motorbloecke', 'motorteile', 'pleuel', 'hauptlager', 'sonstige'])) {
+                $score -= 0.90;
+            }
+        }
+        if ($intent === 'interior_trim') {
+            if ($this->contains_any_text($normalizedSuggestion, ['zierleiste', 'dekorleiste', 'dekoreinlage', 'dekor', 'armaturenbrett', 'mittelkonsole', 'innenausstattung', 'verkleidung'])) {
+                $score += 0.35;
+            }
+            if ($this->contains_any_text($normalizedSuggestion, ['lautsprecher', 'audio', 'soundsystem', 'autoradio', 'hi-fi', 'hifi', 'motorrad'])) {
+                $score -= 0.90;
+            }
+        }
+        if (in_array($intent, ['hvac_control_panel', 'hvac_blower'], true) && $this->contains_any_text($normalizedSuggestion, ['motoren', 'motorteile', 'pleuel', 'hauptlager'])) {
             $score -= 0.75;
         }
 

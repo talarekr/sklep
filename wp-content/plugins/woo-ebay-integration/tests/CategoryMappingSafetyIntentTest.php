@@ -42,6 +42,7 @@ $cases = [
     ['Pleuellager Hauptlager Audi 2.0 TDI', 'engine_bearing'],
     ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', 'bumper_grille'],
     ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'bumper_reinforcement'],
+    ['2136 LISTWA DEKOR DESKI ROZDZIELCZEJ KONSOLI', 'interior_trim'],
     ['2181 AUDI Q5 SQ5 8R LIFT 3.0 TDI DEH BELKA WZMOCNIENIE ZDERZAKA TYŁ 8R0807313C', 'bumper_reinforcement'],
     ['2284 AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'wiring_harness'],
     ['2085 AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'power_steering_hose'],
@@ -89,6 +90,10 @@ $negativeChecks = [
     ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
     ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
     ['2155 AUDI KOŁO ZAPASOWE DOJAZDOWE NOTRAD', 'Automobile > Fahrzeuge', 'spare_wheel_candidate_is_vehicle_category'],
+    ['2115 AUDI HAK HOLOWNICZY UCHO HOLOWNICZE', 'Scheibenreinigung > Wischerarme', 'tow_hook_candidate_is_wrong_family'],
+    ['2232 AUDI ZACZEP HOLOWNICZY', 'Motoren > Motorblöcke', 'tow_hook_candidate_is_engine_parts'],
+    ['2136 LISTWA DEKOR DESKI ROZDZIELCZEJ KONSOLI', 'Auto & Motorrad: Teile > In-Car Audio > Lautsprecher', 'interior_trim_candidate_is_audio_or_motorcycle'],
+    ['2085 AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'Auto & Motorrad: Teile > Motorrad- & Rollerteile > Motoren & Motorteile', 'power_steering_hose_candidate_is_motorcycle_parts_family'],
 ];
 
 foreach ($negativeChecks as [$source, $candidate, $expectedReason]) {
@@ -115,6 +120,9 @@ $positiveChecks = [
     ['2217 AUDI A3 DMUCHAWA WENTYLATOR NAWIEWU HVAC BLOWER', 'Heizung & Klimaanlage > Gebläse Lüfter Innenraum', true],
     ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Klimaanlage > Kältemittelleitung & Schlauch', true],
     ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'Klimaanlage > Klimaleitung Schlauch', true],
+    ['2115 AUDI HAK HOLOWNICZY UCHO HOLOWNICZE', 'Karosserie > Anhängerkupplung Abschlepphaken Abschleppöse Zugvorrichtung', true],
+    ['2232 AUDI ZACZEP HOLOWNICZY', 'Karosserie > Anhängevorrichtung Abschleppöse', true],
+    ['2136 LISTWA DEKOR DESKI ROZDZIELCZEJ KONSOLI', 'Innenausstattung > Armaturenbrett Mittelkonsole Dekorleiste Zierleiste', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {
