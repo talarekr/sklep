@@ -113,6 +113,8 @@ class AutoCategoryMappingService
             'rules_updated' => 0,
             'rows_skipped' => 0,
             'rows_rejected_by_safety' => 0,
+            'top_hard_safety_reasons' => [],
+            'skipped_sample_rows' => [],
             'validation_errors_sample' => [],
             'imported_rule_keys' => [],
             // Back-compat keys used by older admin/status renderers.
@@ -148,11 +150,14 @@ class AutoCategoryMappingService
                 $manualPath = trim((string) ($details['category_path'] ?? $details['category_name'] ?? ''));
             }
 
-            $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath . ' ' . (string) ($row['detected_intent'] ?? '') . ' ' . (string) ($row['sample_titles'] ?? ''), $manualId, $manualPath);
+            $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath, $manualId, $manualPath);
             if (empty($safety['pass'])) {
                 $reason = (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety');
                 $summary['rows_rejected_by_safety']++;
-                $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => 'safety_failed', 'reason' => $reason, 'category_id' => $manualId, 'woo_category_path' => $wooPath, 'marketplace_id' => $ruleMarketplaceId];
+                $summary['top_hard_safety_reasons'][$reason] = (int) ($summary['top_hard_safety_reasons'][$reason] ?? 0) + 1;
+                $skippedRow = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => 'safety_failed', 'reason' => $reason, 'manual_ebay_category_id' => $manualId, 'manual_ebay_category_path' => $manualPath, 'woo_category_path' => $wooPath, 'marketplace_id' => $ruleMarketplaceId];
+                $summary['details'][] = $skippedRow + ['category_id' => $manualId];
+                $this->append_skipped_sample_row($summary, $skippedRow);
                 $this->append_validation_error($summary, "row {$rowNumber}: safety rejected category {$manualId}: {$reason}");
                 continue;
             }
@@ -191,6 +196,8 @@ class AutoCategoryMappingService
             $summary['details'][] = ['row' => $rowNumber, 'group_id' => (string) ($row['group_id'] ?? ''), 'status' => $writeResult, 'keyword_family' => $keywordFamily, 'category_id' => $manualId, 'safety_warning' => (string) ($safety['warning'] ?? '')] + $key;
         }
 
+        arsort($summary['top_hard_safety_reasons']);
+        $summary['top_hard_safety_reasons'] = array_slice($summary['top_hard_safety_reasons'], 0, 10, true);
         $summary['skipped_rows'] = (int) $summary['rows_skipped'];
         $summary['safety_failed_rows'] = (int) $summary['rows_rejected_by_safety'];
         update_option('wei_ebay_category_mapping_teaching_import', $summary, false);
@@ -212,6 +219,8 @@ class AutoCategoryMappingService
             'mappings_written' => 0,
             'already_mapped' => 0,
             'skipped_by_hard_safety' => 0,
+            'top_hard_safety_reasons' => [],
+            'skipped_sample_rows' => [],
             'errors_sample' => [],
         ];
 
@@ -253,7 +262,11 @@ class AutoCategoryMappingService
                 } elseif (($applyResult['status'] ?? '') === 'already_mapped') {
                     $summary['already_mapped']++;
                 } elseif (($applyResult['status'] ?? '') === 'skipped_by_hard_safety') {
-                    $summary['skipped_by_hard_safety'] += max(1, count($productIds));
+                    $skippedCount = max(1, count($productIds));
+                    $reason = (string) ($applyResult['hard_safety_reason'] ?? $applyResult['reason'] ?? 'manual_mapping_failed_hard_safety');
+                    $summary['skipped_by_hard_safety'] += $skippedCount;
+                    $summary['top_hard_safety_reasons'][$reason] = (int) ($summary['top_hard_safety_reasons'][$reason] ?? 0) + $skippedCount;
+                    $this->append_skipped_sample_row($summary, ['term_id' => $termId, 'status' => 'skipped_by_hard_safety', 'reason' => $reason, 'manual_ebay_category_id' => (string) ($applyResult['rule']['ebay_category_id'] ?? ''), 'manual_ebay_category_path' => (string) ($applyResult['rule']['ebay_category_path'] ?? ''), 'woo_category_path' => $wooPath, 'product_count' => count($productIds), 'sample_product_ids' => implode('|', array_slice(array_map('strval', $productIds), 0, 10))]);
                     $this->append_apply_error($summary, (string) ($applyResult['reason'] ?? 'manual mapping failed hard safety'));
                 } elseif (($applyResult['status'] ?? '') === 'error') {
                     $this->append_apply_error($summary, (string) ($applyResult['reason'] ?? 'manual mapping failed'));
@@ -261,6 +274,8 @@ class AutoCategoryMappingService
             }
         }
 
+        arsort($summary['top_hard_safety_reasons']);
+        $summary['top_hard_safety_reasons'] = array_slice($summary['top_hard_safety_reasons'], 0, 10, true);
         $summary['products_matching_manual_categories'] = count($matchedProducts);
         update_option('wei_ebay_manual_woo_category_mapping_apply_report', $summary, false);
         $this->logger->info('Manual Woo category mappings applied to all products', $summary);
@@ -587,9 +602,10 @@ class AutoCategoryMappingService
         $categoryId = (string) $rule['ebay_category_id'];
         $categoryPath = (string) ($rule['ebay_category_path'] ?? '');
         $categoryText = trim($categoryPath . ' ' . $categoryId);
-        $safety = CategoryMappingSafety::manual_woo_category_mapping_check(trim($wooPath . ' ' . $sampleTitle), $categoryId, $categoryText);
+        $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath, $categoryId, $categoryText);
         if (empty($safety['pass'])) {
-            return ['status' => 'skipped_by_hard_safety', 'reason' => 'Woo path ' . $wooPath . ' rule ' . (string) ($rule['id'] ?? '?') . ' rejected: ' . (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'rule' => $rule];
+            $hardSafetyReason = (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety');
+            return ['status' => 'skipped_by_hard_safety', 'reason' => 'Woo path ' . $wooPath . ' rule ' . (string) ($rule['id'] ?? '?') . ' category ' . $categoryId . ' rejected: ' . $hardSafetyReason, 'hard_safety_reason' => $hardSafetyReason, 'rule' => $rule];
         }
 
         $existing = $this->categoryRepo->find($marketplaceId, $termId);
@@ -710,6 +726,13 @@ class AutoCategoryMappingService
     {
         if (count((array) ($summary['errors_sample'] ?? [])) < 20) {
             $summary['errors_sample'][] = $message;
+        }
+    }
+
+    private function append_skipped_sample_row(array &$summary, array $row): void
+    {
+        if (count((array) ($summary['skipped_sample_rows'] ?? [])) < 20) {
+            $summary['skipped_sample_rows'][] = $row;
         }
     }
 
@@ -956,7 +979,7 @@ class AutoCategoryMappingService
             $categoryPath = (string) ($details['category_path'] ?? '');
         }
         $categoryText = trim($categoryPath . ' ' . $categoryName . ' ' . $categoryId);
-        $safety = CategoryMappingSafety::manual_woo_category_mapping_check(trim($path . ' ' . $query . ' ' . $sampleTitle), $categoryId, $categoryText);
+        $safety = CategoryMappingSafety::manual_woo_category_mapping_check($path, $categoryId, $categoryText);
         if (empty($safety['pass'])) {
             $reason = (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety');
             $this->logger->warning('Manual Woo category mapping failed hard safety checks', ['woo_term_id' => $termId, 'category_id' => $categoryId, 'sanity_reason' => $reason]);

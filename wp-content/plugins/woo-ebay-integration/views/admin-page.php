@@ -605,7 +605,11 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <span class="description">Loads active manual_woo_category_mapping rules by Woo category path and writes category mappings for matching published products/categories only. Does not call taxonomy suggestions, eBay APIs, publish, or modify SKU/price/Allegro data.</span>
             </form>
             <?php if (!empty($manual_woo_category_apply_summary)): ?>
-                <?php $applyErrors = is_array($manual_woo_category_apply_summary['errors_sample'] ?? null) ? $manual_woo_category_apply_summary['errors_sample'] : []; ?>
+                <?php
+                $applyErrors = is_array($manual_woo_category_apply_summary['errors_sample'] ?? null) ? $manual_woo_category_apply_summary['errors_sample'] : [];
+                $applyHardSafetyReasons = is_array($manual_woo_category_apply_summary['top_hard_safety_reasons'] ?? null) ? $manual_woo_category_apply_summary['top_hard_safety_reasons'] : [];
+                $applySkippedRows = is_array($manual_woo_category_apply_summary['skipped_sample_rows'] ?? null) ? $manual_woo_category_apply_summary['skipped_sample_rows'] : [];
+                ?>
                 <details style="margin-top:8px;" open>
                     <summary>Last manual Woo category mapping apply summary</summary>
                     <div class="wei-grid" style="margin-top:8px;">
@@ -617,6 +621,35 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                         <div class="wei-metric"><span>already_mapped</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['already_mapped'] ?? 0)); ?></strong></div>
                         <div class="wei-metric"><span>skipped_by_hard_safety</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['skipped_by_hard_safety'] ?? 0)); ?></strong></div>
                     </div>
+                    <?php if ($applyHardSafetyReasons !== []): ?>
+                        <p><strong>top_hard_safety_reasons</strong></p>
+                        <table class="widefat striped">
+                            <thead><tr><th>reason</th><th>count</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($applyHardSafetyReasons as $reason => $count): ?>
+                                <tr><td><code><?php echo esc_html((string) $reason); ?></code></td><td><?php echo esc_html((string) $count); ?></td></tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                    <?php if ($applySkippedRows !== []): ?>
+                        <p><strong>skipped_sample_rows</strong></p>
+                        <table class="widefat striped">
+                            <thead><tr><th>reason</th><th>manual_ebay_category_id</th><th>manual_ebay_category_path</th><th>woo_category_path</th><th>product_count</th><th>sample_product_ids</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($applySkippedRows as $row): ?>
+                                <tr>
+                                    <td><code><?php echo esc_html((string) ($row['reason'] ?? '')); ?></code></td>
+                                    <td><code><?php echo esc_html((string) ($row['manual_ebay_category_id'] ?? '')); ?></code></td>
+                                    <td><?php echo esc_html((string) ($row['manual_ebay_category_path'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($row['product_count'] ?? '')); ?></td>
+                                    <td><code><?php echo esc_html((string) ($row['sample_product_ids'] ?? '')); ?></code></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
                     <?php if ($applyErrors !== []): ?>
                         <p class="description">errors_sample</p>
                         <ul>
@@ -638,6 +671,8 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <?php
                 $importedRuleKeys = is_array($category_teaching_import_summary['imported_rule_keys'] ?? null) ? $category_teaching_import_summary['imported_rule_keys'] : [];
                 $validationErrors = is_array($category_teaching_import_summary['validation_errors_sample'] ?? null) ? $category_teaching_import_summary['validation_errors_sample'] : [];
+                $importHardSafetyReasons = is_array($category_teaching_import_summary['top_hard_safety_reasons'] ?? null) ? $category_teaching_import_summary['top_hard_safety_reasons'] : [];
+                $importSkippedRows = is_array($category_teaching_import_summary['skipped_sample_rows'] ?? null) ? $category_teaching_import_summary['skipped_sample_rows'] : [];
                 ?>
                 <details style="margin-top:8px;" open>
                     <summary>Last teaching import summary</summary>
@@ -649,6 +684,35 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                         <div class="wei-metric"><span>rows_skipped</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_skipped'] ?? $category_teaching_import_summary['skipped_rows'] ?? 0)); ?></strong></div>
                         <div class="wei-metric"><span>rows_rejected_by_safety</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_rejected_by_safety'] ?? $category_teaching_import_summary['safety_failed_rows'] ?? 0)); ?></strong></div>
                     </div>
+                    <?php if ($importHardSafetyReasons !== []): ?>
+                        <p><strong>top_hard_safety_reasons</strong></p>
+                        <table class="widefat striped">
+                            <thead><tr><th>reason</th><th>count</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($importHardSafetyReasons as $reason => $count): ?>
+                                <tr><td><code><?php echo esc_html((string) $reason); ?></code></td><td><?php echo esc_html((string) $count); ?></td></tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                    <?php if ($importSkippedRows !== []): ?>
+                        <p><strong>skipped_sample_rows</strong></p>
+                        <table class="widefat striped">
+                            <thead><tr><th>row</th><th>reason</th><th>manual_ebay_category_id</th><th>manual_ebay_category_path</th><th>woo_category_path</th><th>marketplace_id</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($importSkippedRows as $row): ?>
+                                <tr>
+                                    <td><?php echo esc_html((string) ($row['row'] ?? '')); ?></td>
+                                    <td><code><?php echo esc_html((string) ($row['reason'] ?? '')); ?></code></td>
+                                    <td><code><?php echo esc_html((string) ($row['manual_ebay_category_id'] ?? '')); ?></code></td>
+                                    <td><?php echo esc_html((string) ($row['manual_ebay_category_path'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($row['marketplace_id'] ?? '')); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
                     <?php if ($validationErrors !== []): ?>
                         <p><strong>validation_errors_sample</strong></p>
                         <ul><?php foreach ($validationErrors as $validationError): ?><li><code><?php echo esc_html((string) $validationError); ?></code></li><?php endforeach; ?></ul>
