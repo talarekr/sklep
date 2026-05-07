@@ -236,6 +236,12 @@ class AdminPage
         $verboseDebug = !empty($_POST['verbose_debug']);
         $res = $this->scheduler->run_full_category_audit($verboseDebug);
         $status = [
+            'result' => (string) ($res['result'] ?? ''),
+            'status' => (string) ($res['status'] ?? ''),
+            'processed' => (int) ($res['processed'] ?? $res['total_scanned'] ?? 0),
+            'total_products' => (int) ($res['total_products'] ?? 0),
+            'processed_this_batch' => (int) ($res['processed_this_batch'] ?? 0),
+            'batch_size' => (int) ($res['batch_size'] ?? 0),
             'total_scanned' => (int) ($res['total_scanned'] ?? 0),
             'ready_count' => (int) ($res['ready_count'] ?? 0),
             'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),

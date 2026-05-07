@@ -310,7 +310,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </table>
         <div class="wei-actions" style="margin-top:12px;">
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_readiness_now'); ?><input type="hidden" name="action" value="wei_auto_sync_readiness_now" /><button class="button">Run readiness scan now</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_full_category_audit'); ?><input type="hidden" name="action" value="wei_full_category_audit" /><label><input type="checkbox" name="verbose_debug" value="1" /> verbose debug JSON</label> <button class="button button-secondary">Run full category audit</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_full_category_audit'); ?><input type="hidden" name="action" value="wei_full_category_audit" /><label><input type="checkbox" name="verbose_debug" value="1" /> verbose debug JSON</label> <button class="button button-secondary">Run / continue full category audit</button></form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Run order sync now</button></form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><button class="button">Run stock sync now</button></form>
             <?php if (!empty($s['auto_export_enabled'])): ?><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_export_now'); ?><input type="hidden" name="action" value="wei_auto_sync_export_now" /><button class="button">Run export batch now</button></form><?php endif; ?>
@@ -335,7 +335,9 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <details style="margin-top:12px;" open>
                 <summary>Latest full eBay category audit reports</summary>
                 <div class="wei-grid" style="margin-top:8px;">
-                    <div class="wei-metric"><span>Total scanned</span><strong><?php echo esc_html((string) ($full_category_audit_summary['total_scanned'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Progress</span><strong><?php echo esc_html((string) ($full_category_audit_summary['processed'] ?? $full_category_audit_summary['total_scanned'] ?? 0) . ' / ' . (string) ($full_category_audit_summary['total_products'] ?? '?')); ?></strong></div>
+                    <div class="wei-metric"><span>Status</span><strong><?php echo esc_html((string) ($full_category_audit_summary['status'] ?? $full_category_audit_summary['result'] ?? '-')); ?></strong></div>
+                    <div class="wei-metric"><span>Last batch</span><strong><?php echo esc_html((string) ($full_category_audit_summary['processed_this_batch'] ?? 0)); ?></strong></div>
                     <div class="wei-metric"><span>Ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['ready_count'] ?? 0)); ?></strong></div>
                     <div class="wei-metric"><span>Blocked by category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['blocked_by_category_count'] ?? 0)); ?></strong></div>
                     <div class="wei-metric"><span>Missing category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['missing_category_count'] ?? 0)); ?></strong></div>
@@ -350,7 +352,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                         <?php endif; ?>
                     <?php endforeach; ?>
                 </ul>
-                <p class="description">Audit scans all published WooCommerce products and writes CSV/JSON files under WordPress uploads. It does not export, publish, change Woo SKU, change Woo price, or touch Allegro.</p>
+                <p class="description">Audit scans published WooCommerce products in safe dry-run batches, resumes an in-progress run on the next click, and writes final CSV/JSON files only after the last batch. It does not generate German content, write translated content/meta, export, publish, change Woo SKU, change Woo price, or touch Allegro.</p>
             </details>
         <?php endif; ?>
         <details class="wei-not-ready-products" style="margin-top:12px;" <?php echo !empty($notReadyItems) ? 'open' : ''; ?>>
