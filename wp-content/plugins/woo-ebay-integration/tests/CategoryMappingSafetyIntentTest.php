@@ -54,6 +54,10 @@ $cases = [
     ['2221 AUDI A1 PRZEWÓD WĄŻ KLIMATYZACJI EUROPA', 'ac_hose'],
     ['2155 AUDI KOŁO ZAPASOWE DOJAZDOWE NOTRAD', 'spare_wheel'],
     ['Panewki silnika Audi 2.0 TDI', 'engine_bearing'],
+    ['2090 RAMKA DEKOR KONSOLI ŚRODKOWEJ AUDI A6', 'interior_trim'],
+    ['2148 GNIAZDO USB PORT USB AUDI A4', 'usb_socket'],
+    ['2151 ANTENA DACHOWA SHARK FIN AUDI Q5', 'roof_antenna'],
+    ['2215 LISTWA DEKOR RAMKA NAWIEWU AUDI A3', 'interior_trim'],
 ];
 
 $failures = [];
@@ -84,7 +88,7 @@ $negativeChecks = [
     ['Anlasserkabelbaum Audi A6', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', 'expected_path_keyword_missing'],
-    ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', 'expected_path_keyword_missing'],
+    ['2250 AUDI A4 B8 2.0 TFSI AVANT BELKA WZMOCNIENIE ZDERZAKA PRZÓD EU 8K0807113D', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', 'bumper_reinforcement_candidate_is_tow_hook_family'],
     ['2284 AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Innenausstattung > Fensterheber & -motoren', 'wiring_harness_candidate_is_window_lifter_or_motor'],
     ['2217 AUDI A3 DMUCHAWA WENTYLATOR NAWIEWU HVAC BLOWER', 'Motoren & Motorenteile > Motorteile', 'hvac_blower_candidate_is_engine_parts'],
     ['2218 AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
@@ -93,6 +97,8 @@ $negativeChecks = [
     ['2115 AUDI HAK HOLOWNICZY UCHO HOLOWNICZE', 'Scheibenreinigung > Wischerarme', 'tow_hook_candidate_is_wrong_family'],
     ['2232 AUDI ZACZEP HOLOWNICZY', 'Motoren > Motorblöcke', 'tow_hook_candidate_is_engine_parts'],
     ['2136 LISTWA DEKOR DESKI ROZDZIELCZEJ KONSOLI', 'Auto & Motorrad: Teile > In-Car Audio > Lautsprecher', 'interior_trim_candidate_is_audio_or_motorcycle'],
+    ['2148 GNIAZDO USB PORT USB AUDI A4', 'Auto & Motorrad: Teile > In-Car Audio > Lautsprecher', 'usb_socket_candidate_is_audio_speaker_family'],
+    ['2151 ANTENA DACHOWA SHARK FIN AUDI Q5', 'Auto & Motorrad: Teile > In-Car Audio > Lautsprecher', 'roof_antenna_candidate_is_audio_speaker_family'],
     ['2085 AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'Auto & Motorrad: Teile > Motorrad- & Rollerteile > Motoren & Motorteile', 'power_steering_hose_candidate_is_motorcycle_parts_family'],
 ];
 
@@ -123,6 +129,8 @@ $positiveChecks = [
     ['2115 AUDI HAK HOLOWNICZY UCHO HOLOWNICZE', 'Karosserie > Anhängerkupplung Abschlepphaken Abschleppöse Zugvorrichtung', true],
     ['2232 AUDI ZACZEP HOLOWNICZY', 'Karosserie > Anhängevorrichtung Abschleppöse', true],
     ['2136 LISTWA DEKOR DESKI ROZDZIELCZEJ KONSOLI', 'Innenausstattung > Armaturenbrett Mittelkonsole Dekorleiste Zierleiste', true],
+    ['2148 GNIAZDO USB PORT USB AUDI A4', 'Innenausstattung > Multimedia USB Anschluss Buchse', true],
+    ['2151 ANTENA DACHOWA SHARK FIN AUDI Q5', 'Karosserie > Antennen > Dachantenne Shark', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {
