@@ -187,7 +187,7 @@ class CategoryMappingSafety
         $rules = [
             'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'kolo dojazdowe', 'dojazdowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
             'engine_bearing' => ['motorlager', 'pleuellager', 'hauptlager', 'engine bearing', 'crank bearing', 'connecting rod bearing', 'panewki', 'panewka', 'lozyska silnika', 'lozysko silnika'],
-            'wiring_harness' => ['kabelbaum', 'kabelbaume', 'kabelbaeume', 'wiazka przewodow', 'wiazki przewodow', 'wiazka elektryczna', 'wiring harness'],
+            'wiring_harness' => ['anlasser-lichtmaschinenkabelbaum', 'anlasser lichtmaschinen kabelbaum', 'anlasserkabelbaum', 'lichtmaschinenkabelbaum', 'kabelbaum', 'kabelbaume', 'kabelbaeume', 'leitungssatz', 'leitungssatze', 'leitungssaetze', 'starter cable harness', 'alternator cable harness', 'starter alternator harness', 'wiazka rozrusznika', 'wiazka alternatora', 'wiazka rozrusznik alternator', 'wiazka przewodow', 'wiazki przewodow', 'wiazka elektryczna', 'przewod rozrusznika', 'przewod alternatora', 'wiring harness'],
             'starter' => ['rozrusznik', 'rozruszniki', 'anlasser', 'starter'],
             'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen', 'polos', 'polos napedowa', 'półoś', 'driveshaft', 'drive shaft'],
             'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'steuermodul', 'kontrollmodul', 'control module', 'module'],
@@ -231,7 +231,7 @@ class CategoryMappingSafety
             'washer_tank' => ['waschwasserbehalter', 'waschwasserbehaelter', 'scheibenwaschanlage', 'scheibenwaschbehalter', 'scheibenwaschbehaelter'],
             'power_steering_hose' => ['servolenkung', 'leitung', 'schlauch'],
             'roof_light' => ['innenbeleuchtung', 'innenleuchte', 'leuchte', 'dachhimmel'],
-            'wiring_harness' => ['kabel', 'kabelbaum', 'kabelbaume', 'kabelbaeume', 'steckverbinder'],
+            'wiring_harness' => ['kabelbaum', 'kabelbaume', 'kabelbaeume', 'leitungssatz', 'leitungssatze', 'leitungssaetze', 'kabel', 'elektrik', 'elektrische komponenten', 'bordnetz', 'anlasser', 'lichtmaschine', 'generator', 'steckverbinder'],
             'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
             'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
             'gearbox_cover' => ['unterfahrschutz', 'abdeckung', 'getriebe', 'motorraum', 'spritzschutz'],
