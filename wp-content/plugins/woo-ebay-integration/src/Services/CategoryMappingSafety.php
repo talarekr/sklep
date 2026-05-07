@@ -124,6 +124,23 @@ class CategoryMappingSafety
         return self::contains_any(self::normalize($ebayPath), $expected);
     }
 
+
+    public static function matched_keywords_for_intent(string $intent, string $ebayPath): array
+    {
+        $expected = self::expected_keywords_for_intent($intent);
+        if ($expected === []) {
+            return [];
+        }
+
+        $ebay = self::normalize($ebayPath);
+        return array_values(array_filter($expected, static fn(string $keyword): bool => $keyword !== '' && str_contains($ebay, self::normalize($keyword))));
+    }
+
+    public static function rejected_by_guard_reason(string $sourceText, string $ebayPath): string
+    {
+        return self::strong_negative_reason(self::category_intent($sourceText), self::normalize($ebayPath));
+    }
+
     public static function sanity_check(string $wooPath, string $ebayPath): array
     {
         $woo = self::normalize($wooPath);
@@ -192,10 +209,10 @@ class CategoryMappingSafety
             'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen', 'polos', 'polos napedowa', 'półoś', 'driveshaft', 'drive shaft'],
             'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'steuermodul', 'kontrollmodul', 'control module', 'module'],
             'washer_tank' => ['scheibenwaschflussigkeitsbehalter', 'scheibenwaschfluessigkeitsbehaelter', 'scheibenwaschbehalter', 'scheibenwaschbehaelter', 'wischwasserbehalter', 'wischwasserbehaelter', 'waschwasserbehalter', 'waschwasserbehaelter', 'zbiornik spryskiwaczy', 'washer tank'],
-            'power_steering_hose' => ['servolenkungsschlauch', 'servolenkung leitung', 'servolenkung schlauch', 'przewod wspomagania', 'waz wspomagania', 'power steering hose'],
+            'power_steering_hose' => ['servolenkungsschlauch', 'servolenkung leitung', 'servolenkung schlauch', 'servoleitung', 'przewod wspomagania', 'przewód wspomagania', 'waz wspomagania', 'wąż wspomagania', 'power steering hose'],
             'roof_light' => ['dachhimmelleuchte', 'dachhimmel leuchte', 'lampka podsufitki', 'oswietlenie podsufitki', 'innenleuchte', 'roof light'],
-            'bumper_grille' => ['kratka zderzaka', 'atrapa zderzaka', 'kratka atrapa zderzaka', 'grill zderzaka', 'bumper grille', 'bumper trim'],
-            'bumper_reinforcement' => ['belka wzmocnienie zderzaka', 'belka zderzaka', 'wzmocnienie zderzaka', 'bumper reinforcement', 'stossstangentrager', 'stosstangentrager', 'pralldampfer'],
+            'bumper_grille' => ['kratka zderzaka', 'atrapa zderzaka', 'kratka atrapa zderzaka', 'grill zderzaka', 'bumper grille', 'grille bumper', 'bumper trim', 'luftungsgitter', 'lueftungsgitter', 'kuhlergrill', 'kuehlergrill', 'stossstangengitter', 'stosstangengitter'],
+            'bumper_reinforcement' => ['belka wzmocnienie zderzaka', 'belka zderzaka', 'wzmocnienie zderzaka', 'bumper reinforcement', 'stossstangentrager', 'stossstangentraeger', 'stosstangentrager', 'stosstangentraeger', 'aufpralldampfer', 'aufpralldaempfer', 'pralltrager', 'pralltraeger', 'pralldampfer'],
             'tow_hook' => ['hak holowniczy', 'ucho holownicze', 'zaczep holowniczy', 'zaczep', 'tow hook', 'towing hook', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'anhangerkupplung', 'anhaengerkupplung', 'towbar', 'tow bar', 'towing coupling'],
             'sunroof' => ['szyberdach', 'dach panoramiczny', 'schiebedach', 'panoramadach', 'sunroof'],
             'gearbox_cover' => ['oslona dolna skrzyni', 'oslona skrzyni', 'unterfahrschutz', 'abdeckung', 'getriebeabdeckung', 'undertray', 'gearbox cover'],
@@ -231,12 +248,12 @@ class CategoryMappingSafety
             'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen'],
             'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'modul', 'module'],
             'washer_tank' => ['wischwasserbehalter', 'wischwasserbehaelter', 'wischwasserbehälter', 'scheibenreinigung', 'scheinwerferreinigung', 'waschwasser', 'waschwasserbehalter', 'waschwasserbehaelter', 'scheibenwaschanlage', 'scheibenwaschbehalter', 'scheibenwaschbehaelter', 'behalter', 'behaelter'],
-            'power_steering_hose' => ['servolenkung', 'leitung', 'schlauch'],
+            'power_steering_hose' => ['servolenkung', 'hydraulik', 'leitung', 'schlauch', 'lenkung'],
             'roof_light' => ['innenbeleuchtung', 'innenleuchte', 'leuchte', 'dachhimmel'],
             'wiring_harness' => ['kabelbaum', 'kabelbaume', 'kabelbaeume', 'leitungssatz', 'leitungssatze', 'leitungssaetze', 'kabel', 'elektrik', 'elektrische komponenten', 'bordnetz', 'anlasser', 'lichtmaschine', 'generator', 'steckverbinder'],
             'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
-            'bumper_grille' => ['stossstange', 'stosstange', 'gitter', 'kuhlergrill', 'kuehlergrill', 'blende', 'zierleiste', 'verkleidung'],
-            'bumper_reinforcement' => ['stossstange', 'stosstange', 'trager', 'traeger', 'pralldampfer', 'verstarkung', 'verstaerkung', 'aufpralldampfer'],
+            'bumper_grille' => ['gitter', 'grill', 'kuhlergrill', 'kuehlergrill', 'kühlergrill', 'stossstange', 'stosstange', 'stoßstange', 'blende', 'abdeckung', 'zierleiste', 'verkleidung'],
+            'bumper_reinforcement' => ['stossstange', 'stosstange', 'stoßstange', 'trager', 'träger', 'traeger', 'pralltrager', 'prallträger', 'pralltraeger', 'pralldampfer', 'verstarkung', 'verstärkung', 'verstaerkung', 'aufpralldampfer', 'aufpralldämpfer', 'aufpralldaempfer'],
             'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
             'gearbox_cover' => ['unterfahrschutz', 'abdeckung', 'getriebe', 'motorraum', 'spritzschutz'],
             'adblue_hose' => ['adblue', 'harnstoff', 'leitung', 'schlauch', 'abgasreinigung'],
@@ -271,13 +288,28 @@ class CategoryMappingSafety
                 return 'spare_wheel_candidate_is_vehicle_category';
             }
         }
+        if ($intent !== '' && self::contains_any($ebay, ['motorrad- & rollerteile', 'motorradteile', 'rollerteile']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+            return $intent . '_candidate_is_motorcycle_parts_family';
+        }
+        if ($intent !== '' && !in_array($intent, ['complete_engine', 'engine_bearing', 'power_steering_hose', 'ac_hose', 'hvac_control_panel', 'hvac_blower', 'tow_hook'], true) && self::contains_any($ebay, ['motoren & motorenteile', 'motoren und motorenteile', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+            return $intent . '_candidate_is_engine_parts_family';
+        }
+        if ($intent !== '' && self::contains_any($ebay, ['automobile', 'fahrzeuge']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+            return $intent . '_candidate_is_vehicle_category';
+        }
+        if ($intent !== '' && $intent !== 'wiring_harness' && self::contains_any($ebay, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+            return $intent . '_candidate_is_window_lifter_or_motor';
+        }
+        if ($intent !== '' && !in_array($intent, ['complete_engine'], true) && self::contains_any($ebay, ['turbolader', 'ladeluftkuhler', 'ladeluftkuehler']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+            return $intent . '_candidate_is_turbo_or_intercooler_family';
+        }
         if ($intent === 'wiring_harness' && self::contains_any($ebay, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor']) && !self::contains_any($ebay, ['kabelbaum', 'leitungssatz', 'kabel', 'elektrik', 'bordnetz', 'steckverbinder', 'anlasser', 'lichtmaschine', 'generator'])) {
             return 'wiring_harness_candidate_is_window_lifter_or_motor';
         }
-        if ($intent === 'power_steering_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke']) && !self::contains_any($ebay, ['servolenkung', 'leitung', 'schlauch'])) {
+        if ($intent === 'power_steering_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke', 'motorradteile']) && !self::contains_any($ebay, ['servolenkung', 'leitung', 'schlauch'])) {
             return 'power_steering_hose_candidate_is_engine_parts';
         }
-        if ($intent === 'ac_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile']) && !self::contains_any($ebay, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'schlauch', 'klimaanlage'])) {
+        if ($intent === 'ac_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorradteile']) && !self::contains_any($ebay, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'schlauch', 'klimaanlage'])) {
             return 'ac_hose_candidate_is_engine_parts';
         }
         if ($intent === 'ac_hose' && self::contains_any($ebay, ['kompressor', 'kompressoren', 'klimakompressor', 'klimakompressoren', 'kupplungen']) && !self::contains_any($ebay, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch'])) {

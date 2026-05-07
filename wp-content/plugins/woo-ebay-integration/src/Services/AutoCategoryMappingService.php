@@ -74,6 +74,107 @@ class AutoCategoryMappingService
         return $summary;
     }
 
+    public function repair_blocked_category_mappings(array $productIds = [], string $marketplaceId = 'EBAY_DE', int $fallbackSampleSize = 200): array
+    {
+        $settings = $this->settings();
+        $marketplaceId = trim($marketplaceId) !== '' ? trim($marketplaceId) : (string) ($settings['marketplace_id'] ?? 'EBAY_DE');
+        $eligibleStatuses = ['category_sanity_failed', 'low_confidence_auto', 'needs_category_review', 'missing_category_mapping', 'unmapped', 'suggestion_failed'];
+        $productIds = array_values(array_unique(array_filter(array_map('intval', $productIds), static fn(int $id): bool => $id > 0)));
+        if ($productIds === []) {
+            $productIds = $this->recent_product_ids_for_repair($fallbackSampleSize);
+        }
+
+        $summary = [
+            'processed' => 0,
+            'fixed_count' => 0,
+            'still_blocked_count' => 0,
+            'no_candidate_count' => 0,
+            'low_confidence_count' => 0,
+            'fixed_product_ids' => [],
+            'still_blocked_product_ids' => [],
+            'top_block_reasons' => [],
+        ];
+        $reasonCounts = [];
+        $processedProducts = [];
+
+        foreach ($productIds as $productId) {
+            if (isset($processedProducts[$productId])) {
+                continue;
+            }
+            $processedProducts[$productId] = true;
+            $terms = function_exists('wp_get_post_terms') ? wp_get_post_terms($productId, 'product_cat') : [];
+            if (is_wp_error($terms) || $terms === []) {
+                $summary['processed']++;
+                $summary['no_candidate_count']++;
+                $reasonCounts['missing_product_category'] = ($reasonCounts['missing_product_category'] ?? 0) + 1;
+                $summary['still_blocked_product_ids'][] = ['product_id' => $productId, 'reason' => 'missing_product_category'];
+                continue;
+            }
+
+            $summary['processed']++;
+            $fixed = false;
+            $lastReason = 'missing_category_mapping';
+            foreach ((array) $terms as $term) {
+                $termId = (int) ($term->term_id ?? 0);
+                if ($termId <= 0) {
+                    continue;
+                }
+                $existing = $this->categoryRepo->find($marketplaceId, $termId);
+                if ($this->is_manual_mapping($existing)) {
+                    continue;
+                }
+                $status = $existing ? (string) ($existing['status'] ?? 'missing_category_mapping') : 'missing_category_mapping';
+                if (!in_array($status, $eligibleStatuses, true)) {
+                    continue;
+                }
+
+                $result = $this->auto_map_term($termId, $marketplaceId, $settings);
+                $newStatus = (string) ($result['status'] ?? 'suggestion_failed');
+                if ($newStatus === 'mapped_auto') {
+                    $fixed = true;
+                    break;
+                }
+                $lastReason = (string) ($result['sanity_reason'] ?? $result['error_reason'] ?? $newStatus ?: 'needs_category_review');
+                if ($newStatus === 'low_confidence_auto') {
+                    $summary['low_confidence_count']++;
+                }
+                if (in_array($newStatus, ['unmapped', 'suggestion_failed'], true)) {
+                    $summary['no_candidate_count']++;
+                }
+            }
+
+            if ($fixed) {
+                $summary['fixed_count']++;
+                $summary['fixed_product_ids'][] = $productId;
+                continue;
+            }
+
+            $summary['still_blocked_count']++;
+            $reasonCounts[$lastReason] = ($reasonCounts[$lastReason] ?? 0) + 1;
+            $summary['still_blocked_product_ids'][] = ['product_id' => $productId, 'reason' => $lastReason];
+        }
+
+        arsort($reasonCounts);
+        $summary['top_block_reasons'] = array_slice($reasonCounts, 0, 5, true);
+        update_option('wei_ebay_category_mapping_repair_report', $summary, false);
+        $this->logger->info('Category mapping repair report', $summary);
+        return $summary;
+    }
+
+    private function recent_product_ids_for_repair(int $limit): array
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => ['publish', 'draft', 'private'],
+            'posts_per_page' => max(1, min(300, $limit)),
+            'fields' => 'ids',
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'no_found_rows' => true,
+        ]);
+        return array_values(array_map('intval', (array) $query->posts));
+    }
+
     public function auto_map_term(int $termId, string $marketplaceId = 'EBAY_DE', ?array $settings = null): array
     {
         $settings = $settings ?? $this->settings();
@@ -385,6 +486,7 @@ class AutoCategoryMappingService
             'is_sonstige' => $isSonstige,
             'required_aspects' => $required,
             'source' => $source,
+            'detected_intent' => CategoryMappingSafety::detect_intent($safetyContext),
             'is_leaf' => $isLeaf,
             'safety' => $safety,
             'raw_summary' => $this->summarize_suggestion($raw),
@@ -393,14 +495,24 @@ class AutoCategoryMappingService
 
     private function candidate_debug_summary(array $candidate): array
     {
+        $intent = (string) ($candidate['detected_intent'] ?? '');
+        $categoryText = trim((string) (($candidate['category_path'] ?? '') . ' ' . ($candidate['category_name'] ?? '')));
+        $sanityReason = (string) ($candidate['sanity_reason'] ?? '');
+        $accepted = !empty($candidate['sanity_pass']) && $sanityReason === '';
         return [
             'category_id' => (string) ($candidate['category_id'] ?? ''),
+            'category_name' => (string) ($candidate['category_name'] ?? ''),
+            'category_path' => (string) ($candidate['category_path'] ?? ''),
             'name' => (string) ($candidate['category_name'] ?? ''),
             'path' => (string) ($candidate['category_path'] ?? ''),
             'raw_position' => (int) ($candidate['raw_position'] ?? 0),
             'score' => (float) ($candidate['score'] ?? 0),
+            'confidence' => (float) ($candidate['confidence'] ?? $candidate['score'] ?? 0),
+            'reason' => $accepted ? 'accepted' : ($sanityReason !== '' ? 'rejected: ' . $sanityReason : 'rejected: lower_scored_candidate'),
             'sanity_pass' => !empty($candidate['sanity_pass']),
-            'sanity_reason' => (string) ($candidate['sanity_reason'] ?? ''),
+            'sanity_reason' => $sanityReason,
+            'matched_keywords' => $intent !== '' ? CategoryMappingSafety::matched_keywords_for_intent($intent, $categoryText) : [],
+            'rejected_by_guard_reason' => $sanityReason,
             'is_sonstige' => !empty($candidate['is_sonstige']),
             'required_aspects' => (array) ($candidate['required_aspects'] ?? []),
             'source' => (string) ($candidate['source'] ?? ''),

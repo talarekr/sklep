@@ -253,6 +253,16 @@ class AutoSyncScheduler
         $message = (string) ($result['message'] ?? '');
         $productTitle = $product ? (string) $product->get_name() : (string) get_the_title($productId);
         $suggestionDiagnostics = $this->category_suggestion_diagnostics($mapping, $productTitle, $content);
+        if (empty($suggestionDiagnostics['selected_candidate']) && (string) ($category['selected_candidate_category_id'] ?? '') !== '') {
+            $suggestionDiagnostics['selected_candidate'] = [
+                'category_id' => (string) ($category['selected_candidate_category_id'] ?? ''),
+                'category_name' => (string) ($category['selected_candidate_category_name'] ?? ''),
+                'category_path' => (string) ($category['selected_candidate_category_path'] ?? ''),
+                'confidence' => (float) ($category['selected_candidate_confidence'] ?? 0),
+                'source' => (string) ($category['selected_candidate_source'] ?? ''),
+                'reason' => (string) ($category['sanity_reason'] ?? '') !== '' ? 'rejected: ' . (string) ($category['sanity_reason'] ?? '') : 'rejected',
+            ];
+        }
         $expectedCategoryKeywords = $this->expected_category_keywords_for_readiness_item($productTitle, $mapping, $content, (string) ($suggestionDiagnostics['detected_intent'] ?? ''));
 
         return [
@@ -344,12 +354,15 @@ class AutoSyncScheduler
             'top_candidates' => array_slice(array_map(static function (array $candidate): array {
                 return [
                     'category_id' => (string) ($candidate['category_id'] ?? ''),
-                    'name' => (string) ($candidate['name'] ?? $candidate['category_name'] ?? ''),
-                    'path' => (string) ($candidate['path'] ?? $candidate['category_path'] ?? ''),
-                    'score' => (float) ($candidate['score'] ?? 0),
+                    'category_name' => (string) ($candidate['category_name'] ?? $candidate['name'] ?? ''),
+                    'category_path' => (string) ($candidate['category_path'] ?? $candidate['path'] ?? ''),
+                    'confidence' => (float) ($candidate['confidence'] ?? $candidate['score'] ?? 0),
+                    'reason' => (string) ($candidate['reason'] ?? (!empty($candidate['sanity_pass']) ? 'accepted' : 'rejected')),
+                    'matched_keywords' => array_values(array_map('strval', (array) ($candidate['matched_keywords'] ?? []))),
+                    'rejected_by_guard_reason' => (string) ($candidate['rejected_by_guard_reason'] ?? $candidate['sanity_reason'] ?? ''),
                     'sanity_reason' => (string) ($candidate['sanity_reason'] ?? ''),
                 ];
-            }, $topCandidates), 0, 3),
+            }, $topCandidates), 0, 5),
             'best_candidate_category_id' => (string) ($best['category_id'] ?? ''),
             'best_candidate_name' => (string) ($best['name'] ?? $best['category_name'] ?? ''),
             'best_candidate_path' => (string) ($best['path'] ?? $best['category_path'] ?? ''),
@@ -418,12 +431,43 @@ class AutoSyncScheduler
     private function blocked_by_category_log_diagnostics(array $items): array
     {
         return array_map(static function (array $item): array {
+            $selected = (array) ($item['selected_candidate'] ?? []);
+            $topCandidates = array_slice((array) ($item['top_candidates'] ?? []), 0, 5);
+            $decision = 'no_candidate';
+            $reason = (string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? $item['primary_reason'] ?? '');
+            if ((string) ($item['category_id'] ?? '') !== '') {
+                $decision = 'accepted';
+                $reason = 'accepted';
+            } elseif ($selected !== [] || $topCandidates !== []) {
+                $decision = 'rejected';
+                if ($reason === '') {
+                    $reason = (string) ($item['rejected_best_reason'] ?? 'category_mapping_requires_review');
+                }
+            }
+
             return [
                 'product_id' => (int) ($item['product_id'] ?? 0),
                 'title' => (string) ($item['product_title'] ?? ''),
                 'detected_intent' => (string) ($item['detected_intent'] ?? ''),
                 'category_id' => (string) ($item['category_id'] ?? ''),
                 'ebay_category_path' => (string) ($item['category_path'] ?? ''),
+                'selected_candidate_category_id' => (string) ($selected['category_id'] ?? $item['best_candidate_category_id'] ?? ''),
+                'selected_candidate_category_name' => (string) ($selected['category_name'] ?? $selected['name'] ?? $item['best_candidate_name'] ?? ''),
+                'selected_candidate_category_path' => (string) ($selected['category_path'] ?? $selected['path'] ?? $item['best_candidate_path'] ?? ''),
+                'selected_candidate_confidence' => (float) ($selected['confidence'] ?? $selected['score'] ?? 0),
+                'selected_candidate_source' => (string) ($selected['source'] ?? ''),
+                'top_taxonomy_candidates' => array_values(array_map(static function (array $candidate): array {
+                    return [
+                        'category_id' => (string) ($candidate['category_id'] ?? ''),
+                        'category_name' => (string) ($candidate['category_name'] ?? $candidate['name'] ?? ''),
+                        'category_path' => (string) ($candidate['category_path'] ?? $candidate['path'] ?? ''),
+                        'confidence' => (float) ($candidate['confidence'] ?? $candidate['score'] ?? 0),
+                        'reason' => (string) ($candidate['reason'] ?? (!empty($candidate['sanity_pass']) ? 'accepted' : 'rejected')),
+                        'matched_keywords' => array_values(array_map('strval', (array) ($candidate['matched_keywords'] ?? []))),
+                        'rejected_by_guard_reason' => (string) ($candidate['rejected_by_guard_reason'] ?? $candidate['sanity_reason'] ?? ''),
+                    ];
+                }, $topCandidates)),
+                'final_decision' => ['decision' => $decision, 'reason' => $reason],
                 'category_sanity_reason' => (string) ($item['category_sanity_reason'] ?? ''),
                 'why_no_intent_match' => (string) ($item['why_no_intent_match'] ?? ''),
                 'expected_keywords' => array_values(array_map('strval', (array) ($item['expected_category_keywords'] ?? []))),
