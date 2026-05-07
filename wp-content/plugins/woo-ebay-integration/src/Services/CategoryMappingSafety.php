@@ -194,6 +194,8 @@ class CategoryMappingSafety
 
     public static function manual_woo_category_mapping_check(string $sourceText, string $categoryId, string $categoryText, array $requiredAspects = []): array
     {
+        unset($requiredAspects);
+
         $normalizedSource = self::normalize($sourceText);
         $normalizedCategory = self::normalize(trim($categoryText . ' ' . $categoryId));
         $hardReason = self::manual_mapping_hard_reject_reason($normalizedSource, $normalizedCategory, trim($categoryId));
@@ -201,21 +203,13 @@ class CategoryMappingSafety
             return ['pass' => false, 'reason' => $hardReason, 'warning' => ''];
         }
 
-        $selected = self::selected_category_check($sourceText, $categoryId, $categoryText, $requiredAspects);
-        if (empty($selected['pass'])) {
-            return ['pass' => false, 'reason' => (string) ($selected['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'warning' => ''];
+        $warning = '';
+        $sanity = self::sanity_check($sourceText, $categoryText);
+        if ((string) ($sanity['reason'] ?? '') === 'expected_path_keyword_missing') {
+            $warning = 'expected_path_keyword_missing';
         }
 
-        $auto = self::evaluate_auto_mapping($sourceText, $categoryText, 1.0, ['auto_category_confidence_threshold' => 0.0]);
-        $reason = (string) ($auto['sanity_reason'] ?? '');
-        if ($reason !== '' && $reason !== 'expected_path_keyword_missing') {
-            $hardReason = self::manual_mapping_hard_reject_reason($normalizedSource, $normalizedCategory, trim($categoryId));
-            if ($hardReason !== '') {
-                return ['pass' => false, 'reason' => $hardReason, 'warning' => ''];
-            }
-        }
-
-        return ['pass' => true, 'reason' => '', 'warning' => $reason === 'expected_path_keyword_missing' ? $reason : ''];
+        return ['pass' => true, 'reason' => '', 'warning' => $warning];
     }
 
     private static function manual_mapping_hard_reject_reason(string $source, string $category, string $categoryId): string
@@ -238,13 +232,9 @@ class CategoryMappingSafety
             return 'manual_mapping_engine_or_motor_block_for_unrelated_parts';
         }
 
-        $sourceLooksWindowLifter = self::contains_any($source, ['fensterheber', 'window lifter', 'window regulator', 'podnosnik szyby', 'podnośnik szyby', 'mechanizm szyby']);
+        $sourceLooksWindowLifter = self::contains_any($source, ['fensterheber', 'window lifter', 'window regulator', 'podnosnik szyby', 'podnośnik szyby', 'podnosniki szyby', 'podnośniki szyby', 'mechanizm szyby']);
         if (!$sourceLooksWindowLifter && self::contains_any($category, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor'])) {
             return 'manual_mapping_window_lifter_family_for_unrelated_products';
-        }
-
-        if ($categoryId === '33619' && !self::is_engine_bearing_intent($source)) {
-            return 'engine_bearing_category_mismatch';
         }
 
         return '';

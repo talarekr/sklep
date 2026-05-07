@@ -1423,7 +1423,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 if (is_array($teachingRule) && trim((string) ($teachingRule['ebay_category_id'] ?? '')) !== '') {
                     $categoryId = (string) $teachingRule['ebay_category_id'];
                     $categoryPath = (string) ($teachingRule['ebay_category_path'] ?? '');
-                    $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath . ' ' . (string) $product->get_name(), $categoryId, $categoryPath . ' ' . $categoryId);
+                    $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath, $categoryId, $categoryPath . ' ' . $categoryId);
                     if (!empty($safety['pass'])) {
                         return ['category_id' => $categoryId, 'category_path' => $categoryPath, 'status' => 'ready_manual', 'source' => 'manual_woo_category_mapping', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath, 'ebay_category_id' => $categoryId, 'ebay_category_path' => $categoryPath, 'source' => 'manual_woo_category_mapping'], 'confidence' => 1.0, 'manual_teaching_rule_id' => (int) ($teachingRule['id'] ?? 0), 'sanity_check_pass' => true, 'sanity_reason' => '', 'manual_warning' => (string) ($safety['warning'] ?? ''), 'product_override_found' => false];
                     }

@@ -163,9 +163,12 @@ foreach ($selectedCategoryChecks as [$source, $categoryId, $categoryText, $requi
 
 $manualWooMappingChecks = [
     ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', '77777', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', true, 'expected_path_keyword_missing'],
+    ['Części samochodowe > Rozruszniki', '33619', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', true, ''],
     ['Części samochodowe > Wnętrze > Listwy dekoracyjne', '55555', 'Auto & Motorrad: Teile > Motorrad- & Rollerteile > Motoren & Motorteile', false, 'manual_mapping_motorcycle_or_quad_category_for_non_motorcycle_woo_path'],
     ['Części samochodowe > Audio > Głośniki', '44444', 'Innenausstattung > Fensterheber & -motoren', false, 'manual_mapping_window_lifter_family_for_unrelated_products'],
     ['Części samochodowe > Wnętrze > Fotele', '33333', 'Automobile > Fahrzeuge', false, 'manual_mapping_vehicle_category_for_normal_parts'],
+    ['Części samochodowe > Wnętrze > Fotele', '22222', 'Motoren & Motorenteile > Motorblöcke', false, 'manual_mapping_engine_or_motor_block_for_unrelated_parts'],
+    ['Części samochodowe > Podnośniki szyby', '11111', 'Innenausstattung > Fensterheber & -motoren', true, ''],
 ];
 
 foreach ($manualWooMappingChecks as [$source, $categoryId, $categoryText, $expectedPass, $expectedReasonOrWarning]) {

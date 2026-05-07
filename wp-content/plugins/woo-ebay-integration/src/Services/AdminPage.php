@@ -209,6 +209,8 @@ class AdminPage
             'mappings_written' => (int) ($res['mappings_written'] ?? 0),
             'already_mapped' => (int) ($res['already_mapped'] ?? 0),
             'skipped_by_hard_safety' => (int) ($res['skipped_by_hard_safety'] ?? 0),
+            'top_hard_safety_reasons' => (array) ($res['top_hard_safety_reasons'] ?? []),
+            'skipped_sample_rows' => (array) ($res['skipped_sample_rows'] ?? []),
             'errors_sample' => (array) ($res['errors_sample'] ?? []),
         ]));
         $this->go();
@@ -278,6 +280,8 @@ class AdminPage
             'rules_updated' => (int) ($res['rules_updated'] ?? 0),
             'rows_skipped' => (int) ($res['rows_skipped'] ?? $res['skipped_rows'] ?? 0),
             'rows_rejected_by_safety' => (int) ($res['rows_rejected_by_safety'] ?? $res['safety_failed_rows'] ?? 0),
+            'top_hard_safety_reasons' => (array) ($res['top_hard_safety_reasons'] ?? []),
+            'skipped_sample_rows' => (array) ($res['skipped_sample_rows'] ?? []),
         ]));
         $this->go();
     }
