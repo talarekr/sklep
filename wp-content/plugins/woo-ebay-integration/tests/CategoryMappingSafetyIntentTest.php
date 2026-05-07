@@ -13,6 +13,8 @@ $cases = [
     ['Koło zapasowe18 Audi A4 B9 8W0601025', 'spare_wheel'],
     ['KOŁO DOJAZDOWE VW GOLF VII 125/70R18', 'spare_wheel'],
     ['Hak holowniczy Audi A6 C7 nieodpinany 13 pin', 'tow_hook'],
+    ['KRATKA ATRAPA ZDERZAKA LEWY TYŁ', 'bumper_grille'],
+    ['BELKA WZMOCNIENIE ZDERZAKA PRZÓD', 'bumper_reinforcement'],
     ['KOMPLETNY SZYBERDACH AUDI Q5 FY', 'sunroof'],
     ['RELINGI DACHOWE AUDI Q7 4M', 'roof_rails'],
     ['PRZEKAŹNIK ŚWIEC ŻAROWYCH AUDI A4 B8', 'glow_plug_relay'],
@@ -28,12 +30,14 @@ $cases = [
     ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228 Anlasserkabelbaum für Lichtmaschine', 'wiring_harness'],
     ['starter alternator harness Audi A4', 'wiring_harness'],
     ['wiązka rozrusznik alternator Audi A4', 'wiring_harness'],
+    ['AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'wiring_harness'],
     ['Antriebswelle links Audi A5', 'driveshaft'],
     ['Półoś napędowa Audi A4', 'driveshaft'],
     ['Motorsteuergerät Audi A6 4G', 'control_module'],
     ['PDC Parkkontrollmodul Audi Q5', 'control_module'],
     ['Scheibenwaschflüssigkeitsbehälter Audi A3', 'washer_tank'],
     ['Servolenkungsschlauch Audi A4', 'power_steering_hose'],
+    ['AUDI A4 PRZEWÓD WSPOMAGANIA SERVOLENKUNG LEITUNG', 'power_steering_hose'],
     ['Dachhimmelleuchte Audi Q7', 'roof_light'],
     ['Pleuellager Hauptlager Audi 2.0 TDI', 'engine_bearing'],
     ['Panewki silnika Audi 2.0 TDI', 'engine_bearing'],
@@ -51,6 +55,11 @@ $negativeChecks = [
     ['Motoryzacja > Części samochodowe > Układ klimatyzacji > Przewody klimatyzacji Przewód klimatyzacji', 'Klimakompressoren & Kupplungen', 'ac_hose_candidate_is_ac_compressor'],
     ['Koło zapasowe18 Audi', 'Automobile > Mercedes-Benz', 'spare_wheel_candidate_is_vehicle_category'],
     ['GŁOŚNIK DRZWI PRZEDNICH', 'Fensterheber & -motoren', 'car_speaker_candidate_is_window_lifter_or_motor'],
+    ['AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Innenausstattung > Fensterheber & -motoren', 'wiring_harness_candidate_is_window_lifter_or_motor'],
+    ['Servolenkungsschlauch Audi A4', 'Motoren & Motorenteile > Motorblöcke', 'power_steering_hose_candidate_is_engine_parts'],
+    ['AUDI A4 PRZEWÓD WSPOMAGANIA', 'Motoren > Motorblöcke', 'power_steering_hose_candidate_is_engine_parts'],
+    ['Przewód klimatyzacji Audi A3', 'Motoren & Motorenteile > Motorteile', 'ac_hose_candidate_is_engine_parts'],
+    ['AUDI Q3 PRZEWÓD RURKA WĄŻ KLIMATYZACJI', 'Klimaanlage > Klimakompressoren & Kupplungen', 'ac_hose_candidate_is_ac_compressor'],
     ['PANEL NAWIEWU KLIMATYZACJI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['Hak holowniczy Audi', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
     ['Anlasser Audi A4', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', 'engine_bearing_category_mismatch'],
@@ -74,8 +83,12 @@ $positiveChecks = [
     ['FOTELE FOTEL WNĘTRZE SLINE KOMPLETNE', 'Innenausstattung > Sitze', true],
     ['PANEL NAWIEWU KLIMATYZACJI', 'Innenausstattung > Schalter, Kontrollelemente & Zündschlösser', true],
     ['Przewód klimatyzacji', 'Klimaanlage > Klimaleitung', true],
+    ['Przewód klimatyzacji Audi A3', 'Klimaanlage > Kältemittelleitung & Schlauch', true],
+    ['Servolenkungsschlauch Audi A4', 'Lenkung > Servolenkung > Leitungen & Schläuche', true],
     ['Pleuellager Hauptlager Audi 2.0 TDI', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', true],
     ['AUDI A4 B8 2.0 TFSI CDN ANLASSER-LICHTMASCHINENKABELBAUM 8K0971228 Anlasserkabelbaum für Lichtmaschine', 'Auto & Motorrad: Teile > Autoelektrik > Kabelbäume & Leitungssätze > Bordnetz', true],
+    ['AUDI A4 B8 2.0 TFSI CDN WIĄZKA ROZRUSZNIKA ALTERNATORA 8K0971228', 'Autoelektrik > Kabelbäume & Leitungssätze > Anlasser Lichtmaschine Generator', true],
+    ['Scheibenwaschflüssigkeitsbehälter Audi A3', 'Scheiben- & Scheinwerferreinigung > Wischwasserbehälter, -pumpen & -düsen', true],
 ];
 
 foreach ($positiveChecks as [$source, $candidate]) {
@@ -91,6 +104,7 @@ $selectedCategoryChecks = [
     ['Koło zapasowe18 Audi A4 B9 8W0601025', '99999', 'Auto & Motorrad: Teile > Reifen & Felgen > Ersatzrad Notrad Felge', [], ''],
     ['Anlasser Audi A4', '33619', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', [], 'engine_bearing_category_mismatch'],
     ['Pleuellager Hauptlager Audi 2.0 TDI', '33619', 'Motoren & Motorenteile > Motor-, Pleuel- & Hauptlager', [], ''],
+    ['Koło zapasowe18 Audi A4 B9 8W0601025', '88888', 'Automobile > Mercedes-Benz', [], 'spare_wheel_candidate_is_vehicle_category'],
 ];
 
 foreach ($selectedCategoryChecks as [$source, $categoryId, $categoryText, $requiredAspects, $expectedReason]) {
