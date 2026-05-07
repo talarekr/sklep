@@ -272,7 +272,7 @@ class AutoSyncScheduler
             'status' => $status,
             'primary_reason' => $this->primary_readiness_reason($status, $errors, $missingAspects, $message, $categoryReason),
             'errors' => $errors,
-            'category_id' => (string) ($category['category_id'] ?? $mapping['ebay_category_id'] ?? ''),
+            'category_id' => (string) (($category['category_id'] ?? '') !== '' ? $category['category_id'] : ($mapping['ebay_category_id'] ?? '')),
             'category_name' => $categoryName,
             'category_path' => $categoryPath,
             'category_status' => (string) ($category['status'] ?? $mapping['status'] ?? ''),
@@ -423,7 +423,7 @@ class AutoSyncScheduler
             'missing_required_aspects' => (int) ($summary['missing_required_aspects'] ?? 0),
             'not_ready_sample_ids' => (array) ($summary['not_ready_sample_ids'] ?? []),
             'blocked_by_category_sample_ids' => (array) ($summary['blocked_by_category_sample_ids'] ?? []),
-            'blocked_by_category_diagnostics' => $this->blocked_by_category_log_diagnostics((array) ($summary['blocked_by_category_items'] ?? [])),
+            'blocked_by_category_diagnostics' => !empty($this->settings()['verbose_debug']) ? $this->blocked_by_category_log_diagnostics((array) ($summary['blocked_by_category_items'] ?? [])) : [],
             'missing_required_aspects_sample_ids' => (array) ($summary['missing_required_aspects_sample_ids'] ?? []),
         ];
     }
@@ -473,6 +473,278 @@ class AutoSyncScheduler
                 'expected_keywords' => array_values(array_map('strval', (array) ($item['expected_category_keywords'] ?? []))),
             ];
         }, $items);
+    }
+
+
+    public function run_full_category_audit(bool $verboseDebug = false): array
+    {
+        $ids = $this->product_ids_for_preflight(-1);
+        $startedAt = gmdate('Y-m-d H:i:s');
+        $runSlug = 'wei-ebay-category-audit-' . gmdate('Ymd-His');
+        $summary = [
+            'result' => 'success',
+            'started_at' => $startedAt,
+            'completed_at' => '',
+            'verbose_debug' => $verboseDebug,
+            'total_scanned' => 0,
+            'ready_count' => 0,
+            'blocked_by_category_count' => 0,
+            'missing_category_count' => 0,
+            'missing_required_aspects_count' => 0,
+            'content_not_ready_count' => 0,
+            'price_not_ready_count' => 0,
+            'sample_problem_product_ids' => [],
+            'top_10_sanity_reasons' => [],
+            'top_10_detected_intents_with_problems' => [],
+            'reports' => [],
+        ];
+        $fullRows = [];
+        $problemRows = [];
+        $missingCategoryRows = [];
+        $missingAspectsRows = [];
+        $debugDetails = [
+            'started_at' => $startedAt,
+            'verbose_debug' => $verboseDebug,
+            'products' => [],
+        ];
+        $reasonCounts = [];
+        $intentProblemCounts = [];
+
+        foreach ($ids as $productId) {
+            $result = $this->adapter->preflight_product($productId, null, true, false);
+            $item = $this->readiness_item($productId, $result);
+            $auditStatus = $this->audit_status($result, $item);
+            $reason = $this->audit_reason($result, $item, $auditStatus);
+            $row = $this->audit_csv_row($productId, $result, $item, $auditStatus, $reason);
+            $fullRows[] = $row;
+            $summary['total_scanned']++;
+            $summary[$auditStatus . '_count'] = (int) ($summary[$auditStatus . '_count'] ?? 0) + 1;
+
+            if ($auditStatus !== 'ready') {
+                $problemRows[] = $row;
+                $this->append_limited($summary['sample_problem_product_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+                $reasonKey = $reason !== '' ? $reason : $auditStatus;
+                $reasonCounts[$reasonKey] = (int) ($reasonCounts[$reasonKey] ?? 0) + 1;
+                $intent = trim((string) ($item['detected_intent'] ?? ''));
+                $intent = $intent !== '' ? $intent : 'unknown_intent';
+                $intentProblemCounts[$intent] = (int) ($intentProblemCounts[$intent] ?? 0) + 1;
+            }
+            if ($auditStatus === 'missing_category') {
+                $missingCategoryRows[] = $row;
+            }
+            if ($auditStatus === 'missing_required_aspects') {
+                $missingAspectsRows[] = $row;
+            }
+
+            $debugProduct = [
+                'product_id' => $productId,
+                'audit_status' => $auditStatus,
+                'reason' => $reason,
+                'readiness_item' => $item,
+            ];
+            if ($verboseDebug) {
+                $debugProduct['preflight'] = $result;
+            }
+            $debugDetails['products'][] = $debugProduct;
+        }
+
+        arsort($reasonCounts);
+        arsort($intentProblemCounts);
+        $summary['top_10_sanity_reasons'] = array_slice($reasonCounts, 0, 10, true);
+        $summary['top_10_detected_intents_with_problems'] = array_slice($intentProblemCounts, 0, 10, true);
+        $summary['completed_at'] = gmdate('Y-m-d H:i:s');
+        $debugDetails['completed_at'] = $summary['completed_at'];
+        $debugDetails['summary'] = $summary;
+
+        $summary['reports'] = $this->write_audit_reports($runSlug, $fullRows, $problemRows, $missingCategoryRows, $missingAspectsRows, $debugDetails);
+        update_option('wei_ebay_full_category_audit_summary', $summary, false);
+        $this->logger->info('eBay full category audit completed', $summary);
+
+        return $summary;
+    }
+
+    private function audit_status(array $result, array $item): string
+    {
+        if (!empty($result['ready'])) {
+            return 'ready';
+        }
+
+        $status = (string) ($result['status'] ?? 'not_ready');
+        if ($this->is_category_blocked_status($status)) {
+            $category = is_array($result['category'] ?? null) ? $result['category'] : [];
+            $categoryId = trim((string) ($category['category_id'] ?? $item['category_id'] ?? ''));
+            $selected = (array) ($item['selected_candidate'] ?? []);
+            $hasCandidate = trim((string) ($selected['category_id'] ?? $item['best_candidate_category_id'] ?? '')) !== '';
+            $source = (string) ($category['source'] ?? '');
+            if ($status === 'unmapped' || ($categoryId === '' && !$hasCandidate) || $source === 'missing_category_mapping') {
+                return 'missing_category';
+            }
+            return 'blocked_by_category';
+        }
+        if ($status === 'missing_required_aspects') {
+            return 'missing_required_aspects';
+        }
+        $errors = array_map('strtolower', array_map('strval', (array) ($result['errors'] ?? [])));
+        if ($status === 'not_ready_missing_german_content' || empty($item['content_ready']) || $this->errors_contain_any($errors, ['title', 'description', 'german', 'image', 'content'])) {
+            return 'content_not_ready';
+        }
+        if ($status === 'invalid_price' || $status === 'missing_exchange_rate' || empty($item['price_ready'])) {
+            return 'price_not_ready';
+        }
+
+        return 'content_not_ready';
+    }
+
+    private function audit_reason(array $result, array $item, string $auditStatus): string
+    {
+        if ($auditStatus === 'ready') {
+            return '';
+        }
+        if ($auditStatus === 'missing_required_aspects') {
+            return 'missing_required_aspects: ' . implode(', ', (array) ($item['missing_aspects'] ?? []));
+        }
+        if ($auditStatus === 'price_not_ready') {
+            $price = is_array($result['price_resolution'] ?? null) ? $result['price_resolution'] : [];
+            return (string) ($price['error'] ?? $result['status'] ?? 'price_not_ready');
+        }
+        if ($auditStatus === 'blocked_by_category' || $auditStatus === 'missing_category') {
+            return (string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? $item['primary_reason'] ?? $auditStatus);
+        }
+        return (string) ($item['primary_reason'] ?? $result['message'] ?? $auditStatus);
+    }
+
+    private function audit_csv_row(int $productId, array $result, array $item, string $auditStatus, string $reason): array
+    {
+        $category = is_array($result['category'] ?? null) ? $result['category'] : [];
+        $mapping = is_array($category['mapping'] ?? null) ? $category['mapping'] : [];
+        $selected = (array) ($item['selected_candidate'] ?? []);
+        $proposedId = (string) ($selected['category_id'] ?? $item['best_candidate_category_id'] ?? $item['category_id'] ?? '');
+        $proposedName = (string) ($selected['category_name'] ?? $selected['name'] ?? $item['best_candidate_name'] ?? '');
+        $proposedPath = (string) ($selected['category_path'] ?? $selected['path'] ?? $item['best_candidate_path'] ?? '');
+        if ($proposedId === '' && (string) ($item['category_id'] ?? '') !== '') {
+            $proposedId = (string) $item['category_id'];
+            $proposedName = (string) ($item['category_name'] ?? '');
+            $proposedPath = (string) ($item['category_path'] ?? '');
+        }
+
+        $currentCategoryId = (string) ($item['category_id'] ?? '');
+        if ($currentCategoryId === '') {
+            $currentCategoryId = (string) ($mapping['ebay_category_id'] ?? '');
+        }
+        $currentCategoryName = (string) ($item['category_name'] ?? '');
+        if ($currentCategoryName === '') {
+            $currentCategoryName = (string) ($mapping['ebay_category_name'] ?? '');
+        }
+        $currentCategoryPath = (string) ($item['category_path'] ?? '');
+        if ($currentCategoryPath === '') {
+            $currentCategoryPath = (string) ($mapping['ebay_category_path'] ?? '');
+        }
+
+        return [
+            'product_id' => $productId,
+            'sku' => (string) ($item['sku'] ?? ''),
+            'wei_ebay_sku' => (string) ($item['ebay_sku'] ?? ''),
+            'title' => (string) ($item['product_title'] ?? ''),
+            'woo_category_path' => $this->product_category_paths($productId),
+            'detected_intent' => (string) ($item['detected_intent'] ?? ''),
+            'current_ebay_category_id' => $currentCategoryId,
+            'current_ebay_category_name' => $currentCategoryName,
+            'current_ebay_category_path' => $currentCategoryPath,
+            'mapping_status' => (string) ($item['mapping_status'] ?? $category['status'] ?? ''),
+            'mapping_source' => (string) ($category['source'] ?? $mapping['source'] ?? ''),
+            'mapping_confidence' => (string) ($category['confidence'] ?? $mapping['confidence'] ?? ''),
+            'proposed_ebay_category_id' => $proposedId,
+            'proposed_ebay_category_name' => $proposedName,
+            'proposed_ebay_category_path' => $proposedPath,
+            'status' => $auditStatus,
+            'reason' => $reason,
+            'missing_aspects' => implode('|', array_map('strval', (array) ($item['missing_aspects'] ?? []))),
+            'required_aspects' => implode('|', array_map('strval', (array) ($item['required_aspects'] ?? []))),
+            'top_3_candidates_json' => wp_json_encode(array_slice((array) ($item['top_candidates'] ?? []), 0, 3), JSON_UNESCAPED_UNICODE),
+            'edit_url' => (string) ($item['edit_url'] ?? ''),
+        ];
+    }
+
+    private function write_audit_reports(string $runSlug, array $fullRows, array $problemRows, array $missingCategoryRows, array $missingAspectsRows, array $debugDetails): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        if (!wp_mkdir_p($baseDir)) {
+            return ['error' => 'failed_to_create_audit_upload_dir', 'dir' => $baseDir];
+        }
+        $reports = [];
+        $reports['full_audit_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-full.csv', $fullRows);
+        $reports['problems_only_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-problems.csv', $problemRows);
+        $reports['missing_category_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-missing-category.csv', $missingCategoryRows);
+        $reports['missing_required_aspects_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-missing-required-aspects.csv', $missingAspectsRows);
+        $jsonPath = trailingslashit($baseDir) . $runSlug . '-debug.json';
+        file_put_contents($jsonPath, wp_json_encode($debugDetails, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        $reports['debug_json'] = ['path' => $jsonPath, 'url' => trailingslashit($baseUrl) . basename($jsonPath)];
+        return $reports;
+    }
+
+    private function write_csv_report(string $baseDir, string $baseUrl, string $filename, array $rows): array
+    {
+        $path = trailingslashit($baseDir) . $filename;
+        $fh = fopen($path, 'wb');
+        if (!$fh) {
+            return ['error' => 'failed_to_open_csv', 'path' => $path];
+        }
+        $headers = $rows !== [] ? array_keys($rows[0]) : [
+            'product_id', 'sku', 'wei_ebay_sku', 'title', 'woo_category_path', 'detected_intent',
+            'current_ebay_category_id', 'current_ebay_category_name', 'current_ebay_category_path',
+            'mapping_status', 'mapping_source', 'mapping_confidence', 'proposed_ebay_category_id',
+            'proposed_ebay_category_name', 'proposed_ebay_category_path', 'status', 'reason',
+            'missing_aspects', 'required_aspects', 'top_3_candidates_json', 'edit_url',
+        ];
+        fputcsv($fh, $headers);
+        foreach ($rows as $row) {
+            fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers));
+        }
+        fclose($fh);
+        return ['path' => $path, 'url' => trailingslashit($baseUrl) . $filename, 'rows' => count($rows)];
+    }
+
+    private function product_category_paths(int $productId): string
+    {
+        $terms = wp_get_post_terms($productId, 'product_cat');
+        if (is_wp_error($terms)) {
+            return '';
+        }
+        $paths = [];
+        foreach ((array) $terms as $term) {
+            if (is_object($term) && isset($term->term_id)) {
+                $paths[] = $this->woo_category_path((int) $term->term_id);
+            }
+        }
+        return implode(' | ', array_values(array_filter(array_unique($paths))));
+    }
+
+    private function woo_category_path(int $termId): string
+    {
+        $parts = [];
+        $ancestors = array_reverse(get_ancestors($termId, 'product_cat'));
+        $ancestors[] = $termId;
+        foreach ($ancestors as $id) {
+            $term = get_term((int) $id, 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $parts[] = (string) $term->name;
+            }
+        }
+        return implode(' > ', $parts);
+    }
+
+    private function errors_contain_any(array $errors, array $needles): bool
+    {
+        foreach ($errors as $error) {
+            foreach ($needles as $needle) {
+                if (str_contains((string) $error, $needle)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public function run_export_batch(int $batchSize = 20): array
@@ -723,7 +995,7 @@ class AutoSyncScheduler
             'post_type' => 'product',
             'post_status' => 'publish',
             'fields' => 'ids',
-            'posts_per_page' => max(1, $limit),
+            'posts_per_page' => $limit < 0 ? -1 : max(1, $limit),
             'orderby' => 'ID',
             'order' => 'ASC',
         ]));

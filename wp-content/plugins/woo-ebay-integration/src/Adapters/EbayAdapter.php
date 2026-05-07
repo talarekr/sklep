@@ -20,6 +20,7 @@ use WEI\Interfaces\TranslationProviderInterface;
 class EbayAdapter implements MarketplaceAdapterInterface
 {
     private const EBAY_SKU_MAX_LENGTH = 50;
+    private bool $suppressVerboseLogs = false;
 
     public function __construct(private EbayClient $client, private MappingRepository $repo, private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbaySkuGenerator $skuGenerator = null, private ?EbayPriceResolver $priceResolver = null)
     {
@@ -503,22 +504,30 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
 
 
-    public function preflight_product(int $product_id, ?int $variation_id = null): array
+    public function preflight_product(int $product_id, ?int $variation_id = null, bool $suppressVerboseLogs = false, bool $persistStatus = true): array
     {
-        $product = wc_get_product($variation_id ?: $product_id);
-        if (!$product) {
-            return ['ready' => false, 'status' => 'not_ready', 'message' => 'Product not found.'];
-        }
+        $previousSuppressVerboseLogs = $this->suppressVerboseLogs;
+        $this->suppressVerboseLogs = $suppressVerboseLogs;
+        try {
+            $product = wc_get_product($variation_id ?: $product_id);
+            if (!$product) {
+                return ['ready' => false, 'status' => 'not_ready', 'message' => 'Product not found.'];
+            }
 
-        $settings = $this->settings();
-        $marketplaceId = $this->marketplace_id();
-        $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
-        $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
-        $category = $this->resolve_category($product, $product_id, $skuResolution['sku'], $marketplaceId, $settings);
-        $aspects = $this->resolve_product_aspects($product, $product_id, $skuResolution['sku'], $settings, $category['category_id'], $content);
-        $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
-        update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
-        return $preflight;
+            $settings = $this->settings();
+            $marketplaceId = $this->marketplace_id();
+            $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
+            $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
+            $category = $this->resolve_category($product, $product_id, $skuResolution['sku'], $marketplaceId, $settings);
+            $aspects = $this->resolve_product_aspects($product, $product_id, $skuResolution['sku'], $settings, $category['category_id'], $content);
+            $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
+            if ($persistStatus) {
+                update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
+            }
+            return $preflight;
+        } finally {
+            $this->suppressVerboseLogs = $previousSuppressVerboseLogs;
+        }
     }
 
     public function publish_product_offer_only(int $product_id, ?int $variation_id = null): array
@@ -1518,22 +1527,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         $missingAspects = $categoryId !== '' ? array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name]))) : [];
         $priceResolution = $this->resolve_price($product, $product_id, $settings);
-        $this->logger->info('Resolved eBay category for preflight/export', [
-            'product_id' => $product_id,
-            'category_id' => $categoryId,
-            'category_source' => (string) ($category['source'] ?? ''),
-            'category_confidence' => (float) ($category['confidence'] ?? 0),
-            'auto_category_confidence_threshold' => CategoryMappingSafety::threshold($settings),
-            'category_sanity_check_pass' => array_key_exists('sanity_check_pass', $category) ? !empty($category['sanity_check_pass']) : true,
-            'category_sanity_reason' => (string) ($category['sanity_reason'] ?? ''),
-            'category_status' => (string) ($category['status'] ?? ''),
-            'selected_candidate_category_id' => $selectedCandidateCategoryId,
-            'selected_candidate_category_name' => $selectedCandidateCategoryName,
-            'selected_candidate_category_path' => $selectedCandidateCategoryPath,
-            'selected_candidate_confidence' => $selectedCandidateConfidence,
-            'selected_candidate_source' => $selectedCandidateSource,
-            'product_override_found' => !empty($category['product_override_found']) ? 'yes' : 'no',
-        ]);
+        if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
+            $this->logger->info('Resolved eBay category for preflight/export', [
+                'product_id' => $product_id,
+                'category_id' => $categoryId,
+                'category_source' => (string) ($category['source'] ?? ''),
+                'category_confidence' => (float) ($category['confidence'] ?? 0),
+                'auto_category_confidence_threshold' => CategoryMappingSafety::threshold($settings),
+                'category_sanity_check_pass' => array_key_exists('sanity_check_pass', $category) ? !empty($category['sanity_check_pass']) : true,
+                'category_sanity_reason' => (string) ($category['sanity_reason'] ?? ''),
+                'category_status' => (string) ($category['status'] ?? ''),
+                'selected_candidate_category_id' => $selectedCandidateCategoryId,
+                'selected_candidate_category_name' => $selectedCandidateCategoryName,
+                'selected_candidate_category_path' => $selectedCandidateCategoryPath,
+                'selected_candidate_confidence' => $selectedCandidateConfidence,
+                'selected_candidate_source' => $selectedCandidateSource,
+                'product_override_found' => !empty($category['product_override_found']) ? 'yes' : 'no',
+            ]);
+        }
 
         if ($skuResolution['sku'] === '') $errors[] = 'final eBay SKU missing';
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
@@ -1556,6 +1567,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
+    }
+
+
+    private function verbose_debug_enabled(array $settings): bool
+    {
+        return !empty($settings['verbose_debug']);
     }
 
     private function resolve_price($product, int $product_id, array $settings): array
@@ -1653,14 +1670,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $required = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
         $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpn);
         $missing = array_values(array_filter($required, static fn($name) => empty($resolved[$name])));
-        $this->logger->info('Required aspects for category ' . $categoryId . ': ' . implode(', ', $required), [
-            'product_id' => $product_id,
-            'sku' => $sku,
-            'category_id' => $categoryId,
-            'required_aspects' => $required,
-            'missing_aspects' => $missing,
-            'final_product_aspects' => $resolved,
-        ]);
+        if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
+            $this->logger->info('Required aspects for category ' . $categoryId . ': ' . implode(', ', $required), [
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'category_id' => $categoryId,
+                'required_aspects' => $required,
+                'missing_aspects' => $missing,
+                'final_product_aspects' => $resolved,
+            ]);
+        }
 
         return $resolved;
     }
@@ -2403,6 +2422,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['auto_generate_german_content_preflight'])) {
             $settings['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($settings['verbose_debug'])) {
+            $settings['verbose_debug'] = 0;
         }
         if (!isset($settings['auto_category_confidence_threshold'])) {
             $settings['auto_category_confidence_threshold'] = CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
