@@ -3699,3 +3699,265 @@ add_action('template_redirect', function (): void {
     echo $pdf;
     exit;
 });
+
+/**
+ * Lightweight operational wp-admin dashboard.
+ */
+function gp_can_view_operations_dashboard(): bool
+{
+    return current_user_can('manage_woocommerce') || current_user_can('manage_options');
+}
+
+function gp_remove_default_dashboard_widgets(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        return;
+    }
+
+    global $wp_meta_boxes;
+    $wp_meta_boxes['dashboard'] = [];
+    remove_action('welcome_panel', 'wp_welcome_panel');
+}
+add_action('wp_dashboard_setup', 'gp_remove_default_dashboard_widgets', 999);
+
+add_filter('welcome_panel', function ($visible) {
+    return gp_can_view_operations_dashboard() ? false : $visible;
+}, 20);
+
+function gp_register_operations_dashboard_widgets(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        return;
+    }
+
+    wp_add_dashboard_widget(
+        'gp_dashboard_woocommerce_orders',
+        __('1. Zamówienia WooCommerce', 'gp-clone'),
+        'gp_render_dashboard_woocommerce_orders'
+    );
+    wp_add_dashboard_widget(
+        'gp_dashboard_ebay_orders',
+        __('2. Zamówienia eBay', 'gp-clone'),
+        'gp_render_dashboard_ebay_orders'
+    );
+    wp_add_dashboard_widget(
+        'gp_dashboard_allegro_orders',
+        __('3. Zamówienia Allegro', 'gp-clone'),
+        'gp_render_dashboard_allegro_orders'
+    );
+    wp_add_dashboard_widget(
+        'gp_dashboard_site_visits',
+        __('4. Wejścia na stronę', 'gp-clone'),
+        'gp_render_dashboard_site_visits'
+    );
+}
+add_action('wp_dashboard_setup', 'gp_register_operations_dashboard_widgets', 1000);
+
+function gp_get_woocommerce_orders_since(DateTimeInterface $date): int
+{
+    if (!function_exists('wc_get_orders')) {
+        return 0;
+    }
+
+    $orders = wc_get_orders([
+        'limit' => -1,
+        'return' => 'ids',
+        'date_created' => '>=' . $date->getTimestamp(),
+    ]);
+
+    return is_countable($orders) ? count($orders) : 0;
+}
+
+function gp_render_dashboard_woocommerce_orders(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        esc_html_e('Brak uprawnień do podglądu danych sklepu.', 'gp-clone');
+        return;
+    }
+
+    if (!function_exists('wc_get_orders')) {
+        echo '<p>' . esc_html__('WooCommerce nie jest aktywny.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    $today_start = new DateTimeImmutable('today', wp_timezone());
+    $latest_orders = wc_get_orders([
+        'limit' => 5,
+        'orderby' => 'date',
+        'order' => 'DESC',
+        'return' => 'objects',
+    ]);
+    $today_count = gp_get_woocommerce_orders_since($today_start);
+    $pending_count = function_exists('wc_orders_count') ? (int) wc_orders_count('pending') : 0;
+    $processing_count = function_exists('wc_orders_count') ? (int) wc_orders_count('processing') : 0;
+
+    gp_render_dashboard_metrics([
+        __('Dziś', 'gp-clone') => $today_count,
+        __('Oczekujące', 'gp-clone') => $pending_count,
+        __('W realizacji', 'gp-clone') => $processing_count,
+    ]);
+
+    if ($latest_orders === []) {
+        echo '<p>' . esc_html__('Brak zamówień WooCommerce do wyświetlenia.', 'gp-clone') . '</p>';
+        return;
+    }
+
+    echo '<ul class="gp-dashboard-order-list">';
+    foreach ($latest_orders as $order) {
+        if (!$order instanceof WC_Order) {
+            continue;
+        }
+
+        $date = $order->get_date_created();
+        $order_url = $order->get_edit_order_url();
+        echo '<li>';
+        echo '<a href="' . esc_url($order_url) . '">#' . esc_html($order->get_order_number()) . '</a> ';
+        echo '<strong>' . wp_kses_post($order->get_formatted_order_total()) . '</strong>';
+        echo '<br><span>' . esc_html(wc_get_order_status_name($order->get_status())) . ' · ' . esc_html($date ? $date->date_i18n('Y-m-d H:i') : '') . '</span>';
+        echo '</li>';
+    }
+    echo '</ul>';
+}
+
+function gp_render_dashboard_ebay_orders(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        esc_html_e('Brak uprawnień do podglądu danych eBay.', 'gp-clone');
+        return;
+    }
+
+    echo '<p class="gp-dashboard-empty-state">' . esc_html__('Brak danych / integracja zamówień eBay jeszcze nieaktywna', 'gp-clone') . '</p>';
+}
+
+function gp_render_dashboard_allegro_orders(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        esc_html_e('Brak uprawnień do podglądu danych Allegro.', 'gp-clone');
+        return;
+    }
+
+    echo '<p class="gp-dashboard-empty-state">' . esc_html__('Brak danych / integracja zamówień Allegro jeszcze nieaktywna', 'gp-clone') . '</p>';
+}
+
+function gp_render_dashboard_site_visits(): void
+{
+    if (!gp_can_view_operations_dashboard()) {
+        esc_html_e('Brak uprawnień do podglądu wejść.', 'gp-clone');
+        return;
+    }
+
+    $visits = gp_get_visit_counts_for_dashboard();
+    gp_render_dashboard_metrics([
+        __('Dzisiaj', 'gp-clone') => $visits['today'],
+        __('Wczoraj', 'gp-clone') => $visits['yesterday'],
+        __('Ostatnie 7 dni', 'gp-clone') => $visits['last_7_days'],
+        __('Ostatnie 30 dni', 'gp-clone') => $visits['last_30_days'],
+    ]);
+    echo '<p class="description">' . esc_html__('Licznik lokalny: frontend bez wp-admin, bez zalogowanych administratorów i bez podstawowych botów.', 'gp-clone') . '</p>';
+}
+
+function gp_render_dashboard_metrics(array $metrics): void
+{
+    echo '<div class="gp-dashboard-metrics">';
+    foreach ($metrics as $label => $value) {
+        echo '<div class="gp-dashboard-metric"><strong>' . esc_html(number_format_i18n((int) $value)) . '</strong><span>' . esc_html((string) $label) . '</span></div>';
+    }
+    echo '</div>';
+}
+
+function gp_enqueue_operations_dashboard_styles(string $hook_suffix): void
+{
+    if ($hook_suffix !== 'index.php' || !gp_can_view_operations_dashboard()) {
+        return;
+    }
+
+    wp_add_inline_style('dashboard', '.gp-dashboard-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin:0 0 14px}.gp-dashboard-metric{background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px}.gp-dashboard-metric strong{display:block;font-size:22px;line-height:1.2}.gp-dashboard-metric span{display:block;color:#50575e;margin-top:4px}.gp-dashboard-order-list{margin:0}.gp-dashboard-order-list li{border-top:1px solid #dcdcde;margin:0;padding:10px 0}.gp-dashboard-order-list li:first-child{border-top:0}.gp-dashboard-order-list span,.gp-dashboard-empty-state{color:#646970}.gp-dashboard-empty-state{margin:0;padding:8px 0}');
+}
+add_action('admin_enqueue_scripts', 'gp_enqueue_operations_dashboard_styles');
+
+function gp_track_frontend_visit(): void
+{
+    if (is_admin() || wp_doing_ajax() || wp_doing_cron() || (defined('REST_REQUEST') && REST_REQUEST)) {
+        return;
+    }
+
+    if (is_user_logged_in() && current_user_can('manage_options')) {
+        return;
+    }
+
+    if (gp_is_basic_bot_request()) {
+        return;
+    }
+
+    $today = wp_date('Y-m-d', null, wp_timezone());
+    $counts = get_option('gp_daily_frontend_visits', []);
+    $counts = is_array($counts) ? $counts : [];
+    $counts[$today] = max(0, (int) ($counts[$today] ?? 0)) + 1;
+    ksort($counts);
+    $counts = array_slice($counts, -60, null, true);
+
+    if (get_option('gp_daily_frontend_visits', null) === null) {
+        add_option('gp_daily_frontend_visits', $counts, '', false);
+        return;
+    }
+
+    update_option('gp_daily_frontend_visits', $counts, false);
+}
+add_action('wp', 'gp_track_frontend_visit', 20);
+
+function gp_is_basic_bot_request(): bool
+{
+    $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? strtolower(sanitize_text_field(wp_unslash((string) $_SERVER['HTTP_USER_AGENT']))) : '';
+    if ($user_agent === '') {
+        return true;
+    }
+
+    $bot_signatures = [
+        'bot',
+        'crawl',
+        'spider',
+        'slurp',
+        'mediapartners-google',
+        'google-inspectiontool',
+        'bingpreview',
+        'facebookexternalhit',
+        'whatsapp',
+        'telegrambot',
+        'pingdom',
+        'lighthouse',
+    ];
+
+    foreach ($bot_signatures as $signature) {
+        if (strpos($user_agent, $signature) !== false) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function gp_get_visit_counts_for_dashboard(): array
+{
+    $counts = get_option('gp_daily_frontend_visits', []);
+    $counts = is_array($counts) ? $counts : [];
+    $timezone = wp_timezone();
+    $today = new DateTimeImmutable('today', $timezone);
+
+    return [
+        'today' => gp_sum_visit_counts_for_period($counts, $today, 1),
+        'yesterday' => gp_sum_visit_counts_for_period($counts, $today->modify('-1 day'), 1),
+        'last_7_days' => gp_sum_visit_counts_for_period($counts, $today, 7),
+        'last_30_days' => gp_sum_visit_counts_for_period($counts, $today, 30),
+    ];
+}
+
+function gp_sum_visit_counts_for_period(array $counts, DateTimeImmutable $end_date, int $days): int
+{
+    $total = 0;
+    for ($day_offset = 0; $day_offset < $days; $day_offset++) {
+        $date_key = $end_date->modify('-' . $day_offset . ' days')->format('Y-m-d');
+        $total += max(0, (int) ($counts[$date_key] ?? 0));
+    }
+
+    return $total;
+}
