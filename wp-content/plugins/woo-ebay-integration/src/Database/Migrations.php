@@ -8,12 +8,14 @@ class Migrations
     {
         self::create_mappings_table();
         self::create_category_mappings_table();
+        self::create_category_teaching_rules_table();
     }
 
     public static function maybe_upgrade(): void
     {
         self::create_mappings_table();
         self::create_category_mappings_table();
+        self::create_category_teaching_rules_table();
     }
 
     private static function create_category_mappings_table(): void
@@ -45,6 +47,39 @@ class Migrations
             UNIQUE KEY uniq_marketplace_woo_term (marketplace_id, woo_term_id),
             KEY idx_ebay_category (marketplace_id, ebay_category_id),
             KEY idx_status (marketplace_id, status)
+        ) {$charset};";
+
+        dbDelta($sql);
+    }
+
+    private static function create_category_teaching_rules_table(): void
+    {
+        global $wpdb;
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
+        $charset = $wpdb->get_charset_collate();
+
+        $sql = "CREATE TABLE {$table} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            marketplace_id VARCHAR(32) NOT NULL DEFAULT 'EBAY_DE',
+            woo_category_path_hash CHAR(64) NOT NULL,
+            woo_category_path TEXT NOT NULL,
+            detected_intent VARCHAR(96) NOT NULL DEFAULT '',
+            title_keyword_family VARCHAR(191) NOT NULL DEFAULT '',
+            ebay_category_id VARCHAR(64) NOT NULL,
+            ebay_category_path TEXT NULL,
+            source VARCHAR(64) NOT NULL DEFAULT 'manual_teaching_csv',
+            rule_note TEXT NULL,
+            import_group_id VARCHAR(64) NULL,
+            sample_product_ids TEXT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_rule (marketplace_id, woo_category_path_hash, detected_intent, title_keyword_family),
+            KEY idx_category (marketplace_id, ebay_category_id),
+            KEY idx_source (source)
         ) {$charset};";
 
         dbDelta($sql);
