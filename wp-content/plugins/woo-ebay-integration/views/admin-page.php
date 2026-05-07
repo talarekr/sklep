@@ -310,6 +310,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </table>
         <div class="wei-actions" style="margin-top:12px;">
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_readiness_now'); ?><input type="hidden" name="action" value="wei_auto_sync_readiness_now" /><button class="button">Run readiness scan now</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_full_category_audit'); ?><input type="hidden" name="action" value="wei_full_category_audit" /><label><input type="checkbox" name="verbose_debug" value="1" /> verbose debug JSON</label> <button class="button button-secondary">Run full category audit</button></form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Run order sync now</button></form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><button class="button">Run stock sync now</button></form>
             <?php if (!empty($s['auto_export_enabled'])): ?><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_export_now'); ?><input type="hidden" name="action" value="wei_auto_sync_export_now" /><button class="button">Run export batch now</button></form><?php endif; ?>
@@ -328,6 +329,30 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <div class="wei-metric"><span>Invalid price</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Missing image</span><strong><?php echo esc_html((string) ($readinessSummary['missing_image'] ?? 0)); ?></strong></div>
         </div>
+
+        <?php if (!empty($full_category_audit_summary)): ?>
+            <?php $auditReports = is_array($full_category_audit_summary['reports'] ?? null) ? $full_category_audit_summary['reports'] : []; ?>
+            <details style="margin-top:12px;" open>
+                <summary>Latest full eBay category audit reports</summary>
+                <div class="wei-grid" style="margin-top:8px;">
+                    <div class="wei-metric"><span>Total scanned</span><strong><?php echo esc_html((string) ($full_category_audit_summary['total_scanned'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['ready_count'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Blocked by category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['blocked_by_category_count'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Missing category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['missing_category_count'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Missing aspects</span><strong><?php echo esc_html((string) ($full_category_audit_summary['missing_required_aspects_count'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Content not ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['content_not_ready_count'] ?? 0)); ?></strong></div>
+                    <div class="wei-metric"><span>Price not ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['price_not_ready_count'] ?? 0)); ?></strong></div>
+                </div>
+                <ul>
+                    <?php foreach ($auditReports as $label => $report): ?>
+                        <?php if (is_array($report) && !empty($report['url'])): ?>
+                            <li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a> <?php echo isset($report['rows']) ? esc_html('(' . (string) $report['rows'] . ' rows)') : ''; ?></li>
+                        <?php endif; ?>
+                    <?php endforeach; ?>
+                </ul>
+                <p class="description">Audit scans all published WooCommerce products and writes CSV/JSON files under WordPress uploads. It does not export, publish, change Woo SKU, change Woo price, or touch Allegro.</p>
+            </details>
+        <?php endif; ?>
         <details class="wei-not-ready-products" style="margin-top:12px;" <?php echo !empty($notReadyItems) ? 'open' : ''; ?>>
             <summary>Not ready products</summary>
             <p class="description">Shows up to 50 products from the latest readiness scan, with each bucket capped to keep the admin page and logs compact.</p>
@@ -661,6 +686,8 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <p><label><input type="checkbox" name="auto_generate_german_content_preflight" value="1" <?php checked(!empty($s['auto_generate_german_content_preflight'])); ?> /> Auto-generate missing German content during preflight</label><br />
                 <span class="description">Preflight writes only <code>_wei_ebay_de_*</code> meta and does not call eBay inventory/offer/publish APIs.</span></p>
             <p><label><input type="checkbox" name="regenerate_german_content_on_hash_change" value="1" <?php checked(!empty($s['regenerate_german_content_on_hash_change'])); ?> /> Regenerate German content when source hash changes</label></p>
+            <p><label><input type="checkbox" name="verbose_debug" value="1" <?php checked(!empty($s['verbose_debug'])); ?> /> Verbose debug mode</label><br />
+                <span class="description">Default off. When off, preflight/audit avoids logging full product payloads, aspects and taxonomy candidates to the main log.</span></p>
         </details>
 
         <details class="postbox">

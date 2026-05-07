@@ -32,6 +32,7 @@ class AdminPage
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
+        add_action('admin_post_wei_full_category_audit', [$this, 'full_category_audit']);
         add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
         add_action('admin_post_wei_auto_sync_stock_now', [$this, 'auto_sync_stock_now']);
         add_action('admin_post_wei_auto_sync_export_now', [$this, 'auto_sync_export_now']);
@@ -64,6 +65,8 @@ class AdminPage
         $nbp_rate_status = $this->priceResolver->get_rate_status($s);
         $connect_url = $this->auth->get_authorize_url();
         $auto_sync_status = AutoSyncScheduler::status_summary();
+        $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
+        $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -89,6 +92,7 @@ class AdminPage
         $s['ebay_special_category_markup_percent'] = $specialMarkup > 0 ? round($specialMarkup, 4) : 30;
         $s['nbp_rate_cache_ttl_hours'] = $nbpTtl > 0 ? round($nbpTtl, 4) : 12;
         $s['sku_category_overrides'] = sanitize_textarea_field((string) ($_POST['sku_category_overrides'] ?? ''));
+        $s['verbose_debug'] = !empty($_POST['verbose_debug']) ? 1 : 0;
         $s['product_category_overrides'] = sanitize_textarea_field((string) ($_POST['product_category_overrides'] ?? ''));
         $s['sku_aspect_overrides'] = sanitize_textarea_field((string) ($_POST['sku_aspect_overrides'] ?? ''));
         $s['category_aspect_fallbacks'] = sanitize_textarea_field((string) ($_POST['category_aspect_fallbacks'] ?? ''));
@@ -222,6 +226,29 @@ class AdminPage
             'missing_required_aspects_sample_ids' => (array) ($res['missing_required_aspects_sample_ids'] ?? []),
         ];
         $this->set_status('Auto sync readiness scan: ' . wp_json_encode($status));
+        $this->go();
+    }
+
+
+    public function full_category_audit(): void
+    {
+        check_admin_referer('wei_full_category_audit');
+        $verboseDebug = !empty($_POST['verbose_debug']);
+        $res = $this->scheduler->run_full_category_audit($verboseDebug);
+        $status = [
+            'total_scanned' => (int) ($res['total_scanned'] ?? 0),
+            'ready_count' => (int) ($res['ready_count'] ?? 0),
+            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),
+            'missing_category_count' => (int) ($res['missing_category_count'] ?? 0),
+            'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
+            'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
+            'top_10_sanity_reasons' => (array) ($res['top_10_sanity_reasons'] ?? []),
+            'top_10_detected_intents_with_problems' => (array) ($res['top_10_detected_intents_with_problems'] ?? []),
+            'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 25),
+            'reports' => (array) ($res['reports'] ?? []),
+        ];
+        $this->set_status('Full eBay category audit: ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 
@@ -406,6 +433,9 @@ class AdminPage
         }
         if (!isset($s['auto_generate_german_content_preflight'])) {
             $s['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($s['verbose_debug'])) {
+            $s['verbose_debug'] = 0;
         }
         if (!isset($s['auto_category_confidence_threshold'])) {
             $s['auto_category_confidence_threshold'] = CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
