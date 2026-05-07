@@ -128,7 +128,7 @@ foreach ((array) ($category_mappings ?? []) as $row) {
     } elseif ($statusValue === 'category_sanity_failed') {
         $statusValue = 'blocked_by_sanity';
         $sanityReason = (string) ($row['error_reason'] ?? '');
-    } elseif (in_array($statusValue, ['mapped_manual', 'mapped_manual_teaching'], true)) {
+    } elseif (in_array($statusValue, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true)) {
         $statusValue = 'accepted_manual';
     }
 
@@ -595,7 +595,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
                 <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
                 <button class="button button-primary">Import filled teaching CSV</button>
-                <span class="description">Rows with manual_ebay_category_id create manual_teaching_csv rules that outrank automatic taxonomy candidates and are still checked by category safety guards.</span>
+                <span class="description">Rows with manual_ebay_category_id create manual_woo_category_mapping rules by Woo category path. Expected-keyword mismatches are warnings; only hard safety mismatches are rejected.</span>
             </form>
             <?php if (!empty($category_teaching_export_summary)): ?>
                 <?php $teachingReports = is_array($category_teaching_export_summary['reports'] ?? null) ? $category_teaching_export_summary['reports'] : []; ?>

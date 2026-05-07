@@ -1423,11 +1423,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 if (is_array($teachingRule) && trim((string) ($teachingRule['ebay_category_id'] ?? '')) !== '') {
                     $categoryId = (string) $teachingRule['ebay_category_id'];
                     $categoryPath = (string) ($teachingRule['ebay_category_path'] ?? '');
-                    $safety = CategoryMappingSafety::evaluate_auto_mapping($wooPath . ' ' . (string) $product->get_name(), $categoryPath . ' ' . $categoryId, 1.0, $settings);
-                    if (!empty($safety['sanity_check_pass'])) {
-                        return ['category_id' => $categoryId, 'category_path' => $categoryPath, 'status' => 'ready_manual', 'source' => 'manual_teaching_csv', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath, 'ebay_category_id' => $categoryId, 'ebay_category_path' => $categoryPath, 'source' => 'manual_teaching_csv'], 'confidence' => 1.0, 'manual_teaching_rule_id' => (int) ($teachingRule['id'] ?? 0), 'sanity_check_pass' => true, 'sanity_reason' => '', 'product_override_found' => false];
+                    $safety = CategoryMappingSafety::manual_woo_category_mapping_check($wooPath . ' ' . (string) $product->get_name(), $categoryId, $categoryPath . ' ' . $categoryId);
+                    if (!empty($safety['pass'])) {
+                        return ['category_id' => $categoryId, 'category_path' => $categoryPath, 'status' => 'ready_manual', 'source' => 'manual_woo_category_mapping', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath, 'ebay_category_id' => $categoryId, 'ebay_category_path' => $categoryPath, 'source' => 'manual_woo_category_mapping'], 'confidence' => 1.0, 'manual_teaching_rule_id' => (int) ($teachingRule['id'] ?? 0), 'sanity_check_pass' => true, 'sanity_reason' => '', 'manual_warning' => (string) ($safety['warning'] ?? ''), 'product_override_found' => false];
                     }
-                    $reviewCandidate ??= ['category_id' => '', 'selected_candidate_category_id' => $categoryId, 'selected_candidate_category_path' => $categoryPath, 'selected_candidate_confidence' => 1.0, 'selected_candidate_source' => 'manual_teaching_csv', 'category_path' => $categoryPath, 'status' => 'category_sanity_failed', 'source' => 'manual_teaching_csv_safety_failed', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath], 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => false, 'sanity_reason' => (string) ($safety['sanity_reason'] ?? 'manual_teaching_rule_failed_safety'), 'product_override_found' => false];
+                    $reviewCandidate ??= ['category_id' => '', 'selected_candidate_category_id' => $categoryId, 'selected_candidate_category_path' => $categoryPath, 'selected_candidate_confidence' => 1.0, 'selected_candidate_source' => 'manual_woo_category_mapping', 'category_path' => $categoryPath, 'status' => 'category_sanity_failed', 'source' => 'manual_woo_category_mapping_safety_failed', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath], 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => false, 'sanity_reason' => (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'product_override_found' => false];
                 }
 
                 $mapping = $this->categoryRepo->find($marketplaceId, $termId);
@@ -1438,8 +1438,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $status = (string) ($mapping['status'] ?? '');
                 $source = (string) ($mapping['source'] ?? '');
                 $confidence = (float) ($mapping['confidence'] ?? 0);
-                if (in_array($status, ['mapped_manual', 'mapped_manual_teaching'], true) || ($status === '' && $source === 'manual') || $source === 'manual_teaching_csv') {
-                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => $source === 'manual_teaching_csv' ? 'manual_teaching_csv' : 'woo_category_mapping_manual', 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                if (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual_teaching_csv', 'manual_woo_category_mapping'], true)) {
+                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => $source === 'manual_woo_category_mapping' ? 'manual_woo_category_mapping' : ($source === 'manual_teaching_csv' ? 'manual_teaching_csv' : 'woo_category_mapping_manual'), 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
                 }
 
                 if ($status === 'mapped_auto' || $source === 'auto_taxonomy') {
@@ -1494,7 +1494,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $confidence = (float) ($mapping['confidence'] ?? 0);
         $threshold = CategoryMappingSafety::threshold($settings);
 
-        if ($categoryId !== '' && (in_array($status, ['mapped_manual', 'mapped_manual_teaching'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv'], true))) {
+        if ($categoryId !== '' && (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping'], true))) {
             return ['accepted' => true, 'final_status' => 'ready_manual', 'ui_status' => 'accepted_manual', 'threshold' => $threshold, 'sanity_check_pass' => true, 'sanity_reason' => ''];
         }
 

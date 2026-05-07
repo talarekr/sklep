@@ -160,6 +160,29 @@ foreach ($selectedCategoryChecks as [$source, $categoryId, $categoryText, $requi
     }
 }
 
+
+$manualWooMappingChecks = [
+    ['2099 VW T-ROC R-LINE 4MOTION 2024 KRATKA ATRAPA ZDERZAKA LEWY TYŁ 2GA807245G', '77777', 'Auto & Motorrad: Teile > Abschlepphaken & Abschleppösen', true, 'expected_path_keyword_missing'],
+    ['Części samochodowe > Wnętrze > Listwy dekoracyjne', '55555', 'Auto & Motorrad: Teile > Motorrad- & Rollerteile > Motoren & Motorteile', false, 'manual_mapping_motorcycle_or_quad_category_for_non_motorcycle_woo_path'],
+    ['Części samochodowe > Audio > Głośniki', '44444', 'Innenausstattung > Fensterheber & -motoren', false, 'manual_mapping_window_lifter_family_for_unrelated_products'],
+    ['Części samochodowe > Wnętrze > Fotele', '33333', 'Automobile > Fahrzeuge', false, 'manual_mapping_vehicle_category_for_normal_parts'],
+];
+
+foreach ($manualWooMappingChecks as [$source, $categoryId, $categoryText, $expectedPass, $expectedReasonOrWarning]) {
+    $safety = CategoryMappingSafety::manual_woo_category_mapping_check($source, $categoryId, $categoryText);
+    if ($expectedPass && empty($safety['pass'])) {
+        $failures[] = sprintf('Expected manual Woo mapping pass for "%s" => "%s", got %s', $source, $categoryText, json_encode($safety));
+        continue;
+    }
+    if (!$expectedPass && (!empty($safety['pass']) || (string) ($safety['reason'] ?? '') !== $expectedReasonOrWarning)) {
+        $failures[] = sprintf('Expected manual Woo mapping failure %s for "%s" => "%s", got %s', $expectedReasonOrWarning, $source, $categoryText, json_encode($safety));
+        continue;
+    }
+    if ($expectedPass && (string) ($safety['warning'] ?? '') !== $expectedReasonOrWarning) {
+        $failures[] = sprintf('Expected manual Woo mapping warning %s for "%s" => "%s", got %s', $expectedReasonOrWarning, $source, $categoryText, json_encode($safety));
+    }
+}
+
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
     exit(1);
