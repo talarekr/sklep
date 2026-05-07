@@ -504,7 +504,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
 
 
-    public function preflight_product(int $product_id, ?int $variation_id = null, bool $suppressVerboseLogs = false, bool $persistStatus = true): array
+    public function preflight_product(int $product_id, ?int $variation_id = null, bool $suppressVerboseLogs = false, bool $persistStatus = true, array $context = []): array
     {
         $previousSuppressVerboseLogs = $this->suppressVerboseLogs;
         $this->suppressVerboseLogs = $suppressVerboseLogs;
@@ -514,7 +514,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 return ['ready' => false, 'status' => 'not_ready', 'message' => 'Product not found.'];
             }
 
-            $settings = $this->settings();
+            $settings = array_merge($this->settings(), $context);
+            if (!empty($context['suppress_side_effects']) || !empty($context['audit_mode'])) {
+                $settings['auto_generate_german_content_preflight'] = 0;
+                $settings['regenerate_german_content_on_hash_change'] = 0;
+                $settings['_wei_suppress_side_effects'] = true;
+            }
             $marketplaceId = $this->marketplace_id();
             $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
             $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
@@ -1007,6 +1012,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         if ($existingWeiEbaySku !== '') {
             $final = $this->sanitize_ebay_sku($existingWeiEbaySku);
+        } elseif (!empty($settings['_wei_suppress_side_effects'])) {
+            $final = $this->generated_ebay_sku($product_id, $variation_id, $settings);
+            $generated = false;
         } else {
             $skuGeneration = $this->skuGenerator
                 ? $this->skuGenerator->ensure_product_ebay_sku($product_id, $variation_id, $settings)
@@ -1028,7 +1036,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'use_woo_sku_setting' => $useWooSkuSetting ? 'on' : 'off',
             'wrote_woo_sku' => $wroteWooSku,
         ];
-        $this->logger->info('Resolved eBay SKU', $context);
+        if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($settings)) {
+            $this->logger->info('Resolved eBay SKU', $context);
+        }
         return [
             'sku' => $final,
             'woo_sku' => $wooSku,
@@ -1076,7 +1086,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $metaDescription = trim((string) get_post_meta($product_id, '_wei_ebay_de_description', true));
         if ($metaTitle !== '' && $metaDescription !== '') {
             $stale = $storedHash !== '' && $storedHash !== $currentHash;
-            if ($stale && !empty($settings['regenerate_german_content_on_hash_change'])) {
+            if ($stale && !empty($settings['regenerate_german_content_on_hash_change']) && empty($settings['_wei_suppress_side_effects'])) {
                 return $this->maybe_generate_german_content($product, $product_id, $settings, 'stale_meta_hash_changed');
             }
             $metaSource = trim((string) get_post_meta($product_id, '_wei_ebay_de_content_source', true));
@@ -1114,6 +1124,26 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
+        if (!empty($settings['_wei_suppress_side_effects'])) {
+            return [
+                'ready' => false,
+                'title' => '',
+                'description' => '',
+                'source' => 'missing',
+                'language' => 'de-DE',
+                'product_id' => $product_id,
+                'source_product_id' => $product_id,
+                'translated_product_id' => 0,
+                'title_found' => false,
+                'description_found' => false,
+                'title_length' => 0,
+                'description_length' => 0,
+                'generated' => false,
+                'side_effects_suppressed' => true,
+                'error_message' => 'German content missing; generation skipped during dry category audit.',
+            ];
+        }
+
         return $this->maybe_generate_german_content($product, $product_id, $settings, 'missing');
     }
 
@@ -1145,7 +1175,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'title_length' => mb_strlen($title),
             'description_length' => mb_strlen($description),
         ], $extra);
-        $this->logger->info('Resolved German content for EBAY_DE', $result);
+        if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($this->settings())) {
+            $this->logger->info('Resolved German content for EBAY_DE', $result);
+        }
         return $result;
     }
 
@@ -1167,14 +1199,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         if (empty($settings['auto_generate_german_content_preflight'])) {
             $message = 'German content missing and automatic generation during preflight is disabled.';
-            $this->logger->warning('German content generator skipped', array_merge($baseLog, ['error_message' => $message]));
+            if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($settings)) {
+                $this->logger->warning('German content generator skipped', array_merge($baseLog, ['error_message' => $message]));
+            }
             return $this->log_german_content($product_id, 0, 'missing', '', '', array_merge($baseLog, ['error_message' => $message]));
         }
 
         $provider = $this->translation_provider($settings);
         if (!$provider || !$provider->is_configured()) {
             $message = 'German content missing and Google Translation provider is not configured.';
-            $this->logger->warning('German content generator unavailable', array_merge($baseLog, ['error_message' => $message]));
+            if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($settings)) {
+                $this->logger->warning('German content generator unavailable', array_merge($baseLog, ['error_message' => $message]));
+            }
             return $this->log_german_content($product_id, 0, 'missing', '', '', array_merge($baseLog, ['error_message' => $message]));
         }
 
@@ -1216,11 +1252,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'title_length' => mb_strlen($title),
                 'description_length' => mb_strlen($description),
             ]);
-            $this->logger->info('German content generated and saved to plugin meta only', $extra);
+            if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($settings)) {
+                $this->logger->info('German content generated and saved to plugin meta only', $extra);
+            }
             return $this->log_german_content($product_id, $product_id, 'generated_' . $provider->provider_key(), $title, $description, $extra);
         } catch (\Throwable $e) {
             $message = 'German content generation failed: ' . $e->getMessage();
-            $this->logger->error('German content generator failed', array_merge($baseLog, ['error_message' => $message]));
+            if (!$this->suppressVerboseLogs || $this->verbose_debug_enabled($settings)) {
+                $this->logger->error('German content generator failed', array_merge($baseLog, ['error_message' => $message]));
+            }
             return $this->log_german_content($product_id, 0, 'missing', '', '', array_merge($baseLog, ['error_message' => $message]));
         }
     }
@@ -1593,7 +1633,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
         }
 
-        return $this->priceResolver ? $this->priceResolver->resolve($product, $product_id, $settings) : [
+        return $this->priceResolver ? $this->priceResolver->resolve($product, $product_id, $settings, !empty($settings['_wei_suppress_side_effects']) && empty($settings['verbose_debug'])) : [
             'ready' => false,
             'error' => 'missing_exchange_rate',
             'base_price_pln' => (float) $product->get_price(),

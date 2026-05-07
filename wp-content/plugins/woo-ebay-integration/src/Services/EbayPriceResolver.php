@@ -17,11 +17,11 @@ class EbayPriceResolver
     {
     }
 
-    public function resolve($product, int $product_id, array $settings): array
+    public function resolve($product, int $product_id, array $settings, bool $suppressLog = false): array
     {
         $basePricePln = $this->product_price_pln($product);
         $markup = $this->resolve_markup($product, $product_id, $settings);
-        $rate = $this->get_eur_rate($settings);
+        $rate = $suppressLog ? $this->get_cached_eur_rate() : $this->get_eur_rate($settings);
 
         $result = [
             'base_price_pln' => $basePricePln,
@@ -39,13 +39,17 @@ class EbayPriceResolver
 
         if ($basePricePln <= 0) {
             $result['error'] = 'invalid_price';
-            $this->log_resolution($product_id, $result);
+            if (!$suppressLog) {
+                $this->log_resolution($product_id, $result);
+            }
             return $result;
         }
 
         if (empty($rate['ready']) || (float) $rate['nbp_rate'] <= 0) {
             $result['error'] = 'missing_exchange_rate';
-            $this->log_resolution($product_id, $result);
+            if (!$suppressLog) {
+                $this->log_resolution($product_id, $result);
+            }
             return $result;
         }
 
@@ -53,14 +57,18 @@ class EbayPriceResolver
         $ebayPriceEur = round($markedPricePln / (float) $rate['nbp_rate'], 2);
         if ($ebayPriceEur <= 0) {
             $result['error'] = 'invalid_price';
-            $this->log_resolution($product_id, $result);
+            if (!$suppressLog) {
+                $this->log_resolution($product_id, $result);
+            }
             return $result;
         }
 
         $result['marked_price_pln'] = $markedPricePln;
         $result['ebay_price_eur'] = $ebayPriceEur;
         $result['ready'] = true;
-        $this->log_resolution($product_id, $result);
+        if (!$suppressLog) {
+            $this->log_resolution($product_id, $result);
+        }
         return $result;
     }
 
@@ -181,6 +189,32 @@ class EbayPriceResolver
         }
 
         return false;
+    }
+
+    private function get_cached_eur_rate(): array
+    {
+        $cached = get_transient(self::TRANSIENT_KEY);
+        if (is_array($cached) && (float) ($cached['nbp_rate'] ?? 0) > 0) {
+            $cached['ready'] = true;
+            $cached['from_transient'] = true;
+            return $cached;
+        }
+
+        $last = get_option(self::LAST_OPTION_KEY, []);
+        if (is_array($last) && (float) ($last['nbp_rate'] ?? 0) > 0) {
+            $last['ready'] = true;
+            $last['from_last_saved'] = true;
+            return $last;
+        }
+
+        return [
+            'ready' => false,
+            'nbp_rate' => null,
+            'nbp_effective_date' => '',
+            'nbp_table_no' => '',
+            'fetched_at' => 0,
+            'error' => 'missing_cached_exchange_rate',
+        ];
     }
 
     private function get_eur_rate(array $settings): array

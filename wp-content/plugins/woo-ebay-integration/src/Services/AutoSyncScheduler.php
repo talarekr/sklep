@@ -14,6 +14,9 @@ class AutoSyncScheduler
     private const LOCK_TTL = 3600;
     private const READINESS_NOT_READY_LIMIT = 50;
     private const READINESS_BUCKET_LIMIT = 25;
+    private const FULL_CATEGORY_AUDIT_BATCH_SIZE = 150;
+    private const FULL_CATEGORY_AUDIT_STATE_OPTION = 'wei_ebay_full_category_audit_state';
+
 
 
     public function __construct(private EbayAdapter $adapter, private OrderImporter $orderImporter, private Logger $logger)
@@ -478,14 +481,99 @@ class AutoSyncScheduler
 
     public function run_full_category_audit(bool $verboseDebug = false): array
     {
-        $ids = $this->product_ids_for_preflight(-1);
+        $state = get_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, []);
+        $state = is_array($state) ? $state : [];
+        if (($state['status'] ?? '') !== 'in_progress') {
+            $state = $this->new_full_category_audit_state($verboseDebug);
+        } else {
+            $state['verbose_debug'] = $verboseDebug || !empty($state['verbose_debug']);
+        }
+
+        $batchSize = self::FULL_CATEGORY_AUDIT_BATCH_SIZE;
+        $ids = $this->product_ids_for_preflight_page((int) ($state['offset'] ?? 0), $batchSize);
+        $processedThisBatch = 0;
+        $verboseDebug = !empty($state['verbose_debug']);
+
+        foreach ($ids as $productId) {
+            $result = $this->adapter->preflight_product($productId, null, !$verboseDebug, false, [
+                'audit_mode' => true,
+                'suppress_side_effects' => true,
+                'suppress_verbose_logs' => !$verboseDebug,
+            ]);
+            $item = $this->readiness_item($productId, $result);
+            $auditStatus = $this->audit_status($result, $item);
+            $reason = $this->audit_reason($result, $item, $auditStatus);
+            $row = $this->audit_csv_row($productId, $result, $item, $auditStatus, $reason);
+            $this->append_audit_tmp_row((string) $state['tmp_rows_path'], $row);
+
+            $state['total_scanned'] = (int) ($state['total_scanned'] ?? 0) + 1;
+            $state[$auditStatus . '_count'] = (int) ($state[$auditStatus . '_count'] ?? 0) + 1;
+            $processedThisBatch++;
+
+            if ($auditStatus !== 'ready') {
+                $this->append_limited($state['sample_problem_product_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+                $reasonKey = $reason !== '' ? $reason : $auditStatus;
+                $state['reason_counts'][$reasonKey] = (int) ($state['reason_counts'][$reasonKey] ?? 0) + 1;
+                $intent = trim((string) ($item['detected_intent'] ?? ''));
+                $intent = $intent !== '' ? $intent : 'unknown_intent';
+                $state['intent_problem_counts'][$intent] = (int) ($state['intent_problem_counts'][$intent] ?? 0) + 1;
+            }
+
+            if ($verboseDebug) {
+                $this->append_audit_tmp_row((string) $state['tmp_debug_path'], [
+                    'product_id' => $productId,
+                    'audit_status' => $auditStatus,
+                    'reason' => $reason,
+                    'readiness_item' => $item,
+                    'preflight' => $result,
+                ]);
+            }
+        }
+
+        $state['offset'] = (int) ($state['offset'] ?? 0) + $processedThisBatch;
+        $state['processed_this_batch'] = $processedThisBatch;
+        $state['updated_at'] = gmdate('Y-m-d H:i:s');
+
+        if ($processedThisBatch < $batchSize || (int) ($state['offset'] ?? 0) >= (int) ($state['total_products'] ?? 0)) {
+            return $this->complete_full_category_audit($state);
+        }
+
+        update_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, $state, false);
+        $summary = $this->full_category_audit_summary_from_state($state, 'in_progress');
+        update_option('wei_ebay_full_category_audit_summary', $summary, false);
+        if ($verboseDebug) {
+            $this->logger->info('eBay full category audit batch completed', [
+                'processed_this_batch' => $processedThisBatch,
+                'processed' => (int) $summary['total_scanned'],
+                'total' => (int) $summary['total_products'],
+            ]);
+        }
+
+        return $summary;
+    }
+
+    private function new_full_category_audit_state(bool $verboseDebug): array
+    {
         $startedAt = gmdate('Y-m-d H:i:s');
         $runSlug = 'wei-ebay-category-audit-' . gmdate('Ymd-His');
-        $summary = [
-            'result' => 'success',
+        $tmp = $this->full_category_audit_tmp_paths($runSlug);
+        foreach ([$tmp['rows'], $tmp['debug']] as $path) {
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+
+        return [
+            'status' => 'in_progress',
+            'result' => 'in_progress',
             'started_at' => $startedAt,
             'completed_at' => '',
+            'updated_at' => $startedAt,
+            'run_slug' => $runSlug,
             'verbose_debug' => $verboseDebug,
+            'batch_size' => self::FULL_CATEGORY_AUDIT_BATCH_SIZE,
+            'offset' => 0,
+            'total_products' => $this->product_count_for_preflight(),
             'total_scanned' => 0,
             'ready_count' => 0,
             'blocked_by_category_count' => 0,
@@ -494,73 +582,80 @@ class AutoSyncScheduler
             'content_not_ready_count' => 0,
             'price_not_ready_count' => 0,
             'sample_problem_product_ids' => [],
-            'top_10_sanity_reasons' => [],
-            'top_10_detected_intents_with_problems' => [],
+            'reason_counts' => [],
+            'intent_problem_counts' => [],
             'reports' => [],
+            'tmp_rows_path' => $tmp['rows'],
+            'tmp_debug_path' => $tmp['debug'],
         ];
-        $fullRows = [];
-        $problemRows = [];
-        $missingCategoryRows = [];
-        $missingAspectsRows = [];
-        $debugDetails = [
-            'started_at' => $startedAt,
-            'verbose_debug' => $verboseDebug,
-            'products' => [],
+    }
+
+    private function full_category_audit_tmp_paths(string $runSlug): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        return [
+            'rows' => trailingslashit($baseDir) . $runSlug . '-rows.tmp.ndjson',
+            'debug' => trailingslashit($baseDir) . $runSlug . '-debug-products.tmp.ndjson',
         ];
-        $reasonCounts = [];
-        $intentProblemCounts = [];
+    }
 
-        foreach ($ids as $productId) {
-            $result = $this->adapter->preflight_product($productId, null, true, false);
-            $item = $this->readiness_item($productId, $result);
-            $auditStatus = $this->audit_status($result, $item);
-            $reason = $this->audit_reason($result, $item, $auditStatus);
-            $row = $this->audit_csv_row($productId, $result, $item, $auditStatus, $reason);
-            $fullRows[] = $row;
-            $summary['total_scanned']++;
-            $summary[$auditStatus . '_count'] = (int) ($summary[$auditStatus . '_count'] ?? 0) + 1;
+    private function append_audit_tmp_row(string $path, array $row): void
+    {
+        file_put_contents($path, wp_json_encode($row, JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
+    }
 
-            if ($auditStatus !== 'ready') {
-                $problemRows[] = $row;
-                $this->append_limited($summary['sample_problem_product_ids'], $productId, self::READINESS_BUCKET_LIMIT);
-                $reasonKey = $reason !== '' ? $reason : $auditStatus;
-                $reasonCounts[$reasonKey] = (int) ($reasonCounts[$reasonKey] ?? 0) + 1;
-                $intent = trim((string) ($item['detected_intent'] ?? ''));
-                $intent = $intent !== '' ? $intent : 'unknown_intent';
-                $intentProblemCounts[$intent] = (int) ($intentProblemCounts[$intent] ?? 0) + 1;
-            }
-            if ($auditStatus === 'missing_category') {
-                $missingCategoryRows[] = $row;
-            }
-            if ($auditStatus === 'missing_required_aspects') {
-                $missingAspectsRows[] = $row;
-            }
+    private function complete_full_category_audit(array $state): array
+    {
+        $state['status'] = 'completed';
+        $state['result'] = 'success';
+        $state['completed_at'] = gmdate('Y-m-d H:i:s');
+        $summary = $this->full_category_audit_summary_from_state($state, 'success');
+        $summary['reports'] = $this->write_audit_reports_from_tmp((string) $state['run_slug'], (string) $state['tmp_rows_path'], (string) $state['tmp_debug_path'], $summary, !empty($state['verbose_debug']));
+        update_option('wei_ebay_full_category_audit_summary', $summary, false);
+        update_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, $state + ['reports' => $summary['reports']], false);
+        $this->logger->info('eBay full category audit completed', [
+            'processed' => (int) $summary['total_scanned'],
+            'total' => (int) $summary['total_products'],
+            'ready' => (int) $summary['ready_count'],
+            'blocked' => (int) $summary['blocked_by_category_count'],
+            'missing_category' => (int) $summary['missing_category_count'],
+            'missing_aspects' => (int) $summary['missing_required_aspects_count'],
+            'reports' => $summary['reports'],
+        ]);
+        return $summary;
+    }
 
-            $debugProduct = [
-                'product_id' => $productId,
-                'audit_status' => $auditStatus,
-                'reason' => $reason,
-                'readiness_item' => $item,
-            ];
-            if ($verboseDebug) {
-                $debugProduct['preflight'] = $result;
-            }
-            $debugDetails['products'][] = $debugProduct;
-        }
-
+    private function full_category_audit_summary_from_state(array $state, string $result): array
+    {
+        $reasonCounts = (array) ($state['reason_counts'] ?? []);
+        $intentProblemCounts = (array) ($state['intent_problem_counts'] ?? []);
         arsort($reasonCounts);
         arsort($intentProblemCounts);
-        $summary['top_10_sanity_reasons'] = array_slice($reasonCounts, 0, 10, true);
-        $summary['top_10_detected_intents_with_problems'] = array_slice($intentProblemCounts, 0, 10, true);
-        $summary['completed_at'] = gmdate('Y-m-d H:i:s');
-        $debugDetails['completed_at'] = $summary['completed_at'];
-        $debugDetails['summary'] = $summary;
-
-        $summary['reports'] = $this->write_audit_reports($runSlug, $fullRows, $problemRows, $missingCategoryRows, $missingAspectsRows, $debugDetails);
-        update_option('wei_ebay_full_category_audit_summary', $summary, false);
-        $this->logger->info('eBay full category audit completed', $summary);
-
-        return $summary;
+        return [
+            'result' => $result,
+            'status' => (string) ($state['status'] ?? $result),
+            'started_at' => (string) ($state['started_at'] ?? ''),
+            'completed_at' => (string) ($state['completed_at'] ?? ''),
+            'updated_at' => (string) ($state['updated_at'] ?? ''),
+            'verbose_debug' => !empty($state['verbose_debug']),
+            'batch_size' => (int) ($state['batch_size'] ?? self::FULL_CATEGORY_AUDIT_BATCH_SIZE),
+            'processed_this_batch' => (int) ($state['processed_this_batch'] ?? 0),
+            'processed' => (int) ($state['total_scanned'] ?? 0),
+            'total_products' => (int) ($state['total_products'] ?? 0),
+            'total_scanned' => (int) ($state['total_scanned'] ?? 0),
+            'ready_count' => (int) ($state['ready_count'] ?? 0),
+            'blocked_by_category_count' => (int) ($state['blocked_by_category_count'] ?? 0),
+            'missing_category_count' => (int) ($state['missing_category_count'] ?? 0),
+            'missing_required_aspects_count' => (int) ($state['missing_required_aspects_count'] ?? 0),
+            'content_not_ready_count' => (int) ($state['content_not_ready_count'] ?? 0),
+            'price_not_ready_count' => (int) ($state['price_not_ready_count'] ?? 0),
+            'sample_problem_product_ids' => (array) ($state['sample_problem_product_ids'] ?? []),
+            'top_10_sanity_reasons' => array_slice($reasonCounts, 0, 10, true),
+            'top_10_detected_intents_with_problems' => array_slice($intentProblemCounts, 0, 10, true),
+            'reports' => (array) ($state['reports'] ?? []),
+        ];
     }
 
     private function audit_status(array $result, array $item): string
@@ -570,18 +665,18 @@ class AutoSyncScheduler
         }
 
         $status = (string) ($result['status'] ?? 'not_ready');
-        if ($this->is_category_blocked_status($status)) {
-            $category = is_array($result['category'] ?? null) ? $result['category'] : [];
-            $categoryId = trim((string) ($category['category_id'] ?? $item['category_id'] ?? ''));
-            $selected = (array) ($item['selected_candidate'] ?? []);
-            $hasCandidate = trim((string) ($selected['category_id'] ?? $item['best_candidate_category_id'] ?? '')) !== '';
-            $source = (string) ($category['source'] ?? '');
+        $category = is_array($result['category'] ?? null) ? $result['category'] : [];
+        $categoryId = trim((string) ($category['category_id'] ?? $item['category_id'] ?? ''));
+        $selected = (array) ($item['selected_candidate'] ?? []);
+        $hasCandidate = trim((string) ($selected['category_id'] ?? $item['best_candidate_category_id'] ?? '')) !== '';
+        $source = (string) ($category['source'] ?? '');
+        if ($this->is_category_blocked_status($status) || $categoryId === '') {
             if ($status === 'unmapped' || ($categoryId === '' && !$hasCandidate) || $source === 'missing_category_mapping') {
                 return 'missing_category';
             }
             return 'blocked_by_category';
         }
-        if ($status === 'missing_required_aspects') {
+        if ($status === 'missing_required_aspects' || (array) ($item['missing_aspects'] ?? []) !== []) {
             return 'missing_required_aspects';
         }
         $errors = array_map('strtolower', array_map('strval', (array) ($result['errors'] ?? [])));
@@ -663,6 +758,59 @@ class AutoSyncScheduler
             'top_3_candidates_json' => wp_json_encode(array_slice((array) ($item['top_candidates'] ?? []), 0, 3), JSON_UNESCAPED_UNICODE),
             'edit_url' => (string) ($item['edit_url'] ?? ''),
         ];
+    }
+
+    private function write_audit_reports_from_tmp(string $runSlug, string $rowsPath, string $debugPath, array $summary, bool $verboseDebug): array
+    {
+        $fullRows = [];
+        $problemRows = [];
+        $missingCategoryRows = [];
+        $missingAspectsRows = [];
+        if (is_readable($rowsPath)) {
+            $fh = fopen($rowsPath, 'rb');
+            if ($fh) {
+                while (($line = fgets($fh)) !== false) {
+                    $row = json_decode(trim($line), true);
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $fullRows[] = $row;
+                    $status = (string) ($row['status'] ?? '');
+                    if ($status !== 'ready') {
+                        $problemRows[] = $row;
+                    }
+                    if ($status === 'missing_category') {
+                        $missingCategoryRows[] = $row;
+                    }
+                    if ($status === 'missing_required_aspects') {
+                        $missingAspectsRows[] = $row;
+                    }
+                }
+                fclose($fh);
+            }
+        }
+
+        $debugDetails = [
+            'started_at' => (string) ($summary['started_at'] ?? ''),
+            'completed_at' => (string) ($summary['completed_at'] ?? ''),
+            'verbose_debug' => $verboseDebug,
+            'summary' => $summary,
+        ];
+        if ($verboseDebug && is_readable($debugPath)) {
+            $debugDetails['products'] = [];
+            $fh = fopen($debugPath, 'rb');
+            if ($fh) {
+                while (($line = fgets($fh)) !== false) {
+                    $row = json_decode(trim($line), true);
+                    if (is_array($row)) {
+                        $debugDetails['products'][] = $row;
+                    }
+                }
+                fclose($fh);
+            }
+        }
+
+        return $this->write_audit_reports($runSlug, $fullRows, $problemRows, $missingCategoryRows, $missingAspectsRows, $debugDetails);
     }
 
     private function write_audit_reports(string $runSlug, array $fullRows, array $problemRows, array $missingCategoryRows, array $missingAspectsRows, array $debugDetails): array
@@ -991,14 +1139,26 @@ class AutoSyncScheduler
 
     private function product_ids_for_preflight(int $limit): array
     {
+        return $this->product_ids_for_preflight_page(0, $limit < 0 ? -1 : max(1, $limit));
+    }
+
+    private function product_ids_for_preflight_page(int $offset, int $limit): array
+    {
         return array_map('intval', get_posts([
             'post_type' => 'product',
             'post_status' => 'publish',
             'fields' => 'ids',
             'posts_per_page' => $limit < 0 ? -1 : max(1, $limit),
+            'offset' => max(0, $offset),
             'orderby' => 'ID',
             'order' => 'ASC',
         ]));
+    }
+
+    private function product_count_for_preflight(): int
+    {
+        $counts = wp_count_posts('product');
+        return is_object($counts) ? (int) ($counts->publish ?? 0) : 0;
     }
 
     private function product_ids_by_export_status(string $status, int $limit): array
