@@ -98,6 +98,7 @@ class CategoryMappingSafety
             [['wydech', 'auspuff'], ['auspuff', 'abgasanlage']],
             [['przewody klimatyzacji', 'przewod klimatyzacji', 'waz klimatyzacji', 'klimaleitung'], self::expected_keywords_for_intent('ac_hose')],
             [['klimatyzacja', 'klima'], ['klimaanlage', 'klima']],
+            [['listwa dekor', 'dekor', 'deska rozdzielcza', 'konsola', 'zierleiste', 'dekorleiste', 'dekoreinlage', 'armaturenbrett', 'mittelkonsole'], self::expected_keywords_for_intent('interior_trim')],
             [['glosniki', 'glosnik', 'audio'], self::expected_keywords_for_intent('car_speaker')],
             [['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitze'], self::expected_keywords_for_intent('seats')],
             [['panel nawiewu', 'panel klimatyzacji', 'sterownik klimatyzacji'], self::expected_keywords_for_intent('hvac_control_panel')],
@@ -201,8 +202,23 @@ class CategoryMappingSafety
     public static function category_intent(string $wooPath): string
     {
         $woo = self::normalize($wooPath);
+        if (self::contains_all($woo, ['belka', 'wzmocnienie']) && self::contains_any($woo, ['zderzaka', 'zderzak', 'stossstange', 'stosstange', 'stoßstange', 'pralltrager', 'pralltraeger', 'verstarkung', 'verstaerkung'])) {
+            return 'bumper_reinforcement';
+        }
+
+        if (self::contains_any($woo, ['skrzyni', 'skrzynia', 'getriebe', 'gearbox', 'transmission'])) {
+            if (self::contains_any($woo, ['poduszka', 'lager', 'halter', 'mocowanie', 'mount', 'aufhangung', 'aufhaengung'])) {
+                return 'gearbox_mount';
+            }
+        }
+
+        if (self::contains_any($woo, ['listwa dekor', 'dekor', 'deska rozdzielcza', 'konsola', 'zierleiste', 'dekorleiste', 'dekoreinlage', 'armaturenbrett', 'mittelkonsole'])) {
+            return 'interior_trim';
+        }
+
         $rules = [
             'spare_wheel' => ['kolo zapasowe', 'zapasowe', 'kolo dojazdowe', 'dojazdowe', 'ersatzrad', 'notrad', 'reserverad', 'spare wheel', 'emergency wheel', 'wheel spare'],
+            'gearbox_mount' => ['poduszka skrzyni biegow', 'mocowanie skrzyni', 'getriebelager', 'getriebehalter', 'getriebeaufhangung', 'getriebeaufhaengung', 'gearbox mount'],
             'engine_bearing' => ['motorlager', 'pleuellager', 'hauptlager', 'engine bearing', 'crank bearing', 'connecting rod bearing', 'panewki', 'panewka', 'lozyska silnika', 'lozysko silnika'],
             'wiring_harness' => ['anlasser-lichtmaschinenkabelbaum', 'anlasser lichtmaschinen kabelbaum', 'anlasserkabelbaum', 'lichtmaschinenkabelbaum', 'kabelbaum', 'kabelbaume', 'kabelbaeume', 'leitungssatz', 'leitungssatze', 'leitungssaetze', 'starter cable harness', 'alternator cable harness', 'starter alternator harness', 'wiazka rozrusznika', 'wiazka alternatora', 'wiazka rozrusznik alternator', 'wiazka przewodow', 'wiazki przewodow', 'wiazka elektryczna', 'przewod rozrusznika', 'przewod alternatora', 'wiring harness'],
             'starter' => ['rozrusznik', 'rozruszniki', 'anlasser', 'starter'],
@@ -223,7 +239,6 @@ class CategoryMappingSafety
             'ac_hose' => ['przewody klimatyzacji', 'przewod klimatyzacji', 'rurka klimatyzacji', 'waz klimatyzacji', 'przewod waz klimatyzacji', 'klima leitung', 'klimaleitung', 'klimaschlauch', 'kaltemittelleitung', 'kaeltemittelleitung', 'ac hose'],
             'glow_plug_relay' => ['przekaznik swiec zarowych', 'swiece zarowe', 'gluhkerzenrelais', 'gluehkerzenrelais', 'vorgluhrelais', 'vorgluehrelais', 'glow plug relay'],
             'hybrid_battery_converter' => ['konwerter baterii', 'bateria hybryda', 'hybryda', 'spannungswandler', 'dc dc wandler', 'dc-dc wandler', 'batterie konverter', 'hybrid battery converter'],
-            'gearbox_mount' => ['poduszka skrzyni biegow', 'mocowanie skrzyni', 'getriebelager', 'getriebehalter', 'getriebeaufhangung', 'getriebeaufhaengung', 'gearbox mount'],
             'armrest_center_console' => ['podlokietnik', 'tunel srodkowy', 'armlehne', 'mittelarmlehne', 'mittelkonsole', 'center armrest'],
             'car_speaker' => ['glosnik', 'glosniki', 'speaker', 'lautsprecher', 'turlautsprecher', 'tuerlautsprecher', 'audio'],
             'seats' => ['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitz', 'sitze', 'seats'],
@@ -248,10 +263,10 @@ class CategoryMappingSafety
             'driveshaft' => ['antriebswelle', 'antriebswellen', 'gelenkwelle', 'gelenkwellen'],
             'control_module' => ['steuergerat', 'steuergeraet', 'steuergerate', 'steuergeraete', 'modul', 'module'],
             'washer_tank' => ['wischwasserbehalter', 'wischwasserbehaelter', 'wischwasserbehälter', 'scheibenreinigung', 'scheinwerferreinigung', 'waschwasser', 'waschwasserbehalter', 'waschwasserbehaelter', 'scheibenwaschanlage', 'scheibenwaschbehalter', 'scheibenwaschbehaelter', 'behalter', 'behaelter'],
-            'power_steering_hose' => ['servolenkung', 'hydraulik', 'leitung', 'schlauch', 'lenkung'],
+            'power_steering_hose' => ['servolenkung', 'hydraulik', 'leitung', 'schlauch', 'lenkung', 'federung'],
             'roof_light' => ['innenbeleuchtung', 'innenleuchte', 'leuchte', 'dachhimmel'],
             'wiring_harness' => ['kabelbaum', 'kabelbaume', 'kabelbaeume', 'leitungssatz', 'leitungssatze', 'leitungssaetze', 'kabel', 'elektrik', 'elektrische komponenten', 'bordnetz', 'anlasser', 'lichtmaschine', 'generator', 'steckverbinder'],
-            'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
+            'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'],
             'bumper_grille' => ['gitter', 'grill', 'kuhlergrill', 'kuehlergrill', 'kühlergrill', 'stossstange', 'stosstange', 'stoßstange', 'blende', 'abdeckung', 'zierleiste', 'verkleidung'],
             'bumper_reinforcement' => ['stossstange', 'stosstange', 'stoßstange', 'trager', 'träger', 'traeger', 'pralltrager', 'prallträger', 'pralltraeger', 'pralldampfer', 'verstarkung', 'verstärkung', 'verstaerkung', 'aufpralldampfer', 'aufpralldämpfer', 'aufpralldaempfer'],
             'sunroof' => ['schiebedach', 'panoramadach', 'dach', 'glasdach'],
@@ -261,8 +276,9 @@ class CategoryMappingSafety
             'ac_hose' => ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch', 'klimaschlauch', 'klimaanlage'],
             'glow_plug_relay' => ['gluhkerze', 'gluehkerze', 'vorgluhen', 'vorgluehen', 'relais', 'steuergerat', 'steuergeraet'],
             'hybrid_battery_converter' => ['hybrid', 'batterie', 'spannungswandler', 'wandler', 'dc-dc', 'hochvolt'],
-            'gearbox_mount' => ['getriebelager', 'motorlager', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
+            'gearbox_mount' => ['getriebelager', 'getriebehalter', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
             'armrest_center_console' => ['armlehne', 'mittelarmlehne', 'mittelkonsole', 'innenausstattung'],
+            'interior_trim' => ['zierleiste', 'dekorleiste', 'dekoreinlage', 'dekor', 'armaturenbrett', 'mittelkonsole', 'innenausstattung', 'verkleidung'],
             'car_speaker' => ['lautsprecher', 'soundsystem', 'audio', 'autoradio', 'hi-fi', 'hifi'],
             'seats' => ['sitze', 'fahrzeugsitze', 'sitz', 'innenausstattung'],
             'hvac_control_panel' => ['klimabedienteil', 'klimaanlage', 'heizung', 'bedienelement', 'bedienfeld', 'schalter', 'kontrollelemente', 'innenausstattung'],
@@ -288,7 +304,7 @@ class CategoryMappingSafety
                 return 'spare_wheel_candidate_is_vehicle_category';
             }
         }
-        if ($intent !== '' && self::contains_any($ebay, ['motorrad- & rollerteile', 'motorradteile', 'rollerteile']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
+        if ($intent !== '' && $intent !== 'motorcycle' && self::contains_any($ebay, ['motorrad- & rollerteile', 'motorradteile', 'rollerteile'])) {
             return $intent . '_candidate_is_motorcycle_parts_family';
         }
         if ($intent !== '' && !in_array($intent, ['complete_engine', 'engine_bearing', 'power_steering_hose', 'ac_hose', 'hvac_control_panel', 'hvac_blower', 'tow_hook'], true) && self::contains_any($ebay, ['motoren & motorenteile', 'motoren und motorenteile', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
@@ -303,10 +319,10 @@ class CategoryMappingSafety
         if ($intent !== '' && !in_array($intent, ['complete_engine'], true) && self::contains_any($ebay, ['turbolader', 'ladeluftkuhler', 'ladeluftkuehler']) && self::matched_keywords_for_intent($intent, $ebay) === []) {
             return $intent . '_candidate_is_turbo_or_intercooler_family';
         }
-        if ($intent === 'wiring_harness' && self::contains_any($ebay, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor']) && !self::contains_any($ebay, ['kabelbaum', 'leitungssatz', 'kabel', 'elektrik', 'bordnetz', 'steckverbinder', 'anlasser', 'lichtmaschine', 'generator'])) {
+        if ($intent === 'wiring_harness' && self::contains_any($ebay, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren', 'window regulator', 'window motor'])) {
             return 'wiring_harness_candidate_is_window_lifter_or_motor';
         }
-        if ($intent === 'power_steering_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke', 'motorradteile']) && !self::contains_any($ebay, ['servolenkung', 'leitung', 'schlauch'])) {
+        if ($intent === 'power_steering_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorblock', 'motorblocke', 'motorbloecke', 'komplettmotoren', 'komplettmotor', 'motorradteile'])) {
             return 'power_steering_hose_candidate_is_engine_parts';
         }
         if ($intent === 'ac_hose' && self::contains_any($ebay, ['motoren', 'motorenteile', 'motorteile', 'motorradteile']) && !self::contains_any($ebay, ['klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'schlauch', 'klimaanlage'])) {
@@ -324,8 +340,14 @@ class CategoryMappingSafety
         if ($intent === 'hvac_blower' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['geblase', 'geblaese', 'lufter', 'luefter', 'heizung', 'klimaanlage', 'innenraum'])) {
             return 'hvac_blower_candidate_is_engine_parts';
         }
-        if ($intent === 'tow_hook' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'])) {
+        if ($intent === 'tow_hook' && self::contains_any($ebay, ['wischerarme', 'wischerarm', 'sonstige']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
+            return 'tow_hook_candidate_is_wrong_family';
+        }
+        if ($intent === 'tow_hook' && self::contains_any($ebay, ['motoren', 'motorblock', 'motorblocke', 'motorbloecke', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
             return 'tow_hook_candidate_is_engine_parts';
+        }
+        if ($intent === 'interior_trim' && self::contains_any($ebay, ['lautsprecher', 'audio', 'soundsystem', 'autoradio', 'hi-fi', 'hifi', 'motorrad'])) {
+            return 'interior_trim_candidate_is_audio_or_motorcycle';
         }
         return '';
     }
@@ -408,6 +430,16 @@ class CategoryMappingSafety
         $text = function_exists('remove_accents') ? remove_accents($text) : iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
         $text = str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], (string) $text);
         return strtolower((string) preg_replace('/\s+/', ' ', $text));
+    }
+
+    private static function contains_all(string $haystack, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if ($needle === '' || !str_contains($haystack, $needle)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static function contains_any(string $haystack, array $needles): bool
