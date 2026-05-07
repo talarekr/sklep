@@ -33,6 +33,7 @@ class AdminPage
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
         add_action('admin_post_wei_import_category_teaching_csv', [$this, 'import_category_teaching_csv']);
+        add_action('admin_post_wei_test_category_teaching_rule_match', [$this, 'test_category_teaching_rule_match']);
         add_action('admin_post_wei_generate_missing_german_content_audit', [$this, 'generate_missing_german_content_audit']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
@@ -79,6 +80,8 @@ class AdminPage
         $category_teaching_export_summary = is_array($category_teaching_export_summary) ? $category_teaching_export_summary : [];
         $category_teaching_import_summary = get_option('wei_ebay_category_mapping_teaching_import', []);
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
+        $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
+        $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -248,11 +251,34 @@ class AdminPage
         }
         $res = $this->autoCategoryMapper->import_category_mapping_teaching_csv($dest, $marketplaceId);
         $this->set_status('Category teaching import: ' . wp_json_encode([
-            'rows' => (int) ($res['rows'] ?? 0),
-            'imported_rules' => (int) ($res['imported_rules'] ?? 0),
-            'skipped_rows' => (int) ($res['skipped_rows'] ?? 0),
-            'safety_failed_rows' => (int) ($res['safety_failed_rows'] ?? 0),
+            'rows_read' => (int) ($res['rows_read'] ?? $res['rows'] ?? 0),
+            'rows_with_manual_category_id' => (int) ($res['rows_with_manual_category_id'] ?? 0),
+            'rules_inserted' => (int) ($res['rules_inserted'] ?? 0),
+            'rules_updated' => (int) ($res['rules_updated'] ?? 0),
+            'rows_skipped' => (int) ($res['rows_skipped'] ?? $res['skipped_rows'] ?? 0),
+            'rows_rejected_by_safety' => (int) ($res['rows_rejected_by_safety'] ?? $res['safety_failed_rows'] ?? 0),
         ]));
+        $this->go();
+    }
+
+    public function test_category_teaching_rule_match(): void
+    {
+        check_admin_referer('wei_test_category_teaching_rule_match');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $productId = absint($_POST['product_id'] ?? 0);
+        if ($productId <= 0) {
+            $this->set_status('Teaching rule match diagnostic failed: enter a valid product_id.');
+            $this->go();
+        }
+        $res = $this->autoCategoryMapper->test_teaching_rule_match_for_product($productId, $marketplaceId);
+        update_option('wei_ebay_category_mapping_teaching_match_diagnostic', $res, false);
+        $this->set_status('Teaching rule match diagnostic: ' . wp_json_encode([
+            'product_id' => $productId,
+            'matching_teaching_rule_found' => !empty($res['matching_teaching_rule_found']),
+            'matched_rule_id' => (int) ($res['matched_rule_id'] ?? 0),
+            'matched_manual_ebay_category_id' => (string) ($res['matched_manual_ebay_category_id'] ?? ''),
+            'error' => (string) ($res['error'] ?? ''),
+        ], JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 

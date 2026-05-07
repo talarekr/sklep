@@ -607,7 +607,56 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 </ul>
             <?php endif; ?>
             <?php if (!empty($category_teaching_import_summary)): ?>
-                <p class="description">Last teaching import: imported <?php echo esc_html((string) ($category_teaching_import_summary['imported_rules'] ?? 0)); ?> rules, skipped <?php echo esc_html((string) ($category_teaching_import_summary['skipped_rows'] ?? 0)); ?> rows, safety failed <?php echo esc_html((string) ($category_teaching_import_summary['safety_failed_rows'] ?? 0)); ?> rows.</p>
+                <?php
+                $importedRuleKeys = is_array($category_teaching_import_summary['imported_rule_keys'] ?? null) ? $category_teaching_import_summary['imported_rule_keys'] : [];
+                $validationErrors = is_array($category_teaching_import_summary['validation_errors_sample'] ?? null) ? $category_teaching_import_summary['validation_errors_sample'] : [];
+                ?>
+                <details style="margin-top:8px;" open>
+                    <summary>Last teaching import summary</summary>
+                    <div class="wei-grid" style="margin-top:8px;">
+                        <div class="wei-metric"><span>rows_read</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_read'] ?? $category_teaching_import_summary['rows'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>rows_with_manual_category_id</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_with_manual_category_id'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>rules_inserted</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rules_inserted'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>rules_updated</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rules_updated'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>rows_skipped</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_skipped'] ?? $category_teaching_import_summary['skipped_rows'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>rows_rejected_by_safety</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_rejected_by_safety'] ?? $category_teaching_import_summary['safety_failed_rows'] ?? 0)); ?></strong></div>
+                    </div>
+                    <?php if ($validationErrors !== []): ?>
+                        <p><strong>validation_errors_sample</strong></p>
+                        <ul><?php foreach ($validationErrors as $validationError): ?><li><code><?php echo esc_html((string) $validationError); ?></code></li><?php endforeach; ?></ul>
+                    <?php endif; ?>
+                    <?php if ($importedRuleKeys !== []): ?>
+                        <p><strong>First 10 imported rule keys</strong></p>
+                        <table class="widefat striped">
+                            <thead><tr><th>marketplace_id</th><th>woo_category_path</th><th>woo_category_path_hash</th><th>detected_intent</th><th>title_keyword_family</th><th>manual_ebay_category_id</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($importedRuleKeys as $ruleKey): ?>
+                                <tr>
+                                    <td><?php echo esc_html((string) ($ruleKey['marketplace_id'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($ruleKey['woo_category_path'] ?? '')); ?></td>
+                                    <td><code><?php echo esc_html((string) ($ruleKey['woo_category_path_hash'] ?? '')); ?></code></td>
+                                    <td><?php echo esc_html((string) ($ruleKey['detected_intent'] ?? '')); ?></td>
+                                    <td><?php echo esc_html((string) ($ruleKey['title_keyword_family'] ?? '')); ?></td>
+                                    <td><code><?php echo esc_html((string) ($ruleKey['manual_ebay_category_id'] ?? '')); ?></code></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </details>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 10px 0 0;">
+                <?php wp_nonce_field('wei_test_category_teaching_rule_match'); ?>
+                <input type="hidden" name="action" value="wei_test_category_teaching_rule_match" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+                <label>Test teaching rule match product_id <input type="number" name="product_id" min="1" required /></label>
+                <button class="button">Test teaching rule match</button>
+            </form>
+            <?php if (!empty($category_teaching_match_diagnostic)): ?>
+                <details class="wei-technical" style="margin-top:8px;" open>
+                    <summary>Teaching rule match diagnostic</summary>
+                    <pre><?php echo esc_html(wp_json_encode($category_teaching_match_diagnostic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: ''); ?></pre>
+                </details>
             <?php endif; ?>
         </div>
 
