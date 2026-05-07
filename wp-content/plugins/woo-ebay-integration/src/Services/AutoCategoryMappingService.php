@@ -93,6 +93,7 @@ class AutoCategoryMappingService
             'fixed_product_ids' => [],
             'still_blocked_product_ids' => [],
             'top_block_reasons' => [],
+            'repair_details' => [],
         ];
         $reasonCounts = [];
         $processedProducts = [];
@@ -114,6 +115,8 @@ class AutoCategoryMappingService
             $summary['processed']++;
             $fixed = false;
             $lastReason = 'missing_category_mapping';
+            $lastResult = [];
+            $fixedResult = [];
             foreach ((array) $terms as $term) {
                 $termId = (int) ($term->term_id ?? 0);
                 if ($termId <= 0) {
@@ -132,8 +135,10 @@ class AutoCategoryMappingService
                 $newStatus = (string) ($result['status'] ?? 'suggestion_failed');
                 if ($newStatus === 'mapped_auto') {
                     $fixed = true;
+                    $fixedResult = $result;
                     break;
                 }
+                $lastResult = $result;
                 $lastReason = (string) ($result['sanity_reason'] ?? $result['error_reason'] ?? $newStatus ?: 'needs_category_review');
                 if ($newStatus === 'low_confidence_auto') {
                     $summary['low_confidence_count']++;
@@ -145,13 +150,17 @@ class AutoCategoryMappingService
 
             if ($fixed) {
                 $summary['fixed_count']++;
-                $summary['fixed_product_ids'][] = $productId;
+                $fixedDetail = ['product_id' => $productId] + $this->repair_result_diagnostics($fixedResult);
+                $summary['fixed_product_ids'][] = $fixedDetail;
+                $summary['repair_details'][] = $fixedDetail;
                 continue;
             }
 
             $summary['still_blocked_count']++;
             $reasonCounts[$lastReason] = ($reasonCounts[$lastReason] ?? 0) + 1;
-            $summary['still_blocked_product_ids'][] = ['product_id' => $productId, 'reason' => $lastReason];
+            $blockedDetail = ['product_id' => $productId, 'reason' => $lastReason] + $this->repair_result_diagnostics($lastResult);
+            $summary['still_blocked_product_ids'][] = $blockedDetail;
+            $summary['repair_details'][] = $blockedDetail;
         }
 
         arsort($reasonCounts);
@@ -159,6 +168,16 @@ class AutoCategoryMappingService
         update_option('wei_ebay_category_mapping_repair_report', $summary, false);
         $this->logger->info('Category mapping repair report', $summary);
         return $summary;
+    }
+
+    private function repair_result_diagnostics(array $result): array
+    {
+        return [
+            'fallback_used' => !empty($result['fallback_used']),
+            'fallback_category_id' => (string) ($result['fallback_category_id'] ?? ''),
+            'fallback_reason' => (string) ($result['fallback_reason'] ?? ''),
+            'rejected_original_candidate' => (array) ($result['rejected_original_candidate'] ?? []),
+        ];
     }
 
     private function recent_product_ids_for_repair(int $limit): array
@@ -223,7 +242,7 @@ class AutoCategoryMappingService
             $status = 'suggestion_failed';
             $errorReason = 'Suggestion payload did not include a usable categoryId';
         } else {
-            $source = in_array($source, ['taxonomy_suggestion', 'local_tree_index'], true) ? 'auto_taxonomy' : $source;
+            $source = in_array($source, ['taxonomy_suggestion', 'local_tree_index', 'intent_fallback'], true) ? 'auto_taxonomy' : $source;
             if (!empty($safety['accepted'])) {
                 $status = 'mapped_auto';
             } elseif (($safety['status'] ?? '') === 'category_sanity_failed') {
@@ -256,7 +275,7 @@ class AutoCategoryMappingService
         ]));
 
         $this->logger->info('Auto category mapping evaluated', ['woo_term_id' => $termId, 'status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'candidate_source' => $source]);
-        return ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId];
+        return ['status' => $status, 'confidence' => $confidence, 'threshold' => (float) ($safety['threshold'] ?? CategoryMappingSafety::threshold($settings)), 'sanity_check_pass' => !empty($safety['sanity_check_pass']), 'sanity_reason' => (string) ($safety['sanity_reason'] ?? ''), 'category_id' => $categoryId, 'fallback_used' => !empty($evaluation['fallback_used']), 'fallback_category_id' => (string) ($evaluation['fallback_category_id'] ?? ''), 'fallback_reason' => (string) ($evaluation['fallback_reason'] ?? ''), 'rejected_original_candidate' => (array) ($evaluation['rejected_original_candidate'] ?? [])];
     }
 
     private function is_manual_mapping(?array $mapping): bool
@@ -429,6 +448,19 @@ class AutoCategoryMappingService
             $selected = $candidates[0];
         }
 
+        $fallbackUsed = false;
+        $fallbackReason = '';
+        $rejectedOriginalCandidate = $selected !== [] ? $this->candidate_debug_summary($selected) : [];
+        if (($selected === [] || empty($selected['sanity_pass'])) && CategoryMappingSafety::detect_intent($wooPath . ' ' . $query) !== '') {
+            $fallback = $this->intent_fallback_candidate($wooPath, $query, $samples, $marketplaceId, $settings, $candidates);
+            if ($fallback !== []) {
+                $candidates[] = $fallback;
+                $selected = $fallback;
+                $fallbackUsed = true;
+                $fallbackReason = (string) ($fallback['fallback_reason'] ?? 'intent_safe_family_after_rejections');
+            }
+        }
+
         $rawBest = [];
         foreach ($candidates as $candidate) {
             if (($candidate['source'] ?? '') === 'taxonomy_suggestion' && ((int) ($candidate['raw_position'] ?? 0)) === 1) {
@@ -462,7 +494,85 @@ class AutoCategoryMappingService
             'rejected_candidates' => array_slice($rejectedCandidates, 0, self::TOP_CANDIDATE_LIMIT),
             'selected_candidate' => $selected,
             'rejected_best_reason' => $rejectedBestReason,
+            'fallback_used' => $fallbackUsed,
+            'fallback_category_id' => $fallbackUsed ? (string) ($selected['category_id'] ?? '') : '',
+            'fallback_reason' => $fallbackReason,
+            'rejected_original_candidate' => $rejectedOriginalCandidate,
         ];
+    }
+
+    private function intent_fallback_candidate(string $wooPath, string $query, array $samples, string $marketplaceId, array $settings, array $existingCandidates): array
+    {
+        $context = $wooPath . ' ' . $query;
+        $intent = CategoryMappingSafety::detect_intent($context);
+        $fallbackKeywords = $this->intent_fallback_keywords($intent);
+        if ($fallbackKeywords === []) {
+            return [];
+        }
+
+        $existingIds = [];
+        foreach ($existingCandidates as $candidate) {
+            $id = (string) ($candidate['category_id'] ?? '');
+            if ($id !== '') {
+                $existingIds[$id] = true;
+            }
+        }
+
+        $fallbackQuery = trim($context . ' ' . implode(' ', $fallbackKeywords));
+        $position = 1000;
+        foreach ($this->taxonomy->search_local_category_index($marketplaceId, $fallbackQuery, $fallbackKeywords, 30) as $local) {
+            if (!is_array($local)) {
+                continue;
+            }
+            $categoryId = (string) ($local['category_id'] ?? '');
+            if ($categoryId === '' || isset($existingIds[$categoryId])) {
+                continue;
+            }
+            $candidate = $this->build_candidate(
+                $categoryId,
+                (string) ($local['category_name'] ?? ''),
+                (string) ($local['category_path'] ?? ''),
+                ++$position,
+                'intent_fallback',
+                ['leafCategoryTreeNode' => !empty($local['is_leaf']), 'local_index_score' => (float) ($local['index_score'] ?? 0), 'fallback_intent' => $intent],
+                $wooPath,
+                $query,
+                $samples,
+                $marketplaceId,
+                $settings,
+                !empty($local['is_leaf'])
+            );
+            if (!empty($candidate['sanity_pass']) && CategoryMappingSafety::matched_keywords_for_intent($intent, (string) ($candidate['category_path'] ?? '') . ' ' . (string) ($candidate['category_name'] ?? '')) !== []) {
+                $candidate['score'] = max((float) ($candidate['score'] ?? 0), (float) CategoryMappingSafety::threshold($settings));
+                $candidate['confidence'] = $candidate['score'];
+                $candidate['safety'] = CategoryMappingSafety::evaluate_auto_mapping($wooPath . ' ' . $query, (string) ($candidate['category_path'] ?? '') . ' ' . (string) ($candidate['category_name'] ?? ''), (float) $candidate['score'], $settings);
+                $candidate['sanity_pass'] = !empty($candidate['safety']['sanity_check_pass']);
+                $candidate['sanity_reason'] = (string) ($candidate['safety']['sanity_reason'] ?? '');
+                $candidate['fallback_reason'] = 'intent_safe_family_after_rejected_taxonomy_and_local_candidates';
+                return $candidate;
+            }
+        }
+
+        return [];
+    }
+
+    private function intent_fallback_keywords(string $intent): array
+    {
+        return match ($intent) {
+            'power_steering_hose' => ['servolenkung', 'hydraulikleitung', 'lenkung', 'leitung', 'schlauch'],
+            'tow_hook' => ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung'],
+            'ac_hose' => ['klimaanlage', 'klimaleitung', 'kaltemittelleitung', 'kaeltemittelleitung', 'leitung', 'schlauch'],
+            'hvac_blower' => ['heizung', 'klimaanlage', 'geblase', 'geblaese', 'lufter', 'luefter', 'innenraum'],
+            'adblue_hose' => ['abgasreinigung', 'adblue', 'harnstoffleitung', 'leitung', 'schlauch'],
+            'wiring_harness' => ['kabelbaum', 'leitungssatz', 'elektrik', 'kabel', 'bordnetz'],
+            'bumper_reinforcement' => ['stossstange', 'stosstange', 'pralltrager', 'pralltraeger', 'verstarkung', 'verstaerkung', 'aufpralldampfer'],
+            'interior_trim' => ['innenausstattung', 'verkleidung', 'zierleiste', 'dekorleiste', 'armaturenbrett', 'mittelkonsole', 'blende', 'rahmen'],
+            'usb_socket', 'media_port' => ['usb', 'anschluss', 'buchse', 'steckdose', 'multimedia'],
+            'roof_antenna' => ['antenne', 'dachantenne', 'antennenfuss', 'antennefuss', 'shark'],
+            'gearbox_mount' => ['getriebelager', 'getriebehalter', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
+            'spare_wheel' => ['ersatzrad', 'notrad', 'reserverad', 'felge', 'felgen'],
+            default => [],
+        };
     }
 
     private function build_candidate(string $categoryId, string $categoryName, string $path, int $position, string $source, array $raw, string $wooPath, string $query, array $samples, string $marketplaceId, array $settings, bool $isLeaf): array
@@ -765,6 +875,10 @@ class AutoCategoryMappingService
             'rejected_candidates' => (array) ($evaluation['rejected_candidates'] ?? []),
             'selected_candidate' => $this->candidate_debug_summary($best),
             'rejected_best_reason' => (string) ($evaluation['rejected_best_reason'] ?? ''),
+            'fallback_used' => !empty($evaluation['fallback_used']),
+            'fallback_category_id' => (string) ($evaluation['fallback_category_id'] ?? ''),
+            'fallback_reason' => (string) ($evaluation['fallback_reason'] ?? ''),
+            'rejected_original_candidate' => (array) ($evaluation['rejected_original_candidate'] ?? []),
             'best' => $best,
             'taxonomy_status' => $result['status'] ?? '',
             'error' => $result['error'] ?? '',

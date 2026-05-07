@@ -98,7 +98,9 @@ class CategoryMappingSafety
             [['wydech', 'auspuff'], ['auspuff', 'abgasanlage']],
             [['przewody klimatyzacji', 'przewod klimatyzacji', 'waz klimatyzacji', 'klimaleitung'], self::expected_keywords_for_intent('ac_hose')],
             [['klimatyzacja', 'klima'], ['klimaanlage', 'klima']],
-            [['listwa dekor', 'dekor', 'deska rozdzielcza', 'konsola', 'zierleiste', 'dekorleiste', 'dekoreinlage', 'armaturenbrett', 'mittelkonsole'], self::expected_keywords_for_intent('interior_trim')],
+            [['listwa dekor', 'dekor', 'ramka', 'deska rozdzielcza', 'konsola', 'zierleiste', 'dekorleiste', 'dekoreinlage', 'armaturenbrett', 'mittelkonsole'], self::expected_keywords_for_intent('interior_trim')],
+            [['gniazdo usb', 'port usb', 'wejscie usb', 'usb socket', 'usb port', 'media port'], self::expected_keywords_for_intent('usb_socket')],
+            [['antena dachowa', 'shark fin', 'rekin', 'dachantenne'], self::expected_keywords_for_intent('roof_antenna')],
             [['glosniki', 'glosnik', 'audio'], self::expected_keywords_for_intent('car_speaker')],
             [['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitze'], self::expected_keywords_for_intent('seats')],
             [['panel nawiewu', 'panel klimatyzacji', 'sterownik klimatyzacji'], self::expected_keywords_for_intent('hvac_control_panel')],
@@ -202,6 +204,19 @@ class CategoryMappingSafety
     public static function category_intent(string $wooPath): string
     {
         $woo = self::normalize($wooPath);
+        $explicitSpeaker = self::contains_any($woo, ['lautsprecher', 'speaker', 'glosnik', 'glosniki', 'głośnik', 'głośniki']);
+        if (!$explicitSpeaker) {
+            if (self::contains_any($woo, ['gniazdo usb', 'port usb', 'wejscie usb', 'wejście usb', 'usb socket', 'usb port', 'media port'])) {
+                return 'usb_socket';
+            }
+            if (self::contains_any($woo, ['antena dachowa', 'dachantenne', 'shark fin', 'shark-fin', 'shark', 'rekin'])) {
+                return 'roof_antenna';
+            }
+            if (self::contains_any($woo, ['ramka', 'dekor', 'listwa', 'zierleiste', 'dekorleiste', 'dekoreinlage'])) {
+                return 'interior_trim';
+            }
+        }
+
         if (self::contains_all($woo, ['belka', 'wzmocnienie']) && self::contains_any($woo, ['zderzaka', 'zderzak', 'stossstange', 'stosstange', 'stoßstange', 'pralltrager', 'pralltraeger', 'verstarkung', 'verstaerkung'])) {
             return 'bumper_reinforcement';
         }
@@ -240,6 +255,8 @@ class CategoryMappingSafety
             'glow_plug_relay' => ['przekaznik swiec zarowych', 'swiece zarowe', 'gluhkerzenrelais', 'gluehkerzenrelais', 'vorgluhrelais', 'vorgluehrelais', 'glow plug relay'],
             'hybrid_battery_converter' => ['konwerter baterii', 'bateria hybryda', 'hybryda', 'spannungswandler', 'dc dc wandler', 'dc-dc wandler', 'batterie konverter', 'hybrid battery converter'],
             'armrest_center_console' => ['podlokietnik', 'tunel srodkowy', 'armlehne', 'mittelarmlehne', 'mittelkonsole', 'center armrest'],
+            'usb_socket' => ['gniazdo usb', 'port usb', 'wejscie usb', 'wejście usb', 'usb socket', 'usb port', 'media port'],
+            'roof_antenna' => ['antena dachowa', 'dachantenne', 'shark fin', 'shark-fin', 'rekin', 'roof antenna'],
             'car_speaker' => ['glosnik', 'glosniki', 'speaker', 'lautsprecher', 'turlautsprecher', 'tuerlautsprecher', 'audio'],
             'seats' => ['fotele', 'fotel', 'kanapa', 'siedzenie', 'sitz', 'sitze', 'seats'],
             'complete_engine' => ['silniki kompletne', 'silnik kompletny', 'komplettmotoren', 'komplettmotor', 'complete engine'],
@@ -278,7 +295,9 @@ class CategoryMappingSafety
             'hybrid_battery_converter' => ['hybrid', 'batterie', 'spannungswandler', 'wandler', 'dc-dc', 'hochvolt'],
             'gearbox_mount' => ['getriebelager', 'getriebehalter', 'lagerung', 'halter', 'aufhangung', 'aufhaengung'],
             'armrest_center_console' => ['armlehne', 'mittelarmlehne', 'mittelkonsole', 'innenausstattung'],
-            'interior_trim' => ['zierleiste', 'dekorleiste', 'dekoreinlage', 'dekor', 'armaturenbrett', 'mittelkonsole', 'innenausstattung', 'verkleidung'],
+            'interior_trim' => ['zierleiste', 'dekorleiste', 'dekoreinlage', 'dekor', 'armaturenbrett', 'mittelkonsole', 'innenausstattung', 'verkleidung', 'blende', 'rahmen'],
+            'usb_socket' => ['usb', 'anschluss', 'buchse', 'steckdose', 'multimedia', 'media', 'aux'],
+            'roof_antenna' => ['antenne', 'dachantenne', 'antennefuss', 'antennenfuss', 'shark', 'hai', 'dach'],
             'car_speaker' => ['lautsprecher', 'soundsystem', 'audio', 'autoradio', 'hi-fi', 'hifi'],
             'seats' => ['sitze', 'fahrzeugsitze', 'sitz', 'innenausstattung'],
             'hvac_control_panel' => ['klimabedienteil', 'klimaanlage', 'heizung', 'bedienelement', 'bedienfeld', 'schalter', 'kontrollelemente', 'innenausstattung'],
@@ -334,13 +353,25 @@ class CategoryMappingSafety
         if ($intent === 'car_speaker' && self::contains_any($ebay, ['fensterheber', 'motoren']) && !self::contains_any($ebay, ['lautsprecher', 'audio', 'soundsystem', 'autoradio', 'hi-fi', 'hifi'])) {
             return 'car_speaker_candidate_is_window_lifter_or_motor';
         }
+        if (in_array($intent, ['usb_socket', 'media_port', 'roof_antenna'], true) && self::contains_any($ebay, ['lautsprecher', 'soundsystem', 'autoradio']) && !self::matched_keywords_for_intent($intent, $ebay)) {
+            return $intent . '_candidate_is_audio_speaker_family';
+        }
         if ($intent === 'hvac_control_panel' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['klimaanlage', 'heizung', 'bedienelement', 'bedienfeld', 'schalter', 'kontrollelemente'])) {
             return 'hvac_control_panel_candidate_is_engine_parts';
         }
         if ($intent === 'hvac_blower' && self::contains_any($ebay, ['motoren', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['geblase', 'geblaese', 'lufter', 'luefter', 'heizung', 'klimaanlage', 'innenraum'])) {
             return 'hvac_blower_candidate_is_engine_parts';
         }
-        if ($intent === 'tow_hook' && self::contains_any($ebay, ['wischerarme', 'wischerarm', 'sonstige']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
+        if ($intent === 'bumper_reinforcement' && self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese'])) {
+            return 'bumper_reinforcement_candidate_is_tow_hook_family';
+        }
+        if ($intent === 'bumper_reinforcement' && self::contains_any($ebay, ['fensterheber', 'fensterhebermotor', 'fensterhebermotoren'])) {
+            return 'bumper_reinforcement_candidate_is_window_lifter_or_motor';
+        }
+        if ($intent === 'bumper_reinforcement' && self::contains_any($ebay, ['ladeluftkuhler', 'ladeluftkuehler', 'turbolader'])) {
+            return 'bumper_reinforcement_candidate_is_turbo_or_intercooler_family';
+        }
+        if ($intent === 'tow_hook' && self::contains_any($ebay, ['wischerarme', 'wischerarm', 'sonstige', 'stossstangen', 'stosstangen', 'stossstange', 'stosstange']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
             return 'tow_hook_candidate_is_wrong_family';
         }
         if ($intent === 'tow_hook' && self::contains_any($ebay, ['motoren', 'motorblock', 'motorblocke', 'motorbloecke', 'motorteile', 'pleuel', 'hauptlager']) && !self::contains_any($ebay, ['anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'zugvorrichtung', 'anhangevorrichtung', 'anhaengevorrichtung'])) {
@@ -348,6 +379,9 @@ class CategoryMappingSafety
         }
         if ($intent === 'interior_trim' && self::contains_any($ebay, ['lautsprecher', 'audio', 'soundsystem', 'autoradio', 'hi-fi', 'hifi', 'motorrad'])) {
             return 'interior_trim_candidate_is_audio_or_motorcycle';
+        }
+        if ($intent === 'interior_trim' && self::contains_any($ebay, ['schalter', 'bedienelement', 'kontrollelement']) && !self::contains_any($ebay, ['zierleiste', 'dekorleiste', 'dekoreinlage', 'dekor', 'armaturenbrett', 'mittelkonsole', 'verkleidung', 'blende', 'rahmen'])) {
+            return 'interior_trim_candidate_is_switch_family';
         }
         return '';
     }
