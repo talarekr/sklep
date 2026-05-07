@@ -597,6 +597,34 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <button class="button button-primary">Import filled teaching CSV</button>
                 <span class="description">Rows with manual_ebay_category_id create manual_woo_category_mapping rules by Woo category path. Expected-keyword mismatches are warnings; only hard safety mismatches are rejected.</span>
             </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px; border-left:4px solid #46b450; padding-left:10px;">
+                <?php wp_nonce_field('wei_apply_manual_woo_category_mappings'); ?>
+                <input type="hidden" name="action" value="wei_apply_manual_woo_category_mappings" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
+                <button class="button button-primary">Apply manual Woo category mappings to all products</button>
+                <span class="description">Loads active manual_woo_category_mapping rules by Woo category path and writes category mappings for matching published products/categories only. Does not call taxonomy suggestions, eBay APIs, publish, or modify SKU/price/Allegro data.</span>
+            </form>
+            <?php if (!empty($manual_woo_category_apply_summary)): ?>
+                <?php $applyErrors = is_array($manual_woo_category_apply_summary['errors_sample'] ?? null) ? $manual_woo_category_apply_summary['errors_sample'] : []; ?>
+                <details style="margin-top:8px;" open>
+                    <summary>Last manual Woo category mapping apply summary</summary>
+                    <div class="wei-grid" style="margin-top:8px;">
+                        <div class="wei-metric"><span>manual_rules_loaded</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['manual_rules_loaded'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>woo_categories_matched</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['woo_categories_matched'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>products_scanned</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['products_scanned'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>products_matching_manual_categories</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['products_matching_manual_categories'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>mappings_written</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['mappings_written'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>already_mapped</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['already_mapped'] ?? 0)); ?></strong></div>
+                        <div class="wei-metric"><span>skipped_by_hard_safety</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['skipped_by_hard_safety'] ?? 0)); ?></strong></div>
+                    </div>
+                    <?php if ($applyErrors !== []): ?>
+                        <p class="description">errors_sample</p>
+                        <ul>
+                            <?php foreach ($applyErrors as $error): ?><li><?php echo esc_html((string) $error); ?></li><?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </details>
+            <?php endif; ?>
             <?php if (!empty($category_teaching_export_summary)): ?>
                 <?php $teachingReports = is_array($category_teaching_export_summary['reports'] ?? null) ? $category_teaching_export_summary['reports'] : []; ?>
                 <p class="description">Last teaching export: <?php echo esc_html((string) ($category_teaching_export_summary['groups_exported'] ?? 0)); ?> grouped rows.</p>

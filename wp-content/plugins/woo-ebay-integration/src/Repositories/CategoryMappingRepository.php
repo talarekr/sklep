@@ -197,6 +197,11 @@ class CategoryMappingRepository
 
     public function find_teaching_rule(string $marketplaceId, string $wooCategoryPath, string $detectedIntent = '', string $title = '', string $keywordFamily = ''): ?array
     {
+        $manualRule = $this->find_manual_woo_category_rule($marketplaceId, $wooCategoryPath, $title, $keywordFamily);
+        if ($manualRule) {
+            return $manualRule;
+        }
+
         global $wpdb;
         $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
         $pathHash = hash('sha256', $this->normalize_rule_text($wooCategoryPath));
@@ -208,9 +213,10 @@ class CategoryMappingRepository
         ]));
 
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s ORDER BY updated_at DESC",
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s AND source<>%s ORDER BY updated_at DESC",
             $marketplaceId,
-            $pathHash
+            $pathHash,
+            'manual_woo_category_mapping'
         ), ARRAY_A);
         $rows = is_array($rows) ? $rows : [];
         if ($rows === []) {
@@ -257,6 +263,64 @@ class CategoryMappingRepository
         }
 
         return $rows[0];
+    }
+
+    public function find_manual_woo_category_rule(string $marketplaceId, string $wooCategoryPath, string $title = '', string $keywordFamily = ''): ?array
+    {
+        $rows = $this->manual_woo_category_rules_for_path($marketplaceId, $wooCategoryPath);
+        if ($rows === []) {
+            return null;
+        }
+        if (count($rows) === 1) {
+            return $rows[0];
+        }
+
+        $families = array_values(array_unique(array_filter([
+            $this->normalize_keyword_family($keywordFamily),
+            $this->keyword_family_from_title($title),
+        ], static fn(string $family): bool => $family !== '')));
+
+        foreach ($families as $family) {
+            foreach ($rows as $row) {
+                if ((string) ($row['title_keyword_family'] ?? '') === $family) {
+                    return $row;
+                }
+            }
+        }
+
+        foreach ($rows as $row) {
+            if ((string) ($row['title_keyword_family'] ?? '') === '') {
+                return $row;
+            }
+        }
+
+        return $rows[0];
+    }
+
+    public function manual_woo_category_rules_for_path(string $marketplaceId, string $wooCategoryPath): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_category_path_hash=%s AND source=%s AND ebay_category_id<>'' ORDER BY updated_at DESC",
+            $marketplaceId,
+            $this->woo_category_path_hash($wooCategoryPath),
+            'manual_woo_category_mapping'
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    public function list_manual_woo_category_rules(string $marketplaceId = 'EBAY_DE', int $limit = 1000): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_teaching_rules';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND source=%s AND ebay_category_id<>'' ORDER BY woo_category_path_hash ASC, updated_at DESC LIMIT %d",
+            $marketplaceId,
+            'manual_woo_category_mapping',
+            max(1, min(5000, $limit))
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
     }
 
     public function nearest_teaching_rules(string $marketplaceId, string $wooCategoryPath = '', string $detectedIntent = '', int $limit = 10): array
