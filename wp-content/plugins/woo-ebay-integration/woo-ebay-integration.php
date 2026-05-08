@@ -13,6 +13,8 @@ if (!defined('ABSPATH')) {
 
 define('WEI_PLUGIN_FILE', __FILE__);
 define('WEI_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('WEI_BUILD_COMMIT', '9d9c575-diagnostics');
+define('WEI_BUILD_ID', '2026-05-08-admin-menu-null-slug-diagnostics');
 
 spl_autoload_register(function (string $class): void {
     if (strpos($class, 'WEI\\') !== 0) {

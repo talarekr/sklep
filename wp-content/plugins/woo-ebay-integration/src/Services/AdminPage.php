@@ -14,6 +14,7 @@ class AdminPage
 
     public function hooks(): void
     {
+        add_action('admin_init', [$this, 'log_build_loaded']);
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_post_wei_save_settings', [$this, 'save_settings']);
         add_action('admin_post_wei_disconnect', [$this, 'disconnect']);
@@ -52,6 +53,8 @@ class AdminPage
 
     public function register_menu(): void
     {
+        $this->log_build_loaded();
+
         $this->add_traced_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_options', 'woo-ebay', [$this, 'render'], 'main admin menu');
 
         // WordPress normalizes both parent and menu slugs through plugin_basename().
@@ -66,33 +69,35 @@ class AdminPage
 
 
     /**
-     * Registers submenu pages with narrow diagnostics for values that WordPress
-     * later normalizes via plugin_basename()/wp_normalize_path().
+     * Registers submenu pages with production-safe diagnostics for values that
+     * WordPress later normalizes via plugin_basename()/wp_normalize_path().
      *
      * @param callable $callback
      */
     private function add_traced_submenu_page($parentSlug, $pageTitle, $menuTitle, $capability, $menuSlug, $callback, string $section): void
     {
-        $fields = [
+        $normalizedParentSlug = $this->safe_admin_slug($parentSlug, 'woocommerce', $section, 'parent_slug');
+        $normalizedPageTitle = $this->safe_admin_label($pageTitle, $section, 'page_title');
+        $normalizedMenuTitle = $this->safe_admin_label($menuTitle, $section, 'menu_title');
+        $normalizedCapability = $this->safe_admin_slug($capability, 'manage_options', $section, 'capability');
+        $normalizedMenuSlug = $this->safe_admin_slug($menuSlug, 'woo-ebay', $section, 'menu_slug');
+
+        $this->log_admin_menu_register('add_submenu_page', $section, [
             'parent_slug' => $parentSlug,
+            'menu_slug' => $menuSlug,
             'page_title' => $pageTitle,
             'menu_title' => $menuTitle,
-            'capability' => $capability,
-            'menu_slug' => $menuSlug,
-        ];
-
-        foreach ($fields as $field => $value) {
-            if ($value === null || (!is_scalar($value) && !(is_object($value) && method_exists($value, '__toString')))) {
-                $this->log_admin_render_diagnostic($section, $field, __METHOD__, $value);
-            }
-        }
+            'callback' => $callback,
+            'normalized_parent_slug' => $normalizedParentSlug,
+            'normalized_menu_slug' => $normalizedMenuSlug,
+        ]);
 
         add_submenu_page(
-            $this->safe_admin_slug($parentSlug, 'woocommerce', $section, 'parent_slug'),
-            $this->safe_admin_label($pageTitle, $section, 'page_title'),
-            $this->safe_admin_label($menuTitle, $section, 'menu_title'),
-            $this->safe_admin_slug($capability, 'manage_options', $section, 'capability'),
-            $this->safe_admin_slug($menuSlug, 'woo-ebay', $section, 'menu_slug'),
+            $normalizedParentSlug,
+            $normalizedPageTitle,
+            $normalizedMenuTitle,
+            $normalizedCapability,
+            $normalizedMenuSlug,
             $callback
         );
     }
@@ -120,20 +125,129 @@ class AdminPage
         return '';
     }
 
-    private function log_admin_render_diagnostic(string $section, string $field, string $renderer, $value): void
+    public function log_build_loaded(): void
     {
-        $summary = function_exists('wp_debug_backtrace_summary')
+        static $logged = false;
+        if ($logged) {
+            return;
+        }
+        $logged = true;
+
+        error_log('WEI_BUILD_LOADED ' . $this->encode_log_context([
+            'commit' => defined('WEI_BUILD_COMMIT') ? WEI_BUILD_COMMIT : 'unknown',
+            'build' => defined('WEI_BUILD_ID') ? WEI_BUILD_ID : 'unknown',
+            'plugin_file' => defined('WEI_PLUGIN_FILE') ? WEI_PLUGIN_FILE : '',
+            'admin_page_sha1' => sha1_file(__FILE__) ?: '',
+            'backtrace' => $this->backtrace_summary(),
+        ]));
+    }
+
+    /**
+     * @param callable $callback
+     */
+    private function log_admin_menu_register(string $function, string $section, array $fields): void
+    {
+        $parentSlug = $fields['parent_slug'] ?? null;
+        $menuSlug = $fields['menu_slug'] ?? null;
+        $context = [
+            'function' => $function,
+            'section' => $section,
+            'parent_slug' => $this->stringify_log_value($parentSlug),
+            'menu_slug' => $this->stringify_log_value($menuSlug),
+            'page_title' => $this->stringify_log_value($fields['page_title'] ?? null),
+            'menu_title' => $this->stringify_log_value($fields['menu_title'] ?? null),
+            'callback' => $this->describe_callback($fields['callback'] ?? null),
+            'normalized_parent_slug' => $this->stringify_log_value($fields['normalized_parent_slug'] ?? null),
+            'normalized_menu_slug' => $this->stringify_log_value($fields['normalized_menu_slug'] ?? null),
+            'backtrace' => $this->backtrace_summary(),
+        ];
+
+        error_log('WEI_ADMIN_MENU_REGISTER ' . $this->encode_log_context($context));
+
+        if ($this->is_empty_slug($parentSlug) || $this->is_empty_slug($menuSlug)) {
+            error_log('WEI_ADMIN_MENU_NULL_SLUG_DETECTED ' . $this->encode_log_context($context + [
+                'parent_slug_type' => get_debug_type($parentSlug),
+                'menu_slug_type' => get_debug_type($menuSlug),
+            ]));
+        }
+    }
+
+    private function is_empty_slug($value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_scalar($value) || (is_object($value) && method_exists($value, '__toString'))) {
+            return trim((string) $value) === '';
+        }
+
+        return true;
+    }
+
+    private function describe_callback($callback): string
+    {
+        if (is_array($callback) && count($callback) === 2) {
+            $target = is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0];
+            return $target . '::' . (string) $callback[1];
+        }
+
+        if ($callback instanceof \Closure) {
+            return 'Closure';
+        }
+
+        if (is_string($callback)) {
+            return $callback;
+        }
+
+        return get_debug_type($callback);
+    }
+
+    private function stringify_log_value($value)
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_scalar($value) || (is_object($value) && method_exists($value, '__toString'))) {
+            return (string) $value;
+        }
+
+        return get_debug_type($value);
+    }
+
+    private function backtrace_summary()
+    {
+        return function_exists('wp_debug_backtrace_summary')
             ? wp_debug_backtrace_summary(null, 0, false)
             : debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+    }
 
-        error_log('WEI admin render diagnostic: ' . wp_json_encode([
+    private function encode_log_context(array $context): string
+    {
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR)
+            : json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+
+        return is_string($json) ? $json : '{}';
+    }
+
+    private function log_admin_render_diagnostic(string $section, string $field, string $renderer, $value): void
+    {
+        $summary = $this->backtrace_summary();
+
+        error_log('WEI admin render diagnostic: ' . $this->encode_log_context([
             'section' => $section,
             'field' => $field,
             'renderer' => $renderer,
             'value_type' => get_debug_type($value),
             'value_before_render' => is_scalar($value) || $value === null ? $value : get_debug_type($value),
             'backtrace' => $summary,
-        ], JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR));
+        ]));
     }
 
     public function render_oauth_callback(): void
