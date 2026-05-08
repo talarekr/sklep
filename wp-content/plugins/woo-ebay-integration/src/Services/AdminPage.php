@@ -758,17 +758,21 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_ebay_rebuild_initial_publish_candidates');
-        $batchSize = max(1, min(5000, absint($_POST['batch_size'] ?? 1000)));
+        $batchSize = max(1, min(500, absint($_POST['batch_size'] ?? 100)));
         $reset = !empty($_POST['reset_rebuild']);
         $res = $this->rebuild_initial_publish_candidates($batchSize, $reset);
-        $this->set_status('Initial publish candidates rebuilt: ' . wp_json_encode([
+        $this->set_status('Sprawdzenie produktów gotowych do wystawienia: ' . wp_json_encode([
             'status' => (string) ($res['status'] ?? ''),
-            'processed_ready_this_batch' => (int) ($res['processed_ready_this_batch'] ?? 0),
-            'ready_according_to_audit' => (int) ($res['ready_according_to_audit'] ?? 0),
-            'initial_publish_candidates' => (int) ($res['initial_publish_candidates'] ?? 0),
+            'processed' => (int) ($res['processed'] ?? 0),
+            'processed_this_batch' => (int) ($res['processed_this_batch'] ?? 0),
+            'ready' => (int) ($res['ready'] ?? 0),
             'already_published' => (int) ($res['already_published'] ?? 0),
-            'missing_candidate_status' => (int) ($res['skipped_reasons']['missing_candidate_status'] ?? 0),
-            'next_offset' => (int) ($res['next_offset'] ?? 0),
+            'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
+            'missing_aspects' => (int) ($res['missing_aspects'] ?? 0),
+            'content_not_ready' => (int) ($res['content_not_ready'] ?? 0),
+            'price_not_ready' => (int) ($res['price_not_ready'] ?? 0),
+            'errors' => (int) ($res['errors'] ?? 0),
+            'cursor' => (int) ($res['cursor'] ?? 0),
         ], JSON_UNESCAPED_UNICODE));
         $this->go();
     }
@@ -827,129 +831,191 @@ class AdminPage
 
     private function rebuild_initial_publish_candidates(int $batchSize, bool $reset): array
     {
-        $auditSummary = get_option('wei_ebay_full_category_audit_summary', []);
-        $auditSummary = is_array($auditSummary) ? $auditSummary : [];
-        $csvPath = $this->last_full_audit_csv_path($auditSummary);
-        if ($csvPath === '' || !is_readable($csvPath)) {
-            $summary = $this->initial_publish_candidate_summary();
-            $summary['status'] = 'error';
-            $summary['last_error'] = 'last_full_audit_csv_not_readable';
-            $summary['audit_report_path'] = $csvPath;
-            $summary['rebuilt_at'] = gmdate('Y-m-d H:i:s');
-            update_option('wei_ebay_initial_publish_candidate_summary', $summary, false);
-            return $summary;
-        }
-
-        $readyProductIds = [];
-        $auditStatusCounts = [
-            'ready' => 0,
-            'blocked_by_category' => 0,
-            'missing_aspects' => 0,
-            'content_not_ready' => 0,
-            'price_not_ready' => 0,
-            'missing_meta' => 0,
-            'other' => 0,
-        ];
-        $rowsRead = 0;
-        $fh = fopen($csvPath, 'rb');
-        if ($fh) {
-            $headers = fgetcsv($fh);
-            $headers = is_array($headers) ? array_map('strval', $headers) : [];
-            while (($row = fgetcsv($fh)) !== false) {
-                $rowsRead++;
-                $record = [];
-                foreach ($headers as $i => $header) {
-                    $record[$header] = $row[$i] ?? '';
-                }
-                $productId = (int) ($record['product_id'] ?? 0);
-                $status = $this->normalize_audit_status_for_initial_publish((string) ($record['status'] ?? ''));
-                $auditStatusCounts[$status] = (int) ($auditStatusCounts[$status] ?? 0) + 1;
-                if ($status === 'ready' && $productId > 0) {
-                    $readyProductIds[] = $productId;
-                }
-            }
-            fclose($fh);
-        }
-
         $previous = $reset ? [] : $this->initial_publish_candidate_summary();
-        $previousReadyAlreadyPublished = $reset ? 0 : (int) ($previous['ready_already_published'] ?? 0);
-        $offset = $reset ? 0 : (int) ($previous['next_offset'] ?? 0);
-        if ($offset < 0 || $offset >= count($readyProductIds)) {
-            $offset = 0;
+        $summary = $this->initial_publish_scan_base_summary($previous, $reset, $batchSize);
+        $cursor = (int) ($summary['cursor'] ?? 0);
+        $ids = $this->initial_publish_scan_product_ids($batchSize, $cursor);
+        $lastError = '';
+        $lastProductId = $cursor;
+        $processedThisBatch = 0;
+
+        if ($reset) {
+            $this->reset_initial_publish_progress_for_new_candidate_scan();
         }
-        $ids = array_slice($readyProductIds, $offset, $batchSize);
-        $processedReady = 0;
-        $alreadyPublishedReady = 0;
-        $fixedMissingCandidateStatus = 0;
-        $stillMissingCandidateStatus = 0;
-        $otherReadySkipped = 0;
 
         foreach ($ids as $productId) {
             $productId = (int) $productId;
             if ($productId <= 0) {
                 continue;
             }
-            $processedReady++;
-            if ($this->is_initial_publish_already_published($productId)) {
-                $alreadyPublishedReady++;
-                continue;
-            }
 
-            $currentStatus = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
-            if ($currentStatus !== 'ready') {
-                $fixedMissingCandidateStatus++;
-            }
-            update_post_meta($productId, '_wei_ebay_export_status', 'ready');
-            $afterStatus = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
-            if ($afterStatus !== 'ready') {
-                $stillMissingCandidateStatus++;
+            $processedThisBatch++;
+            $summary['processed'] = (int) ($summary['processed'] ?? 0) + 1;
+            $lastProductId = max($lastProductId, $productId);
+
+            try {
+                if ($this->is_initial_publish_already_published($productId)) {
+                    $summary['already_published'] = (int) ($summary['already_published'] ?? 0) + 1;
+                    $this->save_initial_publish_readiness_reason($productId, 'already_published', 'Product already has an eBay listing/item ID or published status.');
+                    continue;
+                }
+
+                $stockReason = $this->initial_publish_stock_not_ready_reason($productId);
+                if ($stockReason !== '') {
+                    $summary['other'] = (int) ($summary['other'] ?? 0) + 1;
+                    $this->save_initial_publish_readiness_reason($productId, 'other', $stockReason);
+                    continue;
+                }
+
+                $preflight = $this->adapter->preflight_product($productId, null, true, true, [
+                    'audit_mode' => true,
+                    'suppress_side_effects' => true,
+                ]);
+                $reason = $this->initial_publish_reason_from_preflight($preflight);
+                if ($reason === 'ready') {
+                    $summary['ready'] = (int) ($summary['ready'] ?? 0) + 1;
+                    update_post_meta($productId, '_wei_ebay_export_status', 'ready');
+                    $this->save_initial_publish_readiness_reason($productId, 'ready', (string) ($preflight['message'] ?? 'Product ready for eBay export.'));
+                    continue;
+                }
+
+                $summary[$reason] = (int) ($summary[$reason] ?? 0) + 1;
+                $this->save_initial_publish_readiness_reason($productId, $reason, (string) ($preflight['message'] ?? 'Product not ready for eBay export.'));
+            } catch (\Throwable $throwable) {
+                $summary['errors'] = (int) ($summary['errors'] ?? 0) + 1;
+                $lastError = $throwable->getMessage();
+                $this->save_initial_publish_readiness_reason($productId, 'other', $lastError);
             }
         }
 
-        $nextOffset = $offset + count($ids);
-        $complete = $nextOffset >= count($readyProductIds);
-        $exportStatusReady = $this->count_products_with_export_status('ready');
-        $initialCandidates = $this->count_initial_publish_candidates_from_meta();
-        $alreadyPublished = $this->count_initial_publish_already_published_products();
-        $readyAlreadyPublished = $previousReadyAlreadyPublished + $alreadyPublishedReady;
-        $skippedReasons = [
-            'missing_candidate_status' => $complete ? max(0, count($readyProductIds) - $initialCandidates - $readyAlreadyPublished) : (int) ($previous['skipped_reasons']['missing_candidate_status'] ?? 0),
-            'already_published' => $readyAlreadyPublished,
-            'blocked_by_category' => (int) ($auditStatusCounts['blocked_by_category'] ?? 0),
-            'missing_aspects' => (int) ($auditStatusCounts['missing_aspects'] ?? 0),
-            'content_not_ready' => (int) ($auditStatusCounts['content_not_ready'] ?? 0),
-            'price_not_ready' => (int) ($auditStatusCounts['price_not_ready'] ?? 0),
-            'missing_meta' => (int) ($auditStatusCounts['missing_meta'] ?? 0),
-            'other' => (int) ($auditStatusCounts['other'] ?? 0) + $otherReadySkipped + $stillMissingCandidateStatus,
+        $completed = count($ids) < $batchSize;
+        $summary['status'] = $completed ? 'completed' : 'in_progress';
+        $summary['last_error'] = $lastError;
+        $summary['last_run_at'] = gmdate('Y-m-d H:i:s');
+        $summary['rebuilt_at'] = $summary['last_run_at'];
+        $summary['processed_this_batch'] = $processedThisBatch;
+        $summary['cursor'] = $completed ? 0 : $lastProductId;
+        $summary['offset'] = $summary['cursor'];
+        $summary['next_offset'] = $summary['cursor'];
+        $summary['batch_size'] = $batchSize;
+        $summary['initial_publish_candidates'] = (int) ($summary['ready'] ?? 0);
+        $summary['total_ready'] = (int) ($summary['ready'] ?? 0);
+        $summary['ready_according_to_audit'] = (int) ($summary['ready'] ?? 0);
+        $summary['readiness_status_ready'] = (int) ($summary['ready'] ?? 0);
+        $summary['export_status_ready'] = (int) ($summary['ready'] ?? 0);
+        $summary['skipped_reasons'] = [
+            'already_published' => (int) ($summary['already_published'] ?? 0),
+            'blocked_by_category' => (int) ($summary['blocked_by_category'] ?? 0),
+            'missing_aspects' => (int) ($summary['missing_aspects'] ?? 0),
+            'content_not_ready' => (int) ($summary['content_not_ready'] ?? 0),
+            'price_not_ready' => (int) ($summary['price_not_ready'] ?? 0),
+            'other' => (int) ($summary['other'] ?? 0),
+        ];
+        $summary['skipped_not_eligible'] = array_sum($summary['skipped_reasons']);
+        $summary['source'] = 'woocommerce_products_database_preflight_scan';
+        $summary['candidate_rule'] = 'Current WooCommerce product preflight is ready and product has no listing_id/item_id/listing_status/export_status published.';
+        $summary['csv_required'] = false;
+
+        update_option('wei_ebay_initial_publish_candidate_summary', $summary, false);
+        update_option('wei_ebay_initial_publish_total_ready', (int) $summary['ready'], false);
+        return $summary;
+    }
+
+    private function initial_publish_scan_base_summary(array $previous, bool $reset, int $batchSize): array
+    {
+        $empty = [
+            'processed' => 0,
+            'ready' => 0,
+            'already_published' => 0,
+            'blocked_by_category' => 0,
+            'missing_aspects' => 0,
+            'content_not_ready' => 0,
+            'price_not_ready' => 0,
+            'other' => 0,
+            'errors' => 0,
+            'cursor' => 0,
+            'status' => 'idle',
+            'last_run_at' => '',
+            'last_error' => '',
+            'batch_size' => $batchSize,
         ];
 
-        $summary = [
-            'status' => $complete ? 'completed' : 'in_progress',
-            'last_error' => '',
-            'rebuilt_at' => gmdate('Y-m-d H:i:s'),
-            'audit_completed_at' => (string) ($auditSummary['completed_at'] ?? $auditSummary['updated_at'] ?? ''),
-            'audit_report_path' => $csvPath,
-            'ready_according_to_audit' => count($readyProductIds),
-            'readiness_status_ready' => count($readyProductIds),
-            'audit_rows_read' => $rowsRead,
-            'audit_status_counts' => $auditStatusCounts,
-            'export_status_ready' => $exportStatusReady,
-            'initial_publish_candidates' => $initialCandidates,
-            'already_published' => $alreadyPublished,
-            'ready_already_published' => $readyAlreadyPublished,
-            'skipped_not_eligible' => array_sum($skippedReasons),
-            'skipped_reasons' => $skippedReasons,
-            'processed_ready_this_batch' => $processedReady,
-            'fixed_missing_candidate_status_this_batch' => $fixedMissingCandidateStatus,
-            'offset' => $offset,
-            'next_offset' => $complete ? 0 : $nextOffset,
-            'batch_size' => $batchSize,
-            'source' => 'last_full_category_audit_csv_plus_current_product_meta',
-            'candidate_rule' => '_wei_ebay_export_status=ready and no listing_id/item_id/listing_status/export_status published',
-        ];
-        update_option('wei_ebay_initial_publish_candidate_summary', $summary, false);
-        update_option('wei_ebay_initial_publish_total_ready', $initialCandidates, false);
-        return $summary;
+        return $reset ? $empty : array_merge($empty, array_intersect_key($previous, $empty));
+    }
+
+    private function initial_publish_scan_product_ids(int $batchSize, int $cursor): array
+    {
+        global $wpdb;
+        $sql = "
+            SELECT p.ID
+            FROM {$wpdb->posts} p
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND p.ID > %d
+            ORDER BY p.ID ASC
+            LIMIT %d
+        ";
+
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
+    }
+
+    private function reset_initial_publish_progress_for_new_candidate_scan(): void
+    {
+        foreach ($this->initial_publish_option_names() as $option) {
+            delete_option($option);
+        }
+        delete_option('wei_ebay_initial_publish_last_batch_log');
+    }
+
+    private function save_initial_publish_readiness_reason(int $productId, string $reason, string $message): void
+    {
+        $reason = in_array($reason, ['ready', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'already_published', 'other'], true) ? $reason : 'other';
+        if ($reason !== 'ready') {
+            update_post_meta($productId, '_wei_ebay_export_status', $reason);
+        }
+        update_post_meta($productId, '_wei_ebay_readiness_reason', $reason);
+        update_post_meta($productId, '_wei_ebay_readiness_message', mb_substr($message, 0, 1000));
+        update_post_meta($productId, '_wei_ebay_readiness_checked_at', gmdate('Y-m-d H:i:s'));
+    }
+
+    private function initial_publish_reason_from_preflight(array $preflight): string
+    {
+        if (!empty($preflight['ready'])) {
+            return 'ready';
+        }
+
+        $status = (string) ($preflight['status'] ?? '');
+        $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
+        if (in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
+            return 'blocked_by_category';
+        }
+        if (in_array($status, ['missing_required_aspects', 'missing_aspects'], true) || !empty($preflight['missing_aspects'])) {
+            return 'missing_aspects';
+        }
+        if (in_array($status, ['not_ready_missing_german_content', 'content_not_ready'], true) || str_contains($message, 'content') || str_contains($message, 'title') || str_contains($message, 'description') || str_contains($message, 'german')) {
+            return 'content_not_ready';
+        }
+        if (in_array($status, ['invalid_price', 'missing_exchange_rate', 'price_not_ready'], true) || str_contains($message, 'price') || str_contains($message, 'exchange rate')) {
+            return 'price_not_ready';
+        }
+        return 'other';
+    }
+
+    private function initial_publish_stock_not_ready_reason(int $productId): string
+    {
+        $product = wc_get_product($productId);
+        if (!$product) {
+            return 'Product not found.';
+        }
+        $stockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : '';
+        if ($stockStatus === 'outofstock') {
+            return 'Product stock status is outofstock.';
+        }
+        $stockQuantity = $product->get_stock_quantity();
+        if ($stockQuantity !== null && (int) $stockQuantity < 0) {
+            return 'Product stock quantity is invalid.';
+        }
+        return '';
     }
 
     private function last_full_audit_csv_path(array $auditSummary): string
@@ -1064,9 +1130,6 @@ class AdminPage
 
         $candidateSummary = $this->initial_publish_candidate_summary();
         $totalReady = (int) ($candidateSummary['initial_publish_candidates'] ?? get_option('wei_ebay_initial_publish_total_ready', 0));
-        if ($totalReady <= 0) {
-            $totalReady = $this->count_initial_publish_candidates_from_meta();
-        }
         update_option('wei_ebay_initial_publish_total_ready', $totalReady, false);
 
         $cursor = (int) get_option('wei_ebay_initial_publish_cursor', 0);

@@ -452,26 +452,28 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
 
     <div class="wei-box">
         <h2>Pierwsze wystawienie produktów na eBay</h2>
-        <p class="description">Ręczny tryb initial publish jest osobny od 15-minutowego scheduled syncu. Jeden klik publikuje maksymalnie podany <code>Batch size</code>, kontynuuje od zapisanego kursora i pomija produkty niegotowe lub już opublikowane.</p>
+        <p class="description">Ręczny tryb initial publish jest osobny od 15-minutowego scheduled syncu. Sprawdzenie gotowości uruchamia się tylko po kliknięciu przycisku i zapisuje ostatni wynik; render panelu nie skanuje produktów.</p>
         <div class="wei-grid">
-            <div class="wei-card"><span>Ready according to last readiness audit</span><strong><?php echo esc_html((string) ($initialPublishCandidates['ready_according_to_audit'] ?? $full_category_audit_summary['ready_count'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Initial publish candidates</span><strong><?php echo esc_html((string) ($initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Already published on eBay</span><strong><?php echo esc_html((string) ($initialPublishCandidates['already_published'] ?? ($initialPublishSkippedReasons['already_published'] ?? 0))); ?></strong></div>
-            <div class="wei-card"><span>Skipped / not eligible</span><strong><?php echo esc_html((string) ($initialPublishCandidates['skipped_not_eligible'] ?? array_sum(array_map('intval', $initialPublishSkippedReasons)))); ?></strong></div>
-            <div class="wei-card"><span>Opublikowano w initial publish</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Gotowe do wystawienia</span><strong><?php echo esc_html((string) ($initialPublishCandidates['ready'] ?? $initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Już opublikowane</span><strong><?php echo esc_html((string) ($initialPublishCandidates['already_published'] ?? ($initialPublishSkippedReasons['already_published'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Zablokowane kategorią</span><strong><?php echo esc_html((string) ($initialPublishCandidates['blocked_by_category'] ?? ($initialPublishSkippedReasons['blocked_by_category'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Brak aspektów</span><strong><?php echo esc_html((string) ($initialPublishCandidates['missing_aspects'] ?? ($initialPublishSkippedReasons['missing_aspects'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Brak treści</span><strong><?php echo esc_html((string) ($initialPublishCandidates['content_not_ready'] ?? ($initialPublishSkippedReasons['content_not_ready'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Brak ceny</span><strong><?php echo esc_html((string) ($initialPublishCandidates['price_not_ready'] ?? ($initialPublishSkippedReasons['price_not_ready'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Inne / stock</span><strong><?php echo esc_html((string) ($initialPublishCandidates['other'] ?? ($initialPublishSkippedReasons['other'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Błędy sprawdzania</span><strong><?php echo esc_html((string) ($initialPublishCandidates['errors'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Sprawdzono produktów</span><strong><?php echo esc_html((string) ($initialPublishCandidates['processed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($initialPublishCandidates['status'] ?? 'not_checked')); ?></strong></div>
+            <div class="wei-card"><span>Ostatnie sprawdzenie</span><strong><?php echo esc_html((string) (($initialPublishCandidates['last_run_at'] ?? $initialPublishCandidates['rebuilt_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Cursor sprawdzania</span><strong><?php echo esc_html((string) ($initialPublishCandidates['cursor'] ?? $initialPublishCandidates['next_offset'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Opublikowano</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublishCandidates['ready'] ?? $initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>Pozostało kandydatów</span><strong><?php echo esc_html((string) ($initialPublish['remaining'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Export status ready</span><strong><?php echo esc_html((string) ($initialPublishCandidates['export_status_ready'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Readiness status ready</span><strong><?php echo esc_html((string) ($initialPublishCandidates['readiness_status_ready'] ?? $full_category_audit_summary['ready_count'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Błędy</span><strong><?php echo esc_html((string) ($initialPublish['failed'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Status rebuild</span><strong><?php echo esc_html((string) ($initialPublishCandidates['status'] ?? 'not_rebuilt')); ?></strong></div>
-            <div class="wei-card"><span>Ostatni rebuild</span><strong><?php echo esc_html((string) (($initialPublishCandidates['rebuilt_at'] ?? '') ?: '-')); ?></strong></div>
-            <div class="wei-card"><span>Cursor</span><strong><?php echo esc_html((string) ($initialPublish['cursor'] ?? 0)); ?></strong></div>
         </div>
-        <p class="description"><strong>Źródło liczby kandydatów:</strong> initial publish pobiera produkty z aktualnego meta <code>_wei_ebay_export_status=ready</code> i pomija te z listing ID / item ID / statusem published. Pełny audit działa w trybie diagnostycznym i jego wynik <code>ready</code> jest osobną liczbą.</p>
+        <p class="description"><strong>Źródło liczby kandydatów:</strong> sprawdzenie czyta aktualne produkty WooCommerce z bazy danych, wykonuje preflight dla każdego produktu w batchu i ustawia <code>_wei_ebay_export_status=ready</code> tylko dla produktów gotowych oraz nieopublikowanych. CSV jest opcjonalnym raportem diagnostycznym i nie jest wymagany do zbudowania listy.</p>
         <?php if ($initialPublishSkippedReasons !== []): ?>
             <h3>Skipped / not eligible breakdown</h3>
             <table class="widefat striped"><tbody>
-                <?php foreach (['missing_candidate_status', 'already_published', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'missing_meta', 'other'] as $reasonKey): ?>
+                <?php foreach (['already_published', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'other'] as $reasonKey): ?>
                     <tr><th><?php echo esc_html($reasonKey); ?></th><td><?php echo esc_html((string) ((int) ($initialPublishSkippedReasons[$reasonKey] ?? 0))); ?></td></tr>
                 <?php endforeach; ?>
             </tbody></table>
@@ -481,9 +483,10 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_ebay_rebuild_initial_publish_candidates'); ?>
                 <input type="hidden" name="action" value="wei_ebay_rebuild_initial_publish_candidates" />
-                <label>Batch size <input type="number" min="1" max="5000" name="batch_size" value="1000" /></label>
-                <label><input type="checkbox" name="reset_rebuild" value="1" <?php checked(($initialPublishCandidates['status'] ?? '') !== 'in_progress'); ?> /> start from beginning</label>
-                <button class="button">Rebuild initial publish candidates</button>
+                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="100" /></label>
+                <label><input type="checkbox" name="reset_rebuild" value="1" <?php checked(($initialPublishCandidates['status'] ?? '') !== 'in_progress'); ?> /> zacznij od początku</label>
+                <button class="button">Sprawdź produkty gotowe do wystawienia</button>
+                <p class="description">Ta akcja sprawdza produkty WooCommerce i buduje listę produktów gotowych do publikacji na eBay. Nie publikuje jeszcze ofert.</p>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
@@ -503,7 +506,7 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                 <button class="button">Reset progress</button>
             </form>
         </div>
-        <p class="description"><strong>Uwaga:</strong> ten przycisk realnie wystawia publiczne oferty eBay. Nie uruchamia full audit ani full scan; używa ostatniego readiness statusu produktu i wykonuje preflight dla każdego elementu batcha.</p>
+        <p class="description"><strong>Uwaga:</strong> przycisk publikacji realnie wystawia publiczne oferty eBay. Jeden klik publikuje maksymalnie podany <code>Batch size</code> z zapisanej listy kandydatów <code>_wei_ebay_export_status=ready</code>; samo sprawdzenie gotowości nie publikuje ofert.</p>
         <h3>Log ostatniego batcha</h3>
         <pre class="wei-scroll"><?php echo esc_html(implode("\n", $initialPublishLog)); ?></pre>
     </div>
