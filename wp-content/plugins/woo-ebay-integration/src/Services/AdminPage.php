@@ -1129,7 +1129,7 @@ class AdminPage
         }
 
         $candidateSummary = $this->initial_publish_candidate_summary();
-        $totalReady = (int) ($candidateSummary['initial_publish_candidates'] ?? get_option('wei_ebay_initial_publish_total_ready', 0));
+        $totalReady = $this->initial_publish_total_ready($candidateSummary);
         update_option('wei_ebay_initial_publish_total_ready', $totalReady, false);
 
         $cursor = (int) get_option('wei_ebay_initial_publish_cursor', 0);
@@ -1142,6 +1142,8 @@ class AdminPage
         $success = 0;
         $failed = 0;
         $lastError = '';
+        $lastPublishedProductId = 0;
+        $lastListingId = '';
         $newCursor = $cursor;
 
         $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
@@ -1166,14 +1168,17 @@ class AdminPage
                 }
 
                 $res = $this->adapter->export_product($productId, null, true);
-                if (($res['result'] ?? '') === 'success' && trim((string) ($res['listing_id'] ?? '')) !== '') {
+                $publishedDetails = $this->initial_publish_published_details($productId, $res);
+                if (!empty($publishedDetails['published'])) {
                     $success++;
                     $successTotal++;
-                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_PUBLISHED product_id=' . $productId . ' listing_id=' . $this->compact_log_value((string) ($res['listing_id'] ?? ''));
+                    $lastPublishedProductId = $productId;
+                    $lastListingId = (string) ($publishedDetails['listing_id'] ?? '');
+                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_PUBLISHED product_id=' . $productId . ' listing_id=' . $this->compact_log_value($lastListingId);
                 } else {
                     $failed++;
                     $failedTotal++;
-                    $lastError = (string) ($res['message'] ?? $res['error'] ?? 'publish_failed');
+                    $lastError = (string) ($res['message'] ?? $res['error'] ?? 'publish_failed_without_published_listing_meta');
                     update_post_meta($productId, '_wei_ebay_last_sync_status', 'error');
                     update_post_meta($productId, '_wei_ebay_last_sync_error', $lastError);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_FAILED product_id=' . $productId . ' error="' . $this->compact_log_value($lastError) . '"';
@@ -1197,6 +1202,13 @@ class AdminPage
         update_option('wei_ebay_initial_publish_last_run_at', $startedAt, false);
         update_option('wei_ebay_initial_publish_last_error', $lastError, false);
         update_option('wei_ebay_initial_publish_status', $nextStatus, false);
+        update_option('wei_ebay_initial_publish_last_batch_success', $success, false);
+        update_option('wei_ebay_initial_publish_last_batch_failed', $failed, false);
+        update_option('wei_ebay_initial_publish_last_batch_processed', $processed, false);
+        if ($lastPublishedProductId > 0) {
+            update_option('wei_ebay_initial_publish_last_published_product_id', $lastPublishedProductId, false);
+            update_option('wei_ebay_initial_publish_last_listing_id', $lastListingId, false);
+        }
         $logs[] = 'INITIAL_PUBLISH_BATCH_DONE processed=' . $processed . ' success=' . $success . ' failed=' . $failed . ' published_total=' . $successTotal . ' remaining=' . $remaining;
         update_option('wei_ebay_initial_publish_last_batch_log', array_slice($logs, -100), false);
 
@@ -1210,6 +1222,23 @@ class AdminPage
             'remaining' => $remaining,
             'cursor' => $newCursor,
             'last_error' => $lastError,
+        ];
+    }
+
+    private function initial_publish_published_details(int $productId, array $result): array
+    {
+        if (($result['result'] ?? '') !== 'success') {
+            return ['published' => false, 'listing_id' => ''];
+        }
+
+        $metaListingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        $metaItemId = trim((string) get_post_meta($productId, '_wei_ebay_item_id', true));
+        $listingStatus = (string) get_post_meta($productId, '_wei_ebay_listing_status', true);
+        $publishedListingId = $metaListingId !== '' ? $metaListingId : $metaItemId;
+
+        return [
+            'published' => $publishedListingId !== '' && $listingStatus === 'published',
+            'listing_id' => $publishedListingId,
         ];
     }
 
@@ -1263,7 +1292,7 @@ class AdminPage
     private function initial_publish_status(): array
     {
         $candidateSummary = $this->initial_publish_candidate_summary();
-        $totalReady = (int) ($candidateSummary['initial_publish_candidates'] ?? get_option('wei_ebay_initial_publish_total_ready', 0));
+        $totalReady = $this->initial_publish_total_ready($candidateSummary);
         $success = (int) get_option('wei_ebay_initial_publish_success', 0);
 
         return [
@@ -1276,9 +1305,24 @@ class AdminPage
             'last_error' => (string) get_option('wei_ebay_initial_publish_last_error', ''),
             'status' => (string) get_option('wei_ebay_initial_publish_status', 'idle'),
             'remaining' => max(0, $totalReady - $success),
+            'last_batch_success' => (int) get_option('wei_ebay_initial_publish_last_batch_success', 0),
+            'last_batch_failed' => (int) get_option('wei_ebay_initial_publish_last_batch_failed', 0),
+            'last_batch_processed' => (int) get_option('wei_ebay_initial_publish_last_batch_processed', 0),
+            'last_published_product_id' => (int) get_option('wei_ebay_initial_publish_last_published_product_id', 0),
+            'last_listing_id' => (string) get_option('wei_ebay_initial_publish_last_listing_id', ''),
             'candidate_summary' => $candidateSummary,
             'last_batch_log' => (array) get_option('wei_ebay_initial_publish_last_batch_log', []),
         ];
+    }
+
+    private function initial_publish_total_ready(array $candidateSummary = []): int
+    {
+        $savedTotal = (int) get_option('wei_ebay_initial_publish_total_ready', 0);
+        if ($savedTotal > 0) {
+            return $savedTotal;
+        }
+
+        return (int) ($candidateSummary['initial_publish_candidates'] ?? $candidateSummary['ready'] ?? 0);
     }
 
     private function initial_publish_remaining(): int
@@ -1298,6 +1342,11 @@ class AdminPage
             'wei_ebay_initial_publish_last_run_at',
             'wei_ebay_initial_publish_last_error',
             'wei_ebay_initial_publish_status',
+            'wei_ebay_initial_publish_last_batch_success',
+            'wei_ebay_initial_publish_last_batch_failed',
+            'wei_ebay_initial_publish_last_batch_processed',
+            'wei_ebay_initial_publish_last_published_product_id',
+            'wei_ebay_initial_publish_last_listing_id',
         ];
     }
 
