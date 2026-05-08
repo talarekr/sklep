@@ -266,6 +266,17 @@ $initialPublishCandidates = is_array($initial_publish_candidate_summary ?? null)
 $initialPublishSkippedReasons = is_array($initialPublishCandidates['skipped_reasons'] ?? null) ? $initialPublishCandidates['skipped_reasons'] : [];
 $initialPublishLog = array_values(array_map('strval', (array) ($initialPublish['last_batch_log'] ?? [])));
 $initialPublishLastBatch = $initialPublishLog !== [] ? (string) end($initialPublishLog) : '-';
+$initialPublishTotalReady = (int) ($initialPublish['total_ready'] ?? $initialPublishCandidates['initial_publish_candidates'] ?? $initialPublishCandidates['ready'] ?? 0);
+$initialPublishSuccess = (int) ($initialPublish['success'] ?? 0);
+$initialPublishFailed = (int) ($initialPublish['failed'] ?? 0);
+$initialPublishRemaining = (int) ($initialPublish['remaining'] ?? max(0, $initialPublishTotalReady - $initialPublishSuccess));
+$initialPublishLastBatchSuccess = (int) ($initialPublish['last_batch_success'] ?? 0);
+$initialPublishLastBatchFailed = (int) ($initialPublish['last_batch_failed'] ?? 0);
+$initialPublishLastBatchProcessed = (int) ($initialPublish['last_batch_processed'] ?? 0);
+$initialPublishLastRunAt = (string) ($initialPublish['last_run_at'] ?? '');
+$initialPublishLastPublishedProductId = (int) ($initialPublish['last_published_product_id'] ?? 0);
+$initialPublishLastListingId = (string) ($initialPublish['last_listing_id'] ?? '');
+$initialPublishPublicationStatus = (string) ($initialPublish['status'] ?? 'idle');
 $autoStatus = (string) ($autoSync['status'] ?? 'disabled');
 $autoModeLabels = [
     'disabled' => 'Disabled',
@@ -337,10 +348,13 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
         .wei-admin .wei-badge.error { background:#fcf0f1; color:#b32d2e; }
         .wei-admin .wei-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
         .wei-admin .wei-actions form { display:inline-flex; gap:6px; align-items:center; margin:0; }
+        .wei-admin .wei-actions form.wei-publish-form { display:block; }
         .wei-admin .wei-action-group { border-left:4px solid #dcdcde; padding:8px 0 8px 12px; margin:8px 0; }
         .wei-admin .wei-action-group.primary { border-left-color:#2271b1; }
         .wei-admin .wei-action-group.safe { border-left-color:#00a32a; }
         .wei-admin .wei-action-group.warning { border-left-color:#dba617; }
+        .wei-admin .wei-publish-status { border-left:4px solid #2271b1; background:#f6f7f7; padding:12px 14px; margin:10px 0 0; max-width:620px; }
+        .wei-admin .wei-publish-status p { margin:4px 0; }
         .wei-admin details.wei-box > summary { cursor:pointer; font-size:16px; font-weight:600; margin:-16px; padding:16px; }
         .wei-admin details.wei-box[open] > summary { border-bottom:1px solid #dcdcde; margin-bottom:16px; }
         .wei-admin details:not(.wei-box) > summary { cursor:pointer; font-weight:600; }
@@ -463,11 +477,11 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <div class="wei-card"><span>Inne / stock</span><strong><?php echo esc_html((string) ($initialPublishCandidates['other'] ?? ($initialPublishSkippedReasons['other'] ?? 0))); ?></strong></div>
             <div class="wei-card"><span>Błędy sprawdzania</span><strong><?php echo esc_html((string) ($initialPublishCandidates['errors'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>Sprawdzono produktów</span><strong><?php echo esc_html((string) ($initialPublishCandidates['processed'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($initialPublishCandidates['status'] ?? 'not_checked')); ?></strong></div>
+            <div class="wei-card"><span>Status sprawdzania</span><strong><?php echo esc_html((string) ($initialPublishCandidates['status'] ?? 'not_checked')); ?></strong></div>
             <div class="wei-card"><span>Ostatnie sprawdzenie</span><strong><?php echo esc_html((string) (($initialPublishCandidates['last_run_at'] ?? $initialPublishCandidates['rebuilt_at'] ?? '') ?: '-')); ?></strong></div>
             <div class="wei-card"><span>Cursor sprawdzania</span><strong><?php echo esc_html((string) ($initialPublishCandidates['cursor'] ?? $initialPublishCandidates['next_offset'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Opublikowano</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublishCandidates['ready'] ?? $initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Pozostało kandydatów</span><strong><?php echo esc_html((string) ($initialPublish['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Wystawione oferty</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?> / <?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
+            <div class="wei-card"><span>Pozostało do wystawienia</span><strong><?php echo esc_html((string) $initialPublishRemaining); ?></strong></div>
         </div>
         <p class="description"><strong>Źródło liczby kandydatów:</strong> sprawdzenie czyta aktualne produkty WooCommerce z bazy danych, wykonuje preflight dla każdego produktu w batchu i ustawia <code>_wei_ebay_export_status=ready</code> tylko dla produktów gotowych oraz nieopublikowanych. CSV jest opcjonalnym raportem diagnostycznym i nie jest wymagany do zbudowania listy.</p>
         <?php if ($initialPublishSkippedReasons !== []): ?>
@@ -488,16 +502,25 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                 <button class="button">Sprawdź produkty gotowe do wystawienia</button>
                 <p class="description">Ta akcja sprawdza produkty WooCommerce i buduje listę produktów gotowych do publikacji na eBay. Nie publikuje jeszcze ofert.</p>
             </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+            <form class="wei-publish-form" method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
                 <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
                 <label>Batch size <input type="number" min="1" max="50" name="batch_size" value="5" /></label>
-                <button class="button button-primary" <?php disabled((string) ($initialPublish['status'] ?? '') === 'paused'); ?>>Opublikuj oferty na eBay</button>
+                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Opublikuj oferty na eBay</button>
+                <div class="wei-publish-status" aria-live="polite">
+                    <p><strong>Wystawione oferty:</strong> <?php echo esc_html((string) $initialPublishSuccess); ?> / <?php echo esc_html((string) $initialPublishTotalReady); ?></p>
+                    <p><strong>Pozostało do wystawienia:</strong> <?php echo esc_html((string) $initialPublishRemaining); ?></p>
+                    <p><strong>Błędy publikacji:</strong> <?php echo esc_html((string) $initialPublishFailed); ?></p>
+                    <p><strong>Ostatni batch:</strong> <?php echo esc_html((string) $initialPublishLastBatchSuccess); ?> success, <?php echo esc_html((string) $initialPublishLastBatchFailed); ?> failed, <?php echo esc_html((string) $initialPublishLastBatchProcessed); ?> processed</p>
+                    <p><strong>Ostatnie uruchomienie publikacji:</strong> <?php echo esc_html($initialPublishLastRunAt !== '' ? $initialPublishLastRunAt : '-'); ?></p>
+                    <p><strong>Ostatnio wystawione listing_id / product_id:</strong> <?php echo esc_html($initialPublishLastListingId !== '' ? $initialPublishLastListingId : '-'); ?> / <?php echo esc_html($initialPublishLastPublishedProductId > 0 ? (string) $initialPublishLastPublishedProductId : '-'); ?></p>
+                    <p><strong>Status publikacji:</strong> <?php echo esc_html($initialPublishPublicationStatus); ?></p>
+                </div>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_ebay_initial_publish_toggle_pause'); ?>
                 <input type="hidden" name="action" value="wei_ebay_initial_publish_toggle_pause" />
-                <button class="button"><?php echo (string) ($initialPublish['status'] ?? '') === 'paused' ? 'Wznów' : 'Pauza'; ?></button>
+                <button class="button"><?php echo $initialPublishPublicationStatus === 'paused' ? 'Wznów' : 'Pauza'; ?></button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset progress initial publish? Wpisz RESET w polu potwierdzenia.');">
                 <?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?>
