@@ -266,12 +266,24 @@ class AdminPage
         $status = is_array($status) ? $status : [];
         $logs = get_option('wei_logs', []);
         $logs = array_slice(is_array($logs) ? $logs : [], 0, 20);
-        $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
-        $ebay_sku_status = $this->skuGenerator->status_counts();
+        $admin_section = isset($_GET['wei_section']) ? sanitize_key(wp_unslash((string) $_GET['wei_section'])) : '';
+        $load_category_mapping_rows = $admin_section === 'category-mappings'
+            || isset($_GET['category_status'])
+            || isset($_GET['category_sort']);
+        $load_product_sync_rows = $admin_section === 'product-sync';
+
+        // Keep the default admin page render light. The rebuilt UI originally
+        // executed product-wide SKU counts, product meta queries and external
+        // exchange-rate refreshes while WordPress was only trying to render the
+        // page. Heavy/diagnostic data is now loaded only from explicit links.
+        $category_mappings = $load_category_mapping_rows
+            ? $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), 50)
+            : [];
+        $ebay_sku_status = $this->light_ebay_sku_status();
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
-        $nbp_rate_status = $this->priceResolver->get_rate_status($s);
+        $nbp_rate_status = $this->cached_nbp_rate_status();
         $connect_url = (string) $this->auth->get_authorize_url();
-        $auto_sync_status = AutoSyncScheduler::status_summary();
+        $auto_sync_status = $this->light_auto_sync_status($s);
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
         $german_content_audit_summary = get_option('wei_ebay_german_content_audit_summary', []);
@@ -286,7 +298,7 @@ class AdminPage
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
         $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
-        $product_sync_status_rows = $this->recent_product_sync_status_rows();
+        $product_sync_status_rows = $load_product_sync_rows ? $this->recent_product_sync_status_rows() : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -843,6 +855,129 @@ class AdminPage
         if (!current_user_can('manage_options')) {
             wp_die('No access');
         }
+    }
+
+    private function light_ebay_sku_status(): array
+    {
+        $lastRun = $this->skuGenerator->current_status()['last_run'] ?? [];
+        $lastTotals = is_array($lastRun) && is_array($lastRun['totals'] ?? null) ? $lastRun['totals'] : [];
+
+        return [
+            'products_with_wei_ebay_sku' => null,
+            'products_missing_wei_ebay_sku' => null,
+            'generated_in_last_run' => (int) ($lastTotals['generated'] ?? 0),
+            'skipped_existing_in_last_run' => (int) ($lastTotals['skipped_existing'] ?? 0),
+            'conflicts_in_last_run' => (int) ($lastTotals['conflicts'] ?? 0),
+            'errors_in_last_run' => (int) ($lastTotals['errors'] ?? 0),
+        ];
+    }
+
+    private function cached_nbp_rate_status(): array
+    {
+        $cached = get_transient('wei_nbp_eur_rate');
+        if (is_array($cached) && (float) ($cached['nbp_rate'] ?? 0) > 0) {
+            $cached['ready'] = true;
+            $cached['from_transient'] = true;
+        } else {
+            $cached = get_option('wei_nbp_eur_rate_last', []);
+            $cached = is_array($cached) ? $cached : [];
+            if ((float) ($cached['nbp_rate'] ?? 0) > 0) {
+                $cached['ready'] = true;
+                $cached['from_last_saved'] = true;
+            }
+        }
+
+        $fetchedAt = (int) ($cached['fetched_at'] ?? 0);
+        return array_merge([
+            'ready' => false,
+            'nbp_rate' => null,
+            'nbp_effective_date' => '',
+            'nbp_table_no' => '',
+            'fetched_at' => 0,
+        ], $cached, [
+            'cache_age_seconds' => $fetchedAt > 0 ? max(0, time() - $fetchedAt) : null,
+            'cache_status' => !empty($cached['from_transient']) ? 'fresh' : (!empty($cached['from_last_saved']) ? 'last_saved' : (!empty($cached['ready']) ? 'cached' : 'missing')),
+        ]);
+    }
+
+    private function light_auto_sync_status(array $settings): array
+    {
+        $frequency = (string) ($settings['auto_sync_frequency'] ?? 'hourly');
+        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(AutoSyncScheduler::HOOK_RUN, [], AutoSyncScheduler::CRON_GROUP) : false;
+        if (!$next) {
+            $next = wp_next_scheduled(AutoSyncScheduler::HOOK_RUN);
+        }
+
+        return [
+            'status' => (string) get_option('wei_ebay_global_status', 'disabled'),
+            'mode' => (string) ($settings['auto_sync_mode'] ?? 'disabled'),
+            'frequency' => $frequency,
+            'batch_size' => (int) ($settings['auto_sync_export_batch_size'] ?? 20),
+            'preflight_batch_size' => (int) ($settings['auto_sync_preflight_batch_size'] ?? 200),
+            'last_run' => (string) get_option('wei_ebay_last_run_at', ''),
+            'next_run' => $next ? gmdate('Y-m-d H:i:s', (int) $next) : '-',
+            'last_summary' => $this->summarize_option_array('wei_ebay_last_run_summary'),
+            'pending_stock_sync' => $this->light_pending_stock_count(),
+            'woo_to_ebay_stock_sync_enabled' => !empty($settings['woo_to_ebay_stock_sync_enabled']),
+            'ebay_stock_sync_mode' => (string) ($settings['ebay_stock_sync_mode'] ?? 'max_one'),
+            'ebay_order_sync_enabled' => !empty($settings['ebay_order_sync_enabled']),
+            'account_restriction_status' => (string) get_option('wei_ebay_account_restriction_status', ''),
+            'readiness_summary' => $this->light_readiness_summary(),
+            'export_summary' => $this->summarize_option_array('wei_ebay_export_summary'),
+            'stock_summary' => $this->summarize_option_array('wei_ebay_stock_sync_summary'),
+        ];
+    }
+
+    private function light_pending_stock_count(): string
+    {
+        $summary = get_option('wei_ebay_stock_sync_summary', []);
+        if (is_array($summary) && isset($summary['pending_stock_sync'])) {
+            return (string) (int) $summary['pending_stock_sync'];
+        }
+
+        return 'not loaded';
+    }
+
+    private function light_readiness_summary(): array
+    {
+        $summary = get_option('wei_ebay_readiness_summary', []);
+        $summary = is_array($summary) ? $summary : [];
+        foreach (['not_ready_items', 'blocked_by_category_items', 'missing_required_aspects_items', 'invalid_price_items'] as $key) {
+            if (isset($summary[$key]) && is_array($summary[$key])) {
+                $summary[$key . '_total'] = count($summary[$key]);
+                $summary[$key] = array_slice($summary[$key], 0, 20);
+            }
+        }
+
+        return $summary;
+    }
+
+    private function summarize_option_array(string $option): array
+    {
+        $value = get_option($option, []);
+        $value = is_array($value) ? $value : [];
+
+        return $this->limit_nested_array($value);
+    }
+
+    private function limit_nested_array(array $value, int $maxItems = 20, int $depth = 0): array
+    {
+        if ($depth >= 3) {
+            return count($value) > $maxItems ? ['_truncated_count' => count($value)] : $value;
+        }
+
+        $limited = [];
+        $i = 0;
+        foreach ($value as $key => $item) {
+            if ($i >= $maxItems) {
+                $limited['_truncated_count'] = count($value) - $maxItems;
+                break;
+            }
+            $limited[$key] = is_array($item) ? $this->limit_nested_array($item, $maxItems, $depth + 1) : $item;
+            $i++;
+        }
+
+        return $limited;
     }
 
     private function recent_product_sync_status_rows(int $limit = 20): array
