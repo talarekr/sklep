@@ -270,13 +270,25 @@ $autoModeLabels = [
     'full_sync' => 'Full sync',
 ];
 $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourly', 'daily' => 'daily'];
+$categoryBlockedCount = (int) $categorySummary['blocked_by_sonstige'] + (int) $categorySummary['blocked_by_expected_keyword'] + (int) $categorySummary['blocked_by_threshold'];
+$categoryMissingCount = (int) $categorySummary['needs_category_review'];
+$teachingManualMappingsCount = (int) $categorySummary['mapped_manual'];
+$latestLogMessage = (string) ($logs[0]['message'] ?? '');
+$latestLogHasError = str_contains(strtolower($latestLogMessage), 'error') || str_contains(strtolower($latestLogMessage), 'failed');
+$accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
     <style>
         .wei-admin .postbox { max-width: 1200px; margin-top: 16px; padding: 0 16px 16px; }
         .wei-admin .postbox > h2, .wei-admin .postbox > h3 { padding-top: 12px; }
-        .wei-admin details.postbox summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 14px 0; }
+        .wei-admin details.postbox { overflow-x: auto; }
+        .wei-admin details.postbox summary, .wei-admin details:not(.postbox) summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 14px 0; }
+        .wei-admin details.postbox summary:hover, .wei-admin details:not(.postbox) summary:hover { color: #135e96; }
+        .wei-admin .wei-badge { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: #f0f0f1; color: #1d2327; font-size: 12px; font-weight: 600; vertical-align: middle; }
+        .wei-admin .wei-badge.warn { background: #fcf3db; color: #996800; }
+        .wei-admin .wei-badge.error { background: #fcf0f1; color: #b32d2e; }
+        .wei-admin .wei-badge.ok { background: #edfaef; color: #008a20; }
         .wei-admin .wei-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; max-width: 1100px; }
         .wei-admin .wei-metric { border: 1px solid #dcdcde; background: #fff; padding: 10px 12px; }
         .wei-admin .wei-metric strong { display: block; font-size: 20px; line-height: 1.4; }
@@ -284,7 +296,9 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         .wei-admin .wei-error { color: #b32d2e; font-weight: 600; }
         .wei-admin .wei-warn { color: #996800; font-weight: 600; }
         .wei-admin .wei-actions form { display: inline-block; margin: 0 8px 8px 0; }
-        .wei-admin .wei-technical pre { max-height: 260px; overflow: auto; white-space: pre-wrap; background: #f6f7f7; padding: 10px; border: 1px solid #dcdcde; }
+        .wei-admin .wei-technical pre, .wei-admin textarea.code { max-height: 420px; overflow: auto; white-space: pre-wrap; background: #f6f7f7; padding: 10px; border: 1px solid #dcdcde; }
+        .wei-admin .wei-scroll-table { max-height: 460px; overflow: auto; border: 1px solid #dcdcde; background: #fff; }
+        .wei-admin .wei-scroll-table table { margin: 0; border: 0; }
     </style>
 
     <div class="postbox">
@@ -332,7 +346,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
 
         <?php if (!empty($full_category_audit_summary)): ?>
             <?php $auditReports = is_array($full_category_audit_summary['reports'] ?? null) ? $full_category_audit_summary['reports'] : []; ?>
-            <details style="margin-top:12px;" open>
+            <details style="margin-top:12px;">
                 <summary>Latest full eBay category audit reports</summary>
                 <div class="wei-grid" style="margin-top:8px;">
                     <div class="wei-metric"><span>Progress</span><strong><?php echo esc_html((string) ($full_category_audit_summary['processed'] ?? $full_category_audit_summary['total_scanned'] ?? 0) . ' / ' . (string) ($full_category_audit_summary['total_products'] ?? '?')); ?></strong></div>
@@ -356,7 +370,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             </details>
         <?php endif; ?>
 
-        <details style="margin-top:12px;" <?php echo !empty($german_content_audit_summary) ? 'open' : ''; ?>>
+        <details style="margin-top:12px;">
             <summary>Audit-driven German content generation</summary>
             <p class="description">Uses the latest problems CSV as the source of truth and processes only rows where <code>status=content_not_ready</code> and <code>reason=missing_german_content</code>. It writes only <code>_wei_ebay_de_title</code>, <code>_wei_ebay_de_description</code>, and related WEI German content meta; it does not call eBay APIs, publish, create/update offers, change Woo SKU/price, or touch Allegro.</p>
             <?php if (!empty($german_content_audit_summary)): ?>
@@ -382,7 +396,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <button class="button button-primary">Generate missing German content only</button>
             </form>
         </details>
-        <details class="wei-not-ready-products" style="margin-top:12px;" <?php echo !empty($notReadyItems) ? 'open' : ''; ?>>
+        <details class="wei-not-ready-products" style="margin-top:12px;">
             <summary>Not ready products</summary>
             <p class="description">Shows up to 50 products from the latest readiness scan, with each bucket capped to keep the admin page and logs compact.</p>
             <p class="subsubsub">
@@ -452,17 +466,17 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
     </div>
 
-    <div class="postbox">
-        <h2>Export Summary</h2>
+    <details class="postbox">
+        <summary>Recent exports summary <span class="wei-badge">exported <?php echo esc_html((string) ($exportSummary['exported'] ?? 0)); ?></span></summary>
         <div class="wei-grid">
             <div class="wei-metric"><span>Exported inventory</span><strong><?php echo esc_html((string) ($exportSummary['exported'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Published</span><strong><?php echo esc_html((string) ($exportSummary['published'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Account blocked</span><strong><?php echo esc_html($autoStatus === 'blocked_by_ebay_account_restriction' ? 'yes' : 'no'); ?></strong></div>
         </div>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>Order / Stock Sync Summary</h2>
+    <details class="postbox">
+        <summary>Order / stock sync summary <span class="wei-badge">pending <?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></span></summary>
         <div class="wei-grid">
             <div class="wei-metric"><span>Orders imported</span><strong><?php echo esc_html((string) ($autoLastSummary['orders_imported'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Woo stock updates from eBay orders</span><strong><?php echo esc_html((string) ($autoLastSummary['woo_stock_updates'] ?? 0)); ?></strong></div>
@@ -470,10 +484,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <div class="wei-metric"><span>eBay stock updates done</span><strong><?php echo esc_html((string) ($stockSummary['updated'] ?? $autoLastSummary['ebay_stock_updates'] ?? 0)); ?></strong></div>
             <div class="wei-metric"><span>Stock sync errors</span><strong><?php echo esc_html((string) ($stockSummary['errors'] ?? 0)); ?></strong></div>
         </div>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>Connection &amp; readiness summary</h2>
+    <details class="postbox">
+        <summary>API / OAuth status <span class="wei-badge <?php echo !empty($s['refresh_token']) ? 'ok' : 'warn'; ?>"><?php echo !empty($s['refresh_token']) ? 'connected' : 'not connected'; ?></span></summary>
         <div class="wei-grid">
             <div class="wei-metric"><span>Environment</span><strong><?php echo esc_html((string) ($s['environment'] ?? 'production')); ?></strong></div>
             <div class="wei-metric"><span>Marketplace</span><strong><?php echo esc_html((string) ($s['marketplace_id'] ?? 'EBAY_DE')); ?></strong></div>
@@ -498,10 +512,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <summary>Show technical details</summary>
             <pre><?php echo esc_html($redactTechnical(wp_json_encode($status, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
         </details>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>eBay-only SKU preparation</h2>
+    <details class="postbox">
+        <summary>eBay-only SKU preparation <span class="wei-badge">missing <?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></span></summary>
         <p class="description">Generates plugin-owned <code>_wei_ebay_sku</code> values only. WooCommerce <code>_sku</code> is never written, Allegro data is untouched, and no eBay publish/export is started.</p>
         <table class="widefat striped" style="max-width:900px">
             <tbody>
@@ -521,10 +535,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <label>Batch size <input type="number" name="batch_size" value="200" min="1" max="500" /></label>
             <button class="button button-primary"><?php echo !empty($skuActiveRun['run_id']) ? 'Continue eBay SKU generation' : 'Generate missing eBay SKUs'; ?></button>
         </form>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>German content status</h2>
+    <details class="postbox">
+        <summary>German content status <span class="wei-badge <?php echo $translationConfigured ? 'ok' : 'warn'; ?>"><?php echo esc_html($translationLabel); ?></span></summary>
         <table class="widefat striped" style="max-width:700px;">
             <tbody>
                 <tr><th scope="row">German translation</th><td><?php echo esc_html($translationLabel); ?></td></tr>
@@ -532,10 +546,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <tr><th scope="row">Regenerate on source change</th><td><?php echo !empty($s['regenerate_german_content_on_hash_change']) ? 'enabled' : 'disabled'; ?></td></tr>
             </tbody>
         </table>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>EBAY_DE price status</h2>
+    <details class="postbox">
+        <summary>NBP/API price status <span class="wei-badge <?php echo is_numeric($nbpRate) ? 'ok' : 'warn'; ?>"><?php echo esc_html(is_numeric($nbpRate) ? number_format((float) $nbpRate, 4, '.', '') : 'missing'); ?></span></summary>
         <table class="widefat striped" style="max-width:700px;">
             <tbody>
                 <tr><th scope="row">NBP EUR rate</th><td><code><?php echo esc_html(is_numeric($nbpRate) ? number_format((float) $nbpRate, 4, '.', '') : 'missing'); ?></code></td></tr>
@@ -544,10 +558,11 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             </tbody>
         </table>
         <p class="description">eBay DE offer prices are resolved from WooCommerce PLN prices only for eBay payloads. WooCommerce regular/sale prices and Allegro data are not changed.</p>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2 id="category-mapping-summary">Category mapping summary</h2>
+    <details class="postbox" id="category-mapping-summary">
+        <summary>Category mapping tools <span class="wei-badge <?php echo $categoryBlockedCount > 0 ? 'warn' : 'ok'; ?>"><?php echo esc_html((string) $categoryBlockedCount); ?> blocked</span><span class="wei-badge"><?php echo esc_html((string) $categoryMissingCount); ?> missing/review</span></summary>
+        <h2>Category mapping summary</h2>
         <div class="wei-grid">
             <div class="wei-metric"><span>Total categories</span><strong><?php echo esc_html((string) $categorySummary['total']); ?></strong></div>
             <div class="wei-metric"><span>Mapped manual</span><strong><?php echo esc_html((string) $categorySummary['mapped_manual']); ?></strong></div>
@@ -580,8 +595,8 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <span class="description">Uses the latest problems CSV reason groups and applies imported manual teaching rules before retrying automatic candidates. Detailed diagnostics are written to CSV/JSON, not the main log.</span>
         </form>
 
-        <div style="margin: 10px 0 0; border-left:4px solid #46b450; padding-left:10px;">
-            <h3 style="margin:0 0 8px;">Category mapping teaching export/import</h3>
+        <details style="margin: 10px 0 0; border-left:4px solid #46b450; padding-left:10px;">
+            <summary>Teaching CSV tools <span class="wei-badge"><?php echo esc_html((string) $teachingManualMappingsCount); ?> manual mappings</span></summary>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px;">
                 <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
                 <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
@@ -610,7 +625,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 $applyHardSafetyReasons = is_array($manual_woo_category_apply_summary['top_hard_safety_reasons'] ?? null) ? $manual_woo_category_apply_summary['top_hard_safety_reasons'] : [];
                 $applySkippedRows = is_array($manual_woo_category_apply_summary['skipped_sample_rows'] ?? null) ? $manual_woo_category_apply_summary['skipped_sample_rows'] : [];
                 ?>
-                <details style="margin-top:8px;" open>
+                <details style="margin-top:8px;">
                     <summary>Last manual Woo category mapping apply summary</summary>
                     <div class="wei-grid" style="margin-top:8px;">
                         <div class="wei-metric"><span>manual_rules_loaded</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['manual_rules_loaded'] ?? 0)); ?></strong></div>
@@ -674,7 +689,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 $importHardSafetyReasons = is_array($category_teaching_import_summary['top_hard_safety_reasons'] ?? null) ? $category_teaching_import_summary['top_hard_safety_reasons'] : [];
                 $importSkippedRows = is_array($category_teaching_import_summary['skipped_sample_rows'] ?? null) ? $category_teaching_import_summary['skipped_sample_rows'] : [];
                 ?>
-                <details style="margin-top:8px;" open>
+                <details style="margin-top:8px;">
                     <summary>Last teaching import summary</summary>
                     <div class="wei-grid" style="margin-top:8px;">
                         <div class="wei-metric"><span>rows_read</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_read'] ?? $category_teaching_import_summary['rows'] ?? 0)); ?></strong></div>
@@ -745,12 +760,12 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
                 <button class="button">Test teaching rule match</button>
             </form>
             <?php if (!empty($category_teaching_match_diagnostic)): ?>
-                <details class="wei-technical" style="margin-top:8px;" open>
+                <details class="wei-technical" style="margin-top:8px;">
                     <summary>Teaching rule match diagnostic</summary>
                     <pre><?php echo esc_html(wp_json_encode($category_teaching_match_diagnostic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: ''); ?></pre>
                 </details>
             <?php endif; ?>
-        </div>
+        </details>
 
         <?php if (!empty($category_group_repair_summary)): ?>
             <?php $repairReports = is_array($category_group_repair_summary['reports'] ?? null) ? $category_group_repair_summary['reports'] : []; ?>
@@ -762,6 +777,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             </ul>
         <?php endif; ?>
         <h3>Top 10 risky mappings</h3>
+        <div class="wei-scroll-table">
         <table class="widefat striped">
             <thead><tr><th>Woo category path</th><th>eBay categoryId</th><th>eBay category path</th><th>Confidence</th><th>Reason</th><th>Product count</th><th>eBay DE</th></tr></thead>
             <tbody>
@@ -779,10 +795,11 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <?php if ($riskyCategoryRows === []): ?><tr><td colspan="7">No risky mappings found.</td></tr><?php endif; ?>
             </tbody>
         </table>
-    </div>
+        </div>
+    </details>
 
-    <div class="postbox">
-        <h2>eBay account setup summary</h2>
+    <details class="postbox">
+        <summary>API / OAuth account setup <span class="wei-badge <?php echo $accountSetupMissingCount > 0 ? 'warn' : 'ok'; ?>"><?php echo $accountSetupMissingCount > 0 ? esc_html((string) $accountSetupMissingCount . ' missing') : 'configured'; ?></span></summary>
         <table class="widefat striped" style="max-width:800px;">
             <tbody>
                 <tr><th scope="row">Location</th><td><?php echo esc_html($locationKey !== '' ? $locationKey . ' OK' : 'missing'); ?></td></tr>
@@ -792,10 +809,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             </tbody>
         </table>
         <p class="description">Edit these fields in <strong>Advanced: eBay account setup</strong> below.</p>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>Preflight / export actions</h2>
+    <details class="postbox">
+        <summary>Advanced export / preflight tools <span class="wei-badge">manual actions</span></summary>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" />
             <p><input type="number" name="product_id" placeholder="Woo product ID" />
             <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" /></p>
@@ -818,10 +835,10 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" />
             <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Sync stock</button></form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><button class="button">Import one eBay order</button></form>
-    </div>
+    </details>
 
-    <div class="postbox">
-        <h2>Recent logs/errors summary</h2>
+    <details class="postbox">
+        <summary>Diagnostics and logs <span class="wei-badge <?php echo $latestLogHasError ? 'error' : ''; ?>"><?php echo $latestLogHasError ? 'latest error available' : esc_html((string) count((array) $logs) . ' log entries'); ?></span></summary>
         <ul>
             <?php foreach (array_slice((array) $logs, 0, 8) as $log): ?>
                 <li><strong><?php echo esc_html((string) ($log['at'] ?? '')); ?></strong> <?php echo esc_html($redactTechnical(wp_strip_all_tags((string) ($log['message'] ?? '')))); ?></li>
@@ -831,14 +848,16 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <summary>Show technical log details</summary>
             <pre><?php echo esc_html($redactTechnical(wp_json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
         </details>
-    </div>
+    </details>
 
-    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+    <details class="postbox">
+        <summary>Advanced settings <span class="wei-badge"><?php echo esc_html($autoModeLabels[(string) ($s['auto_sync_mode'] ?? 'disabled')] ?? (string) ($s['auto_sync_mode'] ?? 'disabled')); ?></span></summary>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('wei_save_settings'); ?>
         <input type="hidden" name="action" value="wei_save_settings" />
 
-        <details class="postbox" open>
-            <summary>Advanced scheduler settings</summary>
+        <details class="postbox">
+            <summary>Scheduler settings</summary>
             <p>Mode: <select name="auto_sync_mode">
                 <?php foreach ($autoModeLabels as $modeKey => $modeLabel): ?><option value="<?php echo esc_attr($modeKey); ?>" <?php selected(($s['auto_sync_mode'] ?? 'disabled'), $modeKey); ?>><?php echo esc_html($modeLabel); ?></option><?php endforeach; ?>
             </select></p>
@@ -858,7 +877,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <details class="postbox">
-            <summary>Advanced: API credentials</summary>
+            <summary>API credentials</summary>
             <table class="form-table" role="presentation">
                 <tbody>
                     <tr><th scope="row">Environment</th><td><select name="environment"><option value="sandbox" <?php selected(($s['environment'] ?? ''), 'sandbox'); ?>>sandbox</option><option value="production" <?php selected(($s['environment'] ?? 'production'), 'production'); ?>>production</option></select></td></tr>
@@ -873,8 +892,8 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             </table>
         </details>
 
-        <details class="postbox" <?php echo $accountSetupConfigured ? '' : 'open'; ?>>
-            <summary>Advanced: eBay account setup</summary>
+        <details class="postbox">
+            <summary>eBay account setup <span class="wei-badge <?php echo $accountSetupMissingCount > 0 ? 'warn' : 'ok'; ?>"><?php echo $accountSetupMissingCount > 0 ? esc_html((string) $accountSetupMissingCount . ' missing') : 'configured'; ?></span></summary>
             <table class="widefat striped" style="max-width:800px;margin-bottom:12px;">
                 <tbody>
                     <tr><th scope="row">Location</th><td><?php echo esc_html($locationKey !== '' ? $locationKey . ' OK' : 'missing'); ?></td></tr>
@@ -897,7 +916,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <details class="postbox">
-            <summary>Advanced: German content settings</summary>
+            <summary>German content settings</summary>
             <p>Translation provider: <select name="translation_provider"><option value="disabled" <?php selected($provider, 'disabled'); ?>>Disabled</option><option value="google_cloud_translate" <?php selected($provider, 'google_cloud_translate'); ?>>Google Cloud Translate</option></select><br />
                 <span class="description">Used only for generated eBay DE meta content. WooCommerce title/description and Allegro data are not changed.</span></p>
             <p>Google Translation API key: <input type="password" name="translation_api_key" value="" class="regular-text" autocomplete="off" placeholder="Leave blank to keep current" /> <span class="description">Current: <?php echo esc_html($maskSecret((string) ($s['translation_api_key'] ?? ''))); ?></span></p>
@@ -909,7 +928,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <details class="postbox">
-            <summary>Advanced: SKU and aspect defaults</summary>
+            <summary>SKU and aspect defaults</summary>
             <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" disabled="disabled" /> Use WooCommerce SKU for eBay when present</label><br />
                 <span class="description"><strong>Disabled.</strong> eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
             <p>eBay-only SKU prefix: <input type="text" name="ebay_sku_prefix" value="<?php echo esc_attr((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?>" class="regular-text" placeholder="GPSW" /></p>
@@ -923,7 +942,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <details class="postbox">
-            <summary>Advanced: EBAY_DE price resolver</summary>
+            <summary>EBAY_DE price resolver</summary>
             <p>Default markup percent: <input type="number" step="0.01" min="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_default_markup_percent'] ?? 25)); ?>" class="small-text" />%</p>
             <p>Special category markup percent: <input type="number" step="0.01" min="0.01" name="ebay_special_category_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_special_category_markup_percent'] ?? 30)); ?>" class="small-text" />%</p>
             <p>NBP rate cache TTL: <input type="number" step="0.25" min="0.25" name="nbp_rate_cache_ttl_hours" value="<?php echo esc_attr((string) ($s['nbp_rate_cache_ttl_hours'] ?? 12)); ?>" class="small-text" /> hours</p>
@@ -931,7 +950,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <details class="postbox">
-            <summary>Developer/debug overrides</summary>
+            <summary>Debug/diagnostics overrides</summary>
             <p class="description">Dev/debug only. These exception fields remain available for troubleshooting and legacy fallbacks, but they are not part of the normal operational workflow.</p>
             <p>Product Category Overrides (dev/debug):<br /><textarea name="product_category_overrides" class="large-text code" rows="3" placeholder="43582=179847"><?php echo esc_textarea((string) ($s['product_category_overrides'] ?? '')); ?></textarea></p>
             <p>Legacy SKU Category Overrides:<br /><textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=179847"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea></p>
@@ -939,16 +958,17 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
         </details>
 
         <p><button class="button button-primary">Save settings</button></p>
-    </form>
+        </form>
+    </details>
 
     <details class="postbox wei-actions">
-        <summary>Advanced: account maintenance actions</summary>
+        <summary>Advanced account maintenance actions</summary>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_upsert_inventory_location'); ?><input type="hidden" name="action" value="wei_upsert_inventory_location" /><button class="button">Create / Update inventory location</button></form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_refresh_policies'); ?><input type="hidden" name="action" value="wei_refresh_policies" /><button class="button">Refresh policies from eBay</button></form>
     </details>
 
     <details class="postbox">
-        <summary>Category Mapping Review</summary>
+        <summary>Category mapping reports / audit reports <span class="wei-badge"><?php echo esc_html((string) count($filteredCategoryRows)); ?> rows</span></summary>
         <p>Auto-map scans WooCommerce product categories currently used by products, translates/normalizes the category query to German, and stores only confirmed high-confidence eBay DE leaf mappings automatically. Medium/low confidence rows remain blocked for export until reviewed.</p>
         <p>
             <?php foreach (['all' => 'All', 'mapped_auto' => 'mapped_auto', 'mapped_manual' => 'mapped_manual', 'needs_review' => 'needs_review', 'blocked' => 'blocked'] as $filter => $label): ?>
@@ -956,6 +976,7 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <?php endforeach; ?>
             <span style="margin-left:12px;">Sort: <a href="<?php echo esc_url($sortUrl('confidence')); ?>">confidence</a> / <a href="<?php echo esc_url($sortUrl('products')); ?>">products</a></span>
         </p>
+        <div class="wei-scroll-table">
         <table class="widefat striped">
             <thead><tr><th>Woo category</th><th><a href="<?php echo esc_url($sortUrl('products')); ?>">Products</a></th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th><a href="<?php echo esc_url($sortUrl('confidence')); ?>">Confidence</a></th><th>Threshold</th><th>Status</th><th>Sanity reason</th><th>Last updated</th><th>Error / selected and alternatives</th><th>Manual fallback</th></tr></thead>
             <tbody>
@@ -1003,5 +1024,6 @@ $frequencyLabels = ['every_15_minutes' => 'every 15 minutes', 'hourly' => 'hourl
             <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
     </details>
 </div>
