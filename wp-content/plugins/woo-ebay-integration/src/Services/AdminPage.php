@@ -69,12 +69,14 @@ class AdminPage
         }
         $s = $this->settings();
         $status = get_option('wei_last_status', []);
+        $status = is_array($status) ? $status : [];
         $logs = get_option('wei_logs', []);
+        $logs = array_slice(is_array($logs) ? $logs : [], 0, 20);
         $category_mappings = $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'));
         $ebay_sku_status = $this->skuGenerator->status_counts();
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
         $nbp_rate_status = $this->priceResolver->get_rate_status($s);
-        $connect_url = $this->auth->get_authorize_url();
+        $connect_url = (string) $this->auth->get_authorize_url();
         $auto_sync_status = AutoSyncScheduler::status_summary();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
@@ -649,12 +651,12 @@ class AdminPage
         }
     }
 
-    private function recent_product_sync_status_rows(int $limit = 25): array
+    private function recent_product_sync_status_rows(int $limit = 20): array
     {
         $query = new \WP_Query([
             'post_type' => 'product',
             'post_status' => ['publish', 'draft', 'private'],
-            'posts_per_page' => max(1, min(100, $limit)),
+            'posts_per_page' => max(1, min(20, $limit)),
             'orderby' => 'modified',
             'order' => 'DESC',
             'meta_query' => [
@@ -672,8 +674,8 @@ class AdminPage
             $productId = (int) $productId;
             $rows[] = [
                 'product_id' => $productId,
-                'title' => get_the_title($productId),
-                'edit_url' => get_edit_post_link($productId, ''),
+                'title' => (string) get_the_title($productId),
+                'edit_url' => (string) (get_edit_post_link($productId, '') ?: ''),
                 'sku' => (string) get_post_meta($productId, '_wei_ebay_sku', true),
                 'inventory_id' => (string) get_post_meta($productId, '_wei_ebay_inventory_id', true),
                 'offer_id' => (string) get_post_meta($productId, '_wei_ebay_offer_id', true),
