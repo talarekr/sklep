@@ -277,753 +277,184 @@ $latestLogMessage = (string) ($logs[0]['message'] ?? '');
 $latestLogHasError = str_contains(strtolower($latestLogMessage), 'error') || str_contains(strtolower($latestLogMessage), 'failed');
 $accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
 ?>
+$setting = static fn(string $key, $default = '') => $s[$key] ?? $default;
+$boolLabel = static fn($enabled): string => !empty($enabled) ? 'Enabled' : 'Disabled';
+$badgeClass = static fn($enabled): string => !empty($enabled) ? 'ok' : 'warn';
+$productSyncRows = is_array($product_sync_status_rows ?? null) ? $product_sync_status_rows : [];
+?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
     <style>
-        .wei-admin .postbox { max-width: 1200px; margin-top: 16px; padding: 0 16px 16px; }
-        .wei-admin .postbox > h2, .wei-admin .postbox > h3 { padding-top: 12px; }
-        .wei-admin details.postbox { overflow-x: auto; }
-        .wei-admin details.postbox summary, .wei-admin details:not(.postbox) summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 14px 0; }
-        .wei-admin details.postbox summary:hover, .wei-admin details:not(.postbox) summary:hover { color: #135e96; }
-        .wei-admin .wei-badge { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: #f0f0f1; color: #1d2327; font-size: 12px; font-weight: 600; vertical-align: middle; }
-        .wei-admin .wei-badge.warn { background: #fcf3db; color: #996800; }
-        .wei-admin .wei-badge.error { background: #fcf0f1; color: #b32d2e; }
-        .wei-admin .wei-badge.ok { background: #edfaef; color: #008a20; }
-        .wei-admin .wei-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; max-width: 1100px; }
-        .wei-admin .wei-metric { border: 1px solid #dcdcde; background: #fff; padding: 10px 12px; }
-        .wei-admin .wei-metric strong { display: block; font-size: 20px; line-height: 1.4; }
-        .wei-admin .wei-ok { color: #008a20; font-weight: 600; }
-        .wei-admin .wei-error { color: #b32d2e; font-weight: 600; }
-        .wei-admin .wei-warn { color: #996800; font-weight: 600; }
-        .wei-admin .wei-actions form { display: inline-block; margin: 0 8px 8px 0; }
-        .wei-admin .wei-technical pre, .wei-admin textarea.code { max-height: 420px; overflow: auto; white-space: pre-wrap; background: #f6f7f7; padding: 10px; border: 1px solid #dcdcde; }
-        .wei-admin .wei-scroll-table { max-height: 460px; overflow: auto; border: 1px solid #dcdcde; background: #fff; }
-        .wei-admin .wei-scroll-table table { margin: 0; border: 0; }
+        .wei-admin .wei-box { background:#fff; border:1px solid #dcdcde; box-shadow:0 1px 1px rgba(0,0,0,.04); margin:16px 0; padding:16px; max-width:1240px; }
+        .wei-admin .wei-box h2, .wei-admin .wei-box h3 { margin-top:0; }
+        .wei-admin .wei-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:12px 0; }
+        .wei-admin .wei-card { border:1px solid #dcdcde; background:#f6f7f7; padding:10px 12px; min-height:62px; }
+        .wei-admin .wei-card span { display:block; color:#646970; font-size:12px; }
+        .wei-admin .wei-card strong { display:block; font-size:18px; line-height:1.35; overflow-wrap:anywhere; }
+        .wei-admin .wei-badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#f0f0f1; color:#1d2327; font-size:12px; font-weight:600; vertical-align:middle; }
+        .wei-admin .wei-badge.ok { background:#edfaef; color:#008a20; }
+        .wei-admin .wei-badge.warn { background:#fcf3db; color:#996800; }
+        .wei-admin .wei-badge.error { background:#fcf0f1; color:#b32d2e; }
+        .wei-admin .wei-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
+        .wei-admin .wei-actions form { display:inline-flex; gap:6px; align-items:center; margin:0; }
+        .wei-admin .wei-action-group { border-left:4px solid #dcdcde; padding:8px 0 8px 12px; margin:8px 0; }
+        .wei-admin .wei-action-group.primary { border-left-color:#2271b1; }
+        .wei-admin .wei-action-group.safe { border-left-color:#00a32a; }
+        .wei-admin .wei-action-group.warning { border-left-color:#dba617; }
+        .wei-admin details.wei-box > summary { cursor:pointer; font-size:16px; font-weight:600; margin:-16px; padding:16px; }
+        .wei-admin details.wei-box[open] > summary { border-bottom:1px solid #dcdcde; margin-bottom:16px; }
+        .wei-admin details:not(.wei-box) > summary { cursor:pointer; font-weight:600; }
+        .wei-admin .wei-scroll, .wei-admin .wei-technical pre, .wei-admin textarea.code { max-height:360px; overflow:auto; white-space:pre-wrap; background:#f6f7f7; border:1px solid #dcdcde; padding:10px; }
+        .wei-admin .wei-scroll-table { max-height:440px; overflow:auto; border:1px solid #dcdcde; background:#fff; }
+        .wei-admin .wei-scroll-table table { margin:0; border:0; }
+        .wei-admin .form-table th { width:240px; }
+        .wei-admin .description { color:#646970; }
     </style>
 
-    <div class="postbox">
-        <h2>eBay Auto Sync</h2>
-        <p class="description">Operational scheduler for eBay readiness, safe export preparation, order import, and Woo → eBay stock updates. WooCommerce remains the central source of stock; Allegro is not touched.</p>
-        <div class="wei-grid">
-            <div class="wei-metric"><span>Auto sync status</span><strong><?php echo esc_html(ucwords(str_replace('_', ' ', $autoStatus))); ?></strong></div>
-            <div class="wei-metric"><span>Mode</span><strong><?php echo esc_html($autoModeLabels[(string) ($autoSync['mode'] ?? 'disabled')] ?? (string) ($autoSync['mode'] ?? 'disabled')); ?></strong></div>
-            <div class="wei-metric"><span>Frequency</span><strong><?php echo esc_html($frequencyLabels[(string) ($autoSync['frequency'] ?? 'hourly')] ?? 'hourly'); ?></strong></div>
-            <div class="wei-metric"><span>Batch size</span><strong><?php echo esc_html((string) ($autoSync['batch_size'] ?? 20)); ?></strong></div>
-            <div class="wei-metric"><span>Last run</span><strong><?php echo esc_html((string) ($autoSync['last_run'] ?: '-')); ?></strong></div>
-            <div class="wei-metric"><span>Next scheduled run</span><strong><?php echo esc_html((string) ($autoSync['next_run'] ?? '-')); ?></strong></div>
-            <div class="wei-metric"><span>Pending stock sync items</span><strong><?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Woo → eBay stock sync</span><strong><?php echo !empty($autoSync['woo_to_ebay_stock_sync_enabled']) ? '<span class="wei-ok">enabled</span>' : '<span class="wei-warn">disabled</span>'; ?></strong></div>
-            <div class="wei-metric"><span>eBay stock sync mode</span><strong><?php echo esc_html((string) ($autoSync['ebay_stock_sync_mode'] ?? 'max_one')); ?></strong></div>
-            <div class="wei-metric"><span>eBay → Woo order sync</span><strong><?php echo !empty($autoSync['ebay_order_sync_enabled']) ? '<span class="wei-ok">enabled</span>' : '<span class="wei-warn">disabled</span>'; ?></strong></div>
-            <div class="wei-metric"><span>Account restriction status</span><strong><?php echo esc_html((string) ($autoSync['account_restriction_status'] ?: '-')); ?></strong></div>
-        </div>
-        <table class="widefat striped" style="max-width:900px;margin-top:12px;">
-            <tbody>
-                <tr><th scope="row">Last result summary</th><td><?php echo esc_html($autoLastSummary !== [] ? wp_json_encode($autoLastSummary) : 'No scheduler run yet'); ?></td></tr>
-            </tbody>
-        </table>
-        <div class="wei-actions" style="margin-top:12px;">
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_readiness_now'); ?><input type="hidden" name="action" value="wei_auto_sync_readiness_now" /><button class="button">Run readiness scan now</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_full_category_audit'); ?><input type="hidden" name="action" value="wei_full_category_audit" /><label><input type="checkbox" name="verbose_debug" value="1" /> verbose debug JSON</label> <button class="button button-secondary">Run / continue full category audit</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Run order sync now</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><button class="button">Run stock sync now</button></form>
-            <?php if (!empty($s['auto_export_enabled'])): ?><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_export_now'); ?><input type="hidden" name="action" value="wei_auto_sync_export_now" /><button class="button">Run export batch now</button></form><?php endif; ?>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_toggle_pause'); ?><input type="hidden" name="action" value="wei_auto_sync_toggle_pause" /><button class="button"><?php echo !empty($s['auto_sync_paused']) ? 'Resume auto sync' : 'Pause auto sync'; ?></button></form>
-        </div>
+    <?php if (!empty($_GET['saved'])): ?><div class="notice notice-success"><p>eBay settings saved.</p></div><?php endif; ?>
+
+    <div class="wei-box">
+        <h2>Główna konfiguracja eBay</h2>
+        <p class="description">Najważniejsze ustawienia operacyjne są na górze. Masowa publikacja pozostaje bezpiecznie wyłączona, dopóki <code>Auto publish</code> nie jest włączone.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('wei_save_settings'); ?>
+            <input type="hidden" name="action" value="wei_save_settings" />
+            <table class="form-table" role="presentation">
+                <tr><th><label for="wei-marketplace-id">Marketplace</label></th><td><input id="wei-marketplace-id" class="regular-text" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" placeholder="EBAY_DE" /></td></tr>
+                <tr><th><label for="wei-location-key">Merchant location key</label></th><td><input id="wei-location-key" class="regular-text" name="inventory_location_key" value="<?php echo esc_attr((string) $setting('inventory_location_key', 'gpswiss-pl')); ?>" /></td></tr>
+                <tr><th><label for="wei-fulfillment-policy">Fulfillment policy ID</label></th><td><input id="wei-fulfillment-policy" class="regular-text" name="ebay_fulfillment_policy_id" value="<?php echo esc_attr($fulfillmentId); ?>" /> <span class="description"><?php echo esc_html($fulfillmentId !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId, 'fulfillmentPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-payment-policy">Payment policy ID</label></th><td><input id="wei-payment-policy" class="regular-text" name="ebay_payment_policy_id" value="<?php echo esc_attr($paymentId); ?>" /> <span class="description"><?php echo esc_html($paymentId !== '' ? $findPolicyName($paymentPolicies, $paymentId, 'paymentPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /> <span class="description"><?php echo esc_html($returnId !== '' ? $findPolicyName($returnPolicies, $returnId, 'returnPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-markup">Domyślny markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
+                <tr><th><label for="wei-condition">Domyślny stan przedmiotu</label></th><td><select id="wei-condition" name="default_item_condition"><option value="USED" <?php selected((string) $setting('default_item_condition', 'USED'), 'USED'); ?>>USED</option><option value="USED_EXCELLENT" <?php selected((string) $setting('default_item_condition', 'USED'), 'USED_EXCELLENT'); ?>>USED_EXCELLENT</option></select></td></tr>
+                <tr><th>Auto publish</th><td><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> enabled</label> <span class="wei-badge <?php echo esc_attr($badgeClass(!empty($s['auto_publish_enabled']))); ?>"><?php echo esc_html($boolLabel(!empty($s['auto_publish_enabled']))); ?></span></td></tr>
+                <tr><th>Auto sync</th><td><select name="auto_sync_mode"><option value="disabled" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'disabled'); ?>>disabled / dry-run only</option><option value="preflight_only" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'preflight_only'); ?>>dry run / diagnostics only</option><option value="export_ready_products" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'export_ready_products'); ?>>export/update offers but do not publish unless auto publish is enabled</option><option value="orders_stock_only" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'orders_stock_only'); ?>>orders + stock only</option><option value="full_sync" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'full_sync'); ?>>full sync</option></select></td></tr>
+                <tr><th><label for="wei-batch-size">Batch size / limit</label></th><td><input id="wei-batch-size" type="number" min="1" max="50" name="auto_sync_export_batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_export_batch_size', 20)); ?>" /> <span class="description">Export batch</span></td></tr>
+            </table>
+
+            <details>
+                <summary>Advanced settings / credentials</summary>
+                <table class="form-table" role="presentation">
+                    <tr><th>Environment</th><td><select name="environment"><option value="production" <?php selected((string) $setting('environment', 'production'), 'production'); ?>>production</option><option value="sandbox" <?php selected((string) $setting('environment', 'production'), 'sandbox'); ?>>sandbox</option></select></td></tr>
+                    <tr><th>Client ID</th><td><input class="regular-text" name="client_id" value="<?php echo esc_attr((string) $setting('client_id', '')); ?>" /></td></tr>
+                    <tr><th>Client secret</th><td><input class="regular-text" type="password" name="client_secret" placeholder="<?php echo esc_attr($maskSecret((string) $setting('client_secret', ''))); ?>" autocomplete="new-password" /></td></tr>
+                    <tr><th>RuName</th><td><input class="regular-text" name="runame" value="<?php echo esc_attr((string) $setting('runame', '')); ?>" /></td></tr>
+                    <tr><th>Default category ID</th><td><input class="regular-text" name="default_category_id" value="<?php echo esc_attr((string) $setting('default_category_id', '')); ?>" /></td></tr>
+                    <tr><th>Special category markup %</th><td><input type="number" step="0.01" name="ebay_special_category_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_special_category_markup_percent', 30)); ?>" /></td></tr>
+                    <tr><th>NBP cache TTL hours</th><td><input type="number" step="0.01" name="nbp_rate_cache_ttl_hours" value="<?php echo esc_attr((string) $setting('nbp_rate_cache_ttl_hours', 12)); ?>" /> <span class="description">Rate: <?php echo esc_html((string) ($nbpRate ?? '-')); ?> <?php echo esc_html($nbpEffectiveDate); ?>, cache <?php echo esc_html($nbpCacheStatus); ?></span></td></tr>
+                    <tr><th>Auto sync frequency</th><td><select name="auto_sync_frequency"><option value="every_15_minutes" <?php selected((string) $setting('auto_sync_frequency', 'hourly'), 'every_15_minutes'); ?>>every 15 minutes</option><option value="hourly" <?php selected((string) $setting('auto_sync_frequency', 'hourly'), 'hourly'); ?>>hourly</option><option value="daily" <?php selected((string) $setting('auto_sync_frequency', 'hourly'), 'daily'); ?>>daily</option></select></td></tr>
+                    <tr><th>Preflight batch size</th><td><input type="number" min="1" max="300" name="auto_sync_preflight_batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_preflight_batch_size', 200)); ?>" /></td></tr>
+                    <tr><th>Stock batch size</th><td><input type="number" min="1" max="300" name="auto_sync_stock_batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_stock_batch_size', 100)); ?>" /></td></tr>
+                    <tr><th>Enable export queue</th><td><label><input type="checkbox" name="auto_export_enabled" value="1" <?php checked(!empty($s['auto_export_enabled'])); ?> /> auto export enabled</label></td></tr>
+                    <tr><th>Woo → eBay stock sync</th><td><label><input type="checkbox" name="woo_to_ebay_stock_sync_enabled" value="1" <?php checked(!empty($s['woo_to_ebay_stock_sync_enabled'])); ?> /> enabled</label></td></tr>
+                    <tr><th>eBay order sync</th><td><label><input type="checkbox" name="ebay_order_sync_enabled" value="1" <?php checked(!empty($s['ebay_order_sync_enabled'])); ?> /> enabled</label></td></tr>
+                    <tr><th>Stock sync mode</th><td><select name="stock_sync_mode"><option value="set_zero" <?php selected((string) $setting('stock_sync_mode', 'set_zero'), 'set_zero'); ?>>set zero</option><option value="reduce" <?php selected((string) $setting('stock_sync_mode', 'set_zero'), 'reduce'); ?>>reduce</option></select></td></tr>
+                    <tr><th>eBay stock sync mode</th><td><select name="ebay_stock_sync_mode"><option value="set_zero_only" <?php selected((string) $setting('ebay_stock_sync_mode', 'max_one'), 'set_zero_only'); ?>>set zero only</option><option value="max_one" <?php selected((string) $setting('ebay_stock_sync_mode', 'max_one'), 'max_one'); ?>>max one</option><option value="exact_stock" <?php selected((string) $setting('ebay_stock_sync_mode', 'max_one'), 'exact_stock'); ?>>exact stock</option></select></td></tr>
+                    <tr><th>eBay order stock update</th><td><select name="ebay_order_stock_update_mode"><option value="set_zero" <?php selected((string) $setting('ebay_order_stock_update_mode', 'set_zero'), 'set_zero'); ?>>set zero</option><option value="reduce" <?php selected((string) $setting('ebay_order_stock_update_mode', 'set_zero'), 'reduce'); ?>>reduce</option></select></td></tr>
+                    <tr><th>Translation provider</th><td><select name="translation_provider"><option value="disabled" <?php selected($provider, 'disabled'); ?>>disabled</option><option value="google_cloud_translate" <?php selected($provider, 'google_cloud_translate'); ?>>Google Cloud Translate</option></select> <span class="description"><?php echo esc_html($translationLabel); ?></span></td></tr>
+                    <tr><th>Translation API key</th><td><input class="regular-text" type="password" name="translation_api_key" placeholder="<?php echo esc_attr($maskSecret((string) $setting('translation_api_key', ''))); ?>" /></td></tr>
+                    <tr><th>German content automation</th><td><label><input type="checkbox" name="auto_generate_german_content_preflight" value="1" <?php checked(!empty($s['auto_generate_german_content_preflight'])); ?> /> generate during preflight</label><br><label><input type="checkbox" name="regenerate_german_content_on_hash_change" value="1" <?php checked(!empty($s['regenerate_german_content_on_hash_change'])); ?> /> regenerate on hash change</label></td></tr>
+                    <tr><th>Inventory location details</th><td><input name="inventory_location_name" placeholder="name" value="<?php echo esc_attr((string) $setting('inventory_location_name', 'gpswiss-pl')); ?>" /> <input name="inventory_location_country" placeholder="country" value="<?php echo esc_attr((string) $setting('inventory_location_country', 'PL')); ?>" /> <input name="inventory_location_postal_code" placeholder="postal" value="<?php echo esc_attr((string) $setting('inventory_location_postal_code', '08-460')); ?>" /> <input name="inventory_location_city" placeholder="city" value="<?php echo esc_attr((string) $setting('inventory_location_city', 'Sobolew')); ?>" /> <input class="regular-text" name="inventory_location_address_line_1" placeholder="address" value="<?php echo esc_attr((string) $setting('inventory_location_address_line_1', '')); ?>" /></td></tr>
+                    <tr><th>SKU prefix</th><td><input name="ebay_sku_prefix" value="<?php echo esc_attr((string) $setting('ebay_sku_prefix', 'GPSW')); ?>" /> <span class="description">eBay uses plugin-owned <code>_wei_ebay_sku</code>; Woo SKU is not overwritten.</span></td></tr>
+                    <tr><th>Auto category threshold</th><td><input type="number" step="0.0001" min="0" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) $setting('auto_category_confidence_threshold', \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" /></td></tr>
+                    <tr><th>Verbose debug</th><td><label><input type="checkbox" name="verbose_debug" value="1" <?php checked(!empty($s['verbose_debug'])); ?> /> enabled</label></td></tr>
+                    <tr><th>SKU category overrides</th><td><textarea class="large-text code" rows="4" name="sku_category_overrides"><?php echo esc_textarea((string) $setting('sku_category_overrides', '')); ?></textarea></td></tr>
+                    <tr><th>Product category overrides</th><td><textarea class="large-text code" rows="4" name="product_category_overrides"><?php echo esc_textarea((string) $setting('product_category_overrides', '')); ?></textarea></td></tr>
+                    <tr><th>SKU aspect overrides</th><td><textarea class="large-text code" rows="4" name="sku_aspect_overrides"><?php echo esc_textarea((string) $setting('sku_aspect_overrides', '')); ?></textarea></td></tr>
+                    <tr><th>Category aspect fallbacks</th><td><textarea class="large-text code" rows="4" name="category_aspect_fallbacks"><?php echo esc_textarea((string) $setting('category_aspect_fallbacks', '')); ?></textarea></td></tr>
+                    <tr><th>Default Hersteller fallback</th><td><input class="regular-text" name="default_hersteller_fallback" value="<?php echo esc_attr((string) $setting('default_hersteller_fallback', '')); ?>" /></td></tr>
+                </table>
+            </details>
+            <p><button class="button button-primary">Save settings</button></p>
+        </form>
     </div>
 
-    <div class="postbox">
+    <div class="wei-box">
+        <h2>WooCommerce ↔ eBay sync</h2>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Tryb pracy</span><strong><?php echo esc_html($autoModeLabels[(string) $setting('auto_sync_mode', 'disabled')] ?? (string) $setting('auto_sync_mode', 'disabled')); ?></strong></div>
+            <div class="wei-card"><span>Auto publish</span><strong><span class="wei-badge <?php echo esc_attr($badgeClass(!empty($s['auto_publish_enabled']))); ?>"><?php echo esc_html($boolLabel(!empty($s['auto_publish_enabled']))); ?></span></strong></div>
+            <div class="wei-card"><span>Auto export</span><strong><span class="wei-badge <?php echo esc_attr($badgeClass(!empty($s['auto_export_enabled']))); ?>"><?php echo esc_html($boolLabel(!empty($s['auto_export_enabled']))); ?></span></strong></div>
+            <div class="wei-card"><span>Last run</span><strong><?php echo esc_html((string) (($autoSync['last_run'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Next run</span><strong><?php echo esc_html((string) ($autoSync['next_run'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Pending stock sync</span><strong><?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></strong></div>
+        </div>
+        <div class="wei-actions"><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_toggle_pause'); ?><input type="hidden" name="action" value="wei_auto_sync_toggle_pause" /><button class="button"><?php echo !empty($s['auto_sync_paused']) ? 'Resume auto sync' : 'Pause auto sync'; ?></button></form></div>
+        <div class="wei-action-group primary"><strong>Woo → eBay</strong><div class="wei-actions">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_export_now'); ?><input type="hidden" name="action" value="wei_auto_sync_export_now" /><input type="number" min="1" max="50" name="batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_export_batch_size', 20)); ?>" /><button class="button button-primary" <?php disabled(empty($s['auto_export_enabled'])); ?>>Export/update ready products</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><input type="number" min="1" max="300" name="batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_stock_batch_size', 100)); ?>" /><button class="button">Sync stock only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync_prices_only'); ?><input type="hidden" name="action" value="wei_sync_prices_only" /><button class="button">Sync prices only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync_content_only'); ?><input type="hidden" name="action" value="wei_sync_content_only" /><button class="button">Sync content only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync_categories_only'); ?><input type="hidden" name="action" value="wei_sync_categories_only" /><button class="button">Sync categories/aspects only</button></form>
+        </div><p class="description">Export/update uses existing safe export logic. Publishing happens only when <code>auto_publish_enabled</code> is saved as enabled.</p></div>
+        <div class="wei-action-group safe"><strong>eBay → Woo</strong><div class="wei-actions">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Import eBay orders</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync_listing_meta_back'); ?><input type="hidden" name="action" value="wei_sync_listing_meta_back" /><button class="button">Sync listing IDs / URLs back to Woo meta</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync_ebay_stock_to_woo'); ?><input type="hidden" name="action" value="wei_sync_ebay_stock_to_woo" /><button class="button">Optional stock sync from eBay to Woo</button></form>
+        </div><p class="description">Skeleton eBay → Woo actions never overwrite Woo price, description or stock without a separate implementation/option.</p></div>
+        <div class="wei-action-group warning"><strong>Tryby pracy</strong><ul><li>Dry run / diagnostics only: use readiness scans, preflight and category audit.</li><li>Export/update offers but do not publish: leave Auto publish disabled.</li><li>Publish enabled only if Auto publish is enabled.</li><li>Manual one-product publish is available in Manual tools.</li></ul></div>
+    </div>
+
+    <div class="wei-box">
         <h2>Readiness Summary</h2>
         <div class="wei-grid">
-            <div class="wei-metric"><span>Ready products</span><strong><?php echo esc_html((string) ($readinessSummary['ready'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Not ready products</span><strong><?php echo esc_html((string) ($readinessSummary['not_ready'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Blocked by category</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_category'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Missing German content</span><strong><?php echo esc_html((string) ($readinessSummary['missing_german_content'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Missing required aspects</span><strong><?php echo esc_html((string) ($readinessSummary['missing_required_aspects'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Invalid price</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Missing image</span><strong><?php echo esc_html((string) ($readinessSummary['missing_image'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Ready</span><strong><?php echo esc_html((string) ($readinessSummary['ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Blocked by category</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_category'] ?? $categoryBlockedCount)); ?></strong></div>
+            <div class="wei-card"><span>Missing category</span><strong><?php echo esc_html((string) ($readinessSummary['missing_category'] ?? $categoryMissingCount)); ?></strong></div>
+            <div class="wei-card"><span>Missing aspects</span><strong><?php echo esc_html((string) ($readinessSummary['missing_required_aspects'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Content not ready</span><strong><?php echo esc_html((string) ($readinessSummary['missing_german_content'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Price not ready</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Ostatni audyt</span><strong><?php echo esc_html((string) ($readinessSummary['last_run'] ?? $full_category_audit_summary['last_run'] ?? '-')); ?></strong></div>
         </div>
-
-        <?php if (!empty($full_category_audit_summary)): ?>
-            <?php $auditReports = is_array($full_category_audit_summary['reports'] ?? null) ? $full_category_audit_summary['reports'] : []; ?>
-            <details style="margin-top:12px;">
-                <summary>Latest full eBay category audit reports</summary>
-                <div class="wei-grid" style="margin-top:8px;">
-                    <div class="wei-metric"><span>Progress</span><strong><?php echo esc_html((string) ($full_category_audit_summary['processed'] ?? $full_category_audit_summary['total_scanned'] ?? 0) . ' / ' . (string) ($full_category_audit_summary['total_products'] ?? '?')); ?></strong></div>
-                    <div class="wei-metric"><span>Status</span><strong><?php echo esc_html((string) ($full_category_audit_summary['status'] ?? $full_category_audit_summary['result'] ?? '-')); ?></strong></div>
-                    <div class="wei-metric"><span>Last batch</span><strong><?php echo esc_html((string) ($full_category_audit_summary['processed_this_batch'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['ready_count'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Blocked by category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['blocked_by_category_count'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Missing category</span><strong><?php echo esc_html((string) ($full_category_audit_summary['missing_category_count'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Missing aspects</span><strong><?php echo esc_html((string) ($full_category_audit_summary['missing_required_aspects_count'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Content not ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['content_not_ready_count'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Price not ready</span><strong><?php echo esc_html((string) ($full_category_audit_summary['price_not_ready_count'] ?? 0)); ?></strong></div>
-                </div>
-                <ul>
-                    <?php foreach ($auditReports as $label => $report): ?>
-                        <?php if (is_array($report) && !empty($report['url'])): ?>
-                            <li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a> <?php echo isset($report['rows']) ? esc_html('(' . (string) $report['rows'] . ' rows)') : ''; ?></li>
-                        <?php endif; ?>
-                    <?php endforeach; ?>
-                </ul>
-                <p class="description">Audit scans published WooCommerce products in safe dry-run batches, resumes an in-progress run on the next click, and writes final CSV/JSON files only after the last batch. It does not generate German content, write translated content/meta, export, publish, change Woo SKU, change Woo price, or touch Allegro.</p>
-            </details>
-        <?php endif; ?>
-
-        <details style="margin-top:12px;">
-            <summary>Audit-driven German content generation</summary>
-            <p class="description">Uses the latest problems CSV as the source of truth and processes only rows where <code>status=content_not_ready</code> and <code>reason=missing_german_content</code>. It writes only <code>_wei_ebay_de_title</code>, <code>_wei_ebay_de_description</code>, and related WEI German content meta; it does not call eBay APIs, publish, create/update offers, change Woo SKU/price, or touch Allegro.</p>
-            <?php if (!empty($german_content_audit_summary)): ?>
-                <?php $germanReports = is_array($german_content_audit_summary['reports'] ?? null) ? $german_content_audit_summary['reports'] : []; ?>
-                <div class="wei-grid" style="margin-top:8px;">
-                    <div class="wei-metric"><span>Status</span><strong><?php echo esc_html((string) ($german_content_audit_summary['status'] ?? '-')); ?></strong></div>
-                    <div class="wei-metric"><span>Progress</span><strong><?php echo esc_html((string) ($german_content_audit_summary['processed'] ?? 0) . ' / ' . (string) ($german_content_audit_summary['eligible_total'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Generated</span><strong><?php echo esc_html((string) ($german_content_audit_summary['generated'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Already ready</span><strong><?php echo esc_html((string) ($german_content_audit_summary['already_ready'] ?? 0)); ?></strong></div>
-                    <div class="wei-metric"><span>Failed</span><strong><?php echo esc_html((string) ($german_content_audit_summary['failed'] ?? 0)); ?></strong></div>
-                </div>
-                <ul>
-                    <?php foreach ($germanReports as $label => $report): ?>
-                        <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a></li><?php endif; ?>
-                    <?php endforeach; ?>
-                </ul>
-            <?php endif; ?>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;">
-                <?php wp_nonce_field('wei_generate_missing_german_content_audit'); ?>
-                <input type="hidden" name="action" value="wei_generate_missing_german_content_audit" />
-                <label>Batch size <input type="number" name="batch_size" value="50" min="1" max="200" /></label>
-                <label><input type="checkbox" name="restart" value="1" /> restart from first eligible audit row</label>
-                <button class="button button-primary">Generate missing German content only</button>
-            </form>
-        </details>
-        <details class="wei-not-ready-products" style="margin-top:12px;">
-            <summary>Not ready products</summary>
-            <p class="description">Shows up to 50 products from the latest readiness scan, with each bucket capped to keep the admin page and logs compact.</p>
-            <p class="subsubsub">
-                <?php foreach ($readinessFilterLabels as $filterKey => $filterLabel): ?>
-                    <?php $filterUrl = add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => $filterKey], admin_url('admin.php')); ?>
-                    <a href="<?php echo esc_url($filterUrl); ?>" class="<?php echo $readinessFilter === $filterKey ? 'current' : ''; ?>"><?php echo esc_html($filterLabel); ?></a><?php echo $filterKey !== array_key_last($readinessFilterLabels) ? ' | ' : ''; ?>
-                <?php endforeach; ?>
-            </p>
-            <table class="widefat striped" style="clear:both;">
-                <thead><tr><th>Product ID</th><th>Product title</th><th>Reason</th><th>Mapping diagnostics</th><th>Missing aspects</th><th>Category</th><th>eBay category</th><th>Status</th><th>Actions</th></tr></thead>
-                <tbody>
-                <?php foreach ($notReadyItems as $item): ?>
-                    <?php
-                    $itemProductId = (int) ($item['product_id'] ?? 0);
-                    $categoryStatus = (string) ($item['category_status'] ?? '');
-                    $categoryReason = (string) ($item['category_sanity_reason'] ?? '');
-                    $categoryLabel = trim($categoryStatus . ($categoryReason !== '' ? ': ' . $categoryReason : ''));
-                    $ebayCategory = trim((string) ($item['category_id'] ?? '') . ' ' . (string) ($item['category_name'] ?? '') . ' ' . (string) ($item['category_path'] ?? ''));
-                    $missingAspects = implode(', ', array_map('strval', (array) ($item['missing_aspects'] ?? [])));
-                    $bestCandidate = trim((string) ($item['best_candidate_category_id'] ?? '') . ' ' . (string) ($item['best_candidate_name'] ?? '') . ' ' . (string) ($item['best_candidate_path'] ?? ''));
-                    $mappingDiagnosticParts = [];
-                    if ((string) ($item['detected_intent'] ?? '') !== '') {
-                        $mappingDiagnosticParts[] = 'Intent: ' . (string) $item['detected_intent'];
-                    } else {
-                        if ((string) ($item['why_no_intent_match'] ?? '') !== '') {
-                            $mappingDiagnosticParts[] = 'No intent: ' . (string) $item['why_no_intent_match'];
-                        }
-                        if ((string) ($item['intent_source_text_used'] ?? '') !== '') {
-                            $mappingDiagnosticParts[] = 'Intent text: ' . (string) $item['intent_source_text_used'];
-                        }
-                    }
-                    if ($bestCandidate !== '') {
-                        $mappingDiagnosticParts[] = 'Best: ' . $bestCandidate;
-                    }
-                    if ((string) ($item['rejected_best_reason'] ?? '') !== '') {
-                        $mappingDiagnosticParts[] = 'Reason: ' . (string) $item['rejected_best_reason'];
-                    } elseif ((string) ($item['mapping_error_reason'] ?? '') !== '') {
-                        $mappingDiagnosticParts[] = 'Reason: ' . (string) $item['mapping_error_reason'];
-                    }
-                    $mappingDiagnostics = implode(' | ', $mappingDiagnosticParts);
-                    $preflightUrl = add_query_arg(['action' => 'wei_preflight_product', 'product_id' => $itemProductId, '_wpnonce' => wp_create_nonce('wei_preflight')], admin_url('admin-post.php'));
-                    $categoryReviewUrl = add_query_arg(['page' => 'woo-ebay', 'category_status' => 'needs_review'], admin_url('admin.php')) . '#category-mapping-summary';
-                    ?>
-                    <tr>
-                        <td><code><?php echo esc_html((string) $itemProductId); ?></code></td>
-                        <td><?php echo esc_html((string) ($item['product_title'] ?? '')); ?></td>
-                        <td><?php echo esc_html((string) ($item['primary_reason'] ?? '')); ?></td>
-                        <td><?php echo esc_html($mappingDiagnostics !== '' ? $mappingDiagnostics : '-'); ?></td>
-                        <td><?php echo esc_html($missingAspects !== '' ? $missingAspects : '-'); ?></td>
-                        <td><?php echo esc_html($categoryLabel !== '' ? $categoryLabel : '-'); ?></td>
-                        <td><?php echo esc_html($ebayCategory !== '' ? $ebayCategory : '-'); ?></td>
-                        <td><code><?php echo esc_html((string) ($item['status'] ?? 'not_ready')); ?></code></td>
-                        <td>
-                            <?php if ((string) ($item['edit_url'] ?? '') !== ''): ?><a href="<?php echo esc_url((string) $item['edit_url']); ?>">Edit product</a><?php endif; ?>
-                            <?php if ($itemProductId > 0): ?> | <a href="<?php echo esc_url($preflightUrl); ?>">Preflight only</a><?php endif; ?>
-                            <?php if (str_contains((string) ($item['primary_reason'] ?? ''), 'blocked_by_category')): ?> | <a href="<?php echo esc_url($categoryReviewUrl); ?>">Open category mapping review</a><?php endif; ?>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                <?php if ($notReadyItems === []): ?><tr><td colspan="9">No not-ready products in this filter for the latest readiness scan.</td></tr><?php endif; ?>
-                </tbody>
-            </table>
-        </details>
-        <details class="wei-technical" style="margin-top:12px;">
-            <summary>Technical details</summary>
-            <pre><?php echo esc_html($redactTechnical(wp_json_encode($readinessSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_sync_readiness_now'); ?><input type="hidden" name="action" value="wei_auto_sync_readiness_now" /><button class="button button-primary">Run readiness scan now</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_full_category_audit'); ?><input type="hidden" name="action" value="wei_full_category_audit" /><button class="button">Run full category audit</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_generate_missing_german_content_audit'); ?><input type="hidden" name="action" value="wei_generate_missing_german_content_audit" /><input type="hidden" name="restart" value="1" /><input type="number" min="1" max="200" name="batch_size" value="50" /><button class="button">Generate missing German content only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export_category_teaching_csv'); ?><input type="hidden" name="action" value="wei_export_category_teaching_csv" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Export teaching CSV from latest audit problems</button></form>
+        </div>
+        <details><summary>Not-ready products and audit report links</summary>
+            <p><?php foreach ($readinessFilterLabels as $filter => $label): ?><a href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => $filter], admin_url('admin.php'))); ?>"><?php echo $readinessFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === array_key_last($readinessFilterLabels) ? '' : ' / '; ?><?php endforeach; ?></p>
+            <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Product</th><th>Status</th><th>Reason</th><th>Errors</th></tr></thead><tbody><?php foreach (array_slice($notReadyItems, 0, 100) as $item): ?><tr><td><?php echo esc_html((string) ($item['product_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($item['status'] ?? '')); ?></td><td><?php echo esc_html((string) ($item['primary_reason'] ?? '')); ?></td><td><?php echo esc_html(implode('; ', array_map('strval', (array) ($item['errors'] ?? [])))); ?></td></tr><?php endforeach; ?></tbody></table></div>
+            <pre class="wei-scroll"><?php echo esc_html($redactTechnical(wp_json_encode(['readiness' => $readinessSummary, 'full_category_audit' => $full_category_audit_summary, 'german_content_audit' => $german_content_audit_summary], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
         </details>
     </div>
 
-    <details class="postbox">
-        <summary>Recent exports summary <span class="wei-badge">exported <?php echo esc_html((string) ($exportSummary['exported'] ?? 0)); ?></span></summary>
-        <div class="wei-grid">
-            <div class="wei-metric"><span>Exported inventory</span><strong><?php echo esc_html((string) ($exportSummary['exported'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Published</span><strong><?php echo esc_html((string) ($exportSummary['published'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Account blocked</span><strong><?php echo esc_html($autoStatus === 'blocked_by_ebay_account_restriction' ? 'yes' : 'no'); ?></strong></div>
+    <div class="wei-box">
+        <h2>Product sync status</h2>
+        <p class="description">Widok bazowych pól/meta eBay dla ostatnio aktualizowanych produktów. Pełne eksporty i manual publish zapisują te pola bez dotykania Allegro.</p>
+        <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Product</th><th>eBay SKU / inventory_id</th><th>offer_id</th><th>listing_id</th><th>public_url</th><th>last_export_at</th><th>last_publish_at</th><th>last_sync_status</th><th>last_sync_error</th><th>listing status</th></tr></thead><tbody><?php foreach ($productSyncRows as $row): ?><tr><td><?php if (!empty($row['edit_url'])): ?><a href="<?php echo esc_url((string) $row['edit_url']); ?>"><?php endif; ?>#<?php echo esc_html((string) $row['product_id']); ?> <?php echo esc_html((string) $row['title']); ?><?php if (!empty($row['edit_url'])): ?></a><?php endif; ?></td><td><code><?php echo esc_html((string) ($row['sku'] ?: $row['inventory_id'])); ?></code></td><td><code><?php echo esc_html((string) $row['offer_id']); ?></code></td><td><code><?php echo esc_html((string) $row['listing_id']); ?></code></td><td><?php if (!empty($row['public_url'])): ?><a href="<?php echo esc_url((string) $row['public_url']); ?>" target="_blank" rel="noopener noreferrer">open</a><?php endif; ?></td><td><?php echo esc_html((string) $row['last_export_at']); ?></td><td><?php echo esc_html((string) $row['last_publish_at']); ?></td><td><?php echo esc_html((string) $row['last_sync_status']); ?></td><td><?php echo esc_html((string) $row['last_sync_error']); ?></td><td><?php echo esc_html((string) $row['listing_status']); ?></td></tr><?php endforeach; ?></tbody></table></div>
+    </div>
+
+    <details class="wei-box"><summary>Manual tools <span class="wei-badge warn">advanced</span></summary>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Preflight only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><input type="text" name="ebay_category_id" placeholder="optional category ID" /><textarea name="ebay_aspects_json" placeholder='optional aspects JSON' rows="1"></textarea><button class="button button-primary">Preflight + export product</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button button-secondary">Publish this eBay offer only</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_verify_api_publishing_readiness'); ?><input type="hidden" name="action" value="wei_verify_api_publishing_readiness" /><input type="number" name="product_id" placeholder="Woo product ID" required /><label><input type="checkbox" name="write_diagnostic_offer" value="1" /> write diagnostic offer</label><button class="button">Verify eBay API publishing readiness</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Sync stock for one product</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><input class="regular-text" name="order_id" placeholder="optional eBay order ID" /><button class="button">Import one eBay order</button></form>
         </div>
+        <details><summary>eBay-only SKU preparation</summary><div class="wei-grid"><div class="wei-card"><span>Products with _wei_ebay_sku</span><strong><?php echo esc_html((string) ($ebay_sku_status['products_with_wei_ebay_sku'] ?? 0)); ?></strong></div><div class="wei-card"><span>Products missing _wei_ebay_sku</span><strong><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? 0)); ?></strong></div></div><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_generate_ebay_skus'); ?><input type="hidden" name="action" value="wei_generate_ebay_skus" /><input type="number" name="batch_size" value="200" min="1" max="1000" /><button class="button button-primary">Generate missing eBay SKUs</button></form></details>
     </details>
 
-    <details class="postbox">
-        <summary>Order / stock sync summary <span class="wei-badge">pending <?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></span></summary>
-        <div class="wei-grid">
-            <div class="wei-metric"><span>Orders imported</span><strong><?php echo esc_html((string) ($autoLastSummary['orders_imported'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Woo stock updates from eBay orders</span><strong><?php echo esc_html((string) ($autoLastSummary['woo_stock_updates'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Pending Woo → eBay stock sync</span><strong><?php echo esc_html((string) ($autoSync['pending_stock_sync'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>eBay stock updates done</span><strong><?php echo esc_html((string) ($stockSummary['updated'] ?? $autoLastSummary['ebay_stock_updates'] ?? 0)); ?></strong></div>
-            <div class="wei-metric"><span>Stock sync errors</span><strong><?php echo esc_html((string) ($stockSummary['errors'] ?? 0)); ?></strong></div>
-        </div>
+    <details class="wei-box"><summary>Category mapping tools <span class="wei-badge"><?php echo esc_html((string) $categorySummary['total']); ?> categories</span></summary>
+        <div class="wei-grid"><div class="wei-card"><span>Manual mapped</span><strong><?php echo esc_html((string) $categorySummary['mapped_manual']); ?></strong></div><div class="wei-card"><span>Accepted auto</span><strong><?php echo esc_html((string) $categorySummary['accepted_auto']); ?></strong></div><div class="wei-card"><span>Needs review</span><strong><?php echo esc_html((string) $categorySummary['needs_category_review']); ?></strong></div><div class="wei-card"><span>Blocked</span><strong><?php echo esc_html((string) $categoryBlockedCount); ?></strong></div><div class="wei-card"><span>Last auto-map run</span><strong><?php echo esc_html((string) $categorySummary['last_auto_map_run']); ?></strong></div></div>
+        <div class="wei-actions"><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_auto_map_categories'); ?><input type="hidden" name="action" value="wei_auto_map_categories" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button button-primary">Re-evaluate category mappings</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_repair_blocked_category_mappings'); ?><input type="hidden" name="action" value="wei_repair_blocked_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Re-evaluate blocked only</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_repair_audit_category_groups'); ?><input type="hidden" name="action" value="wei_repair_audit_category_groups" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Repair from audit groups</button></form></div>
+        <h3>Teaching CSV export/import</h3><div class="wei-actions"><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export_category_teaching_csv'); ?><input type="hidden" name="action" value="wei_export_category_teaching_csv" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Export teaching CSV</button></form><form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_import_category_teaching_csv'); ?><input type="hidden" name="action" value="wei_import_category_teaching_csv" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="file" name="teaching_csv" accept=".csv,text/csv" required /><button class="button button-primary">Import filled teaching CSV</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_apply_manual_woo_category_mappings'); ?><input type="hidden" name="action" value="wei_apply_manual_woo_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button button-primary">Apply manual Woo category mappings to all products</button></form></div>
+        <h3>Reports and summaries</h3><pre class="wei-scroll"><?php echo esc_html($redactTechnical(wp_json_encode(['last_teaching_export' => $category_teaching_export_summary, 'last_teaching_import' => $category_teaching_import_summary, 'last_manual_apply' => $manual_woo_category_apply_summary, 'last_group_repair' => $category_group_repair_summary], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_test_category_teaching_rule_match'); ?><input type="hidden" name="action" value="wei_test_category_teaching_rule_match" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="number" name="product_id" placeholder="Woo product ID" /><button class="button">Test teaching rule match</button></form>
+        <h3>Category mapping reports</h3><p><?php foreach (['all' => 'All', 'mapped_auto' => 'Auto', 'mapped_manual' => 'Manual', 'needs_review' => 'Needs review', 'blocked' => 'Blocked'] as $filter => $label): ?><a href="<?php echo esc_url($filterUrl($filter)); ?>"><?php echo $currentFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === 'blocked' ? '' : ' / '; ?><?php endforeach; ?></p>
+        <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Source</th><th>Confidence</th><th>Status</th><th>Reason</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['source'] ?? '')); ?></td><td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_sanity_reason'] ?? $row['error_reason'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
     </details>
 
-    <details class="postbox">
-        <summary>API / OAuth status <span class="wei-badge <?php echo !empty($s['refresh_token']) ? 'ok' : 'warn'; ?>"><?php echo !empty($s['refresh_token']) ? 'connected' : 'not connected'; ?></span></summary>
-        <div class="wei-grid">
-            <div class="wei-metric"><span>Environment</span><strong><?php echo esc_html((string) ($s['environment'] ?? 'production')); ?></strong></div>
-            <div class="wei-metric"><span>Marketplace</span><strong><?php echo esc_html((string) ($s['marketplace_id'] ?? 'EBAY_DE')); ?></strong></div>
-            <div class="wei-metric"><span>Connection</span><strong><?php echo !empty($s['refresh_token']) ? '<span class="wei-ok">connected</span>' : '<span class="wei-warn">not connected</span>'; ?></strong></div>
-            <div class="wei-metric"><span>Token expires at</span><strong><?php echo esc_html((string) ($s['expires_at'] ?? '-')); ?></strong></div>
-        </div>
-        <div class="wei-actions" style="margin-top:12px;">
-            <a class="button button-primary" href="<?php echo esc_url($connect_url); ?>">Connect eBay</a>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_disconnect'); ?><input type="hidden" name="action" value="wei_disconnect" /><button class="button">Disconnect eBay</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_test'); ?><input type="hidden" name="action" value="wei_test_connection" /><button class="button">Test connection</button></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run readiness check</button></form>
-        </div>
-        <table class="widefat striped" style="max-width:900px;margin-top:12px;">
-            <tbody>
-                <tr><th scope="row">Last action</th><td><?php echo esc_html($lastAction); ?> <span class="<?php echo $lastStatusIsError ? 'wei-error' : 'wei-ok'; ?>"><?php echo esc_html($lastStatusIsError ? 'error' : 'ready'); ?></span></td></tr>
-                <?php if ($lastProductId !== ''): ?><tr><th scope="row">Product ID</th><td><code><?php echo esc_html($lastProductId); ?></code></td></tr><?php endif; ?>
-                <tr><th scope="row">Message</th><td><?php echo esc_html($lastShortMessage); ?></td></tr>
-                <?php if ($lastStage !== ''): ?><tr><th scope="row">Stage</th><td><code><?php echo esc_html($lastStage); ?></code></td></tr><?php endif; ?>
-            </tbody>
-        </table>
-        <details class="wei-technical" style="margin-top:12px;">
-            <summary>Show technical details</summary>
-            <pre><?php echo esc_html($redactTechnical(wp_json_encode($status, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
-        </details>
+    <details class="wei-box"><summary>eBay account / API status <span class="wei-badge <?php echo esc_attr($accountSetupMissingCount > 0 ? 'warn' : 'ok'); ?>"><?php echo esc_html($accountSetupMissingCount > 0 ? (string) $accountSetupMissingCount . ' missing' : 'configured'); ?></span></summary>
+        <div class="wei-actions"><a class="button button-primary" href="<?php echo esc_url($connect_url); ?>">Connect eBay</a><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_disconnect'); ?><input type="hidden" name="action" value="wei_disconnect" /><button class="button">Disconnect eBay</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_test'); ?><input type="hidden" name="action" value="wei_test_connection" /><button class="button">Test connection</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_upsert_inventory_location'); ?><input type="hidden" name="action" value="wei_upsert_inventory_location" /><button class="button">Create / Update inventory location</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_refresh_policies'); ?><input type="hidden" name="action" value="wei_refresh_policies" /><button class="button">Refresh policies from eBay</button></form><form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run API readiness check</button></form></div>
+        <div class="wei-grid"><div class="wei-card"><span>OAuth/token status</span><strong><?php echo esc_html((string) ($status['token_status'] ?? $lastAction)); ?></strong></div><div class="wei-card"><span>Policies</span><strong><?php echo esc_html($accountSetupConfigured ? 'configured' : 'missing IDs'); ?></strong></div><div class="wei-card"><span>Merchant location</span><strong><?php echo esc_html($locationKey !== '' ? $locationKey : 'missing'); ?></strong></div><div class="wei-card"><span>Privileges/programs</span><strong><?php echo esc_html((string) ($autoSync['account_restriction_status'] ?: '-')); ?></strong></div></div>
+        <pre class="wei-scroll"><?php echo esc_html($redactTechnical(wp_json_encode(['cached_policies' => $cached, 'last_status' => $status, 'auto_sync' => $autoSync], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
     </details>
 
-    <details class="postbox">
-        <summary>eBay-only SKU preparation <span class="wei-badge">missing <?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></span></summary>
-        <p class="description">Generates plugin-owned <code>_wei_ebay_sku</code> values only. WooCommerce <code>_sku</code> is never written, Allegro data is untouched, and no eBay publish/export is started.</p>
-        <table class="widefat striped" style="max-width:900px">
-            <tbody>
-                <tr><th scope="row">Products total eligible</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_total_eligible'] ?? '0')); ?></code></td></tr>
-                <tr><th scope="row">Products with _wei_ebay_sku</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_with_wei_ebay_sku'] ?? '0')); ?></code></td></tr>
-                <tr><th scope="row">Products missing _wei_ebay_sku</th><td><code><?php echo esc_html((string) ($ebay_sku_status['products_missing_wei_ebay_sku'] ?? '0')); ?></code></td></tr>
-                <tr><th scope="row">Generated in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['generated_in_last_run'] ?? '0')); ?></code></td></tr>
-                <tr><th scope="row">Conflicts/errors in last run</th><td><code><?php echo esc_html((string) ($ebay_sku_status['conflicts_in_last_run'] ?? '0')); ?></code> conflicts, <code><?php echo esc_html((string) ($ebay_sku_status['errors_in_last_run'] ?? '0')); ?></code> errors</td></tr>
-                <tr><th scope="row">Active run</th><td><code><?php echo esc_html((string) ($skuActiveRun['run_id'] ?? '-')); ?></code><?php if ($skuActiveRun): ?> processed <code><?php echo esc_html((string) ($skuActiveTotals['processed'] ?? '0')); ?></code>, remaining <code><?php echo esc_html((string) ($skuActiveRun['remaining_missing'] ?? '0')); ?></code><?php endif; ?></td></tr>
-                <tr><th scope="row">Last run</th><td><code><?php echo esc_html((string) ($skuLastRun['run_id'] ?? '-')); ?></code><?php if ($skuLastRun): ?> processed <code><?php echo esc_html((string) ($skuLastTotals['processed'] ?? '0')); ?></code>, wrote_woo_sku <code>false</code><?php endif; ?></td></tr>
-            </tbody>
-        </table>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:1em">
-            <?php wp_nonce_field('wei_generate_ebay_skus'); ?>
-            <input type="hidden" name="action" value="wei_generate_ebay_skus" />
-            <?php if (!empty($skuActiveRun['run_id'])): ?><input type="hidden" name="run_id" value="<?php echo esc_attr((string) $skuActiveRun['run_id']); ?>" /><?php endif; ?>
-            <label>Batch size <input type="number" name="batch_size" value="200" min="1" max="500" /></label>
-            <button class="button button-primary"><?php echo !empty($skuActiveRun['run_id']) ? 'Continue eBay SKU generation' : 'Generate missing eBay SKUs'; ?></button>
-        </form>
-    </details>
-
-    <details class="postbox">
-        <summary>German content status <span class="wei-badge <?php echo $translationConfigured ? 'ok' : 'warn'; ?>"><?php echo esc_html($translationLabel); ?></span></summary>
-        <table class="widefat striped" style="max-width:700px;">
-            <tbody>
-                <tr><th scope="row">German translation</th><td><?php echo esc_html($translationLabel); ?></td></tr>
-                <tr><th scope="row">Auto-generate</th><td><?php echo !empty($s['auto_generate_german_content_preflight']) ? '<span class="wei-ok">enabled</span>' : '<span class="wei-warn">disabled</span>'; ?></td></tr>
-                <tr><th scope="row">Regenerate on source change</th><td><?php echo !empty($s['regenerate_german_content_on_hash_change']) ? 'enabled' : 'disabled'; ?></td></tr>
-            </tbody>
-        </table>
-    </details>
-
-    <details class="postbox">
-        <summary>NBP/API price status <span class="wei-badge <?php echo is_numeric($nbpRate) ? 'ok' : 'warn'; ?>"><?php echo esc_html(is_numeric($nbpRate) ? number_format((float) $nbpRate, 4, '.', '') : 'missing'); ?></span></summary>
-        <table class="widefat striped" style="max-width:700px;">
-            <tbody>
-                <tr><th scope="row">NBP EUR rate</th><td><code><?php echo esc_html(is_numeric($nbpRate) ? number_format((float) $nbpRate, 4, '.', '') : 'missing'); ?></code></td></tr>
-                <tr><th scope="row">Effective date</th><td><?php echo esc_html($nbpEffectiveDate !== '' ? $nbpEffectiveDate : '-'); ?></td></tr>
-                <tr><th scope="row">Cache</th><td><?php echo esc_html($nbpCacheStatus); ?><?php if ($nbpCacheAgeLabel !== '-'): ?>, age <?php echo esc_html($nbpCacheAgeLabel); ?><?php endif; ?></td></tr>
-            </tbody>
-        </table>
-        <p class="description">eBay DE offer prices are resolved from WooCommerce PLN prices only for eBay payloads. WooCommerce regular/sale prices and Allegro data are not changed.</p>
-    </details>
-
-    <details class="postbox" id="category-mapping-summary">
-        <summary>Category mapping tools <span class="wei-badge <?php echo $categoryBlockedCount > 0 ? 'warn' : 'ok'; ?>"><?php echo esc_html((string) $categoryBlockedCount); ?> blocked</span><span class="wei-badge"><?php echo esc_html((string) $categoryMissingCount); ?> missing/review</span></summary>
-        <h2>Category mapping summary</h2>
-        <div class="wei-grid">
-            <div class="wei-metric"><span>Total categories</span><strong><?php echo esc_html((string) $categorySummary['total']); ?></strong></div>
-            <div class="wei-metric"><span>Mapped manual</span><strong><?php echo esc_html((string) $categorySummary['mapped_manual']); ?></strong></div>
-            <div class="wei-metric"><span>Accepted auto</span><strong><?php echo esc_html((string) $categorySummary['accepted_auto']); ?></strong></div>
-            <div class="wei-metric"><span>Needs category review</span><strong><?php echo esc_html((string) $categorySummary['needs_category_review']); ?></strong></div>
-            <div class="wei-metric"><span>Blocked by Sonstige</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_sonstige']); ?></strong></div>
-            <div class="wei-metric"><span>Blocked by expected keyword</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_expected_keyword']); ?></strong></div>
-            <div class="wei-metric"><span>Blocked by threshold</span><strong><?php echo esc_html((string) $categorySummary['blocked_by_threshold']); ?></strong></div>
-            <div class="wei-metric"><span>Last auto-map run</span><strong><?php echo esc_html((string) $categorySummary['last_auto_map_run']); ?></strong></div>
-        </div>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 12px 0 0;">
-            <?php wp_nonce_field('wei_auto_map_categories'); ?>
-            <input type="hidden" name="action" value="wei_auto_map_categories" />
-            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-            <button class="button button-primary">Re-evaluate category mappings</button>
-            <span class="description">Re-evaluates auto mappings and maps unmapped categories; manual mappings are not overwritten. Runs in WP Admin only; it does not export or publish offers.</span>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 8px 0 0;">
-            <?php wp_nonce_field('wei_repair_blocked_category_mappings'); ?>
-            <input type="hidden" name="action" value="wei_repair_blocked_category_mappings" />
-            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-            <button class="button">Re-evaluate blocked category mappings only</button>
-            <span class="description">Legacy sample-based repair. Prefer the audit group repair below now that the full CSV audit is available.</span>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 8px 0 0; border-left:4px solid #2271b1; padding-left:10px;">
-            <?php wp_nonce_field('wei_repair_audit_category_groups'); ?>
-            <input type="hidden" name="action" value="wei_repair_audit_category_groups" />
-            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-            <button class="button button-primary">Repair category issues from audit reason groups</button>
-            <span class="description">Uses the latest problems CSV reason groups and applies imported manual teaching rules before retrying automatic candidates. Detailed diagnostics are written to CSV/JSON, not the main log.</span>
-        </form>
-
-        <details style="margin: 10px 0 0; border-left:4px solid #46b450; padding-left:10px;">
-            <summary>Teaching CSV tools <span class="wei-badge"><?php echo esc_html((string) $teachingManualMappingsCount); ?> manual mappings</span></summary>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px;">
-                <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-                <button class="button">Export teaching CSV from latest audit problems</button>
-                <span class="description">Groups products by Woo category path, detected intent, sanity reason, bad category, and optional keyword family so you can fill one manual category per pattern.</span>
-            </form>
-            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px;">
-                <?php wp_nonce_field('wei_import_category_teaching_csv'); ?>
-                <input type="hidden" name="action" value="wei_import_category_teaching_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-                <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
-                <button class="button button-primary">Import filled teaching CSV</button>
-                <span class="description">Rows with manual_ebay_category_id create manual_woo_category_mapping rules by Woo category path. Expected-keyword mismatches are warnings; only hard safety mismatches are rejected.</span>
-            </form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 0 0 8px; border-left:4px solid #46b450; padding-left:10px;">
-                <?php wp_nonce_field('wei_apply_manual_woo_category_mappings'); ?>
-                <input type="hidden" name="action" value="wei_apply_manual_woo_category_mappings" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-                <button class="button button-primary">Apply manual Woo category mappings to all products</button>
-                <span class="description">Loads active manual_woo_category_mapping rules by Woo category path and writes category mappings for matching published products/categories only. Does not call taxonomy suggestions, eBay APIs, publish, or modify SKU/price/Allegro data.</span>
-            </form>
-            <?php if (!empty($manual_woo_category_apply_summary)): ?>
-                <?php
-                $applyErrors = is_array($manual_woo_category_apply_summary['errors_sample'] ?? null) ? $manual_woo_category_apply_summary['errors_sample'] : [];
-                $applyHardSafetyReasons = is_array($manual_woo_category_apply_summary['top_hard_safety_reasons'] ?? null) ? $manual_woo_category_apply_summary['top_hard_safety_reasons'] : [];
-                $applySkippedRows = is_array($manual_woo_category_apply_summary['skipped_sample_rows'] ?? null) ? $manual_woo_category_apply_summary['skipped_sample_rows'] : [];
-                ?>
-                <details style="margin-top:8px;">
-                    <summary>Last manual Woo category mapping apply summary</summary>
-                    <div class="wei-grid" style="margin-top:8px;">
-                        <div class="wei-metric"><span>manual_rules_loaded</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['manual_rules_loaded'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>woo_categories_matched</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['woo_categories_matched'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>products_scanned</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['products_scanned'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>products_matching_manual_categories</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['products_matching_manual_categories'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>mappings_written</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['mappings_written'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>already_mapped</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['already_mapped'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>skipped_by_hard_safety</span><strong><?php echo esc_html((string) ($manual_woo_category_apply_summary['skipped_by_hard_safety'] ?? 0)); ?></strong></div>
-                    </div>
-                    <?php if ($applyHardSafetyReasons !== []): ?>
-                        <p><strong>top_hard_safety_reasons</strong></p>
-                        <table class="widefat striped">
-                            <thead><tr><th>reason</th><th>count</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($applyHardSafetyReasons as $reason => $count): ?>
-                                <tr><td><code><?php echo esc_html((string) $reason); ?></code></td><td><?php echo esc_html((string) $count); ?></td></tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php endif; ?>
-                    <?php if ($applySkippedRows !== []): ?>
-                        <p><strong>skipped_sample_rows</strong></p>
-                        <table class="widefat striped">
-                            <thead><tr><th>reason</th><th>manual_ebay_category_id</th><th>manual_ebay_category_path</th><th>woo_category_path</th><th>product_count</th><th>sample_product_ids</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($applySkippedRows as $row): ?>
-                                <tr>
-                                    <td><code><?php echo esc_html((string) ($row['reason'] ?? '')); ?></code></td>
-                                    <td><code><?php echo esc_html((string) ($row['manual_ebay_category_id'] ?? '')); ?></code></td>
-                                    <td><?php echo esc_html((string) ($row['manual_ebay_category_path'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($row['product_count'] ?? '')); ?></td>
-                                    <td><code><?php echo esc_html((string) ($row['sample_product_ids'] ?? '')); ?></code></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php endif; ?>
-                    <?php if ($applyErrors !== []): ?>
-                        <p class="description">errors_sample</p>
-                        <ul>
-                            <?php foreach ($applyErrors as $error): ?><li><?php echo esc_html((string) $error); ?></li><?php endforeach; ?>
-                        </ul>
-                    <?php endif; ?>
-                </details>
-            <?php endif; ?>
-            <?php if (!empty($category_teaching_export_summary)): ?>
-                <?php $teachingReports = is_array($category_teaching_export_summary['reports'] ?? null) ? $category_teaching_export_summary['reports'] : []; ?>
-                <p class="description">Last teaching export: <?php echo esc_html((string) ($category_teaching_export_summary['groups_exported'] ?? 0)); ?> grouped rows.</p>
-                <ul>
-                    <?php foreach ($teachingReports as $label => $report): ?>
-                        <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a><?php echo isset($report['rows']) ? esc_html(' (' . (string) $report['rows'] . ' rows)') : ''; ?></li><?php endif; ?>
-                    <?php endforeach; ?>
-                </ul>
-            <?php endif; ?>
-            <?php if (!empty($category_teaching_import_summary)): ?>
-                <?php
-                $importedRuleKeys = is_array($category_teaching_import_summary['imported_rule_keys'] ?? null) ? $category_teaching_import_summary['imported_rule_keys'] : [];
-                $validationErrors = is_array($category_teaching_import_summary['validation_errors_sample'] ?? null) ? $category_teaching_import_summary['validation_errors_sample'] : [];
-                $importHardSafetyReasons = is_array($category_teaching_import_summary['top_hard_safety_reasons'] ?? null) ? $category_teaching_import_summary['top_hard_safety_reasons'] : [];
-                $importSkippedRows = is_array($category_teaching_import_summary['skipped_sample_rows'] ?? null) ? $category_teaching_import_summary['skipped_sample_rows'] : [];
-                ?>
-                <details style="margin-top:8px;">
-                    <summary>Last teaching import summary</summary>
-                    <div class="wei-grid" style="margin-top:8px;">
-                        <div class="wei-metric"><span>rows_read</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_read'] ?? $category_teaching_import_summary['rows'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>rows_with_manual_category_id</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_with_manual_category_id'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>rules_inserted</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rules_inserted'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>rules_updated</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rules_updated'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>rows_skipped</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_skipped'] ?? $category_teaching_import_summary['skipped_rows'] ?? 0)); ?></strong></div>
-                        <div class="wei-metric"><span>rows_rejected_by_safety</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['rows_rejected_by_safety'] ?? $category_teaching_import_summary['safety_failed_rows'] ?? 0)); ?></strong></div>
-                    </div>
-                    <?php if ($importHardSafetyReasons !== []): ?>
-                        <p><strong>top_hard_safety_reasons</strong></p>
-                        <table class="widefat striped">
-                            <thead><tr><th>reason</th><th>count</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($importHardSafetyReasons as $reason => $count): ?>
-                                <tr><td><code><?php echo esc_html((string) $reason); ?></code></td><td><?php echo esc_html((string) $count); ?></td></tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php endif; ?>
-                    <?php if ($importSkippedRows !== []): ?>
-                        <p><strong>skipped_sample_rows</strong></p>
-                        <table class="widefat striped">
-                            <thead><tr><th>row</th><th>reason</th><th>manual_ebay_category_id</th><th>manual_ebay_category_path</th><th>woo_category_path</th><th>marketplace_id</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($importSkippedRows as $row): ?>
-                                <tr>
-                                    <td><?php echo esc_html((string) ($row['row'] ?? '')); ?></td>
-                                    <td><code><?php echo esc_html((string) ($row['reason'] ?? '')); ?></code></td>
-                                    <td><code><?php echo esc_html((string) ($row['manual_ebay_category_id'] ?? '')); ?></code></td>
-                                    <td><?php echo esc_html((string) ($row['manual_ebay_category_path'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($row['marketplace_id'] ?? '')); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php endif; ?>
-                    <?php if ($validationErrors !== []): ?>
-                        <p><strong>validation_errors_sample</strong></p>
-                        <ul><?php foreach ($validationErrors as $validationError): ?><li><code><?php echo esc_html((string) $validationError); ?></code></li><?php endforeach; ?></ul>
-                    <?php endif; ?>
-                    <?php if ($importedRuleKeys !== []): ?>
-                        <p><strong>First 10 imported rule keys</strong></p>
-                        <table class="widefat striped">
-                            <thead><tr><th>marketplace_id</th><th>woo_category_path</th><th>woo_category_path_hash</th><th>detected_intent</th><th>title_keyword_family</th><th>manual_ebay_category_id</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($importedRuleKeys as $ruleKey): ?>
-                                <tr>
-                                    <td><?php echo esc_html((string) ($ruleKey['marketplace_id'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($ruleKey['woo_category_path'] ?? '')); ?></td>
-                                    <td><code><?php echo esc_html((string) ($ruleKey['woo_category_path_hash'] ?? '')); ?></code></td>
-                                    <td><?php echo esc_html((string) ($ruleKey['detected_intent'] ?? '')); ?></td>
-                                    <td><?php echo esc_html((string) ($ruleKey['title_keyword_family'] ?? '')); ?></td>
-                                    <td><code><?php echo esc_html((string) ($ruleKey['manual_ebay_category_id'] ?? '')); ?></code></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php endif; ?>
-                </details>
-            <?php endif; ?>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin: 10px 0 0;">
-                <?php wp_nonce_field('wei_test_category_teaching_rule_match'); ?>
-                <input type="hidden" name="action" value="wei_test_category_teaching_rule_match" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-                <label>Test teaching rule match product_id <input type="number" name="product_id" min="1" required /></label>
-                <button class="button">Test teaching rule match</button>
-            </form>
-            <?php if (!empty($category_teaching_match_diagnostic)): ?>
-                <details class="wei-technical" style="margin-top:8px;">
-                    <summary>Teaching rule match diagnostic</summary>
-                    <pre><?php echo esc_html(wp_json_encode($category_teaching_match_diagnostic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: ''); ?></pre>
-                </details>
-            <?php endif; ?>
-        </details>
-
-        <?php if (!empty($category_group_repair_summary)): ?>
-            <?php $repairReports = is_array($category_group_repair_summary['reports'] ?? null) ? $category_group_repair_summary['reports'] : []; ?>
-            <p class="description">Last audit group repair: processed <?php echo esc_html((string) ($category_group_repair_summary['processed'] ?? 0)); ?>, fixed <?php echo esc_html((string) ($category_group_repair_summary['fixed_count'] ?? 0)); ?>, still blocked <?php echo esc_html((string) ($category_group_repair_summary['still_blocked_count'] ?? 0)); ?>.</p>
-            <ul>
-                <?php foreach ($repairReports as $label => $report): ?>
-                    <?php if (is_array($report) && !empty($report['url'])): ?><li><a href="<?php echo esc_url((string) $report['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html(str_replace('_', ' ', (string) $label)); ?></a><?php echo isset($report['rows']) ? esc_html(' (' . (string) $report['rows'] . ' rows)') : ''; ?></li><?php endif; ?>
-                <?php endforeach; ?>
-            </ul>
-        <?php endif; ?>
-        <h3>Top 10 risky mappings</h3>
-        <div class="wei-scroll-table">
-        <table class="widefat striped">
-            <thead><tr><th>Woo category path</th><th>eBay categoryId</th><th>eBay category path</th><th>Confidence</th><th>Reason</th><th>Product count</th><th>eBay DE</th></tr></thead>
-            <tbody>
-            <?php foreach ($riskyCategoryRows as $row): ?>
-                <tr>
-                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
-                    <td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code></td>
-                    <td><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td>
-                    <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
-                    <td><?php echo esc_html((string) (($row['_ui_sanity_reason'] ?? '') !== '' ? $row['_ui_sanity_reason'] : (($row['error_reason'] ?? '') !== '' ? $row['error_reason'] : ($row['_ui_status'] ?? '')))); ?></td>
-                    <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
-                    <td><?php if ((string) ($row['_ui_category_url'] ?? '') !== ''): ?><a href="<?php echo esc_url((string) $row['_ui_category_url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html('Open on eBay DE'); ?></a><?php endif; ?></td>
-                </tr>
-            <?php endforeach; ?>
-            <?php if ($riskyCategoryRows === []): ?><tr><td colspan="7">No risky mappings found.</td></tr><?php endif; ?>
-            </tbody>
-        </table>
-        </div>
-    </details>
-
-    <details class="postbox">
-        <summary>API / OAuth account setup <span class="wei-badge <?php echo $accountSetupMissingCount > 0 ? 'warn' : 'ok'; ?>"><?php echo $accountSetupMissingCount > 0 ? esc_html((string) $accountSetupMissingCount . ' missing') : 'configured'; ?></span></summary>
-        <table class="widefat striped" style="max-width:800px;">
-            <tbody>
-                <tr><th scope="row">Location</th><td><?php echo esc_html($locationKey !== '' ? $locationKey . ' OK' : 'missing'); ?></td></tr>
-                <tr><th scope="row">Fulfillment policy</th><td><?php echo esc_html($fulfillmentId !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId, 'fulfillmentPolicyId') . ' OK' : 'missing'); ?></td></tr>
-                <tr><th scope="row">Payment policy</th><td><?php echo esc_html($paymentId !== '' ? $findPolicyName($paymentPolicies, $paymentId, 'paymentPolicyId') . ' OK' : 'missing'); ?></td></tr>
-                <tr><th scope="row">Return policy</th><td><?php echo esc_html($returnId !== '' ? $findPolicyName($returnPolicies, $returnId, 'returnPolicyId') . ' OK' : 'missing'); ?></td></tr>
-            </tbody>
-        </table>
-        <p class="description">Edit these fields in <strong>Advanced: eBay account setup</strong> below.</p>
-    </details>
-
-    <details class="postbox">
-        <summary>Advanced export / preflight tools <span class="wei-badge">manual actions</span></summary>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" />
-            <p><input type="number" name="product_id" placeholder="Woo product ID" />
-            <input type="text" name="ebay_category_id" placeholder="eBay category ID override (optional)" /></p>
-            <details>
-                <summary>Optional technical export inputs</summary>
-                <p><textarea name="ebay_aspects_json" class="large-text code" rows="4" placeholder='{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}'></textarea><br />
-                <span class="description">Optional per-product eBay aspects JSON saved before export.</span></p>
-            </details>
-            <button class="button button-primary">Preflight + export product</button>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" />
-            <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Preflight only</button></form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px; border-left:4px solid #dba617; padding-left:10px;"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" />
-            <input type="number" name="product_id" placeholder="Woo product ID" value="43535" /> <button class="button button-secondary">Publish this eBay offer only</button>
-            <span class="description">Safe manual test: runs preflight first, requires ready=true and an existing offer_id, then calls publishOffer only for that offer. Does not create/update inventory, offers, Woo SKU, Woo price or Allegro.</span></form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px; border-left:4px solid #2271b1; padding-left:10px;"><?php wp_nonce_field('wei_verify_api_publishing_readiness'); ?><input type="hidden" name="action" value="wei_verify_api_publishing_readiness" />
-            <p><input type="number" name="product_id" placeholder="Woo product ID" value="43535" /> <button class="button button-secondary">Verify eBay API publishing readiness</button></p>
-            <p><label><input type="checkbox" name="write_diagnostic_offer" value="1" /> Also create/update the Inventory API item/offer in diagnostic mode (no publishOffer)</label></p>
-            <span class="description">Safe single-product diagnostic for EBAY_DE Inventory API publishing: checks OAuth/app scopes, Account API privileges/programs, policies, merchant location, getInventoryItem/getOffer state, required publish fields, and createOffer/updateOffer warnings/errors. It never changes Woo SKU, Woo price, Allegro, global auto-publish, or calls publishOffer.</span></form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" />
-            <input type="number" name="product_id" placeholder="Woo product ID" /> <button class="button">Sync stock</button></form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><button class="button">Import one eBay order</button></form>
-    </details>
-
-    <details class="postbox">
-        <summary>Diagnostics and logs <span class="wei-badge <?php echo $latestLogHasError ? 'error' : ''; ?>"><?php echo $latestLogHasError ? 'latest error available' : esc_html((string) count((array) $logs) . ' log entries'); ?></span></summary>
-        <ul>
-            <?php foreach (array_slice((array) $logs, 0, 8) as $log): ?>
-                <li><strong><?php echo esc_html((string) ($log['at'] ?? '')); ?></strong> <?php echo esc_html($redactTechnical(wp_strip_all_tags((string) ($log['message'] ?? '')))); ?></li>
-            <?php endforeach; ?>
-        </ul>
-        <details class="wei-technical">
-            <summary>Show technical log details</summary>
-            <pre><?php echo esc_html($redactTechnical(wp_json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
-        </details>
-    </details>
-
-    <details class="postbox">
-        <summary>Advanced settings <span class="wei-badge"><?php echo esc_html($autoModeLabels[(string) ($s['auto_sync_mode'] ?? 'disabled')] ?? (string) ($s['auto_sync_mode'] ?? 'disabled')); ?></span></summary>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-        <?php wp_nonce_field('wei_save_settings'); ?>
-        <input type="hidden" name="action" value="wei_save_settings" />
-
-        <details class="postbox">
-            <summary>Scheduler settings</summary>
-            <p>Mode: <select name="auto_sync_mode">
-                <?php foreach ($autoModeLabels as $modeKey => $modeLabel): ?><option value="<?php echo esc_attr($modeKey); ?>" <?php selected(($s['auto_sync_mode'] ?? 'disabled'), $modeKey); ?>><?php echo esc_html($modeLabel); ?></option><?php endforeach; ?>
-            </select></p>
-            <p>Frequency: <select name="auto_sync_frequency">
-                <?php foreach ($frequencyLabels as $frequencyKey => $frequencyLabel): ?><option value="<?php echo esc_attr($frequencyKey); ?>" <?php selected(($s['auto_sync_frequency'] ?? 'hourly'), $frequencyKey); ?>><?php echo esc_html($frequencyLabel); ?></option><?php endforeach; ?>
-            </select></p>
-            <p>Preflight batch size: <input type="number" min="1" max="300" name="auto_sync_preflight_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_preflight_batch_size'] ?? 200)); ?>" class="small-text" /></p>
-            <p>Export batch size: <input type="number" min="1" max="50" name="auto_sync_export_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_export_batch_size'] ?? 20)); ?>" class="small-text" /></p>
-            <p>Stock batch size: <input type="number" min="1" max="300" name="auto_sync_stock_batch_size" value="<?php echo esc_attr((string) ($s['auto_sync_stock_batch_size'] ?? 100)); ?>" class="small-text" /></p>
-            <p><label><input type="checkbox" name="woo_to_ebay_stock_sync_enabled" value="1" <?php checked(!empty($s['woo_to_ebay_stock_sync_enabled'])); ?> /> Woo → eBay stock sync enabled</label></p>
-            <p><label><input type="checkbox" name="ebay_order_sync_enabled" value="1" <?php checked(!empty($s['ebay_order_sync_enabled'])); ?> /> eBay → Woo order sync enabled</label></p>
-            <p><label><input type="checkbox" name="auto_export_enabled" value="1" <?php checked(!empty($s['auto_export_enabled'])); ?> /> Export ready products automatically</label></p>
-            <p><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> Publish offers automatically (keep off while account restriction exists)</label></p>
-            <p>eBay stock sync mode: <select name="ebay_stock_sync_mode"><option value="set_zero_only" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'set_zero_only'); ?>>set_zero_only</option><option value="max_one" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'max_one'); ?>>max_one</option><option value="exact_stock" <?php selected(($s['ebay_stock_sync_mode'] ?? 'max_one'), 'exact_stock'); ?>>exact_stock</option></select></p>
-            <p>eBay order → Woo stock mode: <select name="ebay_order_stock_update_mode"><option value="set_zero" <?php selected(($s['ebay_order_stock_update_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['ebay_order_stock_update_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
-            <p class="description">Defaults are safe: auto sync disabled, auto export off, auto publish off. Stock mode <code>max_one</code> sends <code>availableQuantity=0</code> when Woo stock reaches zero.</p>
-        </details>
-
-        <details class="postbox">
-            <summary>API credentials</summary>
-            <table class="form-table" role="presentation">
-                <tbody>
-                    <tr><th scope="row">Environment</th><td><select name="environment"><option value="sandbox" <?php selected(($s['environment'] ?? ''), 'sandbox'); ?>>sandbox</option><option value="production" <?php selected(($s['environment'] ?? 'production'), 'production'); ?>>production</option></select></td></tr>
-                    <tr><th scope="row">Client ID</th><td><input type="text" name="client_id" value="<?php echo esc_attr($s['client_id'] ?? ''); ?>" class="regular-text" /> <span class="description">Current: <?php echo esc_html($maskSecret((string) ($s['client_id'] ?? ''))); ?></span></td></tr>
-                    <tr><th scope="row">Client Secret</th><td><input type="password" name="client_secret" value="" class="regular-text" autocomplete="off" placeholder="Leave blank to keep current" /> <span class="description">Current: <?php echo esc_html($maskSecret((string) ($s['client_secret'] ?? ''))); ?></span></td></tr>
-                    <tr><th scope="row">eBay RuName</th><td><input type="text" name="runame" value="<?php echo esc_attr($s['runame'] ?? ''); ?>" class="regular-text" /></td></tr>
-                    <tr><th scope="row">Marketplace ID</th><td><input type="text" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" class="regular-text" /></td></tr>
-                    <tr><th scope="row">Default eBay Category ID</th><td><input type="text" name="default_category_id" value="<?php echo esc_attr($s['default_category_id'] ?? ''); ?>" class="regular-text" /></td></tr>
-                    <tr><th scope="row">Callback URL</th><td><code><?php echo esc_html(admin_url('admin.php?page=ebay-auth-callback')); ?></code></td></tr>
-                    <tr><th scope="row">Authorize URL</th><td><code style="word-break:break-all"><?php echo esc_html($redactTechnical((string) $connect_url)); ?></code></td></tr>
-                </tbody>
-            </table>
-        </details>
-
-        <details class="postbox">
-            <summary>eBay account setup <span class="wei-badge <?php echo $accountSetupMissingCount > 0 ? 'warn' : 'ok'; ?>"><?php echo $accountSetupMissingCount > 0 ? esc_html((string) $accountSetupMissingCount . ' missing') : 'configured'; ?></span></summary>
-            <table class="widefat striped" style="max-width:800px;margin-bottom:12px;">
-                <tbody>
-                    <tr><th scope="row">Location</th><td><?php echo esc_html($locationKey !== '' ? $locationKey . ' OK' : 'missing'); ?></td></tr>
-                    <tr><th scope="row">Fulfillment policy</th><td><?php echo esc_html($fulfillmentId !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId, 'fulfillmentPolicyId') . ' OK' : 'missing'); ?></td></tr>
-                    <tr><th scope="row">Payment policy</th><td><?php echo esc_html($paymentId !== '' ? $findPolicyName($paymentPolicies, $paymentId, 'paymentPolicyId') . ' OK' : 'missing'); ?></td></tr>
-                    <tr><th scope="row">Return policy</th><td><?php echo esc_html($returnId !== '' ? $findPolicyName($returnPolicies, $returnId, 'returnPolicyId') . ' OK' : 'missing'); ?></td></tr>
-                </tbody>
-            </table>
-            <h3>Inventory Location</h3>
-            <p>Merchant Location Key: <input type="text" name="inventory_location_key" value="<?php echo esc_attr($s['inventory_location_key'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
-            <p>Name: <input type="text" name="inventory_location_name" value="<?php echo esc_attr($s['inventory_location_name'] ?? 'gpswiss-pl'); ?>" class="regular-text" /></p>
-            <p>Country: <input type="text" name="inventory_location_country" value="<?php echo esc_attr($s['inventory_location_country'] ?? 'PL'); ?>" class="regular-text" /></p>
-            <p>Postal code: <input type="text" name="inventory_location_postal_code" value="<?php echo esc_attr($s['inventory_location_postal_code'] ?? '08-460'); ?>" class="regular-text" /></p>
-            <p>City: <input type="text" name="inventory_location_city" value="<?php echo esc_attr($s['inventory_location_city'] ?? 'Sobolew'); ?>" class="regular-text" /></p>
-            <p>Address line 1: <input type="text" name="inventory_location_address_line_1" value="<?php echo esc_attr($s['inventory_location_address_line_1'] ?? ''); ?>" class="regular-text" /></p>
-            <h3>Business Policies (manual in eBay)</h3>
-            <p>Fulfillment policy: <select name="fulfillmentPolicyId"><option value="">-- select --</option><?php foreach ($fulfillmentPolicies as $policy): ?><?php $policyId = (string) ($policy['fulfillmentPolicyId'] ?? ''); ?><option value="<?php echo esc_attr($policyId); ?>" <?php selected($fulfillmentId, $policyId); ?>><?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)</option><?php endforeach; ?></select></p>
-            <p>Payment policy: <select name="paymentPolicyId"><option value="">-- select --</option><?php foreach ($paymentPolicies as $policy): ?><?php $policyId = (string) ($policy['paymentPolicyId'] ?? ''); ?><option value="<?php echo esc_attr($policyId); ?>" <?php selected($paymentId, $policyId); ?>><?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)</option><?php endforeach; ?></select></p>
-            <p>Return policy: <select name="returnPolicyId"><option value="">-- select --</option><?php foreach ($returnPolicies as $policy): ?><?php $policyId = (string) ($policy['returnPolicyId'] ?? ''); ?><option value="<?php echo esc_attr($policyId); ?>" <?php selected($returnId, $policyId); ?>><?php echo esc_html((string) ($policy['name'] ?? $policyId)); ?> (<?php echo esc_html($policyId); ?>)</option><?php endforeach; ?></select></p>
-        </details>
-
-        <details class="postbox">
-            <summary>German content settings</summary>
-            <p>Translation provider: <select name="translation_provider"><option value="disabled" <?php selected($provider, 'disabled'); ?>>Disabled</option><option value="google_cloud_translate" <?php selected($provider, 'google_cloud_translate'); ?>>Google Cloud Translate</option></select><br />
-                <span class="description">Used only for generated eBay DE meta content. WooCommerce title/description and Allegro data are not changed.</span></p>
-            <p>Google Translation API key: <input type="password" name="translation_api_key" value="" class="regular-text" autocomplete="off" placeholder="Leave blank to keep current" /> <span class="description">Current: <?php echo esc_html($maskSecret((string) ($s['translation_api_key'] ?? ''))); ?></span></p>
-            <p><label><input type="checkbox" name="auto_generate_german_content_preflight" value="1" <?php checked(!empty($s['auto_generate_german_content_preflight'])); ?> /> Auto-generate missing German content during preflight</label><br />
-                <span class="description">Preflight writes only <code>_wei_ebay_de_*</code> meta and does not call eBay inventory/offer/publish APIs.</span></p>
-            <p><label><input type="checkbox" name="regenerate_german_content_on_hash_change" value="1" <?php checked(!empty($s['regenerate_german_content_on_hash_change'])); ?> /> Regenerate German content when source hash changes</label></p>
-            <p><label><input type="checkbox" name="verbose_debug" value="1" <?php checked(!empty($s['verbose_debug'])); ?> /> Verbose debug mode</label><br />
-                <span class="description">Default off. When off, preflight/audit avoids logging full product payloads, aspects and taxonomy candidates to the main log.</span></p>
-        </details>
-
-        <details class="postbox">
-            <summary>SKU and aspect defaults</summary>
-            <p><label><input type="checkbox" name="use_woo_sku_for_ebay" value="1" disabled="disabled" /> Use WooCommerce SKU for eBay when present</label><br />
-                <span class="description"><strong>Disabled.</strong> eBay uses only the plugin-owned <code>_wei_ebay_sku</code> value, generated automatically when missing. WooCommerce <code>_sku</code> is never changed.</span></p>
-            <p>eBay-only SKU prefix: <input type="text" name="ebay_sku_prefix" value="<?php echo esc_attr((string) ($s['ebay_sku_prefix'] ?? 'GPSW')); ?>" class="regular-text" placeholder="GPSW" /></p>
-            <p><strong>WooCommerce SKU write-back:</strong> <code>disabled</code></p>
-            <p>Default manufacturer / Hersteller fallback: <input type="text" name="default_hersteller_fallback" value="<?php echo esc_attr($s['default_hersteller_fallback'] ?? ''); ?>" class="regular-text" placeholder="SEAT" /></p>
-            <p>Default eBay item condition: <select name="default_item_condition"><option value="USED" <?php selected(($s['default_item_condition'] ?? 'USED'), 'USED'); ?>>USED (used parts)</option><option value="FOR_PARTS_OR_NOT_WORKING" <?php selected(($s['default_item_condition'] ?? 'USED'), 'FOR_PARTS_OR_NOT_WORKING'); ?>>FOR_PARTS_OR_NOT_WORKING</option></select><br />
-                <span class="description">Sets the real Inventory API <code>condition</code> field. Do not rely on the Stan/Zustand aspect for item condition.</span></p>
-            <p>Category aspect fallbacks:<br /><textarea name="category_aspect_fallbacks" class="large-text code" rows="3" placeholder="179847|Hersteller|SEAT"><?php echo esc_textarea((string) ($s['category_aspect_fallbacks'] ?? '')); ?></textarea></p>
-            <p>Auto category confidence threshold: <input type="number" step="0.01" min="0.01" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) ($s['auto_category_confidence_threshold'] ?? \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" class="small-text" /></p>
-            <p>Legacy eBay order stock mode: <select name="stock_sync_mode"><option value="set_zero" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'set_zero'); ?>>Set to zero after eBay sale</option><option value="reduce" <?php selected(($s['stock_sync_mode'] ?? 'set_zero'), 'reduce'); ?>>Reduce by sold quantity</option></select></p>
-        </details>
-
-        <details class="postbox">
-            <summary>EBAY_DE price resolver</summary>
-            <p>Default markup percent: <input type="number" step="0.01" min="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_default_markup_percent'] ?? 25)); ?>" class="small-text" />%</p>
-            <p>Special category markup percent: <input type="number" step="0.01" min="0.01" name="ebay_special_category_markup_percent" value="<?php echo esc_attr((string) ($s['ebay_special_category_markup_percent'] ?? 30)); ?>" class="small-text" />%</p>
-            <p>NBP rate cache TTL: <input type="number" step="0.25" min="0.25" name="nbp_rate_cache_ttl_hours" value="<?php echo esc_attr((string) ($s['nbp_rate_cache_ttl_hours'] ?? 12)); ?>" class="small-text" /> hours</p>
-            <p class="description">Special Woo category slugs: <code>silniki-kompletne</code>, <code>kompletne-skrzynie</code>. The resolved EUR price is used in <code>pricingSummary.price.value</code> only.</p>
-        </details>
-
-        <details class="postbox">
-            <summary>Debug/diagnostics overrides</summary>
-            <p class="description">Dev/debug only. These exception fields remain available for troubleshooting and legacy fallbacks, but they are not part of the normal operational workflow.</p>
-            <p>Product Category Overrides (dev/debug):<br /><textarea name="product_category_overrides" class="large-text code" rows="3" placeholder="43582=179847"><?php echo esc_textarea((string) ($s['product_category_overrides'] ?? '')); ?></textarea></p>
-            <p>Legacy SKU Category Overrides:<br /><textarea name="sku_category_overrides" class="large-text code" rows="3" placeholder="CFM-001=179847"><?php echo esc_textarea((string) ($s['sku_category_overrides'] ?? '')); ?></textarea></p>
-            <p>Developer/debug JSON aspects fallback:<br /><textarea name="sku_aspect_overrides" class="large-text code" rows="7" placeholder='{&quot;CFM-001&quot;:{&quot;Hersteller&quot;:[&quot;SEAT&quot;]}}'><?php echo esc_textarea((string) ($s['sku_aspect_overrides'] ?? '')); ?></textarea></p>
-        </details>
-
-        <p><button class="button button-primary">Save settings</button></p>
-        </form>
-    </details>
-
-    <details class="postbox wei-actions">
-        <summary>Advanced account maintenance actions</summary>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_upsert_inventory_location'); ?><input type="hidden" name="action" value="wei_upsert_inventory_location" /><button class="button">Create / Update inventory location</button></form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_refresh_policies'); ?><input type="hidden" name="action" value="wei_refresh_policies" /><button class="button">Refresh policies from eBay</button></form>
-    </details>
-
-    <details class="postbox">
-        <summary>Category mapping reports / audit reports <span class="wei-badge"><?php echo esc_html((string) count($filteredCategoryRows)); ?> rows</span></summary>
-        <p>Auto-map scans WooCommerce product categories currently used by products, translates/normalizes the category query to German, and stores only confirmed high-confidence eBay DE leaf mappings automatically. Medium/low confidence rows remain blocked for export until reviewed.</p>
-        <p>
-            <?php foreach (['all' => 'All', 'mapped_auto' => 'mapped_auto', 'mapped_manual' => 'mapped_manual', 'needs_review' => 'needs_review', 'blocked' => 'blocked'] as $filter => $label): ?>
-                <a href="<?php echo esc_url($filterUrl($filter)); ?>"><?php echo $currentFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === 'blocked' ? '' : ' / '; ?>
-            <?php endforeach; ?>
-            <span style="margin-left:12px;">Sort: <a href="<?php echo esc_url($sortUrl('confidence')); ?>">confidence</a> / <a href="<?php echo esc_url($sortUrl('products')); ?>">products</a></span>
-        </p>
-        <div class="wei-scroll-table">
-        <table class="widefat striped">
-            <thead><tr><th>Woo category</th><th><a href="<?php echo esc_url($sortUrl('products')); ?>">Products</a></th><th>eBay categoryId</th><th>eBay category name/path</th><th>eBay DE link</th><th>Source</th><th><a href="<?php echo esc_url($sortUrl('confidence')); ?>">Confidence</a></th><th>Threshold</th><th>Status</th><th>Sanity reason</th><th>Last updated</th><th>Error / selected and alternatives</th><th>Manual fallback</th></tr></thead>
-            <tbody>
-            <?php foreach ($filteredCategoryRows as $row): ?>
-                <?php $statusValue = (string) ($row['_ui_status'] ?? ''); ?>
-                <?php $statusColor = in_array($statusValue, ['accepted_manual', 'accepted_auto'], true) ? '#008a20' : (in_array($statusValue, ['blocked_by_threshold', 'needs_category_review'], true) ? '#996800' : '#b32d2e'); ?>
-                <tr>
-                    <td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td>
-                    <td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td>
-                    <td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code></td>
-                    <td><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td>
-                    <td><?php if ((string) ($row['_ui_category_url'] ?? '') !== ''): ?><a href="<?php echo esc_url((string) $row['_ui_category_url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html('Open on eBay DE'); ?></a><?php endif; ?></td>
-                    <td><?php echo esc_html((string) ($row['source'] ?? '')); ?></td>
-                    <td><?php echo esc_html(isset($row['confidence']) ? number_format((float) $row['confidence'], 4) : ''); ?></td>
-                    <td><?php echo esc_html(number_format($thresholdValue, 4)); ?></td>
-                    <td><span style="color:<?php echo esc_attr($statusColor); ?>"><?php echo esc_html($statusValue); ?></span></td>
-                    <td><?php echo esc_html((string) ($row['_ui_sanity_reason'] ?? '')); ?></td>
-                    <td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td>
-                    <td>
-                        <?php echo esc_html((string) ($row['error_reason'] ?? '')); ?>
-                        <?php if ((string) ($row['_ui_best_suggestion'] ?? '') !== ''): ?><br /><strong><?php echo esc_html('Selected:'); ?></strong> <span class="description"><?php echo esc_html((string) $row['_ui_best_suggestion']); ?></span><?php endif; ?>
-                        <?php if ((string) ($row['_ui_rejected_best_reason'] ?? '') !== ''): ?><br /><span class="description"><?php echo esc_html('Rejected first suggestion: ' . (string) $row['_ui_rejected_best_reason']); ?></span><?php endif; ?>
-                        <?php if (!empty($row['_ui_top_candidates'])): ?>
-                            <br /><strong><?php echo esc_html('Top alternatives:'); ?></strong>
-                            <ol style="margin:4px 0 0 18px;">
-                                <?php foreach ((array) $row['_ui_top_candidates'] as $candidate): ?>
-                                    <li><code><?php echo esc_html((string) ($candidate['category_id'] ?? '')); ?></code> <?php echo esc_html((string) ($candidate['name'] ?? '')); ?> <span class="description"><?php echo esc_html(number_format((float) ($candidate['score'] ?? 0), 4) . ' · ' . (string) ($candidate['source'] ?? '') . (!empty($candidate['sanity_pass']) ? ' · sanity OK' : ' · ' . (string) ($candidate['sanity_reason'] ?? 'sanity failed'))); ?></span></li>
-                                <?php endforeach; ?>
-                            </ol>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                            <?php wp_nonce_field('wei_save_category_mapping'); ?>
-                            <input type="hidden" name="action" value="wei_save_category_mapping" />
-                            <input type="hidden" name="marketplace_id" value="<?php echo esc_attr($s['marketplace_id'] ?? 'EBAY_DE'); ?>" />
-                            <input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" />
-                            <input type="text" name="ebay_category_id" placeholder="179847" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" />
-                            <input type="text" name="ebay_category_name" placeholder="eBay category name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" />
-                            <input type="text" name="ebay_category_path" placeholder="eBay category path (optional)" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" />
-                            <button class="button">Save mapping</button>
-                        </form>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-        </div>
+    <details class="wei-box"><summary>Logs / debug <span class="wei-badge <?php echo esc_attr($latestLogHasError || $lastStatusIsError ? 'error' : 'ok'); ?>">recent</span></summary>
+        <h3>Recent status</h3><pre class="wei-scroll"><?php echo esc_html($redactTechnical(wp_json_encode(['last_action' => $lastAction, 'product_id' => $lastProductId, 'stage' => $lastStage, 'message' => $lastShortMessage, 'payload' => $lastStatusPayload], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre>
+        <h3>Recent logs/errors</h3><div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>At</th><th>Level</th><th>Message</th><th>Context</th></tr></thead><tbody><?php foreach ((array) $logs as $log): ?><tr><td><?php echo esc_html((string) ($log['at'] ?? '')); ?></td><td><?php echo esc_html((string) ($log['level'] ?? '')); ?></td><td><?php echo esc_html((string) ($log['message'] ?? '')); ?></td><td><pre class="wei-scroll"><?php echo esc_html($redactTechnical(wp_json_encode($log['context'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '')); ?></pre></td></tr><?php endforeach; ?></tbody></table></div>
     </details>
 </div>

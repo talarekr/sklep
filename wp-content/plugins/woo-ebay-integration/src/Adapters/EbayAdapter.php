@@ -429,7 +429,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
             update_post_meta($metaProductId, '_wei_ebay_sku', (string) $skuResolution['wei_ebay_sku']);
         }
         update_post_meta($metaProductId, '_wei_ebay_offer_id', $offer_id);
+        update_post_meta($metaProductId, '_wei_ebay_inventory_id', $sku);
         update_post_meta($metaProductId, '_wei_ebay_item_id', $listing_id);
+        update_post_meta($metaProductId, '_wei_ebay_listing_id', $listing_id);
+        update_post_meta($metaProductId, '_wei_ebay_public_url', $this->listing_public_url($listing_id, $marketplaceId));
+        update_post_meta($metaProductId, '_wei_ebay_last_export_at', gmdate('Y-m-d H:i:s'));
+        update_post_meta($metaProductId, '_wei_ebay_last_sync_status', $listing_id !== '' ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory'));
+        delete_post_meta($metaProductId, '_wei_ebay_last_sync_error');
+        if ($listing_id !== '') {
+            update_post_meta($metaProductId, '_wei_ebay_last_publish_at', gmdate('Y-m-d H:i:s'));
+            update_post_meta($metaProductId, '_wei_ebay_listing_status', 'published');
+        }
         update_post_meta($product_id, '_wei_ebay_last_payload_hash', hash('sha256', wp_json_encode(['inventory' => $itemPayload, 'offer' => $offerPayload]) ?: ''));
         update_post_meta($metaProductId, '_wei_ebay_last_synced_quantity', (string) max(0, (int) $product->get_stock_quantity()));
         update_post_meta($product_id, '_wei_ebay_export_status', $listing_id !== '' ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory'));
@@ -671,7 +681,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'ebay_response' => $published,
         ]);
         update_post_meta($metaProductId, '_wei_ebay_offer_id', $offerId);
+        update_post_meta($metaProductId, '_wei_ebay_inventory_id', (string) ($mapping['remote_inventory_id'] ?? $sku));
         update_post_meta($metaProductId, '_wei_ebay_item_id', $listingId);
+        update_post_meta($metaProductId, '_wei_ebay_listing_id', $listingId);
+        update_post_meta($metaProductId, '_wei_ebay_public_url', $this->listing_public_url($listingId, $marketplaceId));
+        update_post_meta($metaProductId, '_wei_ebay_last_publish_at', gmdate('Y-m-d H:i:s'));
+        update_post_meta($metaProductId, '_wei_ebay_last_sync_status', 'published');
+        update_post_meta($metaProductId, '_wei_ebay_listing_status', 'published');
+        delete_post_meta($metaProductId, '_wei_ebay_last_sync_error');
         update_post_meta($product_id, '_wei_ebay_export_status', 'published');
         $this->repo->upsert([
             'marketplace' => 'ebay',
@@ -2421,6 +2438,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             update_option('wei_ebay_global_status', 'blocked_by_ebay_account_restriction', false);
             update_option('wei_ebay_account_restriction_status', 'detected', false);
             update_post_meta($product_id, '_wei_ebay_export_status', $stage === 'publishOffer' ? 'publish_blocked_account' : 'export_error');
+            update_post_meta($product_id, '_wei_ebay_last_sync_status', 'error');
+            update_post_meta($product_id, '_wei_ebay_last_sync_error', $message);
         }
 
         $logContext = [

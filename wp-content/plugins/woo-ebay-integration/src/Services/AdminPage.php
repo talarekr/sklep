@@ -42,6 +42,11 @@ class AdminPage
         add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
         add_action('admin_post_wei_auto_sync_stock_now', [$this, 'auto_sync_stock_now']);
         add_action('admin_post_wei_auto_sync_export_now', [$this, 'auto_sync_export_now']);
+        add_action('admin_post_wei_sync_prices_only', [$this, 'sync_prices_only']);
+        add_action('admin_post_wei_sync_content_only', [$this, 'sync_content_only']);
+        add_action('admin_post_wei_sync_categories_only', [$this, 'sync_categories_only']);
+        add_action('admin_post_wei_sync_listing_meta_back', [$this, 'sync_listing_meta_back']);
+        add_action('admin_post_wei_sync_ebay_stock_to_woo', [$this, 'sync_ebay_stock_to_woo']);
         add_action('admin_post_wei_auto_sync_toggle_pause', [$this, 'auto_sync_toggle_pause']);
     }
 
@@ -85,11 +90,13 @@ class AdminPage
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
         $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
+        $product_sync_status_rows = $this->recent_product_sync_status_rows();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
     public function save_settings(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_save_settings');
         $s = $this->settings();
         $s['environment'] = in_array($_POST['environment'] ?? 'production', ['sandbox', 'production'], true) ? $_POST['environment'] : 'production';
@@ -158,12 +165,13 @@ class AdminPage
         exit;
     }
 
-    public function disconnect(): void { check_admin_referer('wei_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
-    public function test_connection(): void { check_admin_referer('wei_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }
-    public function run_readiness(): void { check_admin_referer('wei_readiness'); $res = $this->adapter->readiness_check(); $this->set_status('Readiness: '.wp_json_encode($res)); $this->go(); }
+    public function disconnect(): void { $this->require_manage_options(); check_admin_referer('wei_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
+    public function test_connection(): void { $this->require_manage_options(); check_admin_referer('wei_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }
+    public function run_readiness(): void { $this->require_manage_options(); check_admin_referer('wei_readiness'); $res = $this->adapter->readiness_check(); $this->set_status('Readiness: '.wp_json_encode($res)); $this->go(); }
 
     public function generate_ebay_skus(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_generate_ebay_skus');
         $batchSize = absint($_POST['batch_size'] ?? 200);
         $runId = sanitize_text_field((string) ($_POST['run_id'] ?? ''));
@@ -174,6 +182,7 @@ class AdminPage
 
     public function auto_map_categories(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_map_categories');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $res = $this->autoCategoryMapper->auto_map_used_categories($marketplaceId, 200);
@@ -184,6 +193,7 @@ class AdminPage
 
     public function repair_blocked_category_mappings(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_repair_blocked_category_mappings');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $readiness = get_option('wei_ebay_readiness_summary', []);
@@ -200,6 +210,7 @@ class AdminPage
 
     public function apply_manual_woo_category_mappings(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_apply_manual_woo_category_mappings');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $res = $this->autoCategoryMapper->apply_manual_woo_category_mappings_to_all_products($marketplaceId);
@@ -220,6 +231,7 @@ class AdminPage
 
     public function repair_audit_category_groups(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_repair_audit_category_groups');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $path = $this->latest_audit_report_path('problems_only_csv');
@@ -241,6 +253,7 @@ class AdminPage
 
     public function export_category_teaching_csv(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_export_category_teaching_csv');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $path = $this->latest_audit_report_path('problems_only_csv');
@@ -258,6 +271,7 @@ class AdminPage
 
     public function import_category_teaching_csv(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_import_category_teaching_csv');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $file = is_array($_FILES['teaching_csv'] ?? null) ? $_FILES['teaching_csv'] : [];
@@ -290,6 +304,7 @@ class AdminPage
 
     public function test_category_teaching_rule_match(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_test_category_teaching_rule_match');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $productId = absint($_POST['product_id'] ?? 0);
@@ -311,6 +326,7 @@ class AdminPage
 
     public function generate_missing_german_content_audit(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_generate_missing_german_content_audit');
         $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
         $restart = !empty($_POST['restart']);
@@ -331,6 +347,7 @@ class AdminPage
 
     public function export_product(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_export');
         $id = (int) ($_POST['product_id'] ?? 0);
         $category_id = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
@@ -351,6 +368,7 @@ class AdminPage
 
     public function sync_stock(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_sync');
         $id = (int) ($_POST['product_id'] ?? 0);
         $res = $this->adapter->sync_stock($id);
@@ -360,6 +378,7 @@ class AdminPage
 
     public function import_order(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_import_order');
         $res = $this->orderImporter->import_once();
         $this->set_status('Import order: ' . wp_json_encode($res));
@@ -369,6 +388,7 @@ class AdminPage
 
     public function auto_sync_readiness_now(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_sync_readiness_now');
         $res = $this->scheduler->run_readiness_scan(max(1, min(300, absint($_POST['batch_size'] ?? 200))));
         $status = [
@@ -388,6 +408,7 @@ class AdminPage
 
     public function full_category_audit(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_full_category_audit');
         $verboseDebug = !empty($_POST['verbose_debug']);
         $res = $this->scheduler->run_full_category_audit($verboseDebug);
@@ -416,6 +437,7 @@ class AdminPage
 
     public function auto_sync_orders_now(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_sync_orders_now');
         $res = $this->orderImporter->import_once();
         $this->set_status('Auto sync order import: ' . wp_json_encode($res));
@@ -424,6 +446,7 @@ class AdminPage
 
     public function auto_sync_stock_now(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_sync_stock_now');
         $res = $this->scheduler->process_stock_queue(max(1, min(300, absint($_POST['batch_size'] ?? 100))));
         $this->set_status('Auto sync stock queue: ' . wp_json_encode($res));
@@ -432,6 +455,7 @@ class AdminPage
 
     public function auto_sync_export_now(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_sync_export_now');
         $s = $this->settings();
         if (empty($s['auto_export_enabled'])) {
@@ -443,8 +467,49 @@ class AdminPage
         $this->go();
     }
 
+    public function sync_prices_only(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_sync_prices_only');
+        $this->set_status('Woo → eBay prices only: skeleton action registered; no eBay write performed until dedicated price-only implementation is enabled.');
+        $this->go();
+    }
+
+    public function sync_content_only(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_sync_content_only');
+        $this->set_status('Woo → eBay content only: skeleton action registered; no eBay write performed until dedicated content-only implementation is enabled.');
+        $this->go();
+    }
+
+    public function sync_categories_only(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_sync_categories_only');
+        $this->set_status('Woo → eBay categories/aspects only: skeleton action registered; use readiness scan/category audit for diagnostics. No eBay write performed.');
+        $this->go();
+    }
+
+    public function sync_listing_meta_back(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_sync_listing_meta_back');
+        $this->set_status('eBay → Woo listing status/listing IDs/public URLs: skeleton action registered; current export/publish flows already write known offer/listing URL meta. No price/content/stock overwrite performed.');
+        $this->go();
+    }
+
+    public function sync_ebay_stock_to_woo(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_sync_ebay_stock_to_woo');
+        $this->set_status('eBay → Woo stock sync: disabled skeleton. No Woo stock overwrite performed without a dedicated explicit implementation.');
+        $this->go();
+    }
+
     public function auto_sync_toggle_pause(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_auto_sync_toggle_pause');
         $s = $this->settings();
         $s['auto_sync_paused'] = empty($s['auto_sync_paused']) ? 1 : 0;
@@ -455,6 +520,7 @@ class AdminPage
 
     public function preflight_product(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_preflight');
         $id = (int) ($_REQUEST['product_id'] ?? 0);
         $res = $id > 0 ? $this->adapter->preflight_product($id) : ['result' => 'error', 'error' => 'missing_product_id'];
@@ -464,6 +530,7 @@ class AdminPage
 
     public function publish_product_offer_only(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_publish_product_offer_only');
         $id = (int) ($_POST['product_id'] ?? 0);
         $res = $id > 0 ? $this->adapter->publish_product_offer_only($id) : [
@@ -484,6 +551,7 @@ class AdminPage
 
     public function verify_api_publishing_readiness(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_verify_api_publishing_readiness');
         $id = (int) ($_POST['product_id'] ?? 0);
         $writeDiagnosticOffer = !empty($_POST['write_diagnostic_offer']);
@@ -502,6 +570,7 @@ class AdminPage
 
     public function save_category_mapping(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_save_category_mapping');
         $termId = (int) ($_POST['woo_term_id'] ?? 0);
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
@@ -533,6 +602,7 @@ class AdminPage
 
     public function upsert_inventory_location(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_upsert_inventory_location');
         $res = $this->adapter->upsert_inventory_location();
         $this->set_status('Inventory location: ' . wp_json_encode($res));
@@ -541,6 +611,7 @@ class AdminPage
 
     public function refresh_policies(): void
     {
+        $this->require_manage_options();
         check_admin_referer('wei_refresh_policies');
         $res = $this->adapter->refresh_policies();
         $this->set_status('Refresh policies: ' . wp_json_encode($res));
@@ -569,6 +640,53 @@ class AdminPage
         $report = is_array($reports[$key] ?? null) ? $reports[$key] : [];
         $path = trim((string) ($report['path'] ?? ''));
         return $path !== '' && is_readable($path) ? $path : '';
+    }
+
+    private function require_manage_options(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('No access');
+        }
+    }
+
+    private function recent_product_sync_status_rows(int $limit = 25): array
+    {
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => ['publish', 'draft', 'private'],
+            'posts_per_page' => max(1, min(100, $limit)),
+            'orderby' => 'modified',
+            'order' => 'DESC',
+            'meta_query' => [
+                'relation' => 'OR',
+                ['key' => '_wei_ebay_sku', 'compare' => 'EXISTS'],
+                ['key' => '_wei_ebay_offer_id', 'compare' => 'EXISTS'],
+                ['key' => '_wei_ebay_export_status', 'compare' => 'EXISTS'],
+                ['key' => '_wei_ebay_item_id', 'compare' => 'EXISTS'],
+            ],
+            'fields' => 'ids',
+            'no_found_rows' => true,
+        ]);
+        $rows = [];
+        foreach ((array) $query->posts as $productId) {
+            $productId = (int) $productId;
+            $rows[] = [
+                'product_id' => $productId,
+                'title' => get_the_title($productId),
+                'edit_url' => get_edit_post_link($productId, ''),
+                'sku' => (string) get_post_meta($productId, '_wei_ebay_sku', true),
+                'inventory_id' => (string) get_post_meta($productId, '_wei_ebay_inventory_id', true),
+                'offer_id' => (string) get_post_meta($productId, '_wei_ebay_offer_id', true),
+                'listing_id' => (string) get_post_meta($productId, '_wei_ebay_listing_id', true) ?: (string) get_post_meta($productId, '_wei_ebay_item_id', true),
+                'public_url' => (string) get_post_meta($productId, '_wei_ebay_public_url', true),
+                'last_export_at' => (string) get_post_meta($productId, '_wei_ebay_last_export_at', true),
+                'last_publish_at' => (string) get_post_meta($productId, '_wei_ebay_last_publish_at', true),
+                'last_sync_status' => (string) get_post_meta($productId, '_wei_ebay_last_sync_status', true) ?: (string) get_post_meta($productId, '_wei_ebay_export_status', true),
+                'last_sync_error' => (string) get_post_meta($productId, '_wei_ebay_last_sync_error', true) ?: (string) get_post_meta($productId, '_wei_ebay_last_preflight_error', true),
+                'listing_status' => (string) get_post_meta($productId, '_wei_ebay_listing_status', true),
+            ];
+        }
+        return $rows;
     }
 
     private function settings(): array
