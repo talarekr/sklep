@@ -49,6 +49,9 @@ class AdminPage
         add_action('admin_post_wei_sync_listing_meta_back', [$this, 'sync_listing_meta_back']);
         add_action('admin_post_wei_sync_ebay_stock_to_woo', [$this, 'sync_ebay_stock_to_woo']);
         add_action('admin_post_wei_auto_sync_toggle_pause', [$this, 'auto_sync_toggle_pause']);
+        add_action('admin_post_wei_ebay_sync_now', [$this, 'ebay_sync_now']);
+        add_action('admin_post_wei_ebay_process_queue_now', [$this, 'ebay_process_queue_now']);
+        add_action('admin_post_wei_ebay_rebuild_ready_queue', [$this, 'ebay_rebuild_ready_queue']);
     }
 
     public function register_menu(): void
@@ -715,6 +718,35 @@ class AdminPage
         $this->go();
     }
 
+    public function ebay_sync_now(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_sync_now');
+        $res = $this->scheduler->run_checkpoint_queue_sync();
+        $this->set_status('eBay sync run finished: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function ebay_process_queue_now(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_process_queue_now');
+        $batchSize = max(1, min(100, absint($_POST['batch_size'] ?? 50)));
+        $res = $this->scheduler->process_change_queue($batchSize);
+        $this->set_status('eBay queue processed: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function ebay_rebuild_ready_queue(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_rebuild_ready_queue');
+        $batchSize = max(1, min(100, absint($_POST['batch_size'] ?? 50)));
+        $res = $this->scheduler->rebuild_queue_for_ready_products($batchSize);
+        $this->set_status('eBay ready-products queue rebuilt: ' . wp_json_encode($res));
+        $this->go();
+    }
+
     public function auto_sync_toggle_pause(): void
     {
         $this->require_manage_options();
@@ -903,9 +935,9 @@ class AdminPage
     private function light_auto_sync_status(array $settings): array
     {
         $frequency = (string) ($settings['auto_sync_frequency'] ?? 'hourly');
-        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(AutoSyncScheduler::HOOK_RUN, [], AutoSyncScheduler::CRON_GROUP) : false;
+        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(AutoSyncScheduler::HOOK_DELTA_SYNC, [], AutoSyncScheduler::CRON_GROUP) : false;
         if (!$next) {
-            $next = wp_next_scheduled(AutoSyncScheduler::HOOK_RUN);
+            $next = wp_next_scheduled(AutoSyncScheduler::HOOK_DELTA_SYNC);
         }
 
         return [
@@ -918,6 +950,11 @@ class AdminPage
             'next_run' => $next ? gmdate('Y-m-d H:i:s', (int) $next) : '-',
             'last_summary' => $this->summarize_option_array('wei_ebay_last_run_summary'),
             'pending_stock_sync' => $this->light_pending_stock_count(),
+            'queued_products_count' => AutoSyncScheduler::queue_count('pending'),
+            'failed_queue_count' => AutoSyncScheduler::queue_count('failed'),
+            'checkpoint' => $this->summarize_option_array('wei_ebay_sync_checkpoints'),
+            'queue_summary' => $this->summarize_option_array('wei_ebay_queue_summary'),
+            'hook' => AutoSyncScheduler::HOOK_DELTA_SYNC,
             'woo_to_ebay_stock_sync_enabled' => !empty($settings['woo_to_ebay_stock_sync_enabled']),
             'ebay_stock_sync_mode' => (string) ($settings['ebay_stock_sync_mode'] ?? 'max_one'),
             'ebay_order_sync_enabled' => !empty($settings['ebay_order_sync_enabled']),
