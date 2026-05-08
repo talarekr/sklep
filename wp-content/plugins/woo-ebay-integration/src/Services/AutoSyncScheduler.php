@@ -8,10 +8,14 @@ use WEI\Plugin;
 class AutoSyncScheduler
 {
     public const HOOK_RUN = 'wei_ebay_auto_sync_run';
+    public const HOOK_DELTA_SYNC = 'wei_ebay_run_scheduled_sync';
     public const HOOK_STOCK = 'wei_ebay_process_stock_sync_queue';
     public const CRON_GROUP = 'wei_ebay_auto_sync';
     private const LOCK_KEY = 'wei_ebay_auto_sync_lock';
-    private const LOCK_TTL = 3600;
+    private const DELTA_LOCK_KEY = 'wei_ebay_delta_sync_lock';
+    private const CHECKPOINT_OPTION = 'wei_ebay_sync_checkpoints';
+    private const QUEUE_BATCH_SIZE = 50;
+    private const LOCK_TTL = 900;
     private const READINESS_NOT_READY_LIMIT = 50;
     private const READINESS_BUCKET_LIMIT = 25;
     private const FULL_CATEGORY_AUDIT_BATCH_SIZE = 150;
@@ -29,6 +33,7 @@ class AutoSyncScheduler
     {
         add_filter('cron_schedules', [$this, 'cron_schedules']);
         add_action('init', [$this, 'ensure_scheduled']);
+        add_action(self::HOOK_DELTA_SYNC, [$this, 'run_checkpoint_queue_sync']);
         add_action(self::HOOK_RUN, [$this, 'run_scheduled']);
         add_action(self::HOOK_STOCK, [$this, 'process_stock_queue']);
         add_action('woocommerce_reduce_order_stock', [$this, 'queue_order_stock_sync']);
@@ -37,6 +42,10 @@ class AutoSyncScheduler
         add_action('woocommerce_order_status_processing', [$this, 'queue_order_id_stock_sync']);
         add_action('woocommerce_order_status_completed', [$this, 'queue_order_id_stock_sync']);
         add_action('save_post_product', [$this, 'queue_saved_product_stock_sync'], 10, 3);
+        add_action('woocommerce_new_product', [$this, 'queue_new_product_sync']);
+        add_action('woocommerce_update_product', [$this, 'queue_updated_product_sync']);
+        add_action('woocommerce_product_set_regular_price', [$this, 'queue_product_price_sync']);
+        add_action('woocommerce_product_set_sale_price', [$this, 'queue_product_price_sync']);
     }
 
     public function cron_schedules(array $schedules): array
@@ -57,15 +66,15 @@ class AutoSyncScheduler
 
         $frequency = $this->frequency($settings);
         if ($this->action_scheduler_available()) {
-            $next = as_next_scheduled_action(self::HOOK_RUN, [], self::CRON_GROUP);
+            $next = as_next_scheduled_action(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP);
             if (!$next) {
-                as_schedule_recurring_action(time() + 60, $this->frequency_seconds($frequency), self::HOOK_RUN, [], self::CRON_GROUP, true);
+                as_schedule_recurring_action(time() + 60, 15 * MINUTE_IN_SECONDS, self::HOOK_DELTA_SYNC, [], self::CRON_GROUP, true);
             }
             return;
         }
 
-        if (!wp_next_scheduled(self::HOOK_RUN)) {
-            wp_schedule_event(time() + 60, $this->wp_cron_recurrence($frequency), self::HOOK_RUN);
+        if (!wp_next_scheduled(self::HOOK_DELTA_SYNC)) {
+            wp_schedule_event(time() + 60, 'wei_every_15_minutes', self::HOOK_DELTA_SYNC);
         }
     }
 
@@ -73,11 +82,16 @@ class AutoSyncScheduler
     {
         if ($this->action_scheduler_available()) {
             as_unschedule_all_actions(self::HOOK_RUN, [], self::CRON_GROUP);
+            as_unschedule_all_actions(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP);
             as_unschedule_all_actions(self::HOOK_STOCK, [], self::CRON_GROUP);
         }
         $runTs = wp_next_scheduled(self::HOOK_RUN);
         if ($runTs) {
             wp_unschedule_event($runTs, self::HOOK_RUN);
+        }
+        $deltaTs = wp_next_scheduled(self::HOOK_DELTA_SYNC);
+        if ($deltaTs) {
+            wp_unschedule_event($deltaTs, self::HOOK_DELTA_SYNC);
         }
         $stockTs = wp_next_scheduled(self::HOOK_STOCK);
         if ($stockTs) {
@@ -87,65 +101,97 @@ class AutoSyncScheduler
 
     public function run_scheduled(): array
     {
+        return $this->run_checkpoint_queue_sync();
+    }
+
+    public function run_checkpoint_queue_sync(?int $batchSize = null): array
+    {
         $settings = $this->settings();
-        $mode = (string) ($settings['auto_sync_mode'] ?? 'disabled');
-        if ($mode === 'disabled') {
-            $this->set_global_status('disabled');
+        $this->logger->info('EBAY_SYNC_START', ['hook' => self::HOOK_DELTA_SYNC]);
+        $this->logger->info('EBAY_SYNC_NO_FULL_SCAN', ['full_product_scan' => false, 'full_audit' => false, 'content_generation' => false]);
+
+        if ((string) ($settings['auto_sync_mode'] ?? 'disabled') === 'disabled') {
+            $this->save_checkpoint(['last_run_status' => 'disabled']);
             return ['result' => 'skipped', 'reason' => 'disabled'];
         }
         if (!empty($settings['auto_sync_paused'])) {
-            $this->set_global_status('paused');
+            $this->save_checkpoint(['last_run_status' => 'paused']);
             return ['result' => 'skipped', 'reason' => 'paused'];
         }
-        if (!$this->acquire_lock('scheduler')) {
-            $this->logger->warning('eBay auto sync skipped because previous run is still active', ['mode' => $mode]);
+
+        $checkpoint = $this->get_checkpoint();
+        $this->logger->info('EBAY_SYNC_CHECKPOINT_LOADED', $this->compact_checkpoint($checkpoint));
+
+        if (!$this->acquire_delta_lock('ebay_event_sync')) {
+            $this->logger->warning('EBAY_SYNC_LOCK_ALREADY_RUNNING', ['lock' => self::DELTA_LOCK_KEY]);
             return ['result' => 'skipped', 'reason' => 'locked'];
         }
+        $this->logger->info('EBAY_SYNC_LOCK_ACQUIRED', ['lock' => self::DELTA_LOCK_KEY]);
 
-        $runId = 'wei_' . gmdate('Ymd_His') . '_' . wp_generate_password(6, false, false);
-        $summary = $this->blank_summary($runId, $mode);
-        $this->set_global_status('running', $summary);
+        $summary = [
+            'result' => 'success',
+            'orders_imported' => 0,
+            'orders_skipped' => 0,
+            'listing_meta_checked' => 0,
+            'queue_processed' => 0,
+            'queue_succeeded' => 0,
+            'queue_failed' => 0,
+            'queue_skipped' => 0,
+            'errors' => 0,
+            'batch_size' => $batchSize ?? $this->queue_batch_size($settings),
+            'started_at' => gmdate('Y-m-d H:i:s'),
+        ];
 
         try {
-            if (in_array($mode, ['preflight_only', 'export_ready_products', 'full_sync'], true)) {
-                $summary = array_merge($summary, $this->run_readiness_scan($this->preflight_batch_size($settings)));
-            }
-            if (in_array($mode, ['orders_stock_only', 'full_sync'], true) && !empty($settings['ebay_order_sync_enabled'])) {
-                $orders = $this->orderImporter->import_once();
-                $summary['orders_imported'] = count((array) ($orders['processed'] ?? []));
-                $summary['woo_stock_updates'] = count(array_filter((array) ($orders['processed'] ?? []), static fn ($row): bool => is_array($row) && (string) ($row['result'] ?? '') === 'stock_synced_to_woo'));
+            if (!empty($settings['ebay_order_sync_enabled'])) {
+                $this->logger->info('EBAY_SYNC_ORDER_ENDPOINT_CALL', ['since' => (string) ($checkpoint['last_ebay_order_sync_at'] ?? ''), 'limit' => 50]);
+                $orders = $this->orderImporter->import_since((string) ($checkpoint['last_ebay_order_sync_at'] ?? ''), 50);
                 if (($orders['result'] ?? '') === 'error') {
                     $summary['errors']++;
-                }
-            }
-            if (in_array($mode, ['orders_stock_only', 'full_sync'], true) && !empty($settings['woo_to_ebay_stock_sync_enabled'])) {
-                $stock = $this->process_stock_queue($this->stock_batch_size($settings), false);
-                $summary['ebay_stock_updates'] = (int) ($stock['updated'] ?? 0);
-                $summary['pending_stock_sync'] = self::pending_stock_count();
-                $summary['errors'] += (int) ($stock['errors'] ?? 0);
-            }
-            if (in_array($mode, ['export_ready_products', 'full_sync'], true)) {
-                $export = $this->run_export_batch($this->export_batch_size($settings));
-                $summary['exported'] = (int) ($export['exported'] ?? 0);
-                $summary['published'] = (int) ($export['published'] ?? 0);
-                $summary['skipped'] += (int) ($export['skipped'] ?? 0);
-                $summary['errors'] += (int) ($export['errors'] ?? 0);
-                if (($export['status'] ?? '') === 'blocked_by_ebay_account_restriction') {
-                    $summary['status'] = 'blocked_by_ebay_account_restriction';
+                    $this->save_checkpoint(['last_run_status' => 'error', 'last_error' => (string) ($orders['error'] ?? 'order_sync_error')]);
+                } else {
+                    $processed = (array) ($orders['processed'] ?? []);
+                    $summary['orders_imported'] = count($processed);
+                    if ($processed === []) {
+                        $summary['orders_skipped']++;
+                        $this->logger->info('EBAY_SYNC_NO_NEW_ORDERS', ['reason' => (string) ($orders['reason'] ?? 'empty_delta')]);
+                    }
+                    $this->save_checkpoint(['last_ebay_order_sync_at' => gmdate('Y-m-d H:i:s')]);
                 }
             }
 
+            $listing = $this->sync_listing_meta_delta(50);
+            $summary['listing_meta_checked'] = (int) ($listing['checked'] ?? 0);
+            $this->save_checkpoint(['last_ebay_offer_sync_at' => gmdate('Y-m-d H:i:s'), 'last_ebay_inventory_sync_at' => gmdate('Y-m-d H:i:s')]);
+
+            $this->logger->info('EBAY_SYNC_QUEUE_LOADED', ['queued' => self::queue_count('pending'), 'failed' => self::queue_count('failed'), 'batch_size' => $summary['batch_size']]);
+            $queue = $this->process_change_queue((int) $summary['batch_size'], false);
+            $summary['queue_processed'] = (int) ($queue['processed'] ?? 0);
+            $summary['queue_succeeded'] = (int) ($queue['succeeded'] ?? 0);
+            $summary['queue_failed'] = (int) ($queue['failed'] ?? 0);
+            $summary['queue_skipped'] = (int) ($queue['skipped'] ?? 0);
+            $summary['errors'] += (int) ($queue['failed'] ?? 0);
+
+            $status = $summary['errors'] > 0 ? 'completed_with_errors' : 'completed';
             $summary['finished_at'] = gmdate('Y-m-d H:i:s');
-            $summary['pending_stock_sync'] = self::pending_stock_count();
-            $finalStatus = (string) ($summary['status'] ?? '');
-            if ($finalStatus === '') {
-                $finalStatus = $summary['errors'] > 0 ? 'completed_with_errors' : 'completed';
-            }
-            $this->set_global_status($finalStatus, $summary);
-            $this->logger->info('eBay auto sync run completed', $summary + ['wrote_woo_sku' => false, 'wrote_woo_price' => false, 'wrote_allegro' => false]);
-            return ['result' => $summary['errors'] > 0 ? 'completed_with_errors' : 'success', 'summary' => $summary];
+            $this->save_checkpoint([
+                'last_success_at' => gmdate('Y-m-d H:i:s'),
+                'last_success_ts' => time(),
+                'last_run_status' => $status,
+                'last_error' => $summary['errors'] > 0 ? 'one_or_more_queue_items_failed' : '',
+                'last_processed_counts' => $summary,
+            ]);
+            $this->set_global_status($status, $summary);
+            $this->logger->info('EBAY_SYNC_DONE', $summary);
+            return ['result' => $status === 'completed' ? 'success' : 'completed_with_errors', 'summary' => $summary];
+        } catch (\Throwable $throwable) {
+            $this->save_checkpoint(['last_run_status' => 'error', 'last_error' => $throwable->getMessage()]);
+            $this->set_global_status('error', ['last_error' => $throwable->getMessage()]);
+            $this->logger->error('EBAY_SYNC_PRODUCT_FAILED', ['stage' => 'sync_unhandled_exception', 'error' => $throwable->getMessage()]);
+            return ['result' => 'error', 'error' => $throwable->getMessage()];
         } finally {
-            $this->release_lock();
+            $this->release_delta_lock();
+            $this->logger->info('EBAY_SYNC_LOCK_RELEASED', ['lock' => self::DELTA_LOCK_KEY]);
         }
     }
 
@@ -1234,7 +1280,7 @@ class AutoSyncScheduler
         if (!$update || wp_is_post_revision($postId)) {
             return;
         }
-        $this->queue_product_id($postId, 'save_post_product');
+        $this->queue_product_change($postId, 'content_changed', 'save_post_product');
     }
 
     public function queue_product_id(int $productId, string $source): void
@@ -1250,8 +1296,235 @@ class AutoSyncScheduler
         }
         update_post_meta($productId, '_wei_ebay_stock_sync_source', $source);
         update_post_meta($productId, '_wei_ebay_export_status', 'stock_sync_pending_to_ebay');
+        $this->queue_product_change($productId, 'stock_changed', $source);
         $this->logger->info('Woo stock change queued for eBay sync', ['source' => $source, 'product_id' => $productId, 'wrote_allegro' => false]);
         $this->schedule_stock_queue_once();
+    }
+
+    public function queue_new_product_sync(int $productId): void
+    {
+        $this->queue_product_change($productId, 'publish_requested', 'woocommerce_new_product');
+    }
+
+    public function queue_updated_product_sync(int $productId): void
+    {
+        $this->queue_product_change($productId, 'content_changed', 'woocommerce_update_product');
+        $this->queue_product_change($productId, 'price_changed', 'woocommerce_update_product');
+    }
+
+    public function queue_product_price_sync($product): void
+    {
+        if (is_object($product) && method_exists($product, 'get_id')) {
+            $this->queue_product_change((int) $product->get_id(), 'price_changed', 'woocommerce_price_change');
+        }
+    }
+
+    public function queue_product_change(int $productId, string $reason, string $source = 'manual'): void
+    {
+        if ($productId <= 0 || (get_post_type($productId) !== 'product' && get_post_type($productId) !== 'product_variation')) {
+            return;
+        }
+        $allowed = ['stock_changed', 'price_changed', 'content_changed', 'category_changed', 'publish_requested'];
+        if (!in_array($reason, $allowed, true)) {
+            $reason = 'content_changed';
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $now = gmdate('Y-m-d H:i:s');
+        $existingId = (int) $wpdb->get_var($wpdb->prepare("SELECT id FROM {$table} WHERE product_id=%d AND reason=%s LIMIT 1", $productId, $reason));
+        $data = ['status' => 'pending', 'queued_at' => $now, 'updated_at' => $now, 'last_error' => '', 'source' => $source];
+        if ($existingId > 0) {
+            $wpdb->update($table, $data, ['id' => $existingId]);
+        } else {
+            $wpdb->insert($table, $data + ['product_id' => $productId, 'reason' => $reason, 'attempts' => 0]);
+        }
+        update_post_meta($productId, '_wei_ebay_last_sync_status', 'queued_' . $reason);
+        update_post_meta($productId, '_wei_ebay_sync_queued_at', $now);
+        $this->logger->info('EBAY_SYNC_PRODUCT_QUEUED', ['product_id' => $productId, 'reason' => $reason, 'source' => $source]);
+    }
+
+    public function process_change_queue(int $batchSize = self::QUEUE_BATCH_SIZE, bool $withLock = true): array
+    {
+        if ($withLock && !$this->acquire_delta_lock('ebay_queue_sync')) {
+            $this->logger->warning('EBAY_SYNC_LOCK_ALREADY_RUNNING', ['lock' => self::DELTA_LOCK_KEY, 'mode' => 'ebay_queue_sync']);
+            return ['result' => 'skipped', 'reason' => 'locked', 'processed' => 0, 'succeeded' => 0, 'failed' => 0, 'skipped' => 0];
+        }
+        try {
+            $rows = $this->queue_rows(max(1, min(100, $batchSize)));
+            $summary = ['result' => 'success', 'processed' => 0, 'succeeded' => 0, 'failed' => 0, 'skipped' => 0];
+            foreach ($rows as $row) {
+                $summary['processed']++;
+                $result = $this->process_queue_row($row);
+                $bucket = (string) ($result['bucket'] ?? 'failed');
+                if (isset($summary[$bucket])) {
+                    $summary[$bucket]++;
+                }
+            }
+            update_option('wei_ebay_queue_summary', $summary + ['last_run' => gmdate('Y-m-d H:i:s'), 'queued' => self::queue_count('pending'), 'failed_count' => self::queue_count('failed')], false);
+            return $summary;
+        } finally {
+            if ($withLock) {
+                $this->release_delta_lock();
+                $this->logger->info('EBAY_SYNC_LOCK_RELEASED', ['lock' => self::DELTA_LOCK_KEY, 'mode' => 'ebay_queue_sync']);
+            }
+        }
+    }
+
+    public function rebuild_queue_for_ready_products(int $batchSize = self::QUEUE_BATCH_SIZE): array
+    {
+        $ids = $this->product_ids_by_export_status('ready', max(1, min(100, $batchSize)));
+        foreach ($ids as $productId) {
+            $this->queue_product_change((int) $productId, 'publish_requested', 'rebuild_ready_products');
+        }
+        return ['result' => 'success', 'queued' => count($ids), 'batch_size' => max(1, min(100, $batchSize))];
+    }
+
+    private function process_queue_row(array $row): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $id = (int) ($row['id'] ?? 0);
+        $productId = (int) ($row['product_id'] ?? 0);
+        $reason = (string) ($row['reason'] ?? 'content_changed');
+        $attempts = (int) ($row['attempts'] ?? 0);
+        $wpdb->update($table, ['status' => 'processing', 'updated_at' => gmdate('Y-m-d H:i:s')], ['id' => $id]);
+
+        try {
+            $settings = $this->settings();
+            if ($reason === 'stock_changed') {
+                $res = $this->adapter->sync_stock($productId);
+            } elseif ($reason === 'publish_requested' && empty($settings['auto_publish_enabled']) && (string) ($row['source'] ?? '') !== 'manual_publish_requested') {
+                $res = ['result' => 'skipped', 'reason' => 'auto_publish_disabled'];
+            } else {
+                $res = $this->adapter->export_product($productId);
+            }
+
+            if (($res['result'] ?? '') === 'success') {
+                $wpdb->update($table, ['status' => 'done', 'updated_at' => gmdate('Y-m-d H:i:s'), 'last_error' => ''], ['id' => $id]);
+                update_post_meta($productId, '_wei_ebay_last_synced_at', gmdate('Y-m-d H:i:s'));
+                update_post_meta($productId, '_wei_ebay_last_sync_status', 'synced_' . $reason);
+                delete_post_meta($productId, '_wei_ebay_last_sync_error');
+                $this->logger->info('EBAY_SYNC_PRODUCT_PROCESSED', ['product_id' => $productId, 'reason' => $reason, 'result' => 'success']);
+                return ['bucket' => 'succeeded'];
+            }
+
+            if (($res['result'] ?? '') === 'skipped') {
+                $wpdb->update($table, ['status' => 'done', 'updated_at' => gmdate('Y-m-d H:i:s'), 'last_error' => (string) ($res['reason'] ?? 'skipped')], ['id' => $id]);
+                update_post_meta($productId, '_wei_ebay_last_sync_status', 'skipped_' . $reason);
+                $this->logger->info('EBAY_SYNC_PRODUCT_PROCESSED', ['product_id' => $productId, 'reason' => $reason, 'result' => 'skipped', 'skip_reason' => (string) ($res['reason'] ?? '')]);
+                return ['bucket' => 'skipped'];
+            }
+
+            return $this->mark_queue_row_failed($id, $productId, $reason, $attempts, (string) ($res['error'] ?? $res['message'] ?? 'sync_error'));
+        } catch (\Throwable $throwable) {
+            return $this->mark_queue_row_failed($id, $productId, $reason, $attempts, $throwable->getMessage());
+        }
+    }
+
+    private function mark_queue_row_failed(int $id, int $productId, string $reason, int $attempts, string $error): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $attempts++;
+        $status = $attempts >= 3 ? 'failed' : 'pending';
+        $wpdb->update($table, ['status' => $status, 'attempts' => $attempts, 'last_error' => $error, 'updated_at' => gmdate('Y-m-d H:i:s')], ['id' => $id]);
+        update_post_meta($productId, '_wei_ebay_last_sync_status', $status . '_' . $reason);
+        update_post_meta($productId, '_wei_ebay_last_sync_error', $error);
+        $this->logger->error('EBAY_SYNC_PRODUCT_FAILED', ['product_id' => $productId, 'reason' => $reason, 'attempts' => $attempts, 'status' => $status, 'error' => $error]);
+        return ['bucket' => 'failed'];
+    }
+
+    private function queue_rows(int $limit): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE status IN ('pending','retry') ORDER BY queued_at ASC, id ASC LIMIT %d", $limit);
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    public static function queue_count(string $status = ''): int
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        if ($status !== '') {
+            return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE status=%s", $status));
+        }
+        return (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+    }
+
+    private function sync_listing_meta_delta(int $limit): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT woo_product_id, woo_variation_id, remote_offer_id, remote_listing_id FROM {$table} WHERE marketplace=%s AND (remote_offer_id<>'' OR remote_listing_id<>'') ORDER BY updated_at DESC LIMIT %d", 'ebay', max(1, min(100, $limit))), ARRAY_A);
+        $checked = 0;
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $productId = (int) ($row['woo_variation_id'] ?: $row['woo_product_id']);
+            if ($productId <= 0) {
+                continue;
+            }
+            $listingId = (string) ($row['remote_listing_id'] ?? '');
+            update_post_meta($productId, '_wei_ebay_offer_id', (string) ($row['remote_offer_id'] ?? ''));
+            update_post_meta($productId, '_wei_ebay_listing_id', $listingId);
+            update_post_meta($productId, '_wei_ebay_item_id', $listingId);
+            if ($listingId !== '') {
+                update_post_meta($productId, '_wei_ebay_public_url', 'https://www.ebay.de/itm/' . rawurlencode($listingId));
+                update_post_meta($productId, '_wei_ebay_listing_status', 'mapped');
+            }
+            update_post_meta($productId, '_wei_ebay_last_synced_at', gmdate('Y-m-d H:i:s'));
+            $checked++;
+        }
+        return ['checked' => $checked];
+    }
+
+    private function get_checkpoint(): array
+    {
+        $checkpoint = get_option(self::CHECKPOINT_OPTION, []);
+        $checkpoint = is_array($checkpoint) ? $checkpoint : [];
+        return $checkpoint + [
+            'last_ebay_order_sync_at' => '',
+            'last_ebay_inventory_sync_at' => '',
+            'last_ebay_offer_sync_at' => '',
+            'last_success_at' => '',
+            'last_success_ts' => 0,
+            'last_run_status' => '',
+            'last_error' => '',
+            'last_processed_counts' => [],
+        ];
+    }
+
+    private function save_checkpoint(array $updates): void
+    {
+        $checkpoint = array_merge($this->get_checkpoint(), $updates);
+        update_option(self::CHECKPOINT_OPTION, $checkpoint, false);
+        $this->logger->info('EBAY_SYNC_CHECKPOINT_SAVED', $this->compact_checkpoint($checkpoint));
+    }
+
+    private function compact_checkpoint(array $checkpoint): array
+    {
+        return array_intersect_key($checkpoint, array_flip(['last_ebay_order_sync_at', 'last_ebay_inventory_sync_at', 'last_ebay_offer_sync_at', 'last_success_at', 'last_success_ts', 'last_run_status', 'last_error']));
+    }
+
+    private function acquire_delta_lock(string $owner): bool
+    {
+        $lock = get_option(self::DELTA_LOCK_KEY, []);
+        if (is_array($lock) && (int) ($lock['expires_at'] ?? 0) > time()) {
+            return false;
+        }
+        update_option(self::DELTA_LOCK_KEY, ['owner' => $owner, 'started_at' => gmdate('Y-m-d H:i:s'), 'expires_at' => time() + self::LOCK_TTL], false);
+        return true;
+    }
+
+    private function release_delta_lock(): void
+    {
+        delete_option(self::DELTA_LOCK_KEY);
+    }
+
+    private function queue_batch_size(array $settings): int
+    {
+        return max(1, min(100, (int) ($settings['ebay_delta_queue_batch_size'] ?? $settings['auto_sync_stock_batch_size'] ?? self::QUEUE_BATCH_SIZE)));
     }
 
     public static function mark_ebay_order_stock_context(bool $active): void
@@ -1282,9 +1555,9 @@ class AutoSyncScheduler
         $settings = get_option(Plugin::OPTION_KEY, []);
         $settings = is_array($settings) ? $settings : [];
         $frequency = (string) ($settings['auto_sync_frequency'] ?? 'hourly');
-        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(self::HOOK_RUN, [], self::CRON_GROUP) : false;
+        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP) : false;
         if (!$next) {
-            $next = wp_next_scheduled(self::HOOK_RUN);
+            $next = wp_next_scheduled(self::HOOK_DELTA_SYNC);
         }
         return [
             'status' => (string) get_option('wei_ebay_global_status', 'disabled'),
@@ -1296,6 +1569,10 @@ class AutoSyncScheduler
             'next_run' => $next ? gmdate('Y-m-d H:i:s', (int) $next) : '-',
             'last_summary' => get_option('wei_ebay_last_run_summary', []),
             'pending_stock_sync' => self::pending_stock_count(),
+            'queued_products_count' => self::queue_count('pending'),
+            'failed_queue_count' => self::queue_count('failed'),
+            'checkpoint' => get_option(self::CHECKPOINT_OPTION, []),
+            'hook' => self::HOOK_DELTA_SYNC,
             'woo_to_ebay_stock_sync_enabled' => !empty($settings['woo_to_ebay_stock_sync_enabled']),
             'ebay_stock_sync_mode' => (string) ($settings['ebay_stock_sync_mode'] ?? 'max_one'),
             'ebay_order_sync_enabled' => !empty($settings['ebay_order_sync_enabled']),
@@ -1405,7 +1682,7 @@ class AutoSyncScheduler
         $settings = is_array($settings) ? $settings : [];
         $settings += [
             'auto_sync_mode' => 'disabled',
-            'auto_sync_frequency' => 'hourly',
+            'auto_sync_frequency' => 'every_15_minutes',
             'auto_sync_export_batch_size' => 20,
             'auto_sync_preflight_batch_size' => 200,
             'woo_to_ebay_stock_sync_enabled' => 1,
@@ -1414,6 +1691,7 @@ class AutoSyncScheduler
             'ebay_order_stock_update_mode' => 'set_zero',
             'auto_export_enabled' => 0,
             'auto_publish_enabled' => 0,
+            'ebay_delta_queue_batch_size' => self::QUEUE_BATCH_SIZE,
         ];
         return $settings;
     }

@@ -13,7 +13,18 @@ class OrderImporter
 
     public function import_once(): array
     {
-        $orders = $this->adapter->import_orders(['limit' => 20]);
+        return $this->import_since('', 20);
+    }
+
+    public function import_since(string $sinceGmt, int $limit = 50): array
+    {
+        $query = ['limit' => max(1, min(100, $limit))];
+        if ($sinceGmt !== '') {
+            $from = gmdate('Y-m-d\TH:i:s.000\Z', max(0, strtotime($sinceGmt) - 300));
+            $query['filter'] = 'lastmodifieddate:[' . $from . '..]';
+        }
+
+        $orders = $this->adapter->import_orders($query);
         if (is_wp_error($orders)) {
             return ['result' => 'error', 'error' => $orders->get_error_message()];
         }
