@@ -262,6 +262,8 @@ $readinessFilterLabels = [
 $exportSummary = is_array($autoSync['export_summary'] ?? null) ? $autoSync['export_summary'] : [];
 $stockSummary = is_array($autoSync['stock_summary'] ?? null) ? $autoSync['stock_summary'] : [];
 $initialPublish = is_array($initial_publish_status ?? null) ? $initial_publish_status : [];
+$initialPublishCandidates = is_array($initial_publish_candidate_summary ?? null) ? $initial_publish_candidate_summary : (is_array($initialPublish['candidate_summary'] ?? null) ? $initialPublish['candidate_summary'] : []);
+$initialPublishSkippedReasons = is_array($initialPublishCandidates['skipped_reasons'] ?? null) ? $initialPublishCandidates['skipped_reasons'] : [];
 $initialPublishLog = array_values(array_map('strval', (array) ($initialPublish['last_batch_log'] ?? [])));
 $initialPublishLastBatch = $initialPublishLog !== [] ? (string) end($initialPublishLog) : '-';
 $autoStatus = (string) ($autoSync['status'] ?? 'disabled');
@@ -452,17 +454,37 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
         <h2>Pierwsze wystawienie produktów na eBay</h2>
         <p class="description">Ręczny tryb initial publish jest osobny od 15-minutowego scheduled syncu. Jeden klik publikuje maksymalnie podany <code>Batch size</code>, kontynuuje od zapisanego kursora i pomija produkty niegotowe lub już opublikowane.</p>
         <div class="wei-grid">
-            <div class="wei-card"><span>Gotowe do publikacji</span><strong><?php echo esc_html((string) ($initialPublish['total_ready'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Opublikowano</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublish['total_ready'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Pozostało</span><strong><?php echo esc_html((string) ($initialPublish['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Ready according to last readiness audit</span><strong><?php echo esc_html((string) ($initialPublishCandidates['ready_according_to_audit'] ?? $full_category_audit_summary['ready_count'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Initial publish candidates</span><strong><?php echo esc_html((string) ($initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Already published on eBay</span><strong><?php echo esc_html((string) ($initialPublishCandidates['already_published'] ?? ($initialPublishSkippedReasons['already_published'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Skipped / not eligible</span><strong><?php echo esc_html((string) ($initialPublishCandidates['skipped_not_eligible'] ?? array_sum(array_map('intval', $initialPublishSkippedReasons)))); ?></strong></div>
+            <div class="wei-card"><span>Opublikowano w initial publish</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublishCandidates['initial_publish_candidates'] ?? $initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Pozostało kandydatów</span><strong><?php echo esc_html((string) ($initialPublish['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Export status ready</span><strong><?php echo esc_html((string) ($initialPublishCandidates['export_status_ready'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Readiness status ready</span><strong><?php echo esc_html((string) ($initialPublishCandidates['readiness_status_ready'] ?? $full_category_audit_summary['ready_count'] ?? '-')); ?></strong></div>
             <div class="wei-card"><span>Błędy</span><strong><?php echo esc_html((string) ($initialPublish['failed'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Ostatni batch</span><strong><?php echo esc_html($initialPublishLastBatch); ?></strong></div>
-            <div class="wei-card"><span>Ostatnie uruchomienie</span><strong><?php echo esc_html((string) (($initialPublish['last_run_at'] ?? '') ?: '-')); ?></strong></div>
-            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($initialPublish['status'] ?? 'idle')); ?></strong></div>
+            <div class="wei-card"><span>Status rebuild</span><strong><?php echo esc_html((string) ($initialPublishCandidates['status'] ?? 'not_rebuilt')); ?></strong></div>
+            <div class="wei-card"><span>Ostatni rebuild</span><strong><?php echo esc_html((string) (($initialPublishCandidates['rebuilt_at'] ?? '') ?: '-')); ?></strong></div>
             <div class="wei-card"><span>Cursor</span><strong><?php echo esc_html((string) ($initialPublish['cursor'] ?? 0)); ?></strong></div>
         </div>
+        <p class="description"><strong>Źródło liczby kandydatów:</strong> initial publish pobiera produkty z aktualnego meta <code>_wei_ebay_export_status=ready</code> i pomija te z listing ID / item ID / statusem published. Pełny audit działa w trybie diagnostycznym i jego wynik <code>ready</code> jest osobną liczbą.</p>
+        <?php if ($initialPublishSkippedReasons !== []): ?>
+            <h3>Skipped / not eligible breakdown</h3>
+            <table class="widefat striped"><tbody>
+                <?php foreach (['missing_candidate_status', 'already_published', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'missing_meta', 'other'] as $reasonKey): ?>
+                    <tr><th><?php echo esc_html($reasonKey); ?></th><td><?php echo esc_html((string) ((int) ($initialPublishSkippedReasons[$reasonKey] ?? 0))); ?></td></tr>
+                <?php endforeach; ?>
+            </tbody></table>
+        <?php endif; ?>
         <?php if (!empty($initialPublish['last_error'])): ?><p class="description"><strong>Ostatni błąd:</strong> <?php echo esc_html((string) $initialPublish['last_error']); ?></p><?php endif; ?>
         <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_ebay_rebuild_initial_publish_candidates'); ?>
+                <input type="hidden" name="action" value="wei_ebay_rebuild_initial_publish_candidates" />
+                <label>Batch size <input type="number" min="1" max="5000" name="batch_size" value="1000" /></label>
+                <label><input type="checkbox" name="reset_rebuild" value="1" <?php checked(($initialPublishCandidates['status'] ?? '') !== 'in_progress'); ?> /> start from beginning</label>
+                <button class="button">Rebuild initial publish candidates</button>
+            </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
                 <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
