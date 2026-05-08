@@ -11,6 +11,7 @@ use WEI\Services\EbayClient;
 use WEI\Services\EbayTaxonomyService;
 use WEI\Services\EbaySkuGenerator;
 use WEI\Services\EbayPriceResolver;
+use WEI\Services\EbayConditionResolver;
 use WEI\Services\CategoryMappingSafety;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
@@ -202,6 +203,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $category = $this->resolve_category($product, $product_id, $sku, $marketplaceId, $settings);
         $categoryId = $category['category_id'];
         $aspects = $this->resolve_product_aspects($product, $product_id, $sku, $settings, $categoryId, $content);
+        $conditionResolution = EbayConditionResolver::resolve($marketplaceId, $settings);
         $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
         update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
         if (!$preflight['ready']) {
@@ -211,7 +213,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $itemPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
-            'condition' => 'NEW',
+            'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
                 'description' => $content['description'],
@@ -227,6 +229,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'marketplace_id' => $marketplaceId,
             'category_id' => $categoryId,
             'product_aspects' => $aspects,
+            'condition_resolution' => [
+                'condition' => $conditionResolution['condition'],
+                'source' => $conditionResolution['source'],
+            ],
         ]);
 
         $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
@@ -235,6 +241,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'sku' => $sku,
             'marketplace_id' => $marketplaceId,
             'category_id' => $categoryId ?? null,
+            'condition_resolution' => [
+                'condition' => $conditionResolution['condition'],
+                'source' => $conditionResolution['source'],
+            ],
         ]);
         if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
 
@@ -436,7 +446,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'last_sync_at' => gmdate('Y-m-d H:i:s'),
         ]);
 
-        return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
+        return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'condition_resolution' => ['condition' => $conditionResolution['condition'], 'source' => $conditionResolution['source']], 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
     }
 
     private function marketplace_id(): string
@@ -713,6 +723,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $content = is_array($preflight['content'] ?? null) ? $preflight['content'] : [];
         $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
+        $conditionResolution = EbayConditionResolver::resolve($marketplaceId, $settings);
         $listingPolicies = [
             'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
@@ -720,7 +731,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ];
         $inventoryPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
-            'condition' => 'NEW',
+            'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => (string) ($content['title'] ?? ''),
                 'description' => (string) ($content['description'] ?? ''),
@@ -758,6 +769,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'offer_before_publish' => null,
             'inventory_item_before_publish' => null,
             'publish_required_field_check' => [],
+            'condition_resolution' => [
+                'condition' => $conditionResolution['condition'],
+                'source' => $conditionResolution['source'],
+            ],
             'diagnostic_create_update' => ['attempted' => false],
             'fresh_offer_recreate_check' => ['attempted' => false, 'reason' => $writeDiagnosticOffer ? '' : 'Not requested. Enable diagnostic offer create/update to test fresh Inventory API create/update without publishing.'],
             'alternate_api_path_note' => 'Not tested by this safe action. If Inventory API publishOffer remains blocked but manual UI listing works, a separate diagnostic should compare Trading API AddFixedPriceItem or Sell Feed LMS using the same seller, marketplace, policies, tax/business setup, and SKU-equivalent data.',
@@ -829,6 +844,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'sku' => $sku,
                 'marketplace_id' => $marketplaceId,
                 'category_id' => $categoryId,
+                'condition_resolution' => [
+                    'condition' => $conditionResolution['condition'],
+                    'source' => $conditionResolution['source'],
+                ],
             ]);
             $createOrUpdate['inventory_write'] = $this->api_result($inventoryWrite);
             if (!is_wp_error($inventoryWrite)) {
@@ -2651,6 +2670,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['regenerate_german_content_on_hash_change'])) {
             $settings['regenerate_german_content_on_hash_change'] = 0;
+        }
+        if (!isset($settings['default_item_condition'])) {
+            $settings['default_item_condition'] = EbayConditionResolver::DEFAULT_ITEM_CONDITION;
         }
         if (!isset($settings['ebay_default_markup_percent'])) {
             $settings['ebay_default_markup_percent'] = 25;

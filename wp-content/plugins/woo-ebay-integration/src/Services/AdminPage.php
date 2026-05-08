@@ -101,6 +101,8 @@ class AdminPage
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
+        $defaultItemCondition = strtoupper(sanitize_text_field((string) ($_POST['default_item_condition'] ?? EbayConditionResolver::DEFAULT_ITEM_CONDITION)));
+        $s['default_item_condition'] = $defaultItemCondition !== '' ? $defaultItemCondition : EbayConditionResolver::DEFAULT_ITEM_CONDITION;
         $threshold = (float) ($_POST['auto_category_confidence_threshold'] ?? CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD);
         $s['auto_category_confidence_threshold'] = $threshold > 0 && $threshold <= 1 ? round($threshold, 4) : CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD;
         $defaultMarkup = (float) ($_POST['ebay_default_markup_percent'] ?? 25);
@@ -590,6 +592,9 @@ class AdminPage
         }
         if (empty($s['inventory_location_city'])) {
             $s['inventory_location_city'] = 'Sobolew';
+        }
+        if (!isset($s['default_item_condition'])) {
+            $s['default_item_condition'] = EbayConditionResolver::DEFAULT_ITEM_CONDITION;
         }
         if (!isset($s['translation_provider'])) {
             $s['translation_provider'] = 'disabled';
