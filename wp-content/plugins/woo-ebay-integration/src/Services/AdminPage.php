@@ -52,6 +52,9 @@ class AdminPage
         add_action('admin_post_wei_ebay_sync_now', [$this, 'ebay_sync_now']);
         add_action('admin_post_wei_ebay_process_queue_now', [$this, 'ebay_process_queue_now']);
         add_action('admin_post_wei_ebay_rebuild_ready_queue', [$this, 'ebay_rebuild_ready_queue']);
+        add_action('admin_post_wei_ebay_initial_publish_batch', [$this, 'ebay_initial_publish_batch']);
+        add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
+        add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
     }
 
     public function register_menu(): void
@@ -287,6 +290,7 @@ class AdminPage
         $nbp_rate_status = $this->cached_nbp_rate_status();
         $connect_url = (string) $this->auth->get_authorize_url();
         $auto_sync_status = $this->light_auto_sync_status($s);
+        $initial_publish_status = $this->initial_publish_status();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
         $german_content_audit_summary = get_option('wei_ebay_german_content_audit_summary', []);
@@ -745,6 +749,238 @@ class AdminPage
         $res = $this->scheduler->rebuild_queue_for_ready_products($batchSize);
         $this->set_status('eBay ready-products queue rebuilt: ' . wp_json_encode($res));
         $this->go();
+    }
+
+
+    public function ebay_initial_publish_batch(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_initial_publish_batch');
+        $batchSize = max(1, min(50, absint($_POST['batch_size'] ?? 5)));
+        $res = $this->run_initial_publish_batch($batchSize);
+        $this->set_status('Initial eBay publish batch: ' . wp_json_encode([
+            'processed' => (int) ($res['processed'] ?? 0),
+            'success' => (int) ($res['success'] ?? 0),
+            'failed' => (int) ($res['failed'] ?? 0),
+            'published_total' => (int) ($res['published_total'] ?? 0),
+            'remaining' => (int) ($res['remaining'] ?? 0),
+            'status' => (string) ($res['status'] ?? ''),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    public function ebay_initial_publish_toggle_pause(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_initial_publish_toggle_pause');
+        $current = (string) get_option('wei_ebay_initial_publish_status', 'idle');
+        $next = $current === 'paused' ? 'idle' : 'paused';
+        update_option('wei_ebay_initial_publish_status', $next, false);
+        $this->set_status($next === 'paused' ? 'Initial eBay publish paused' : 'Initial eBay publish resumed');
+        $this->go();
+    }
+
+    public function ebay_initial_publish_reset(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_initial_publish_reset');
+        if ((string) ($_POST['confirm_reset'] ?? '') !== 'RESET') {
+            $this->set_status('Initial eBay publish reset skipped: type RESET to confirm.');
+            $this->go();
+        }
+
+        foreach ($this->initial_publish_option_names() as $option) {
+            delete_option($option);
+        }
+        delete_option('wei_ebay_initial_publish_last_batch_log');
+        $this->set_status('Initial eBay publish progress reset.');
+        $this->go();
+    }
+
+    private function run_initial_publish_batch(int $batchSize): array
+    {
+        $status = (string) get_option('wei_ebay_initial_publish_status', 'idle');
+        if ($status === 'paused') {
+            return ['result' => 'skipped', 'status' => 'paused', 'processed' => 0, 'success' => 0, 'failed' => 0, 'published_total' => (int) get_option('wei_ebay_initial_publish_success', 0), 'remaining' => $this->initial_publish_remaining()];
+        }
+
+        $readiness = get_option('wei_ebay_readiness_summary', []);
+        $readiness = is_array($readiness) ? $readiness : [];
+        $totalReady = max((int) get_option('wei_ebay_initial_publish_total_ready', 0), (int) ($readiness['ready'] ?? 0));
+        update_option('wei_ebay_initial_publish_total_ready', $totalReady, false);
+
+        $cursor = (int) get_option('wei_ebay_initial_publish_cursor', 0);
+        $processedTotal = (int) get_option('wei_ebay_initial_publish_processed', 0);
+        $successTotal = (int) get_option('wei_ebay_initial_publish_success', 0);
+        $failedTotal = (int) get_option('wei_ebay_initial_publish_failed', 0);
+        $startedAt = gmdate('Y-m-d H:i:s');
+        $logs = ['INITIAL_PUBLISH_BATCH_START batch_size=' . $batchSize . ' cursor=' . $cursor];
+        $processed = 0;
+        $success = 0;
+        $failed = 0;
+        $lastError = '';
+        $newCursor = $cursor;
+
+        $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
+        foreach ($ids as $productId) {
+            $productId = (int) $productId;
+            $newCursor = max($newCursor, $productId);
+            $processed++;
+            $processedTotal++;
+            $logs[] = 'INITIAL_PUBLISH_PRODUCT_START product_id=' . $productId;
+
+            if ($this->is_initial_publish_already_published($productId)) {
+                $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="already_published"';
+                continue;
+            }
+
+            try {
+                $preflight = $this->adapter->preflight_product($productId);
+                if (empty($preflight['ready'])) {
+                    $reason = (string) ($preflight['status'] ?? 'not_ready');
+                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="' . $this->compact_log_value($reason) . '"';
+                    continue;
+                }
+
+                $res = $this->adapter->export_product($productId, null, true);
+                if (($res['result'] ?? '') === 'success' && trim((string) ($res['listing_id'] ?? '')) !== '') {
+                    $success++;
+                    $successTotal++;
+                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_PUBLISHED product_id=' . $productId . ' listing_id=' . $this->compact_log_value((string) ($res['listing_id'] ?? ''));
+                } else {
+                    $failed++;
+                    $failedTotal++;
+                    $lastError = (string) ($res['message'] ?? $res['error'] ?? 'publish_failed');
+                    update_post_meta($productId, '_wei_ebay_last_sync_status', 'error');
+                    update_post_meta($productId, '_wei_ebay_last_sync_error', $lastError);
+                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_FAILED product_id=' . $productId . ' error="' . $this->compact_log_value($lastError) . '"';
+                }
+            } catch (\Throwable $throwable) {
+                $failed++;
+                $failedTotal++;
+                $lastError = $throwable->getMessage();
+                update_post_meta($productId, '_wei_ebay_last_sync_status', 'error');
+                update_post_meta($productId, '_wei_ebay_last_sync_error', $lastError);
+                $logs[] = 'INITIAL_PUBLISH_PRODUCT_FAILED product_id=' . $productId . ' error="' . $this->compact_log_value($lastError) . '"';
+            }
+        }
+
+        $remaining = max(0, $totalReady - $successTotal);
+        $nextStatus = empty($ids) || $remaining === 0 ? 'completed' : 'idle';
+        update_option('wei_ebay_initial_publish_processed', $processedTotal, false);
+        update_option('wei_ebay_initial_publish_success', $successTotal, false);
+        update_option('wei_ebay_initial_publish_failed', $failedTotal, false);
+        update_option('wei_ebay_initial_publish_cursor', $newCursor, false);
+        update_option('wei_ebay_initial_publish_last_run_at', $startedAt, false);
+        update_option('wei_ebay_initial_publish_last_error', $lastError, false);
+        update_option('wei_ebay_initial_publish_status', $nextStatus, false);
+        $logs[] = 'INITIAL_PUBLISH_BATCH_DONE processed=' . $processed . ' success=' . $success . ' failed=' . $failed . ' published_total=' . $successTotal . ' remaining=' . $remaining;
+        update_option('wei_ebay_initial_publish_last_batch_log', array_slice($logs, -100), false);
+
+        return [
+            'result' => $failed > 0 ? 'completed_with_errors' : 'success',
+            'status' => $nextStatus,
+            'processed' => $processed,
+            'success' => $success,
+            'failed' => $failed,
+            'published_total' => $successTotal,
+            'remaining' => $remaining,
+            'cursor' => $newCursor,
+            'last_error' => $lastError,
+        ];
+    }
+
+    private function initial_publish_candidate_product_ids(int $batchSize, int $cursor): array
+    {
+        global $wpdb;
+
+        $posts = $wpdb->posts;
+        $postmeta = $wpdb->postmeta;
+        $sql = "
+            SELECT p.ID
+            FROM {$posts} p
+            INNER JOIN {$postmeta} ready_meta
+                ON ready_meta.post_id = p.ID
+                AND ready_meta.meta_key = '_wei_ebay_export_status'
+                AND ready_meta.meta_value = 'ready'
+            LEFT JOIN {$postmeta} listing_meta
+                ON listing_meta.post_id = p.ID
+                AND listing_meta.meta_key = '_wei_ebay_listing_id'
+                AND listing_meta.meta_value <> ''
+            LEFT JOIN {$postmeta} item_meta
+                ON item_meta.post_id = p.ID
+                AND item_meta.meta_key = '_wei_ebay_item_id'
+                AND item_meta.meta_value <> ''
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND p.ID > %d
+                AND listing_meta.post_id IS NULL
+                AND item_meta.post_id IS NULL
+            GROUP BY p.ID
+            ORDER BY p.ID ASC
+            LIMIT %d
+        ";
+
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
+    }
+
+    private function is_initial_publish_already_published(int $productId): bool
+    {
+        return trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true)) !== ''
+            || trim((string) get_post_meta($productId, '_wei_ebay_item_id', true)) !== ''
+            || (string) get_post_meta($productId, '_wei_ebay_listing_status', true) === 'published'
+            || (string) get_post_meta($productId, '_wei_ebay_export_status', true) === 'published';
+    }
+
+    private function initial_publish_status(): array
+    {
+        $readiness = get_option('wei_ebay_readiness_summary', []);
+        $readiness = is_array($readiness) ? $readiness : [];
+        $totalReady = (int) get_option('wei_ebay_initial_publish_total_ready', 0);
+        if ($totalReady <= 0) {
+            $totalReady = (int) ($readiness['ready'] ?? 0);
+        }
+        $success = (int) get_option('wei_ebay_initial_publish_success', 0);
+
+        return [
+            'total_ready' => $totalReady,
+            'processed' => (int) get_option('wei_ebay_initial_publish_processed', 0),
+            'success' => $success,
+            'failed' => (int) get_option('wei_ebay_initial_publish_failed', 0),
+            'cursor' => (int) get_option('wei_ebay_initial_publish_cursor', 0),
+            'last_run_at' => (string) get_option('wei_ebay_initial_publish_last_run_at', ''),
+            'last_error' => (string) get_option('wei_ebay_initial_publish_last_error', ''),
+            'status' => (string) get_option('wei_ebay_initial_publish_status', 'idle'),
+            'remaining' => max(0, $totalReady - $success),
+            'last_batch_log' => (array) get_option('wei_ebay_initial_publish_last_batch_log', []),
+        ];
+    }
+
+    private function initial_publish_remaining(): int
+    {
+        $status = $this->initial_publish_status();
+        return (int) ($status['remaining'] ?? 0);
+    }
+
+    private function initial_publish_option_names(): array
+    {
+        return [
+            'wei_ebay_initial_publish_total_ready',
+            'wei_ebay_initial_publish_processed',
+            'wei_ebay_initial_publish_success',
+            'wei_ebay_initial_publish_failed',
+            'wei_ebay_initial_publish_cursor',
+            'wei_ebay_initial_publish_last_run_at',
+            'wei_ebay_initial_publish_last_error',
+            'wei_ebay_initial_publish_status',
+        ];
+    }
+
+    private function compact_log_value(string $value): string
+    {
+        $value = preg_replace('/\s+/', ' ', $value) ?: '';
+        $value = str_replace(['"', "\n", "\r"], ["'", ' ', ' '], $value);
+        return mb_substr($value, 0, 240);
     }
 
     public function auto_sync_toggle_pause(): void

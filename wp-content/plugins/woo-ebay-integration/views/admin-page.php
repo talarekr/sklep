@@ -261,6 +261,9 @@ $readinessFilterLabels = [
 ];
 $exportSummary = is_array($autoSync['export_summary'] ?? null) ? $autoSync['export_summary'] : [];
 $stockSummary = is_array($autoSync['stock_summary'] ?? null) ? $autoSync['stock_summary'] : [];
+$initialPublish = is_array($initial_publish_status ?? null) ? $initial_publish_status : [];
+$initialPublishLog = array_values(array_map('strval', (array) ($initialPublish['last_batch_log'] ?? [])));
+$initialPublishLastBatch = $initialPublishLog !== [] ? (string) end($initialPublishLog) : '-';
 $autoStatus = (string) ($autoSync['status'] ?? 'disabled');
 $autoModeLabels = [
     'disabled' => 'Disabled',
@@ -442,6 +445,45 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_sync_ebay_stock_to_woo'); ?><input type="hidden" name="action" value="wei_sync_ebay_stock_to_woo" /><button class="button">Optional stock sync from eBay to Woo</button></form>
         </div><p class="description">Skeleton eBay → Woo actions never overwrite Woo price, description or stock without a separate implementation/option.</p></div>
         <div class="wei-action-group warning"><strong>Tryby pracy</strong><ul><li>Dry run / diagnostics only: use readiness scans, preflight and category audit.</li><li>Export/update offers but do not publish: leave Auto publish disabled.</li><li>Publish enabled only if Auto publish is enabled.</li><li>Manual one-product publish is available in Manual tools.</li></ul></div>
+    </div>
+
+
+    <div class="wei-box">
+        <h2>Pierwsze wystawienie produktów na eBay</h2>
+        <p class="description">Ręczny tryb initial publish jest osobny od 15-minutowego scheduled syncu. Jeden klik publikuje maksymalnie podany <code>Batch size</code>, kontynuuje od zapisanego kursora i pomija produkty niegotowe lub już opublikowane.</p>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Gotowe do publikacji</span><strong><?php echo esc_html((string) ($initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Opublikowano</span><strong><?php echo esc_html((string) ($initialPublish['success'] ?? 0)); ?> / <?php echo esc_html((string) ($initialPublish['total_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Pozostało</span><strong><?php echo esc_html((string) ($initialPublish['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Błędy</span><strong><?php echo esc_html((string) ($initialPublish['failed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Ostatni batch</span><strong><?php echo esc_html($initialPublishLastBatch); ?></strong></div>
+            <div class="wei-card"><span>Ostatnie uruchomienie</span><strong><?php echo esc_html((string) (($initialPublish['last_run_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($initialPublish['status'] ?? 'idle')); ?></strong></div>
+            <div class="wei-card"><span>Cursor</span><strong><?php echo esc_html((string) ($initialPublish['cursor'] ?? 0)); ?></strong></div>
+        </div>
+        <?php if (!empty($initialPublish['last_error'])): ?><p class="description"><strong>Ostatni błąd:</strong> <?php echo esc_html((string) $initialPublish['last_error']); ?></p><?php endif; ?>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
+                <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
+                <label>Batch size <input type="number" min="1" max="50" name="batch_size" value="5" /></label>
+                <button class="button button-primary" <?php disabled((string) ($initialPublish['status'] ?? '') === 'paused'); ?>>Opublikuj oferty na eBay</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_ebay_initial_publish_toggle_pause'); ?>
+                <input type="hidden" name="action" value="wei_ebay_initial_publish_toggle_pause" />
+                <button class="button"><?php echo (string) ($initialPublish['status'] ?? '') === 'paused' ? 'Wznów' : 'Pauza'; ?></button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset progress initial publish? Wpisz RESET w polu potwierdzenia.');">
+                <?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?>
+                <input type="hidden" name="action" value="wei_ebay_initial_publish_reset" />
+                <input type="text" name="confirm_reset" placeholder="RESET" size="8" />
+                <button class="button">Reset progress</button>
+            </form>
+        </div>
+        <p class="description"><strong>Uwaga:</strong> ten przycisk realnie wystawia publiczne oferty eBay. Nie uruchamia full audit ani full scan; używa ostatniego readiness statusu produktu i wykonuje preflight dla każdego elementu batcha.</p>
+        <h3>Log ostatniego batcha</h3>
+        <pre class="wei-scroll"><?php echo esc_html(implode("\n", $initialPublishLog)); ?></pre>
     </div>
 
     <div class="wei-box">
