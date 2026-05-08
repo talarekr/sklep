@@ -190,7 +190,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['result' => 'success', 'merchantLocationKey' => $merchantLocationKey];
     }
 
-    public function export_product(int $product_id, ?int $variation_id = null): array
+    public function export_product(int $product_id, ?int $variation_id = null, bool $forcePublish = false): array
     {
         $product = wc_get_product($variation_id ?: $product_id);
         if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
@@ -392,7 +392,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $published = [];
         $listing_id = '';
-        if (empty($settings['auto_publish_enabled'])) {
+        if (empty($settings['auto_publish_enabled']) && !$forcePublish) {
             $this->logger->warning('publishOffer skipped because auto publish is disabled', [
                 'stage' => 'publishOffer',
                 'product_id' => $product_id,
