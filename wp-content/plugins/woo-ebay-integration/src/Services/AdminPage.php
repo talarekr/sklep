@@ -53,6 +53,7 @@ class AdminPage
         add_action('admin_post_wei_ebay_process_queue_now', [$this, 'ebay_process_queue_now']);
         add_action('admin_post_wei_ebay_rebuild_ready_queue', [$this, 'ebay_rebuild_ready_queue']);
         add_action('admin_post_wei_ebay_initial_publish_batch', [$this, 'ebay_initial_publish_batch']);
+        add_action('admin_post_wei_ebay_rebuild_initial_publish_candidates', [$this, 'ebay_rebuild_initial_publish_candidates']);
         add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
         add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
     }
@@ -290,6 +291,7 @@ class AdminPage
         $nbp_rate_status = $this->cached_nbp_rate_status();
         $connect_url = (string) $this->auth->get_authorize_url();
         $auto_sync_status = $this->light_auto_sync_status($s);
+        $initial_publish_candidate_summary = $this->initial_publish_candidate_summary();
         $initial_publish_status = $this->initial_publish_status();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
@@ -752,6 +754,25 @@ class AdminPage
     }
 
 
+    public function ebay_rebuild_initial_publish_candidates(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_rebuild_initial_publish_candidates');
+        $batchSize = max(1, min(5000, absint($_POST['batch_size'] ?? 1000)));
+        $reset = !empty($_POST['reset_rebuild']);
+        $res = $this->rebuild_initial_publish_candidates($batchSize, $reset);
+        $this->set_status('Initial publish candidates rebuilt: ' . wp_json_encode([
+            'status' => (string) ($res['status'] ?? ''),
+            'processed_ready_this_batch' => (int) ($res['processed_ready_this_batch'] ?? 0),
+            'ready_according_to_audit' => (int) ($res['ready_according_to_audit'] ?? 0),
+            'initial_publish_candidates' => (int) ($res['initial_publish_candidates'] ?? 0),
+            'already_published' => (int) ($res['already_published'] ?? 0),
+            'missing_candidate_status' => (int) ($res['skipped_reasons']['missing_candidate_status'] ?? 0),
+            'next_offset' => (int) ($res['next_offset'] ?? 0),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
     public function ebay_initial_publish_batch(): void
     {
         $this->require_manage_options();
@@ -797,6 +818,243 @@ class AdminPage
         $this->go();
     }
 
+
+    private function initial_publish_candidate_summary(): array
+    {
+        $summary = get_option('wei_ebay_initial_publish_candidate_summary', []);
+        return is_array($summary) ? $summary : [];
+    }
+
+    private function rebuild_initial_publish_candidates(int $batchSize, bool $reset): array
+    {
+        $auditSummary = get_option('wei_ebay_full_category_audit_summary', []);
+        $auditSummary = is_array($auditSummary) ? $auditSummary : [];
+        $csvPath = $this->last_full_audit_csv_path($auditSummary);
+        if ($csvPath === '' || !is_readable($csvPath)) {
+            $summary = $this->initial_publish_candidate_summary();
+            $summary['status'] = 'error';
+            $summary['last_error'] = 'last_full_audit_csv_not_readable';
+            $summary['audit_report_path'] = $csvPath;
+            $summary['rebuilt_at'] = gmdate('Y-m-d H:i:s');
+            update_option('wei_ebay_initial_publish_candidate_summary', $summary, false);
+            return $summary;
+        }
+
+        $readyProductIds = [];
+        $auditStatusCounts = [
+            'ready' => 0,
+            'blocked_by_category' => 0,
+            'missing_aspects' => 0,
+            'content_not_ready' => 0,
+            'price_not_ready' => 0,
+            'missing_meta' => 0,
+            'other' => 0,
+        ];
+        $rowsRead = 0;
+        $fh = fopen($csvPath, 'rb');
+        if ($fh) {
+            $headers = fgetcsv($fh);
+            $headers = is_array($headers) ? array_map('strval', $headers) : [];
+            while (($row = fgetcsv($fh)) !== false) {
+                $rowsRead++;
+                $record = [];
+                foreach ($headers as $i => $header) {
+                    $record[$header] = $row[$i] ?? '';
+                }
+                $productId = (int) ($record['product_id'] ?? 0);
+                $status = $this->normalize_audit_status_for_initial_publish((string) ($record['status'] ?? ''));
+                $auditStatusCounts[$status] = (int) ($auditStatusCounts[$status] ?? 0) + 1;
+                if ($status === 'ready' && $productId > 0) {
+                    $readyProductIds[] = $productId;
+                }
+            }
+            fclose($fh);
+        }
+
+        $previous = $reset ? [] : $this->initial_publish_candidate_summary();
+        $previousReadyAlreadyPublished = $reset ? 0 : (int) ($previous['ready_already_published'] ?? 0);
+        $offset = $reset ? 0 : (int) ($previous['next_offset'] ?? 0);
+        if ($offset < 0 || $offset >= count($readyProductIds)) {
+            $offset = 0;
+        }
+        $ids = array_slice($readyProductIds, $offset, $batchSize);
+        $processedReady = 0;
+        $alreadyPublishedReady = 0;
+        $fixedMissingCandidateStatus = 0;
+        $stillMissingCandidateStatus = 0;
+        $otherReadySkipped = 0;
+
+        foreach ($ids as $productId) {
+            $productId = (int) $productId;
+            if ($productId <= 0) {
+                continue;
+            }
+            $processedReady++;
+            if ($this->is_initial_publish_already_published($productId)) {
+                $alreadyPublishedReady++;
+                continue;
+            }
+
+            $currentStatus = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
+            if ($currentStatus !== 'ready') {
+                $fixedMissingCandidateStatus++;
+            }
+            update_post_meta($productId, '_wei_ebay_export_status', 'ready');
+            $afterStatus = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
+            if ($afterStatus !== 'ready') {
+                $stillMissingCandidateStatus++;
+            }
+        }
+
+        $nextOffset = $offset + count($ids);
+        $complete = $nextOffset >= count($readyProductIds);
+        $exportStatusReady = $this->count_products_with_export_status('ready');
+        $initialCandidates = $this->count_initial_publish_candidates_from_meta();
+        $alreadyPublished = $this->count_initial_publish_already_published_products();
+        $readyAlreadyPublished = $previousReadyAlreadyPublished + $alreadyPublishedReady;
+        $skippedReasons = [
+            'missing_candidate_status' => $complete ? max(0, count($readyProductIds) - $initialCandidates - $readyAlreadyPublished) : (int) ($previous['skipped_reasons']['missing_candidate_status'] ?? 0),
+            'already_published' => $readyAlreadyPublished,
+            'blocked_by_category' => (int) ($auditStatusCounts['blocked_by_category'] ?? 0),
+            'missing_aspects' => (int) ($auditStatusCounts['missing_aspects'] ?? 0),
+            'content_not_ready' => (int) ($auditStatusCounts['content_not_ready'] ?? 0),
+            'price_not_ready' => (int) ($auditStatusCounts['price_not_ready'] ?? 0),
+            'missing_meta' => (int) ($auditStatusCounts['missing_meta'] ?? 0),
+            'other' => (int) ($auditStatusCounts['other'] ?? 0) + $otherReadySkipped + $stillMissingCandidateStatus,
+        ];
+
+        $summary = [
+            'status' => $complete ? 'completed' : 'in_progress',
+            'last_error' => '',
+            'rebuilt_at' => gmdate('Y-m-d H:i:s'),
+            'audit_completed_at' => (string) ($auditSummary['completed_at'] ?? $auditSummary['updated_at'] ?? ''),
+            'audit_report_path' => $csvPath,
+            'ready_according_to_audit' => count($readyProductIds),
+            'readiness_status_ready' => count($readyProductIds),
+            'audit_rows_read' => $rowsRead,
+            'audit_status_counts' => $auditStatusCounts,
+            'export_status_ready' => $exportStatusReady,
+            'initial_publish_candidates' => $initialCandidates,
+            'already_published' => $alreadyPublished,
+            'ready_already_published' => $readyAlreadyPublished,
+            'skipped_not_eligible' => array_sum($skippedReasons),
+            'skipped_reasons' => $skippedReasons,
+            'processed_ready_this_batch' => $processedReady,
+            'fixed_missing_candidate_status_this_batch' => $fixedMissingCandidateStatus,
+            'offset' => $offset,
+            'next_offset' => $complete ? 0 : $nextOffset,
+            'batch_size' => $batchSize,
+            'source' => 'last_full_category_audit_csv_plus_current_product_meta',
+            'candidate_rule' => '_wei_ebay_export_status=ready and no listing_id/item_id/listing_status/export_status published',
+        ];
+        update_option('wei_ebay_initial_publish_candidate_summary', $summary, false);
+        update_option('wei_ebay_initial_publish_total_ready', $initialCandidates, false);
+        return $summary;
+    }
+
+    private function last_full_audit_csv_path(array $auditSummary): string
+    {
+        $reports = is_array($auditSummary['reports'] ?? null) ? $auditSummary['reports'] : [];
+        $full = is_array($reports['full_audit_csv'] ?? null) ? $reports['full_audit_csv'] : [];
+        return (string) ($full['path'] ?? '');
+    }
+
+    private function normalize_audit_status_for_initial_publish(string $status): string
+    {
+        $status = trim($status);
+        if ($status === 'ready') {
+            return 'ready';
+        }
+        if ($status === 'blocked_by_category' || $status === 'missing_category') {
+            return 'blocked_by_category';
+        }
+        if ($status === 'missing_required_aspects' || $status === 'missing_aspects') {
+            return 'missing_aspects';
+        }
+        if ($status === 'content_not_ready') {
+            return 'content_not_ready';
+        }
+        if ($status === 'price_not_ready') {
+            return 'price_not_ready';
+        }
+        if ($status === '' || $status === 'missing_meta') {
+            return 'missing_meta';
+        }
+        return 'other';
+    }
+
+    private function count_products_with_export_status(string $status): int
+    {
+        global $wpdb;
+        $sql = "
+            SELECT COUNT(DISTINCT p.ID)
+            FROM {$wpdb->posts} p
+            INNER JOIN {$wpdb->postmeta} m
+                ON m.post_id = p.ID
+                AND m.meta_key = '_wei_ebay_export_status'
+                AND m.meta_value = %s
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+        ";
+        return (int) $wpdb->get_var($wpdb->prepare($sql, $status));
+    }
+
+    private function count_initial_publish_candidates_from_meta(): int
+    {
+        global $wpdb;
+        $sql = "
+            SELECT COUNT(DISTINCT p.ID)
+            FROM {$wpdb->posts} p
+            INNER JOIN {$wpdb->postmeta} ready_meta
+                ON ready_meta.post_id = p.ID
+                AND ready_meta.meta_key = '_wei_ebay_export_status'
+                AND ready_meta.meta_value = 'ready'
+            LEFT JOIN {$wpdb->postmeta} listing_meta
+                ON listing_meta.post_id = p.ID
+                AND listing_meta.meta_key = '_wei_ebay_listing_id'
+                AND listing_meta.meta_value <> ''
+            LEFT JOIN {$wpdb->postmeta} item_meta
+                ON item_meta.post_id = p.ID
+                AND item_meta.meta_key = '_wei_ebay_item_id'
+                AND item_meta.meta_value <> ''
+            LEFT JOIN {$wpdb->postmeta} listing_status_meta
+                ON listing_status_meta.post_id = p.ID
+                AND listing_status_meta.meta_key = '_wei_ebay_listing_status'
+                AND listing_status_meta.meta_value = 'published'
+            LEFT JOIN {$wpdb->postmeta} export_published_meta
+                ON export_published_meta.post_id = p.ID
+                AND export_published_meta.meta_key = '_wei_ebay_export_status'
+                AND export_published_meta.meta_value = 'published'
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND listing_meta.post_id IS NULL
+                AND item_meta.post_id IS NULL
+                AND listing_status_meta.post_id IS NULL
+                AND export_published_meta.post_id IS NULL
+        ";
+        return (int) $wpdb->get_var($sql);
+    }
+
+    private function count_initial_publish_already_published_products(): int
+    {
+        global $wpdb;
+        $sql = "
+            SELECT COUNT(DISTINCT p.ID)
+            FROM {$wpdb->posts} p
+            INNER JOIN {$wpdb->postmeta} m
+                ON m.post_id = p.ID
+                AND (
+                    (m.meta_key = '_wei_ebay_listing_id' AND m.meta_value <> '')
+                    OR (m.meta_key = '_wei_ebay_item_id' AND m.meta_value <> '')
+                    OR (m.meta_key = '_wei_ebay_listing_status' AND m.meta_value = 'published')
+                    OR (m.meta_key = '_wei_ebay_export_status' AND m.meta_value = 'published')
+                )
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+        ";
+        return (int) $wpdb->get_var($sql);
+    }
+
     private function run_initial_publish_batch(int $batchSize): array
     {
         $status = (string) get_option('wei_ebay_initial_publish_status', 'idle');
@@ -804,9 +1062,11 @@ class AdminPage
             return ['result' => 'skipped', 'status' => 'paused', 'processed' => 0, 'success' => 0, 'failed' => 0, 'published_total' => (int) get_option('wei_ebay_initial_publish_success', 0), 'remaining' => $this->initial_publish_remaining()];
         }
 
-        $readiness = get_option('wei_ebay_readiness_summary', []);
-        $readiness = is_array($readiness) ? $readiness : [];
-        $totalReady = max((int) get_option('wei_ebay_initial_publish_total_ready', 0), (int) ($readiness['ready'] ?? 0));
+        $candidateSummary = $this->initial_publish_candidate_summary();
+        $totalReady = (int) ($candidateSummary['initial_publish_candidates'] ?? get_option('wei_ebay_initial_publish_total_ready', 0));
+        if ($totalReady <= 0) {
+            $totalReady = $this->count_initial_publish_candidates_from_meta();
+        }
         update_option('wei_ebay_initial_publish_total_ready', $totalReady, false);
 
         $cursor = (int) get_option('wei_ebay_initial_publish_cursor', 0);
@@ -911,11 +1171,16 @@ class AdminPage
                 ON item_meta.post_id = p.ID
                 AND item_meta.meta_key = '_wei_ebay_item_id'
                 AND item_meta.meta_value <> ''
+            LEFT JOIN {$postmeta} listing_status_meta
+                ON listing_status_meta.post_id = p.ID
+                AND listing_status_meta.meta_key = '_wei_ebay_listing_status'
+                AND listing_status_meta.meta_value = 'published'
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
                 AND listing_meta.post_id IS NULL
                 AND item_meta.post_id IS NULL
+                AND listing_status_meta.post_id IS NULL
             GROUP BY p.ID
             ORDER BY p.ID ASC
             LIMIT %d
@@ -934,12 +1199,8 @@ class AdminPage
 
     private function initial_publish_status(): array
     {
-        $readiness = get_option('wei_ebay_readiness_summary', []);
-        $readiness = is_array($readiness) ? $readiness : [];
-        $totalReady = (int) get_option('wei_ebay_initial_publish_total_ready', 0);
-        if ($totalReady <= 0) {
-            $totalReady = (int) ($readiness['ready'] ?? 0);
-        }
+        $candidateSummary = $this->initial_publish_candidate_summary();
+        $totalReady = (int) ($candidateSummary['initial_publish_candidates'] ?? get_option('wei_ebay_initial_publish_total_ready', 0));
         $success = (int) get_option('wei_ebay_initial_publish_success', 0);
 
         return [
@@ -952,6 +1213,7 @@ class AdminPage
             'last_error' => (string) get_option('wei_ebay_initial_publish_last_error', ''),
             'status' => (string) get_option('wei_ebay_initial_publish_status', 'idle'),
             'remaining' => max(0, $totalReady - $success),
+            'candidate_summary' => $candidateSummary,
             'last_batch_log' => (array) get_option('wei_ebay_initial_publish_last_batch_log', []),
         ];
     }
