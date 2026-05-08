@@ -52,8 +52,88 @@ class AdminPage
 
     public function register_menu(): void
     {
-        add_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_options', 'woo-ebay', [$this, 'render']);
-        add_submenu_page(null, 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_woocommerce', 'ebay-auth-callback', [$this, 'render_oauth_callback']);
+        $this->add_traced_submenu_page('woocommerce', 'eBay Integration', 'eBay Integration', 'manage_options', 'woo-ebay', [$this, 'render'], 'main admin menu');
+
+        // WordPress normalizes both parent and menu slugs through plugin_basename().
+        // Passing null as the parent slug for a hidden callback page reaches
+        // wp_normalize_path(null), which emits PHP 8.1+ deprecations from
+        // wp_is_stream()/str_replace() in wp-includes/functions.php. Register
+        // under WooCommerce with a real slug, then remove the submenu entry so
+        // the callback remains hidden without sending null into WordPress core.
+        $this->add_traced_submenu_page('woocommerce', 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_woocommerce', 'ebay-auth-callback', [$this, 'render_oauth_callback'], 'oauth callback menu');
+        remove_submenu_page('woocommerce', 'ebay-auth-callback');
+    }
+
+
+    /**
+     * Registers submenu pages with narrow diagnostics for values that WordPress
+     * later normalizes via plugin_basename()/wp_normalize_path().
+     *
+     * @param callable $callback
+     */
+    private function add_traced_submenu_page($parentSlug, $pageTitle, $menuTitle, $capability, $menuSlug, $callback, string $section): void
+    {
+        $fields = [
+            'parent_slug' => $parentSlug,
+            'page_title' => $pageTitle,
+            'menu_title' => $menuTitle,
+            'capability' => $capability,
+            'menu_slug' => $menuSlug,
+        ];
+
+        foreach ($fields as $field => $value) {
+            if ($value === null || (!is_scalar($value) && !(is_object($value) && method_exists($value, '__toString')))) {
+                $this->log_admin_render_diagnostic($section, $field, __METHOD__, $value);
+            }
+        }
+
+        add_submenu_page(
+            $this->safe_admin_slug($parentSlug, 'woocommerce', $section, 'parent_slug'),
+            $this->safe_admin_label($pageTitle, $section, 'page_title'),
+            $this->safe_admin_label($menuTitle, $section, 'menu_title'),
+            $this->safe_admin_slug($capability, 'manage_options', $section, 'capability'),
+            $this->safe_admin_slug($menuSlug, 'woo-ebay', $section, 'menu_slug'),
+            $callback
+        );
+    }
+
+    private function safe_admin_slug($value, string $fallback, string $section, string $field): string
+    {
+        if (is_scalar($value) || (is_object($value) && method_exists($value, '__toString'))) {
+            $value = trim((string) $value);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        $this->log_admin_render_diagnostic($section, $field, __METHOD__, $value);
+        return $fallback;
+    }
+
+    private function safe_admin_label($value, string $section, string $field): string
+    {
+        if (is_scalar($value) || (is_object($value) && method_exists($value, '__toString'))) {
+            return (string) $value;
+        }
+
+        $this->log_admin_render_diagnostic($section, $field, __METHOD__, $value);
+        return '';
+    }
+
+    private function log_admin_render_diagnostic(string $section, string $field, string $renderer, $value): void
+    {
+        $summary = function_exists('wp_debug_backtrace_summary')
+            ? wp_debug_backtrace_summary(null, 0, false)
+            : debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+
+        error_log('WEI admin render diagnostic: ' . wp_json_encode([
+            'section' => $section,
+            'field' => $field,
+            'renderer' => $renderer,
+            'value_type' => get_debug_type($value),
+            'value_before_render' => is_scalar($value) || $value === null ? $value : get_debug_type($value),
+            'backtrace' => $summary,
+        ], JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR));
     }
 
     public function render_oauth_callback(): void
