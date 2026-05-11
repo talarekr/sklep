@@ -30,6 +30,7 @@ class AllegroAuth
     private const OAUTH_STATE_MAX_ACTIVE = 5;
     private const OAUTH_CALLBACK_MARKER = 'callback';
     private const OAUTH_CALLBACK_PAGE_SLUG = 'allegro-gearboxes';
+    private const AUTH_AUTHORIZE_ENDPOINT_PATH = '/auth/oauth/authorize';
     private const OAUTH_CODE_EXCHANGE_LOCK_PREFIX = 'gag_oauth_code_exchange_';
     private const OAUTH_CODE_EXCHANGE_LOCK_TTL_SECONDS = 10 * MINUTE_IN_SECONDS;
 
@@ -76,7 +77,7 @@ class AllegroAuth
             'scope' => implode(' ', self::REQUIRED_OAUTH_SCOPES),
         ];
 
-        return add_query_arg($query, $base . '/auth/oauth/authorize');
+        return add_query_arg($query, $base . self::AUTH_AUTHORIZE_ENDPOINT_PATH);
     }
 
     public function handle_oauth_callback(): void
@@ -85,10 +86,14 @@ class AllegroAuth
             return;
         }
 
-        $this->logger->info('OAuth callback started.');
+        $this->logger->info('OAuth callback started.', $this->build_safe_callback_diagnostic());
 
         if (!is_user_logged_in() || !current_user_can('manage_woocommerce')) {
-            $this->logger->error('OAuth callback rejected due to missing permissions.');
+            $this->logger->error('OAuth callback rejected due to missing permissions.', [
+                'is_user_logged_in' => is_user_logged_in(),
+                'can_manage_woocommerce' => current_user_can('manage_woocommerce'),
+                'is_admin_request' => is_admin(),
+            ]);
             return;
         }
 
@@ -97,7 +102,7 @@ class AllegroAuth
 
         $stored_oauth_state = $this->consume_oauth_state($state);
         if ($stored_oauth_state === null) {
-            $this->logger->error('OAuth callback rejected due to invalid state.', ['state_present' => $state !== '']);
+            $this->logger->error('OAuth callback rejected due to invalid state.', $this->build_safe_callback_error_diagnostic() + ['state_present' => $state !== '']);
             $this->store_admin_notice('error', __('Błędny stan OAuth (state). Spróbuj połączyć konto ponownie.', 'gpswiss-allegro-gearboxes'));
             $this->redirect_to_settings();
         }
@@ -108,7 +113,11 @@ class AllegroAuth
         if (empty($code)) {
             $error = isset($_GET['error']) ? sanitize_text_field(wp_unslash($_GET['error'])) : 'unknown_error';
             $error_description = isset($_GET['error_description']) ? sanitize_text_field(wp_unslash($_GET['error_description'])) : '';
-            $this->logger->error('OAuth callback without code.', ['error' => $error, 'error_description' => $error_description]);
+            $this->logger->error('OAuth callback without code.', $this->build_safe_callback_error_diagnostic() + [
+                'error' => $error,
+                'error_description' => $error_description,
+                'state_present' => $state !== '',
+            ]);
 
             $message = sprintf(__('Autoryzacja Allegro nieudana: %s', 'gpswiss-allegro-gearboxes'), $error);
             if ($error_description !== '') {
@@ -158,6 +167,60 @@ class AllegroAuth
         return $this->get_effective_redirect_uri($settings);
     }
 
+    public function build_safe_authorization_url_diagnostic(string $authorization_url): array
+    {
+        $parts = wp_parse_url($authorization_url);
+        if (!is_array($parts)) {
+            return [
+                'authorize_url_present' => $authorization_url !== '',
+                'authorize_url_parseable' => false,
+                'authorize_url_scheme' => '',
+                'authorize_url_host' => '',
+                'authorize_url_path' => '',
+                'authorize_url_query_keys' => [],
+                'authorize_url_has_client_id' => false,
+                'authorize_url_has_redirect_uri' => false,
+                'authorize_url_has_response_type' => false,
+                'authorize_url_has_state' => false,
+                'authorize_url_has_scope' => false,
+                'authorize_url_redirect_uri_hash' => '',
+                'authorize_url_redirect_uri_length' => 0,
+                'authorize_url_is_expected_allegro_endpoint' => false,
+            ];
+        }
+
+        $query = [];
+        if (isset($parts['query']) && is_string($parts['query'])) {
+            parse_str($parts['query'], $query);
+        }
+
+        $query_keys = array_map('strval', array_keys($query));
+        sort($query_keys);
+        $redirect_uri = isset($query['redirect_uri']) && is_scalar($query['redirect_uri']) ? (string) $query['redirect_uri'] : '';
+        $scheme = isset($parts['scheme']) ? (string) $parts['scheme'] : '';
+        $host = isset($parts['host']) ? (string) $parts['host'] : '';
+        $path = isset($parts['path']) ? (string) $parts['path'] : '';
+
+        return [
+            'authorize_url_present' => $authorization_url !== '',
+            'authorize_url_parseable' => true,
+            'authorize_url_scheme' => $scheme,
+            'authorize_url_host' => $host,
+            'authorize_url_path' => $path,
+            'authorize_url_query_keys' => $query_keys,
+            'authorize_url_has_client_id' => !empty($query['client_id']),
+            'authorize_url_has_redirect_uri' => $redirect_uri !== '',
+            'authorize_url_has_response_type' => !empty($query['response_type']),
+            'authorize_url_has_state' => !empty($query['state']),
+            'authorize_url_has_scope' => !empty($query['scope']),
+            'authorize_url_redirect_uri_hash' => $this->hash_diagnostic_value($redirect_uri),
+            'authorize_url_redirect_uri_length' => strlen($redirect_uri),
+            'authorize_url_is_expected_allegro_endpoint' => $scheme === 'https'
+                && in_array($host, ['allegro.pl', 'allegro.pl.allegrosandbox.pl'], true)
+                && $path === self::AUTH_AUTHORIZE_ENDPOINT_PATH,
+        ];
+    }
+
     public function has_required_order_events_scope(?string $token_scope): bool
     {
         $scopes = $this->normalize_scope_list($token_scope);
@@ -191,17 +254,16 @@ class AllegroAuth
 
     private function is_oauth_callback_request(): bool
     {
-        if (is_admin() === false) {
+        $oauth_marker = isset($_GET['gag_oauth']) ? sanitize_key((string) wp_unslash($_GET['gag_oauth'])) : '';
+        if ($oauth_marker !== self::OAUTH_CALLBACK_MARKER) {
             return false;
         }
 
         $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
-        $oauth_marker = isset($_GET['gag_oauth']) ? sanitize_key((string) wp_unslash($_GET['gag_oauth'])) : '';
-        $has_oauth_response = isset($_GET['code'], $_GET['state']) || isset($_GET['error'], $_GET['state']);
+        $has_oauth_response = isset($_GET['code']) || isset($_GET['error']);
+        $is_supported_callback_location = !is_admin() || $page === self::OAUTH_CALLBACK_PAGE_SLUG || $page === 'gag-settings';
 
-        return $page === self::OAUTH_CALLBACK_PAGE_SLUG
-            && $oauth_marker === self::OAUTH_CALLBACK_MARKER
-            && $has_oauth_response;
+        return $is_supported_callback_location && $has_oauth_response;
     }
 
     public function get_valid_access_token()
@@ -591,9 +653,35 @@ class AllegroAuth
     {
         $base = !empty($settings['redirect_uri'])
             ? $this->normalize_redirect_uri((string) $settings['redirect_uri'])
-            : add_query_arg(['page' => self::OAUTH_CALLBACK_PAGE_SLUG], admin_url('admin.php'));
+            : home_url('/');
+
+        if ($this->is_legacy_admin_callback_uri($base)) {
+            $base = home_url('/');
+        }
 
         return add_query_arg('gag_oauth', self::OAUTH_CALLBACK_MARKER, $base);
+    }
+
+    private function is_legacy_admin_callback_uri(string $redirect_uri): bool
+    {
+        $parts = wp_parse_url($redirect_uri);
+        if (!is_array($parts)) {
+            return false;
+        }
+
+        $path = isset($parts['path']) ? (string) $parts['path'] : '';
+        if (substr($path, -19) !== '/wp-admin/admin.php' && $path !== '/admin.php') {
+            return false;
+        }
+
+        $query = [];
+        if (isset($parts['query']) && is_string($parts['query'])) {
+            parse_str($parts['query'], $query);
+        }
+
+        $page = isset($query['page']) && is_scalar($query['page']) ? sanitize_key((string) $query['page']) : '';
+
+        return $page === self::OAUTH_CALLBACK_PAGE_SLUG || $page === 'gag-settings';
     }
 
     private function normalize_redirect_uri(string $redirect_uri): string
@@ -610,6 +698,36 @@ class AllegroAuth
         }
 
         return $redirect_uri;
+    }
+
+    private function build_safe_callback_diagnostic(): array
+    {
+        $request_uri = isset($_SERVER['REQUEST_URI']) && is_scalar($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+
+        return [
+            'callback_request_path' => (string) wp_parse_url($request_uri, PHP_URL_PATH),
+            'callback_query_keys' => $this->get_safe_current_query_keys(),
+            'error' => isset($_GET['error']) ? $this->sanitize_log_field(wp_unslash($_GET['error'])) : '',
+            'error_description' => isset($_GET['error_description']) ? $this->sanitize_log_field(wp_unslash($_GET['error_description'])) : '',
+            'state_present' => isset($_GET['state']) && (string) wp_unslash($_GET['state']) !== '',
+        ];
+    }
+
+    private function build_safe_callback_error_diagnostic(): array
+    {
+        return [
+            'error' => isset($_GET['error']) ? $this->sanitize_log_field(wp_unslash($_GET['error'])) : '',
+            'error_description' => isset($_GET['error_description']) ? $this->sanitize_log_field(wp_unslash($_GET['error_description'])) : '',
+            'state_present' => isset($_GET['state']) && (string) wp_unslash($_GET['state']) !== '',
+        ];
+    }
+
+    private function get_safe_current_query_keys(): array
+    {
+        $keys = array_map('strval', array_keys($_GET));
+        sort($keys);
+
+        return $keys;
     }
 
     private function build_safe_redirect_uri_diagnostic(string $authorize_redirect_uri, string $token_exchange_redirect_uri): array
