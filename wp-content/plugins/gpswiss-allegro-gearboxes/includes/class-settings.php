@@ -849,7 +849,7 @@ class Settings
                     $batch_requires_better_source_count
                 );
                 $is_extreme_ratio = $created_listing_image_id > 0
-                    ? (int) get_post_meta($created_listing_image_id, '_gag_listing_is_extreme_ratio', true) === 1
+                    ? (int) get_post_meta($created_listing_image_id, '_gp_listing_is_extreme_ratio', true) === 1
                     : false;
                 if ($is_extreme_ratio) {
                     $batch_extreme_ratio_products++;
