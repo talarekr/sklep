@@ -22,6 +22,9 @@ class AllegroAuth
     private const AUTH_HTTP_REDIRECTION_LIMIT = 3;
     private const AUTH_MAX_RETRY_ATTEMPTS = 3;
     private const AUTH_RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
+    private const AUTH_PRODUCTION_BASE_URL = 'https://allegro.pl';
+    private const AUTH_SANDBOX_BASE_URL = 'https://allegro.pl.allegrosandbox.pl';
+    private const TOKEN_ENDPOINT_PATH = '/auth/oauth/token';
     private const OAUTH_STATE_TRANSIENT_PREFIX = 'gag_oauth_state_';
     private const OAUTH_STATE_TTL_SECONDS = 30 * MINUTE_IN_SECONDS;
     private const OAUTH_STATE_MAX_ACTIVE = 5;
@@ -106,10 +109,10 @@ class AllegroAuth
 
         if (is_wp_error($token_response)) {
             $error_data = $token_response->get_error_data();
-            $this->logger->error('OAuth token exchange failed.', [
+            $this->logger->error('OAuth token exchange failed.', array_merge([
                 'error' => $token_response->get_error_message(),
-                'http_code' => is_array($error_data) ? (int) ($error_data['status'] ?? 0) : 0,
-            ]);
+                'http_code' => is_array($error_data) ? (int) ($error_data['http_code'] ?? $error_data['status'] ?? 0) : 0,
+            ], is_array($error_data) ? $error_data : []));
             $this->store_admin_notice('error', __('Nie udało się pobrać tokena Allegro.', 'gpswiss-allegro-gearboxes'));
             $this->redirect_to_settings();
         }
@@ -210,103 +213,144 @@ class AllegroAuth
         $base = $this->get_auth_base_url($settings['environment']);
 
         $credentials = base64_encode($settings['client_id'] . ':' . $settings['client_secret']);
+        $is_authorization_code_grant = ($body['grant_type'] ?? '') === 'authorization_code';
+        $max_attempts = $is_authorization_code_grant ? 1 : self::AUTH_MAX_RETRY_ATTEMPTS;
 
-        $url = $base . '/auth/oauth/token';
+        $url = $base . self::TOKEN_ENDPOINT_PATH;
+        $host = (string) parse_url($url, PHP_URL_HOST);
         $args = [
+            'method' => 'POST',
             'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
             'redirection' => self::AUTH_HTTP_REDIRECTION_LIMIT,
             'headers' => [
                 'Authorization' => 'Basic ' . $credentials,
+                'Accept' => 'application/json',
                 'Content-Type' => 'application/x-www-form-urlencoded',
             ],
-            'body' => $body,
+            'body' => $this->build_token_request_body($body),
         ];
         $request_started_at = microtime(true);
         $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
-            $this->logger->error('OAuth token request failed before response.', [
-                'request_type' => 'allegro_api',
-                'endpoint' => '/auth/oauth/token',
-                'host' => (string) parse_url($url, PHP_URL_HOST),
+            $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, [
                 'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                 'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
-                'http_code' => 0,
                 'error_reason' => $response->get_error_message(),
+                'attempt' => 1,
+                'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
             ]);
-            return $response;
+            $this->logger->error('OAuth token request failed before response.', $diagnostic);
+            return new \WP_Error($response->get_error_code(), $response->get_error_message(), $diagnostic);
         }
 
-        for ($attempt = 1; $attempt <= self::AUTH_MAX_RETRY_ATTEMPTS; $attempt++) {
+        for ($attempt = 1; $attempt <= $max_attempts; $attempt++) {
             $status = (int) wp_remote_retrieve_response_code($response);
-            $raw = wp_remote_retrieve_body($response);
+            $raw = (string) wp_remote_retrieve_body($response);
             $data = json_decode($raw, true);
             $elapsed_time = round(max(0, microtime(true) - $request_started_at), 3);
 
             if ($status >= 200 && $status <= 299 && is_array($data)) {
                 $this->logger->info('OAuth token request completed.', [
                     'request_type' => 'allegro_api',
-                    'endpoint' => '/auth/oauth/token',
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                    'endpoint' => self::TOKEN_ENDPOINT_PATH,
+                    'host' => $host,
                     'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                     'elapsed_time' => $elapsed_time,
                     'http_code' => $status,
                     'error_reason' => '',
                     'attempt' => $attempt,
+                    'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
                 ]);
                 return $data;
             }
 
-            $is_retryable = in_array($status, self::AUTH_RETRYABLE_STATUS_CODES, true);
-            $has_next_attempt = $attempt < self::AUTH_MAX_RETRY_ATTEMPTS;
+            $diagnostic = $this->build_safe_token_error_diagnostic($url, $status, $raw, is_array($data) ? $data : null, [
+                'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
+                'elapsed_time' => $elapsed_time,
+                'error_reason' => !is_array($data) ? 'invalid_json' : 'http_status_non_success',
+                'attempt' => $attempt,
+                'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
+            ]);
+
+            $is_retryable = !$is_authorization_code_grant && in_array($status, self::AUTH_RETRYABLE_STATUS_CODES, true);
+            $has_next_attempt = $attempt < $max_attempts;
             if (!$is_retryable || !$has_next_attempt) {
-                $this->logger->error('Allegro token endpoint returned invalid response.', [
-                    'request_type' => 'allegro_api',
-                    'endpoint' => '/auth/oauth/token',
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
-                    'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
-                    'elapsed_time' => $elapsed_time,
-                    'http_code' => $status,
-                    'error_reason' => !is_array($data) ? 'invalid_json' : 'http_status_non_success',
-                    'attempt' => $attempt,
-                    'body_present' => $raw !== '',
-                    'body_length' => strlen($raw),
-                ]);
-                return new \WP_Error('gag_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'gpswiss-allegro-gearboxes'), ['status' => $status]);
+                $this->logger->error('Allegro token endpoint returned invalid response.', $diagnostic);
+                return new \WP_Error('gag_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'gpswiss-allegro-gearboxes'), $diagnostic);
             }
 
             $sleep_seconds = (int) pow(2, max(0, $attempt - 1));
             $sleep_seconds = max(1, min(10, $sleep_seconds));
-            $this->logger->warning('Retrying OAuth token request after retryable response.', [
-                'request_type' => 'allegro_api',
-                'endpoint' => '/auth/oauth/token',
-                'host' => (string) parse_url($url, PHP_URL_HOST),
-                'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
-                'elapsed_time' => $elapsed_time,
-                'http_code' => $status,
+            $this->logger->warning('Retrying OAuth token request after retryable response.', array_merge($diagnostic, [
                 'error_reason' => 'retryable_http_status',
-                'attempt' => $attempt,
                 'retry_after_seconds' => $sleep_seconds,
-            ]);
+            ]));
 
             sleep($sleep_seconds);
             $response = wp_remote_post($url, $args);
             if (is_wp_error($response)) {
-                $this->logger->error('OAuth token request retry failed before response.', [
-                    'request_type' => 'allegro_api',
-                    'endpoint' => '/auth/oauth/token',
-                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, [
                     'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                     'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
-                    'http_code' => 0,
                     'error_reason' => $response->get_error_message(),
                     'attempt' => $attempt + 1,
+                    'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
                 ]);
-                return $response;
+                $this->logger->error('OAuth token request retry failed before response.', $diagnostic);
+                return new \WP_Error($response->get_error_code(), $response->get_error_message(), $diagnostic);
             }
         }
 
         return new \WP_Error('gag_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'gpswiss-allegro-gearboxes'));
+    }
+
+    private function build_token_request_body(array $body): string
+    {
+        $allowed_keys = ['grant_type', 'code', 'redirect_uri', 'refresh_token'];
+        $filtered_body = [];
+
+        foreach ($allowed_keys as $key) {
+            if (!array_key_exists($key, $body)) {
+                continue;
+            }
+
+            $filtered_body[$key] = (string) $body[$key];
+        }
+
+        return http_build_query($filtered_body, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    private function build_safe_token_error_diagnostic(string $url, int $status, string $raw_body, ?array $decoded_body, array $extra = []): array
+    {
+        $diagnostic = [
+            'http_code' => $status,
+            'endpoint' => self::TOKEN_ENDPOINT_PATH,
+            'host' => (string) parse_url($url, PHP_URL_HOST),
+            'error' => '',
+            'error_description' => '',
+            'body_present' => $raw_body !== '',
+            'body_length' => strlen($raw_body),
+        ];
+
+        if (is_array($decoded_body)) {
+            $diagnostic['error'] = $this->sanitize_token_error_field($decoded_body['error'] ?? '');
+            $diagnostic['error_description'] = $this->sanitize_token_error_field($decoded_body['error_description'] ?? '');
+        }
+
+        return array_merge($diagnostic, $extra);
+    }
+
+    private function sanitize_token_error_field($value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $value = sanitize_text_field((string) $value);
+        $value = preg_replace('/(access_token|refresh_token|client_secret|authorization)\s*[:=]\s*[^\s,;]+/i', '$1=[redacted]', $value);
+
+        return is_string($value) ? substr($value, 0, 300) : '';
     }
 
     private function persist_token_response(array $token_data, array $current_settings): void
@@ -508,16 +552,30 @@ class AllegroAuth
 
     private function get_auth_base_url(string $environment): string
     {
-        return $environment === 'sandbox' ? 'https://allegro.pl.allegrosandbox.pl' : 'https://allegro.pl';
+        return $environment === 'sandbox' ? self::AUTH_SANDBOX_BASE_URL : self::AUTH_PRODUCTION_BASE_URL;
     }
 
     private function get_effective_redirect_uri(array $settings): string
     {
         $base = !empty($settings['redirect_uri'])
-            ? (string) $settings['redirect_uri']
+            ? $this->normalize_redirect_uri((string) $settings['redirect_uri'])
             : add_query_arg(['page' => self::OAUTH_CALLBACK_PAGE_SLUG], admin_url('admin.php'));
 
         return add_query_arg('gag_oauth', self::OAUTH_CALLBACK_MARKER, $base);
+    }
+
+    private function normalize_redirect_uri(string $redirect_uri): string
+    {
+        $redirect_uri = trim(html_entity_decode($redirect_uri, ENT_QUOTES, 'UTF-8'));
+
+        if (strpos($redirect_uri, '://') === false) {
+            $decoded_redirect_uri = rawurldecode($redirect_uri);
+            if ($decoded_redirect_uri !== $redirect_uri && strpos($decoded_redirect_uri, '://') !== false) {
+                $redirect_uri = $decoded_redirect_uri;
+            }
+        }
+
+        return $redirect_uri;
     }
 
     private function get_oauth_state_key(): string
