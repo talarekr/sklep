@@ -207,6 +207,14 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Last imported offer_id:', 'gpswiss-allegro-gearboxes'); ?> <strong><?php echo esc_html((string) (($missing_import_checkpoint['last_imported_offer_id'] ?? '') !== '' ? $missing_import_checkpoint['last_imported_offer_id'] : '—')); ?></strong></li>
     </ul>
 
+    <h3><?php esc_html_e('Ręczny test event sync (bez crona)', 'gpswiss-allegro-gearboxes'); ?></h3>
+    <p><?php esc_html_e('Uruchamia wyłącznie Gearboxes event sync: pobiera offer-events i order-events od zapisanych checkpointów gag_event_sync_checkpoint, zapisuje checkpointy i nie startuje crona, full scan ani masowego importu ofert.', 'gpswiss-allegro-gearboxes'); ?></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+        <?php wp_nonce_field('gag_manual_event_sync_test'); ?>
+        <input type="hidden" name="action" value="gag_manual_event_sync_test">
+        <?php submit_button(__('Uruchom test event sync Gearboxes', 'gpswiss-allegro-gearboxes'), 'secondary', 'submit', false); ?>
+    </form>
+
     <h3><?php esc_html_e('Event sync status', 'gpswiss-allegro-gearboxes'); ?></h3>
     <ul>
         <li><?php esc_html_e('Last event sync run:', 'gpswiss-allegro-gearboxes'); ?> <strong><?php echo esc_html((string) (($event_sync_status['last_run_at'] ?? '') !== '' ? $event_sync_status['last_run_at'] : '—')); ?></strong></li>
