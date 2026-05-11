@@ -33,15 +33,17 @@ class Cron
         add_action(Plugin::MISSING_IMPORT_CRON_HOOK, [$this, 'run_missing_import_batch']);
         add_action('update_option_' . Plugin::OPTION_KEY, [$this, 'reschedule_if_needed'], 10, 2);
         add_action('admin_init', [$this, 'maybe_repair_schedule_admin_only']);
-        $this->logger->info('CRON_HOOK_REGISTERED', [
-            'hook' => Plugin::CRON_HOOK,
-            'callback' => __CLASS__ . '::run_scheduled_import',
-            'class' => __CLASS__,
-            'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
-            'accepted_args' => 1,
-            'current_callback_priority' => has_action(Plugin::CRON_HOOK, $callback),
-            'registered_callbacks' => $this->describe_registered_callbacks_for_hook(Plugin::CRON_HOOK),
-        ]);
+        if (Logger::is_debug_enabled()) {
+            $this->logger->info('CRON_HOOK_REGISTERED', [
+                'hook' => Plugin::CRON_HOOK,
+                'callback' => __CLASS__ . '::run_scheduled_import',
+                'class' => __CLASS__,
+                'build' => defined('AWI_PLUGIN_BUILD') ? AWI_PLUGIN_BUILD : 'unknown',
+                'accepted_args' => 1,
+                'current_callback_priority' => has_action(Plugin::CRON_HOOK, $callback),
+                'registered_callbacks' => $this->describe_registered_callbacks_for_hook(Plugin::CRON_HOOK),
+            ]);
+        }
 
         if (Plugin::is_safe_mode_enabled()) {
             self::clear_schedule();
@@ -139,11 +141,37 @@ class Cron
                     'stage' => 'fallback_to_full_import',
                     'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
                 ]);
+                $fallback_reason = (string) ($event_sync_summary['reason'] ?? 'unknown');
                 $this->logger->warning('EVENT_SYNC_FALLBACK_FULL_IMPORT_STARTED', [
-                    'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+                    'reason' => $fallback_reason,
                 ]);
-                $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
-                $this->importer->import_offers();
+                $this->importer->mark_fallback_full_import_started($fallback_reason);
+                try {
+                    $fallback_summary = $this->importer->import_offers();
+                    $fallback_errors = (int) ($fallback_summary['errors'] ?? 0);
+                    if ($fallback_errors > 0) {
+                        $this->importer->mark_fallback_full_import_finished('failed', 'fallback_full_import_finished_with_errors');
+                        $this->logger->error('EVENT_SYNC_FALLBACK_FULL_IMPORT_FAILED', [
+                            'reason' => 'fallback_full_import_finished_with_errors',
+                            'errors' => $fallback_errors,
+                        ]);
+                    } else {
+                        $this->importer->mark_fallback_full_import_finished('success');
+                        $this->logger->info('EVENT_SYNC_FALLBACK_FULL_IMPORT_DONE', [
+                            'offers' => (int) ($fallback_summary['offers'] ?? 0),
+                            'created' => (int) ($fallback_summary['created'] ?? 0),
+                            'updated' => (int) ($fallback_summary['updated'] ?? 0),
+                            'skipped' => (int) ($fallback_summary['skipped'] ?? 0),
+                        ]);
+                    }
+                } catch (\Throwable $fallback_exception) {
+                    $this->importer->mark_fallback_full_import_finished('failed', 'fallback_full_import_exception');
+                    $this->logger->error('EVENT_SYNC_FALLBACK_FULL_IMPORT_FAILED', [
+                        'reason' => 'fallback_full_import_exception',
+                        'message' => $fallback_exception->getMessage(),
+                    ]);
+                    throw $fallback_exception;
+                }
             } else {
                 $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
                     'reason' => 'event_sync_finished_without_fallback_required',
