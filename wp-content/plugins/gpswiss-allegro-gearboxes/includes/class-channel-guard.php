@@ -26,8 +26,13 @@ class ChannelGuard
         }
 
         $source_account = strtolower(trim((string) get_post_meta($product_id, '_source_account', true)));
-        if ($source_account !== '' && $source_account !== SecondaryProductMeta::ACCOUNT) {
-            return 'different_source_account';
+        if ($source_account !== SecondaryProductMeta::ACCOUNT) {
+            return $source_account === '' ? 'missing_source_account' : 'different_source_account';
+        }
+
+        $offer_id = trim((string) get_post_meta($product_id, SecondaryProductMeta::OFFER_ID_META_KEY, true));
+        if ($offer_id === '') {
+            return 'missing_secondary_allegro_offer_id';
         }
 
         return '';

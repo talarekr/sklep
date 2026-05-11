@@ -1218,10 +1218,10 @@ class Importer
         ];
     }
 
-    public function mark_fallback_full_import_started(string $reason): void
+    public function mark_fallback_full_import_blocked(string $reason): void
     {
         $checkpoint = $this->get_event_sync_checkpoint();
-        $this->save_event_sync_status('fallback_full_import', 'started', $reason, $checkpoint);
+        $this->save_event_sync_status('event_based', 'fallback_full_import_blocked', $reason, $checkpoint);
     }
 
     private function calculate_page_no_from_offset(int $offset): int
@@ -1729,112 +1729,9 @@ class Importer
             }
         }
 
-        if (count($offer_details) === 0) {
-            $offer_details_response = $this->client->get_offer_details($offer_id);
-            $attempts[] = [
-                'lookup' => 'offer_details_api',
-                'value' => $offer_id,
-                'matched_count' => is_wp_error($offer_details_response) ? 0 : 1,
-            ];
-            if (!is_wp_error($offer_details_response) && is_array($offer_details_response)) {
-                $offer_details = $offer_details_response;
-            }
-        }
-
         // Do not fall back to SKU, external id, part number, or generic Allegro meta here:
         // those identifiers can belong to products from the main Allegro account.
         // Gearboxes event lookup is intentionally limited to the secondary offer id keys above.
-        return [
-            'product_ids' => [],
-            'resolved_by' => 'none',
-            'attempts' => $attempts,
-            'identifiers' => $identifiers,
-        ];
-
-        $external_id = sanitize_text_field((string) ($offer_details['external']['id'] ?? ''));
-        if ($external_id !== '') {
-            $identifiers['external_id'] = $external_id;
-            $external_meta_keys = ['_allegro_external_id', 'allegro_external_id', '_external_id', 'external_id'];
-            foreach ($external_meta_keys as $meta_key) {
-                $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $external_id, $attempts);
-                if (count($product_ids) > 0) {
-                    foreach ($product_ids as $product_id) {
-                        update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
-                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
-                    }
-
-                    return [
-                        'product_ids' => $product_ids,
-                        'resolved_by' => 'external_id:' . $meta_key,
-                        'attempts' => $attempts,
-                        'identifiers' => $identifiers,
-                    ];
-                }
-            }
-        }
-
-        $sku = $this->extract_offer_lookup_value($offer_details, ['sku', 'numer części', 'nr części', 'part number']);
-        if ($sku !== '') {
-            $identifiers['sku'] = $sku;
-
-            if (function_exists('wc_get_product_id_by_sku')) {
-                $product_id = (int) wc_get_product_id_by_sku($sku);
-                $attempts[] = [
-                    'lookup' => 'wc_get_product_id_by_sku',
-                    'value' => $sku,
-                    'matched_count' => $product_id > 0 ? 1 : 0,
-                ];
-                if ($product_id > 0) {
-                    update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
-                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
-
-                    return [
-                        'product_ids' => [$product_id],
-                        'resolved_by' => 'sku:wc_get_product_id_by_sku',
-                        'attempts' => $attempts,
-                        'identifiers' => $identifiers,
-                    ];
-                }
-            }
-
-            $product_ids = $this->find_product_ids_by_exact_meta_key('_sku', $sku, $attempts);
-            if (count($product_ids) > 0) {
-                foreach ($product_ids as $product_id) {
-                    update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
-                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
-                }
-
-                return [
-                    'product_ids' => $product_ids,
-                    'resolved_by' => 'sku:_sku',
-                    'attempts' => $attempts,
-                    'identifiers' => $identifiers,
-                ];
-            }
-        }
-
-        $part_number = $this->extract_offer_lookup_value($offer_details, ['numer części', 'nr części', 'part number']);
-        if ($part_number !== '') {
-            $identifiers['part_number'] = $part_number;
-            $part_number_meta_keys = ['_part_number', 'part_number', '_product_part_number'];
-            foreach ($part_number_meta_keys as $meta_key) {
-                $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $part_number, $attempts);
-                if (count($product_ids) > 0) {
-                    foreach ($product_ids as $product_id) {
-                        update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
-                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
-                    }
-
-                    return [
-                        'product_ids' => $product_ids,
-                        'resolved_by' => 'part_number:' . $meta_key,
-                        'attempts' => $attempts,
-                        'identifiers' => $identifiers,
-                    ];
-                }
-            }
-        }
-
         return [
             'product_ids' => [],
             'resolved_by' => 'none',

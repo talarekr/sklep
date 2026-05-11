@@ -881,40 +881,11 @@ class ProductMapper
     public function find_existing_product_id_for_offer(array $offer): int
     {
         $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
-        if ($offer_id !== '') {
-            $by_offer_id = $this->find_product_id_by_offer_id($offer_id);
-            if ($by_offer_id > 0) {
-                return $by_offer_id;
-            }
-        }
-
-        $sku = $this->extract_sku($offer);
-        if ($sku === '') {
+        if ($offer_id === '') {
             return 0;
         }
 
-        if (function_exists('wc_get_product_id_by_sku')) {
-            $by_sku = (int) wc_get_product_id_by_sku($sku);
-            if ($by_sku > 0) {
-                return $by_sku;
-            }
-        }
-
-        $query = new \WP_Query([
-            'post_type' => 'product',
-            'post_status' => 'any',
-            'fields' => 'ids',
-            'posts_per_page' => 1,
-            'meta_query' => [
-                [
-                    'key' => '_sku',
-                    'value' => $sku,
-                    'compare' => '=',
-                ],
-            ],
-        ]);
-
-        return !empty($query->posts[0]) ? (int) $query->posts[0] : 0;
+        return $this->find_product_id_by_offer_id($offer_id);
     }
 
     private function find_product_id_by_offer_id(string $offer_id): int
