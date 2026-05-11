@@ -1042,6 +1042,10 @@ class Importer
             return;
         }
 
+        if (!ChannelGuard::assert_gearboxes_outbound_allowed($product_id, 'set_offer_stock_to_zero', $this->logger)) {
+            return;
+        }
+
         $status = $this->client->get_offer_status_snapshot($offer_id);
         if (is_wp_error($status)) {
             $this->logger->error('SYNC_ERROR', [
@@ -1061,10 +1065,6 @@ class Importer
                 'action' => 'skip',
                 'reason' => 'offer_already_not_active',
             ]);
-            return;
-        }
-
-        if (!ChannelGuard::assert_gearboxes_outbound_allowed($product_id, 'set_offer_stock_to_zero', $this->logger)) {
             return;
         }
 
@@ -1576,11 +1576,16 @@ class Importer
             $previous_stock_status = (string) $product->get_stock_status();
             $previous_status = (string) $product->get_status();
 
-            $product->set_manage_stock(true);
-            $product->set_stock_quantity(0);
-            $product->set_stock_status('outofstock');
-            $product->set_status($inactive_status);
-            $product->save();
+            ChannelGuard::push_source_channel(SyncQueue::CHANNEL_ALLEGRO_GEARBOXES);
+            try {
+                $product->set_manage_stock(true);
+                $product->set_stock_quantity(0);
+                $product->set_stock_status('outofstock');
+                $product->set_status($inactive_status);
+                $product->save();
+            } finally {
+                ChannelGuard::pop_source_channel();
+            }
 
             $this->logger->info('EVENT_SYNC_ORDER_APPLIED_TO_WOO', [
                 'event_id' => $event_id,
@@ -1714,11 +1719,16 @@ class Importer
             $previous_stock_status = (string) $product->get_stock_status();
             $previous_status = (string) $product->get_status();
 
-            $product->set_manage_stock(true);
-            $product->set_stock_quantity(0);
-            $product->set_stock_status('outofstock');
-            $product->set_status($inactive_status);
-            $product->save();
+            ChannelGuard::push_source_channel(SyncQueue::CHANNEL_ALLEGRO_GEARBOXES);
+            try {
+                $product->set_manage_stock(true);
+                $product->set_stock_quantity(0);
+                $product->set_stock_status('outofstock');
+                $product->set_status($inactive_status);
+                $product->save();
+            } finally {
+                ChannelGuard::pop_source_channel();
+            }
 
             $this->logger->info('EVENT_SYNC_ORDER_APPLIED_TO_WOO', [
                 'event_id' => $event_id,
