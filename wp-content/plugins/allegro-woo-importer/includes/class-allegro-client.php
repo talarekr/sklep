@@ -420,15 +420,26 @@ class AllegroClient
             $is_retryable = in_array($status, self::RETRYABLE_STATUS_CODES, true);
             $has_next_attempt = $attempt < self::MAX_RETRY_ATTEMPTS;
             if (!$is_retryable || !$has_next_attempt) {
+                $safe_error = $this->extract_safe_api_error($data, $raw, $status);
                 $this->logger->error('Allegro API returned non-success status.', [
-                    'path' => $path,
-                    'status' => $status,
+                    'request_type' => 'allegro_api',
+                    'method' => strtoupper($method),
+                    'endpoint' => $path,
+                    'host' => (string) parse_url($url, PHP_URL_HOST),
+                    'timeout' => self::API_REQUEST_TIMEOUT_SECONDS,
+                    'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
+                    'http_code' => $status,
+                    'error_reason' => (string) ($safe_error['reason'] ?? 'http_status_non_success'),
+                    'safe_error' => $safe_error,
                     'attempt' => $attempt,
                     'max_attempts' => self::MAX_RETRY_ATTEMPTS,
-                    'body' => $raw,
                 ]);
 
-                return new \WP_Error('awi_api_error', __('Allegro API zwróciło błąd.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+                return new \WP_Error('awi_api_error', __('Allegro API zwróciło błąd.', 'allegro-woo-importer'), [
+                    'status' => $status,
+                    'endpoint' => $path,
+                    'safe_error' => $safe_error,
+                ]);
             }
 
             $retry_after_header = wp_remote_retrieve_header($response, 'retry-after');
@@ -459,6 +470,38 @@ class AllegroClient
         }
 
         return new \WP_Error('awi_api_unexpected_state', __('Nieoczekiwany stan klienta Allegro API.', 'allegro-woo-importer'));
+    }
+
+    private function extract_safe_api_error($data, string $raw, int $status): array
+    {
+        $safe_error = [
+            'reason' => is_array($data) ? 'http_status_non_success' : 'invalid_json',
+            'code' => '',
+            'message' => '',
+            'details' => '',
+            'user_message' => '',
+        ];
+
+        if (!is_array($data)) {
+            $safe_error['message'] = substr(trim(wp_strip_all_tags($raw)), 0, 240);
+            return $safe_error;
+        }
+
+        $source = $data;
+        if (isset($data['errors']) && is_array($data['errors']) && isset($data['errors'][0]) && is_array($data['errors'][0])) {
+            $source = $data['errors'][0];
+        }
+
+        $safe_error['code'] = sanitize_text_field((string) ($source['code'] ?? $source['error'] ?? $data['error'] ?? ''));
+        $safe_error['message'] = sanitize_text_field((string) ($source['message'] ?? $source['error_description'] ?? $data['error_description'] ?? ''));
+        $safe_error['details'] = sanitize_text_field((string) ($source['details'] ?? ''));
+        $safe_error['user_message'] = sanitize_text_field((string) ($source['userMessage'] ?? $source['user_message'] ?? ''));
+
+        if ($safe_error['code'] === '') {
+            $safe_error['code'] = 'http_' . $status;
+        }
+
+        return $safe_error;
     }
 
     private function calculate_retry_delay_seconds($retry_after_header, int $attempt): int

@@ -492,14 +492,16 @@ class Importer
                 'limit' => 100,
             ]);
             if (is_wp_error($offer_events_response)) {
+                $error_details = $this->get_safe_wp_error_details($offer_events_response);
                 $this->logger->error('EVENT_SYNC_ERROR', [
                     'stage' => 'fetch_offer_events',
                     'reason' => $offer_events_response->get_error_message(),
+                    'error_details' => $error_details,
                 ]);
 
                 return [
                     'status' => 'fallback_required',
-                    'reason' => 'offer_events_api_error',
+                    'reason' => $this->build_event_api_error_reason('offer_events_api_error', $offer_events_response),
                 ];
             }
 
@@ -528,15 +530,17 @@ class Importer
                         'events' => [],
                     ];
                 } else {
-                $this->logger->error('EVENT_SYNC_ERROR', [
-                    'stage' => 'fetch_order_events',
-                    'reason' => $order_events_response->get_error_message(),
-                ]);
+                    $error_details = $this->get_safe_wp_error_details($order_events_response);
+                    $this->logger->error('EVENT_SYNC_ERROR', [
+                        'stage' => 'fetch_order_events',
+                        'reason' => $order_events_response->get_error_message(),
+                        'error_details' => $error_details,
+                    ]);
 
-                return [
-                    'status' => 'fallback_required',
-                    'reason' => 'order_events_api_error',
-                ];
+                    return [
+                        'status' => 'fallback_required',
+                        'reason' => $this->build_event_api_error_reason('order_events_api_error', $order_events_response),
+                    ];
                 }
             }
 
@@ -1196,6 +1200,13 @@ class Importer
     {
         $checkpoint = $this->get_event_sync_checkpoint();
         $this->save_event_sync_status('fallback_full_import', 'started', $reason, $checkpoint);
+    }
+
+    public function mark_fallback_full_import_finished(string $status, string $error = ''): void
+    {
+        $status = in_array($status, ['success', 'failed'], true) ? $status : 'failed';
+        $checkpoint = $this->get_event_sync_checkpoint();
+        $this->save_event_sync_status('fallback_full_import', $status, $error, $checkpoint);
     }
 
     private function calculate_page_no_from_offset(int $offset): int
@@ -1891,6 +1902,31 @@ class Importer
             'last_error' => $error,
             'checkpoint' => $checkpoint,
         ], false);
+    }
+
+    private function get_safe_wp_error_details(\WP_Error $error): array
+    {
+        $data = $error->get_error_data();
+        return is_array($data) ? $data : [];
+    }
+
+    private function build_event_api_error_reason(string $prefix, \WP_Error $error): string
+    {
+        $details = $this->get_safe_wp_error_details($error);
+        $status = isset($details['status']) ? (int) $details['status'] : 0;
+        $safe_error = sanitize_key((string) ($details['safe_error']['code'] ?? $details['safe_error']['reason'] ?? ''));
+
+        $parts = [$prefix];
+        if ($status > 0) {
+            $parts[] = 'http_' . $status;
+        } elseif ($error->get_error_code() !== '') {
+            $parts[] = sanitize_key($error->get_error_code());
+        }
+        if ($safe_error !== '') {
+            $parts[] = $safe_error;
+        }
+
+        return implode(':', array_filter($parts));
     }
 
     private function sort_events_by_time_and_id(array $events): array
