@@ -115,7 +115,24 @@ class Settings
         }
 
         check_admin_referer('gag_allegro_connect');
-        wp_safe_redirect($this->auth->get_authorization_url());
+
+        $authorization_url = $this->auth->get_authorization_url();
+        $authorization_url_host = (string) wp_parse_url($authorization_url, PHP_URL_HOST);
+        $this->logger->info('OAuth redirect to Allegro started.', [
+            'authorize_url_host' => $authorization_url_host,
+            'authorize_url_present' => $authorization_url !== '',
+        ]);
+
+        if ($authorization_url === '' || !in_array($authorization_url_host, ['allegro.pl', 'allegro.pl.allegrosandbox.pl'], true)) {
+            $this->logger->error('OAuth redirect to Allegro blocked: invalid authorization URL host.', [
+                'authorize_url_host' => $authorization_url_host,
+                'authorize_url_present' => $authorization_url !== '',
+            ]);
+            $this->store_admin_notice('error', __('Nie udało się rozpocząć autoryzacji Allegro. Sprawdź konfigurację OAuth.', 'gpswiss-allegro-gearboxes'));
+            $this->redirect_to_settings();
+        }
+
+        wp_redirect($authorization_url);
         exit;
     }
 
@@ -965,6 +982,12 @@ class Settings
             __('Tryb awaryjny jest aktywny. Operacje importu i diagnostyki zostały tymczasowo wyłączone dla stabilności.', 'gpswiss-allegro-gearboxes')
         );
 
+        wp_safe_redirect(add_query_arg(['page' => 'gag-settings'], admin_url('admin.php')));
+        exit;
+    }
+
+    private function redirect_to_settings(): void
+    {
         wp_safe_redirect(add_query_arg(['page' => 'gag-settings'], admin_url('admin.php')));
         exit;
     }
