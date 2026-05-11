@@ -135,15 +135,12 @@ class Cron
             $scheduled_run_result_logged = true;
 
             if ($fallback_required) {
-                $this->logger->warning('EVENT_SYNC_ERROR', [
-                    'stage' => 'fallback_to_full_import',
+                $this->logger->error('EVENT_SYNC_ERROR', [
+                    'stage' => 'fallback_to_full_import_blocked',
                     'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
+                    'message' => 'Auto sync must not run a full Allegro import automatically; run a manual import if reconciliation is required.',
                 ]);
-                $this->logger->warning('EVENT_SYNC_FALLBACK_FULL_IMPORT_STARTED', [
-                    'reason' => (string) ($event_sync_summary['reason'] ?? 'unknown'),
-                ]);
-                $this->importer->mark_fallback_full_import_started((string) ($event_sync_summary['reason'] ?? 'unknown'));
-                $this->importer->import_offers();
+                $this->importer->mark_fallback_full_import_blocked((string) ($event_sync_summary['reason'] ?? 'unknown'));
             } else {
                 $this->logger->info('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
                     'reason' => 'event_sync_finished_without_fallback_required',
@@ -236,9 +233,9 @@ class Cron
         if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_single_action')) {
             // as_has_scheduled_action() can return the currently running action inside callback context.
             // Here we care only about queued future runs, so use as_next_scheduled_action().
-            $next_action_timestamp = as_next_scheduled_action(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+            $next_action_timestamp = as_next_scheduled_action(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
             if ((int) $next_action_timestamp <= 0) {
-                as_schedule_single_action(time() + 2, Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+                as_schedule_single_action(time() + 2, Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
                 $action_scheduler_scheduled = true;
                 $this->logger->info('MISSING_IMPORT_BATCH_ENQUEUED', [
                     'runner' => 'action_scheduler',
@@ -265,7 +262,7 @@ class Cron
     public function clear_missing_import_schedule(): void
     {
         if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
         }
 
         $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
@@ -381,7 +378,7 @@ class Cron
     {
         self::clear_schedule();
         if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], 'awi');
+            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
         }
 
         $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
