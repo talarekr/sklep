@@ -705,9 +705,11 @@ class Settings
         }
 
         if ($operation === 'start') {
+            $this->disable_auto_sync_for_missing_import($operation);
             $this->importer->start_missing_import();
             $this->cron->schedule_missing_import_batch();
         } elseif ($operation === 'continue') {
+            $this->disable_auto_sync_for_missing_import($operation);
             $this->importer->continue_missing_import();
             $this->cron->schedule_missing_import_batch();
         } elseif ($operation === 'pause') {
@@ -720,6 +722,25 @@ class Settings
 
         wp_safe_redirect(add_query_arg(['page' => 'gag-settings'], admin_url('admin.php')));
         exit;
+    }
+
+
+    private function disable_auto_sync_for_missing_import(string $operation): void
+    {
+        $settings = Plugin::get_settings();
+        $current_interval = sanitize_key((string) ($settings['cron_interval'] ?? 'manual'));
+
+        if ($current_interval !== 'manual') {
+            Plugin::update_settings(['cron_interval' => 'manual']);
+        }
+
+        $this->cron->clear_schedule();
+        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+            'source' => 'missing_import_' . $operation,
+            'hook' => Plugin::CRON_HOOK,
+            'previous_interval' => $current_interval,
+            'reason' => 'missing_import_requires_manual_auto_sync_enable_after_completion',
+        ]);
     }
 
     public function handle_listing_images_regenerate_batch(): void
