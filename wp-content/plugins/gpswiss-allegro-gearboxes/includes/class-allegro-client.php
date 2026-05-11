@@ -1,6 +1,6 @@
 <?php
 
-namespace AWI;
+namespace GAG;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -168,11 +168,11 @@ class AllegroClient
     {
         $offer_id = sanitize_text_field($offer_id);
         if ($offer_id === '') {
-            return new \WP_Error('awi_missing_offer_id', __('Brak offer_id Allegro.', 'allegro-woo-importer'));
+            return new \WP_Error('gag_missing_offer_id', __('Brak offer_id Allegro.', 'gpswiss-allegro-gearboxes'));
         }
 
-        if ($product_id > 0 && !ChannelGuard::assert_main_allegro_outbound_allowed($product_id, 'api_patch_offer_stock_zero', $this->logger)) {
-            return new \WP_Error('awi_main_allegro_outbound_blocked', __('Produkt jest zablokowany przed synchronizacją do głównego Allegro.', 'allegro-woo-importer'));
+        if ($product_id > 0 && !ChannelGuard::assert_gearboxes_outbound_allowed($product_id, 'api_patch_offer_stock_zero', $this->logger)) {
+            return new \WP_Error('gag_gearboxes_outbound_blocked', __('Produkt jest zablokowany przed synchronizacją do konta Allegro Gearboxes.', 'gpswiss-allegro-gearboxes'));
         }
 
         return $this->request('PATCH', '/sale/product-offers/' . rawurlencode($offer_id), [
@@ -229,7 +229,7 @@ class AllegroClient
     {
         $checkout_form_id = sanitize_text_field($checkout_form_id);
         if ($checkout_form_id === '') {
-            return new \WP_Error('awi_missing_checkout_form_id', __('Brak checkout form id Allegro.', 'allegro-woo-importer'));
+            return new \WP_Error('gag_missing_checkout_form_id', __('Brak checkout form id Allegro.', 'gpswiss-allegro-gearboxes'));
         }
 
         $endpoint = '/order/checkout-forms/' . rawurlencode($checkout_form_id);
@@ -251,7 +251,7 @@ class AllegroClient
     {
         $category_id = sanitize_text_field($category_id);
         if ($category_id === '') {
-            return new \WP_Error('awi_missing_category_id', __('Brak category_id Allegro.', 'allegro-woo-importer'));
+            return new \WP_Error('gag_missing_category_id', __('Brak category_id Allegro.', 'gpswiss-allegro-gearboxes'));
         }
 
         if (isset($this->category_cache[$category_id])) {
@@ -411,7 +411,7 @@ class AllegroClient
 
             if ($status >= 200 && $status <= 299) {
                 if (!is_array($data)) {
-                    return new \WP_Error('awi_api_invalid_json', __('Nieprawidłowa odpowiedź JSON z Allegro API.', 'allegro-woo-importer'));
+                    return new \WP_Error('gag_api_invalid_json', __('Nieprawidłowa odpowiedź JSON z Allegro API.', 'gpswiss-allegro-gearboxes'));
                 }
 
                 return $data;
@@ -428,7 +428,7 @@ class AllegroClient
                     'body' => $raw,
                 ]);
 
-                return new \WP_Error('awi_api_error', __('Allegro API zwróciło błąd.', 'allegro-woo-importer'), ['status' => $status, 'body' => $raw]);
+                return new \WP_Error('gag_api_error', __('Allegro API zwróciło błąd.', 'gpswiss-allegro-gearboxes'), ['status' => $status, 'body' => $raw]);
             }
 
             $retry_after_header = wp_remote_retrieve_header($response, 'retry-after');
@@ -458,7 +458,7 @@ class AllegroClient
             }
         }
 
-        return new \WP_Error('awi_api_unexpected_state', __('Nieoczekiwany stan klienta Allegro API.', 'allegro-woo-importer'));
+        return new \WP_Error('gag_api_unexpected_state', __('Nieoczekiwany stan klienta Allegro API.', 'gpswiss-allegro-gearboxes'));
     }
 
     private function calculate_retry_delay_seconds($retry_after_header, int $attempt): int
