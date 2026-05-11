@@ -43,16 +43,13 @@ class Cron
             'registered_callbacks' => $this->describe_registered_callbacks_for_hook(Plugin::CRON_HOOK),
         ]);
 
-        self::clear_schedule();
-        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
-            'source' => 'hooks_bootstrap',
-            'hook' => Plugin::CRON_HOOK,
-        ]);
-
         if (Plugin::is_safe_mode_enabled()) {
+            self::clear_schedule();
             $this->logger->warning('Safe mode enabled: cron import schedule cleared.');
             return;
         }
+
+        $this->schedule_from_settings('hooks_bootstrap');
     }
 
     public function register_intervals(array $schedules): array
@@ -97,6 +94,27 @@ class Cron
             'request_id' => sanitize_text_field((string) ($context['request_id'] ?? '')),
             'user_id' => isset($context['user_id']) ? (int) $context['user_id'] : 0,
         ];
+
+        if (!$is_manual_trigger && $configured_interval === 'manual') {
+            $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_SKIPPED', [
+                'hook' => Plugin::CRON_HOOK,
+                'trigger' => $trigger,
+                'configured_cron_interval' => $configured_interval,
+                'reason' => 'auto_sync_disabled',
+            ]);
+            return;
+        }
+
+        $missing_import_checkpoint = $this->importer->get_missing_import_checkpoint();
+        if (!$is_manual_trigger && (string) ($missing_import_checkpoint['status'] ?? '') === 'running') {
+            $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_SKIPPED', [
+                'hook' => Plugin::CRON_HOOK,
+                'trigger' => $trigger,
+                'configured_cron_interval' => $configured_interval,
+                'reason' => 'missing_import_running',
+            ]);
+            return;
+        }
 
         $this->logger->info('Cron import started.');
         $this->logger->info('EVENT_SYNC_SCHEDULED_RUN_START_CONTEXT', [
@@ -266,9 +284,7 @@ class Cron
 
     public function clear_missing_import_schedule(): void
     {
-        if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-        }
+        self::unschedule_all_actions_when_ready(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
 
         $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
         while ($timestamp) {
@@ -283,7 +299,6 @@ class Cron
         $new_interval = is_array($new_value) ? ($new_value['cron_interval'] ?? 'manual') : 'manual';
 
         if ($old_interval !== $new_interval) {
-            self::clear_schedule();
             $this->schedule_from_settings('settings_interval_changed');
             return;
         }
@@ -307,29 +322,68 @@ class Cron
         }
 
         set_transient(self::ADMIN_REPAIR_TRANSIENT_KEY, time(), self::ADMIN_REPAIR_THROTTLE_SECONDS);
-        $this->cleanup_duplicate_main_import_actions();
-        self::clear_schedule();
-        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
-            'source' => 'admin_repair',
-            'hook' => Plugin::CRON_HOOK,
-        ]);
+        $this->schedule_from_settings('admin_repair');
     }
 
     private function schedule_from_settings(string $source = 'unknown'): void
     {
-        self::clear_schedule();
-        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
-            'source' => $source,
-            'hook' => Plugin::CRON_HOOK,
-        ]);
+        if (Plugin::is_safe_mode_enabled()) {
+            self::clear_schedule();
+            $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+                'source' => $source,
+                'hook' => Plugin::CRON_HOOK,
+                'reason' => 'safe_mode_enabled',
+            ]);
+            return;
+        }
+
+        $settings = Plugin::get_settings();
+        $interval = sanitize_key((string) ($settings['cron_interval'] ?? 'manual'));
+        $allowed_intervals = ['gag_15_minutes', 'hourly', 'daily'];
+
+        if (!in_array($interval, $allowed_intervals, true)) {
+            self::clear_schedule();
+            $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+                'source' => $source,
+                'hook' => Plugin::CRON_HOOK,
+                'configured_interval' => $interval,
+                'reason' => 'auto_sync_disabled',
+            ]);
+            return;
+        }
+
+        $missing_import_checkpoint = $this->importer->get_missing_import_checkpoint();
+        if ((string) ($missing_import_checkpoint['status'] ?? '') === 'running') {
+            self::clear_schedule();
+            $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+                'source' => $source,
+                'hook' => Plugin::CRON_HOOK,
+                'configured_interval' => $interval,
+                'reason' => 'missing_import_running',
+            ]);
+            return;
+        }
+
+        $this->cleanup_duplicate_main_import_actions();
+        if ($this->schedule_main_import_with_action_scheduler($interval, $source)) {
+            return;
+        }
+
+        if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
+            wp_schedule_event(time() + 60, $interval, Plugin::CRON_HOOK);
+            $this->logger->info('BACKGROUND_SYNC_SCHEDULED', [
+                'runner' => 'wp_cron',
+                'hook' => Plugin::CRON_HOOK,
+                'interval' => $interval,
+                'source' => $source,
+            ]);
+        }
     }
 
     public static function clear_schedule(): void
     {
-        if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(Plugin::CRON_HOOK);
-            as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-        }
+        self::unschedule_all_actions_when_ready(Plugin::CRON_HOOK);
+        self::unschedule_all_actions_when_ready(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
 
         $timestamp = wp_next_scheduled(Plugin::CRON_HOOK);
         while ($timestamp) {
@@ -346,9 +400,7 @@ class Cron
     public static function on_deactivation(): void
     {
         self::clear_schedule();
-        if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-        }
+        self::unschedule_all_actions_when_ready(Plugin::MISSING_IMPORT_CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
 
         $timestamp = wp_next_scheduled(Plugin::MISSING_IMPORT_CRON_HOOK);
         while ($timestamp) {
@@ -413,7 +465,7 @@ class Cron
             ) {
                 $old_next_run_timestamp = $next_action_timestamp;
                 $old_next_run_at = $old_next_run_timestamp > 0 ? gmdate('Y-m-d H:i:s', $old_next_run_timestamp) : '';
-                as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                self::unschedule_all_actions_when_ready(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
                 $new_action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, self::SCHEDULER_ARGS, self::ACTION_SCHEDULER_GROUP);
 
                 if ($new_action_id !== false) {
@@ -437,7 +489,7 @@ class Cron
                 && function_exists('as_schedule_recurring_action')
             ) {
                 $old_next_run_at = gmdate('Y-m-d H:i:s', $next_action_timestamp);
-                as_unschedule_all_actions(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
+                self::unschedule_all_actions_when_ready(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
                 $new_action_id = as_schedule_recurring_action(time() + 60, $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
 
                 if ($new_action_id !== false) {
@@ -469,6 +521,55 @@ class Cron
         return true;
     }
 
+
+    private static function unschedule_all_actions_when_ready(string $hook, array $args = [], ?string $group = null): void
+    {
+        if (!function_exists('as_unschedule_all_actions')) {
+            return;
+        }
+
+        $unschedule = static function () use ($hook, $args, $group): void {
+            if (!function_exists('as_unschedule_all_actions') || !self::is_action_scheduler_ready_for_unschedule()) {
+                return;
+            }
+
+            if ($group === null) {
+                as_unschedule_all_actions($hook);
+                return;
+            }
+
+            as_unschedule_all_actions($hook, $args, $group);
+        };
+
+        if (self::is_action_scheduler_ready_for_unschedule()) {
+            $unschedule();
+            return;
+        }
+
+        add_action('action_scheduler_init', $unschedule, 20);
+    }
+
+    private static function is_action_scheduler_ready_for_unschedule(): bool
+    {
+        if (!function_exists('as_unschedule_all_actions')) {
+            return false;
+        }
+
+        if (did_action('action_scheduler_init')) {
+            return true;
+        }
+
+        if (class_exists('\\ActionScheduler') && method_exists('\\ActionScheduler', 'store')) {
+            try {
+                $store = \ActionScheduler::store();
+                return is_object($store);
+            } catch (\Throwable $exception) {
+                return false;
+            }
+        }
+
+        return false;
+    }
 
     private function normalize_scheduled_import_context($context): array
     {
