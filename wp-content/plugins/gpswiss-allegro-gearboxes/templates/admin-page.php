@@ -8,6 +8,7 @@
  * @var array  $import_lock_status
  * @var array  $missing_import_checkpoint
  * @var array  $event_sync_status
+ * @var array  $target_category_status
  * @var string $log_tail
  */
 if (!defined('ABSPATH')) {
@@ -131,6 +132,22 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         </p>
     <?php endif; ?>
 
+    <h3><?php esc_html_e('Docelowa kategoria importu', 'gpswiss-allegro-gearboxes'); ?></h3>
+    <p>
+        <strong><?php esc_html_e('Docelowa kategoria importu:', 'gpswiss-allegro-gearboxes'); ?></strong>
+        <?php echo esc_html((string) ($target_category_status['label'] ?? 'Motoryzacja → Części samochodowe → Układ napędowy → Skrzynie biegów → Kompletne skrzynie')); ?>
+    </p>
+    <p>
+        <strong><?php esc_html_e('Status:', 'gpswiss-allegro-gearboxes'); ?></strong>
+        <span style="font-weight:600; color:<?php echo !empty($target_category_status['found']) ? '#008a20' : '#b32d2e'; ?>;">
+            <?php echo esc_html((string) ($target_category_status['status_label'] ?? __('Kategoria nie została znaleziona — import nie powinien przypisywać losowej kategorii.', 'gpswiss-allegro-gearboxes'))); ?>
+        </span>
+    </p>
+    <p>
+        <strong><?php esc_html_e('Ścieżka slugów:', 'gpswiss-allegro-gearboxes'); ?></strong>
+        <code><?php echo esc_html(implode(' / ', (array) ($target_category_status['slug_path'] ?? []))); ?></code>
+    </p>
+
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('gag_manual_import'); ?>
         <input type="hidden" name="action" value="gag_manual_import">
@@ -140,7 +157,9 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <input id="gag-start-page" type="number" min="1" name="gag_start_page" placeholder="np. 171" style="width:100px; margin-right:10px;">
         <label for="gag-start-offer-index"><?php esc_html_e('Start index:', 'gpswiss-allegro-gearboxes'); ?></label>
         <input id="gag-start-offer-index" type="number" min="0" name="gag_start_offer_index" value="0" style="width:90px; margin-right:12px;">
-        <?php submit_button(__('Importuj teraz', 'gpswiss-allegro-gearboxes'), 'secondary', 'submit', false); ?>
+        <label for="gag-max-offers"><?php esc_html_e('Liczba ofert testowych:', 'gpswiss-allegro-gearboxes'); ?></label>
+        <input id="gag-max-offers" type="number" min="1" max="5" name="gag_max_offers" value="1" style="width:70px; margin-right:12px;">
+        <?php submit_button(__('Import testowy 1–5 ofert', 'gpswiss-allegro-gearboxes'), 'secondary', 'submit', false); ?>
     </form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
         <?php wp_nonce_field('gag_restore_active_offers'); ?>
