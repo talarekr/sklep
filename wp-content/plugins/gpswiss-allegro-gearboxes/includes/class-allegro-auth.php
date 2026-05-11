@@ -22,6 +22,11 @@ class AllegroAuth
     private const AUTH_HTTP_REDIRECTION_LIMIT = 3;
     private const AUTH_MAX_RETRY_ATTEMPTS = 3;
     private const AUTH_RETRYABLE_STATUS_CODES = [408, 409, 425, 429, 500, 502, 503, 504];
+    private const OAUTH_STATE_TRANSIENT_PREFIX = 'gag_oauth_state_';
+    private const OAUTH_STATE_TTL_SECONDS = 30 * MINUTE_IN_SECONDS;
+    private const OAUTH_STATE_MAX_ACTIVE = 5;
+    private const OAUTH_CALLBACK_MARKER = 'callback';
+    private const OAUTH_CALLBACK_PAGE_SLUG = 'allegro-gearboxes';
 
     private Logger $logger;
 
@@ -41,8 +46,8 @@ class AllegroAuth
         $base = $this->get_auth_base_url($settings['environment']);
         $redirect_uri = $this->get_effective_redirect_uri($settings);
 
-        $state = wp_generate_password(20, false, false);
-        set_transient('gag_oauth_state_' . get_current_user_id(), $state, 10 * MINUTE_IN_SECONDS);
+        $state = wp_generate_password(32, false, false);
+        $this->store_oauth_state($state);
 
         $query = [
             'response_type' => 'code',
@@ -69,19 +74,12 @@ class AllegroAuth
         }
 
         $settings = Plugin::get_settings();
-        $state_key = 'gag_oauth_state_' . get_current_user_id();
-        $saved_state = get_transient($state_key);
         $state = isset($_GET['state']) ? sanitize_text_field(wp_unslash($_GET['state'])) : '';
 
-        if (!empty($saved_state)) {
-            if ($saved_state !== $state) {
-                $this->logger->error('OAuth callback rejected due to invalid state.', ['state_present' => $state !== '']);
-                $this->store_admin_notice('error', __('Błędny stan OAuth (state). Spróbuj połączyć konto ponownie.', 'gpswiss-allegro-gearboxes'));
-                $this->redirect_to_settings();
-            }
-            delete_transient($state_key);
-        } elseif ($state !== '') {
-            $this->logger->warning('OAuth callback state could not be validated (missing transient).');
+        if (!$this->consume_oauth_state($state)) {
+            $this->logger->error('OAuth callback rejected due to invalid state.', ['state_present' => $state !== '']);
+            $this->store_admin_notice('error', __('Błędny stan OAuth (state). Spróbuj połączyć konto ponownie.', 'gpswiss-allegro-gearboxes'));
+            $this->redirect_to_settings();
         }
 
         $code = isset($_GET['code']) ? sanitize_text_field(wp_unslash($_GET['code'])) : '';
@@ -107,7 +105,11 @@ class AllegroAuth
         ]);
 
         if (is_wp_error($token_response)) {
-            $this->logger->error('OAuth token exchange failed.', ['error' => $token_response->get_error_message(), 'details' => $token_response->get_error_data()]);
+            $error_data = $token_response->get_error_data();
+            $this->logger->error('OAuth token exchange failed.', [
+                'error' => $token_response->get_error_message(),
+                'http_code' => is_array($error_data) ? (int) ($error_data['status'] ?? 0) : 0,
+            ]);
             $this->store_admin_notice('error', __('Nie udało się pobrać tokena Allegro.', 'gpswiss-allegro-gearboxes'));
             $this->redirect_to_settings();
         }
@@ -158,11 +160,15 @@ class AllegroAuth
 
     private function is_oauth_callback_request(): bool
     {
-        if (!isset($_GET['gag_oauth'])) {
-            return false;
+        $oauth_marker = isset($_GET['gag_oauth']) ? sanitize_key((string) wp_unslash($_GET['gag_oauth'])) : '';
+        if ($oauth_marker === self::OAUTH_CALLBACK_MARKER || $oauth_marker === '1') {
+            return true;
         }
 
-        return true;
+        $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
+        $has_oauth_response = isset($_GET['code'], $_GET['state']) || isset($_GET['error'], $_GET['state']);
+
+        return $page === self::OAUTH_CALLBACK_PAGE_SLUG && $has_oauth_response;
     }
 
     public function get_valid_access_token()
@@ -263,9 +269,10 @@ class AllegroAuth
                     'http_code' => $status,
                     'error_reason' => !is_array($data) ? 'invalid_json' : 'http_status_non_success',
                     'attempt' => $attempt,
-                    'body' => $raw,
+                    'body_present' => $raw !== '',
+                    'body_length' => strlen($raw),
                 ]);
-                return new \WP_Error('gag_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'gpswiss-allegro-gearboxes'), ['status' => $status, 'body' => $raw]);
+                return new \WP_Error('gag_token_request_failed', __('Błąd podczas pobierania tokena Allegro.', 'gpswiss-allegro-gearboxes'), ['status' => $status]);
             }
 
             $sleep_seconds = (int) pow(2, max(0, $attempt - 1));
@@ -506,10 +513,109 @@ class AllegroAuth
 
     private function get_effective_redirect_uri(array $settings): string
     {
-        $fallback = home_url('/');
-        $base = !empty($settings['redirect_uri']) ? (string) $settings['redirect_uri'] : $fallback;
+        $base = !empty($settings['redirect_uri'])
+            ? (string) $settings['redirect_uri']
+            : add_query_arg(['page' => self::OAUTH_CALLBACK_PAGE_SLUG], admin_url('admin.php'));
 
-        return add_query_arg('gag_oauth', '1', $base);
+        return add_query_arg('gag_oauth', self::OAUTH_CALLBACK_MARKER, $base);
+    }
+
+    private function get_oauth_state_key(): string
+    {
+        return self::OAUTH_STATE_TRANSIENT_PREFIX . get_current_user_id();
+    }
+
+    private function store_oauth_state(string $state): void
+    {
+        $states = $this->get_stored_oauth_states();
+        array_unshift($states, [
+            'state' => $state,
+            'created_at' => time(),
+        ]);
+
+        $states = array_slice($states, 0, self::OAUTH_STATE_MAX_ACTIVE);
+        set_transient($this->get_oauth_state_key(), $states, self::OAUTH_STATE_TTL_SECONDS);
+    }
+
+    private function consume_oauth_state(string $state): bool
+    {
+        if ($state === '') {
+            return false;
+        }
+
+        $states = $this->get_stored_oauth_states();
+        $remaining_states = [];
+        $matched = false;
+        $now = time();
+
+        foreach ($states as $stored_state) {
+            $stored_value = sanitize_text_field((string) ($stored_state['state'] ?? ''));
+            $created_at = (int) ($stored_state['created_at'] ?? 0);
+            if ($stored_value === '' || $created_at <= 0 || ($created_at + self::OAUTH_STATE_TTL_SECONDS) < $now) {
+                continue;
+            }
+
+            if (!$matched && hash_equals($stored_value, $state)) {
+                $matched = true;
+                continue;
+            }
+
+            $remaining_states[] = [
+                'state' => $stored_value,
+                'created_at' => $created_at,
+            ];
+        }
+
+        if ($remaining_states !== []) {
+            set_transient($this->get_oauth_state_key(), array_slice($remaining_states, 0, self::OAUTH_STATE_MAX_ACTIVE), self::OAUTH_STATE_TTL_SECONDS);
+        } else {
+            delete_transient($this->get_oauth_state_key());
+        }
+
+        return $matched;
+    }
+
+    private function get_stored_oauth_states(): array
+    {
+        $stored = get_transient($this->get_oauth_state_key());
+        if (!is_array($stored)) {
+            if (is_string($stored) && $stored !== '') {
+                return [[
+                    'state' => sanitize_text_field($stored),
+                    'created_at' => time(),
+                ]];
+            }
+
+            return [];
+        }
+
+        $states = [];
+        foreach ($stored as $entry) {
+            if (is_string($entry) && $entry !== '') {
+                $states[] = [
+                    'state' => sanitize_text_field($entry),
+                    'created_at' => time(),
+                ];
+                continue;
+            }
+
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $state = sanitize_text_field((string) ($entry['state'] ?? ''));
+            $created_at = (int) ($entry['created_at'] ?? 0);
+            if ($state === '' || $created_at <= 0) {
+                continue;
+            }
+
+            $states[] = [
+                'state' => $state,
+                'created_at' => $created_at,
+            ];
+        }
+
+        return array_slice($states, 0, self::OAUTH_STATE_MAX_ACTIVE);
     }
 
     private function redirect_to_settings(): void
