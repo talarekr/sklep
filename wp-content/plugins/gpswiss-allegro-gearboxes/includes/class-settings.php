@@ -33,6 +33,7 @@ class Settings
     {
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_init', [$this, 'register_settings']);
+        add_action('admin_post_gag_allegro_connect', [$this, 'handle_allegro_connect']);
         add_action('admin_post_gag_manual_import', [$this, 'handle_manual_import']);
         add_action('admin_post_gag_manual_sync_trigger', [$this, 'handle_manual_sync_trigger']);
         add_action('admin_post_gag_missing_import_start', [$this, 'handle_missing_import_start']);
@@ -105,6 +106,17 @@ class Settings
         ];
 
         return array_merge($current, $clean);
+    }
+
+    public function handle_allegro_connect(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'gpswiss-allegro-gearboxes'));
+        }
+
+        check_admin_referer('gag_allegro_connect');
+        wp_safe_redirect($this->auth->get_authorization_url());
+        exit;
     }
 
     public function handle_manual_import(): void
@@ -472,7 +484,6 @@ class Settings
             $history = [];
         }
 
-        $oauth_url = $this->auth->get_authorization_url();
         $callback_uri = $this->auth->get_connection_callback_uri();
         $listing_regen_checkpoint = get_option(self::LISTING_IMAGES_CHECKPOINT_OPTION_KEY, []);
         if (!is_array($listing_regen_checkpoint)) {
