@@ -16,10 +16,11 @@ class Importer
     private const EVENT_SYNC_CHECKPOINT_OPTION_KEY = 'gag_event_sync_checkpoint';
     private const EVENT_SYNC_STATUS_OPTION_KEY = 'gag_event_sync_status';
     private const BATCH_LIMIT = 50;
-    private const MISSING_IMPORT_BATCH_LIMIT = 50;
+    private const MISSING_IMPORT_BATCH_LIMIT = 10;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
     private const SOFT_RUNTIME_LIMIT_SECONDS = 840;
-    private const IMPORT_LOCK_TTL_SECONDS = self::MAX_EXECUTION_TIME_SECONDS + 60;
+    private const IMPORT_LOCK_TTL_SECONDS = 20 * MINUTE_IN_SECONDS;
+    private const MISSING_IMPORT_SOFT_RUNTIME_LIMIT_SECONDS = 90;
     private const OFFER_STATUS_SYNC_BATCH_SIZE = 50;
     private const EVENT_SYNC_MAX_GAP_SECONDS = DAY_IN_SECONDS;
 
@@ -63,6 +64,7 @@ class Importer
         }
 
         try {
+            ImportGuard::begin((string) ($lock_context['mode'] ?? 'full_import'));
             $settings = Plugin::get_settings();
 
             $checkpoint = $this->load_checkpoint();
@@ -448,12 +450,14 @@ class Importer
 
             return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
         } finally {
+            ImportGuard::end();
             $this->release_import_lock($lock_context);
         }
     }
 
     public function start_missing_import(): array
     {
+        $this->cleanup_stale_import_lock('missing_import_start');
         $checkpoint = $this->get_missing_import_checkpoint();
         $checkpoint['status'] = 'running';
         $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
@@ -506,6 +510,7 @@ class Importer
         }
 
         try {
+            ImportGuard::begin('event_sync');
             $this->logger->info('EVENT_SYNC_START', [
                 'stage' => 'running',
                 'checkpoint' => $checkpoint,
@@ -729,6 +734,7 @@ class Importer
 
             return $summary;
         } finally {
+            ImportGuard::end();
             $this->release_import_lock($lock_context);
         }
     }
@@ -792,7 +798,9 @@ class Importer
 
     public function run_missing_import_batch(): array
     {
+        $this->cleanup_stale_import_lock('missing_import_batch_start');
         $checkpoint = $this->get_missing_import_checkpoint();
+        $this->register_missing_import_shutdown_handler($checkpoint);
         if (($checkpoint['status'] ?? '') !== 'running') {
             return $checkpoint;
         }
@@ -809,6 +817,7 @@ class Importer
         }
 
         try {
+            ImportGuard::begin('missing_import');
             $offset = (int) ($checkpoint['current_offset'] ?? 0);
             $page = $this->client->get_offers('ACTIVE', $offset, self::MISSING_IMPORT_BATCH_LIMIT, '');
             if (is_wp_error($page)) {
@@ -842,6 +851,16 @@ class Importer
             ]);
 
             foreach ($offers as $offer_basic) {
+                if ($this->is_missing_import_runtime_exhausted($started_at)) {
+                    $this->logger->warning('MISSING_IMPORT_BATCH_STOPPED_SOFT_RUNTIME_LIMIT', [
+                        'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
+                        'soft_runtime_limit_seconds' => self::MISSING_IMPORT_SOFT_RUNTIME_LIMIT_SECONDS,
+                        'current_offset' => $offset,
+                        'checked_in_batch' => $checked_in_batch,
+                    ]);
+                    break;
+                }
+
                 $offer_id = sanitize_text_field((string) ($offer_basic['id'] ?? ''));
                 if ($offer_id === '') {
                     $errors_in_batch++;
@@ -963,7 +982,7 @@ class Importer
                 ]);
             }
 
-            $next_offset = $offset + $batch_size;
+            $next_offset = $offset + $checked_in_batch;
             $has_more = $batch_size > 0 && (
                 $total_count === null
                 || $next_offset < $total_count
@@ -1017,6 +1036,7 @@ class Importer
             ]);
             return $checkpoint;
         } finally {
+            ImportGuard::end();
             $this->release_import_lock($lock_context);
         }
     }
@@ -1135,6 +1155,80 @@ class Importer
         return $summary;
     }
 
+
+    private function is_missing_import_runtime_exhausted(float $started_at): bool
+    {
+        return (microtime(true) - $started_at) >= self::MISSING_IMPORT_SOFT_RUNTIME_LIMIT_SECONDS;
+    }
+
+    private function register_missing_import_shutdown_handler(array $checkpoint): void
+    {
+        static $registered = false;
+        if ($registered || !function_exists('register_shutdown_function')) {
+            return;
+        }
+        $registered = true;
+
+        register_shutdown_function(function (): void {
+            $error = error_get_last();
+            if (!is_array($error)) {
+                return;
+            }
+
+            $fatal_types = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+            if (!in_array((int) ($error['type'] ?? 0), $fatal_types, true)) {
+                return;
+            }
+
+            $checkpoint = $this->get_missing_import_checkpoint();
+            if (($checkpoint['status'] ?? '') === 'running') {
+                $checkpoint['status'] = 'failed';
+                $checkpoint['errors'] = (int) ($checkpoint['errors'] ?? 0) + 1;
+                $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+                $checkpoint['last_error'] = 'fatal_shutdown: ' . sanitize_text_field((string) ($error['message'] ?? 'unknown'));
+                $this->save_missing_import_checkpoint($checkpoint);
+            }
+
+            $this->release_import_lock(['mode' => 'missing_import', 'source' => 'shutdown_handler']);
+            ImportGuard::end();
+        });
+    }
+
+    private function cleanup_stale_import_lock(string $source): void
+    {
+        $existing = get_option(self::IMPORT_LOCK_OPTION_KEY, []);
+        if (!is_array($existing) || empty($existing)) {
+            return;
+        }
+
+        $expires_at = (int) ($existing['expires_at'] ?? 0);
+        $locked_at_raw = (string) ($existing['locked_at'] ?? '');
+        $locked_at = $locked_at_raw !== '' ? strtotime($locked_at_raw . ' UTC') : 0;
+        $age_seconds = $locked_at > 0 ? max(0, time() - $locked_at) : 0;
+        $is_expired = $expires_at > 0 && $expires_at < time();
+        $is_older_than_ttl = $age_seconds >= self::IMPORT_LOCK_TTL_SECONDS;
+
+        if (!$is_expired && !$is_older_than_ttl) {
+            return;
+        }
+
+        delete_option(self::IMPORT_LOCK_OPTION_KEY);
+        $this->logger->warning('Recovered stale import lock.', [
+            'source' => $source,
+            'existing_lock' => $existing,
+            'age_seconds' => $age_seconds,
+            'lock_ttl_seconds' => self::IMPORT_LOCK_TTL_SECONDS,
+        ]);
+
+        $checkpoint = $this->get_missing_import_checkpoint();
+        if (($existing['mode'] ?? '') === 'missing_import' && ($checkpoint['status'] ?? '') === 'running') {
+            $checkpoint['status'] = 'failed';
+            $checkpoint['updated_at'] = gmdate('Y-m-d H:i:s');
+            $checkpoint['last_error'] = 'stale_missing_import_lock_recovered';
+            $this->save_missing_import_checkpoint($checkpoint);
+        }
+    }
+
     private function ensure_runtime_limits(): void
     {
         if (function_exists('ini_set')) {
@@ -1162,6 +1256,7 @@ class Importer
 
     private function acquire_import_lock(array $lock_context): bool
     {
+        $this->cleanup_stale_import_lock('acquire_import_lock');
         $payload = $lock_context + [
             'locked_at' => gmdate('Y-m-d H:i:s'),
             'expires_at' => time() + self::IMPORT_LOCK_TTL_SECONDS,

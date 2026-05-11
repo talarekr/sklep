@@ -23,16 +23,20 @@ class SecondaryProductMeta
         update_post_meta($product_id, '_source_channel', self::ACCOUNT);
 
         update_post_meta($product_id, '_allegro_export_blocked', 'yes');
-        update_post_meta($product_id, '_ebay_export_allowed', 'yes');
+        update_post_meta($product_id, '_ebay_export_allowed', 'no');
+        update_post_meta($product_id, '_wei_ebay_export_blocked', 'yes');
+        update_post_meta($product_id, '_wei_ebay_export_status', 'blocked_gearboxes_import');
 
         update_post_meta($product_id, '_channel_allegro_main_enabled', 'no');
         update_post_meta($product_id, '_channel_allegro_gearboxes_enabled', 'yes');
-        update_post_meta($product_id, '_channel_ebay_de_enabled', 'yes');
+        update_post_meta($product_id, '_channel_ebay_de_enabled', 'no');
         update_post_meta($product_id, '_channel_woocommerce_enabled', 'yes');
 
         if ($offer_id !== '') {
             update_post_meta($product_id, self::OFFER_ID_META_KEY, sanitize_text_field($offer_id));
         }
+
+        delete_post_meta($product_id, '_allegro_offer_id');
 
         update_post_meta($product_id, '_secondary_allegro_account', self::ACCOUNT);
         update_post_meta($product_id, '_imported_from_secondary_allegro', 'yes');
