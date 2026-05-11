@@ -2,7 +2,6 @@
 /**
  * @var array  $settings
  * @var array  $history
- * @var string $oauth_url
  * @var string $callback_uri
  * @var array  $listing_regen_checkpoint
  * @var array  $listing_last_batch
@@ -108,8 +107,12 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
     </form>
 
     <h2><?php esc_html_e('2. Połączenie OAuth i ręczny import', 'gpswiss-allegro-gearboxes'); ?></h2>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
+        <?php wp_nonce_field('gag_allegro_connect'); ?>
+        <input type="hidden" name="action" value="gag_allegro_connect" />
+        <button type="submit" class="button button-primary"><?php esc_html_e('Połącz z Allegro', 'gpswiss-allegro-gearboxes'); ?></button>
+    </form>
     <p>
-        <a class="button button-primary" href="<?php echo esc_url($oauth_url); ?>"><?php esc_html_e('Połącz z Allegro', 'gpswiss-allegro-gearboxes'); ?></a>
         <strong style="margin-left: 12px;"><?php esc_html_e('Status połączenia:', 'gpswiss-allegro-gearboxes'); ?></strong>
         <?php echo !empty($settings['access_token']) ? esc_html__('Połączono', 'gpswiss-allegro-gearboxes') : esc_html__('Brak połączenia', 'gpswiss-allegro-gearboxes'); ?>
     </p>

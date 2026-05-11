@@ -30,6 +30,8 @@ class AllegroAuth
     private const OAUTH_STATE_MAX_ACTIVE = 5;
     private const OAUTH_CALLBACK_MARKER = 'callback';
     private const OAUTH_CALLBACK_PAGE_SLUG = 'allegro-gearboxes';
+    private const OAUTH_CODE_EXCHANGE_LOCK_PREFIX = 'gag_oauth_code_exchange_';
+    private const OAUTH_CODE_EXCHANGE_LOCK_TTL_SECONDS = 10 * MINUTE_IN_SECONDS;
 
     private Logger $logger;
 
@@ -45,12 +47,26 @@ class AllegroAuth
 
     public function get_authorization_url(): string
     {
+        return $this->prepare_authorization_url(true);
+    }
+
+    private function prepare_authorization_url(bool $store_state): string
+    {
         $settings = Plugin::get_settings();
         $base = $this->get_auth_base_url($settings['environment']);
         $redirect_uri = $this->get_effective_redirect_uri($settings);
 
         $state = wp_generate_password(32, false, false);
-        $this->store_oauth_state($state);
+        if ($store_state) {
+            $this->store_oauth_state($state, $redirect_uri);
+
+            $this->logger->info('OAuth authorization URL prepared.', $this->build_safe_redirect_uri_diagnostic($redirect_uri, $redirect_uri) + [
+                'client_id_hash' => $this->hash_diagnostic_value((string) ($settings['client_id'] ?? '')),
+                'client_id_length' => strlen((string) ($settings['client_id'] ?? '')),
+                'client_secret_present' => !empty($settings['client_secret']),
+                'client_secret_length' => strlen((string) ($settings['client_secret'] ?? '')),
+            ]);
+        }
 
         $query = [
             'response_type' => 'code',
@@ -79,7 +95,8 @@ class AllegroAuth
         $settings = Plugin::get_settings();
         $state = isset($_GET['state']) ? sanitize_text_field(wp_unslash($_GET['state'])) : '';
 
-        if (!$this->consume_oauth_state($state)) {
+        $stored_oauth_state = $this->consume_oauth_state($state);
+        if ($stored_oauth_state === null) {
             $this->logger->error('OAuth callback rejected due to invalid state.', ['state_present' => $state !== '']);
             $this->store_admin_notice('error', __('Błędny stan OAuth (state). Spróbuj połączyć konto ponownie.', 'gpswiss-allegro-gearboxes'));
             $this->redirect_to_settings();
@@ -101,11 +118,22 @@ class AllegroAuth
             $this->redirect_to_settings();
         }
 
+        $authorize_redirect_uri = (string) ($stored_oauth_state['redirect_uri'] ?? '');
+        $token_exchange_redirect_uri = $this->get_effective_redirect_uri($settings);
+        $redirect_uri_diagnostic = $this->build_safe_redirect_uri_diagnostic($authorize_redirect_uri, $token_exchange_redirect_uri);
+        $this->logger->info('OAuth redirect URI diagnostic.', $redirect_uri_diagnostic);
+
+        if (!$this->acquire_authorization_code_exchange_lock($code)) {
+            $this->logger->warning('OAuth authorization code exchange skipped because code was already handled.', $redirect_uri_diagnostic);
+            $this->store_admin_notice('error', __('Ten kod autoryzacyjny Allegro został już obsłużony. Kliknij „Połącz z Allegro” ponownie.', 'gpswiss-allegro-gearboxes'));
+            $this->redirect_to_settings();
+        }
+
         $token_response = $this->request_token([
             'grant_type' => 'authorization_code',
             'code' => $code,
-            'redirect_uri' => $this->get_effective_redirect_uri($settings),
-        ]);
+            'redirect_uri' => $token_exchange_redirect_uri,
+        ], $redirect_uri_diagnostic);
 
         if (is_wp_error($token_response)) {
             $error_data = $token_response->get_error_data();
@@ -163,15 +191,17 @@ class AllegroAuth
 
     private function is_oauth_callback_request(): bool
     {
-        $oauth_marker = isset($_GET['gag_oauth']) ? sanitize_key((string) wp_unslash($_GET['gag_oauth'])) : '';
-        if ($oauth_marker === self::OAUTH_CALLBACK_MARKER || $oauth_marker === '1') {
-            return true;
+        if (is_admin() === false) {
+            return false;
         }
 
         $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
+        $oauth_marker = isset($_GET['gag_oauth']) ? sanitize_key((string) wp_unslash($_GET['gag_oauth'])) : '';
         $has_oauth_response = isset($_GET['code'], $_GET['state']) || isset($_GET['error'], $_GET['state']);
 
-        return $page === self::OAUTH_CALLBACK_PAGE_SLUG && $has_oauth_response;
+        return $page === self::OAUTH_CALLBACK_PAGE_SLUG
+            && $oauth_marker === self::OAUTH_CALLBACK_MARKER
+            && $has_oauth_response;
     }
 
     public function get_valid_access_token()
@@ -207,7 +237,7 @@ class AllegroAuth
         return $refreshed_token;
     }
 
-    private function request_token(array $body)
+    private function request_token(array $body, array $safe_diagnostic_context = [])
     {
         $settings = Plugin::get_settings();
         $base = $this->get_auth_base_url($settings['environment']);
@@ -233,13 +263,13 @@ class AllegroAuth
         $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
-            $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, [
+            $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, array_merge($safe_diagnostic_context, [
                 'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                 'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
                 'error_reason' => $response->get_error_message(),
                 'attempt' => 1,
                 'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
-            ]);
+            ]));
             $this->logger->error('OAuth token request failed before response.', $diagnostic);
             return new \WP_Error($response->get_error_code(), $response->get_error_message(), $diagnostic);
         }
@@ -265,13 +295,13 @@ class AllegroAuth
                 return $data;
             }
 
-            $diagnostic = $this->build_safe_token_error_diagnostic($url, $status, $raw, is_array($data) ? $data : null, [
+            $diagnostic = $this->build_safe_token_error_diagnostic($url, $status, $raw, is_array($data) ? $data : null, array_merge($safe_diagnostic_context, [
                 'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                 'elapsed_time' => $elapsed_time,
                 'error_reason' => !is_array($data) ? 'invalid_json' : 'http_status_non_success',
                 'attempt' => $attempt,
                 'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
-            ]);
+            ]));
 
             $is_retryable = !$is_authorization_code_grant && in_array($status, self::AUTH_RETRYABLE_STATUS_CODES, true);
             $has_next_attempt = $attempt < $max_attempts;
@@ -290,13 +320,13 @@ class AllegroAuth
             sleep($sleep_seconds);
             $response = wp_remote_post($url, $args);
             if (is_wp_error($response)) {
-                $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, [
+                $diagnostic = $this->build_safe_token_error_diagnostic($url, 0, '', null, array_merge($safe_diagnostic_context, [
                     'timeout' => self::AUTH_HTTP_TIMEOUT_SECONDS,
                     'elapsed_time' => round(max(0, microtime(true) - $request_started_at), 3),
                     'error_reason' => $response->get_error_message(),
                     'attempt' => $attempt + 1,
                     'grant_type' => sanitize_key((string) ($body['grant_type'] ?? '')),
-                ]);
+                ]));
                 $this->logger->error('OAuth token request retry failed before response.', $diagnostic);
                 return new \WP_Error($response->get_error_code(), $response->get_error_message(), $diagnostic);
             }
@@ -315,7 +345,9 @@ class AllegroAuth
                 continue;
             }
 
-            $filtered_body[$key] = (string) $body[$key];
+            $filtered_body[$key] = $key === 'redirect_uri'
+                ? $this->normalize_redirect_uri((string) $body[$key])
+                : (string) $body[$key];
         }
 
         return http_build_query($filtered_body, '', '&', PHP_QUERY_RFC3986);
@@ -568,14 +600,60 @@ class AllegroAuth
     {
         $redirect_uri = trim(html_entity_decode($redirect_uri, ENT_QUOTES, 'UTF-8'));
 
-        if (strpos($redirect_uri, '://') === false) {
+        for ($i = 0; $i < 3 && strpos($redirect_uri, '://') === false; $i++) {
             $decoded_redirect_uri = rawurldecode($redirect_uri);
-            if ($decoded_redirect_uri !== $redirect_uri && strpos($decoded_redirect_uri, '://') !== false) {
-                $redirect_uri = $decoded_redirect_uri;
+            if ($decoded_redirect_uri === $redirect_uri) {
+                break;
             }
+
+            $redirect_uri = $decoded_redirect_uri;
         }
 
         return $redirect_uri;
+    }
+
+    private function build_safe_redirect_uri_diagnostic(string $authorize_redirect_uri, string $token_exchange_redirect_uri): array
+    {
+        return [
+            'authorize_redirect_uri_hash' => $this->hash_diagnostic_value($authorize_redirect_uri),
+            'token_exchange_redirect_uri_hash' => $this->hash_diagnostic_value($token_exchange_redirect_uri),
+            'authorize_redirect_uri_length' => strlen($authorize_redirect_uri),
+            'token_exchange_redirect_uri_length' => strlen($token_exchange_redirect_uri),
+            'redirect_uri_match' => hash_equals($authorize_redirect_uri, $token_exchange_redirect_uri),
+        ];
+    }
+
+    private function hash_diagnostic_value(string $value): string
+    {
+        return $value === '' ? '' : hash('sha256', $value);
+    }
+
+    private function acquire_authorization_code_exchange_lock(string $code): bool
+    {
+        $code_hash = $this->hash_diagnostic_value($code);
+        if ($code_hash === '') {
+            return false;
+        }
+
+        $option_key = self::OAUTH_CODE_EXCHANGE_LOCK_PREFIX . $code_hash;
+        $now = time();
+        $payload = [
+            'created_at' => $now,
+            'expires_at' => $now + self::OAUTH_CODE_EXCHANGE_LOCK_TTL_SECONDS,
+        ];
+
+        if (add_option($option_key, $payload, '', false)) {
+            return true;
+        }
+
+        $existing = get_option($option_key, []);
+        $expires_at = is_array($existing) ? (int) ($existing['expires_at'] ?? 0) : 0;
+        if ($expires_at > 0 && $expires_at <= $now) {
+            delete_option($option_key);
+            return add_option($option_key, $payload, '', false);
+        }
+
+        return false;
     }
 
     private function get_oauth_state_key(): string
@@ -583,44 +661,47 @@ class AllegroAuth
         return self::OAUTH_STATE_TRANSIENT_PREFIX . get_current_user_id();
     }
 
-    private function store_oauth_state(string $state): void
+    private function store_oauth_state(string $state, string $redirect_uri): void
     {
         $states = $this->get_stored_oauth_states();
         array_unshift($states, [
             'state' => $state,
             'created_at' => time(),
+            'redirect_uri' => $redirect_uri,
         ]);
 
         $states = array_slice($states, 0, self::OAUTH_STATE_MAX_ACTIVE);
         set_transient($this->get_oauth_state_key(), $states, self::OAUTH_STATE_TTL_SECONDS);
     }
 
-    private function consume_oauth_state(string $state): bool
+    private function consume_oauth_state(string $state): ?array
     {
         if ($state === '') {
-            return false;
+            return null;
         }
 
         $states = $this->get_stored_oauth_states();
         $remaining_states = [];
-        $matched = false;
+        $matched_state = null;
         $now = time();
 
         foreach ($states as $stored_state) {
             $stored_value = sanitize_text_field((string) ($stored_state['state'] ?? ''));
             $created_at = (int) ($stored_state['created_at'] ?? 0);
+            $redirect_uri = $this->normalize_redirect_uri((string) ($stored_state['redirect_uri'] ?? ''));
             if ($stored_value === '' || $created_at <= 0 || ($created_at + self::OAUTH_STATE_TTL_SECONDS) < $now) {
                 continue;
             }
 
-            if (!$matched && hash_equals($stored_value, $state)) {
-                $matched = true;
+            if ($matched_state === null && hash_equals($stored_value, $state)) {
+                $matched_state = $stored_state;
                 continue;
             }
 
             $remaining_states[] = [
                 'state' => $stored_value,
                 'created_at' => $created_at,
+                'redirect_uri' => $redirect_uri,
             ];
         }
 
@@ -630,7 +711,7 @@ class AllegroAuth
             delete_transient($this->get_oauth_state_key());
         }
 
-        return $matched;
+        return $matched_state;
     }
 
     private function get_stored_oauth_states(): array
@@ -641,6 +722,7 @@ class AllegroAuth
                 return [[
                     'state' => sanitize_text_field($stored),
                     'created_at' => time(),
+                    'redirect_uri' => '',
                 ]];
             }
 
@@ -653,6 +735,7 @@ class AllegroAuth
                 $states[] = [
                     'state' => sanitize_text_field($entry),
                     'created_at' => time(),
+                    'redirect_uri' => '',
                 ];
                 continue;
             }
@@ -663,6 +746,7 @@ class AllegroAuth
 
             $state = sanitize_text_field((string) ($entry['state'] ?? ''));
             $created_at = (int) ($entry['created_at'] ?? 0);
+            $redirect_uri = $this->normalize_redirect_uri((string) ($entry['redirect_uri'] ?? ''));
             if ($state === '' || $created_at <= 0) {
                 continue;
             }
@@ -670,6 +754,7 @@ class AllegroAuth
             $states[] = [
                 'state' => $state,
                 'created_at' => $created_at,
+                'redirect_uri' => $redirect_uri,
             ];
         }
 
