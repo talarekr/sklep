@@ -1,6 +1,6 @@
 <?php
 
-namespace AWI;
+namespace GAG;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -8,11 +8,11 @@ if (!defined('ABSPATH')) {
 
 final class Plugin
 {
-    public const OPTION_KEY = 'awi_settings';
-    public const HISTORY_OPTION_KEY = 'awi_import_history';
-    public const CRON_HOOK = 'awi_run_scheduled_import';
-    public const MISSING_IMPORT_CRON_HOOK = 'awi_run_missing_import_batch';
-    public const SAFE_MODE_OPTION_KEY = 'awi_safe_mode_enabled';
+    public const OPTION_KEY = 'gag_settings';
+    public const HISTORY_OPTION_KEY = 'gag_import_history';
+    public const CRON_HOOK = 'gag_run_scheduled_import';
+    public const MISSING_IMPORT_CRON_HOOK = 'gag_run_missing_import_batch';
+    public const SAFE_MODE_OPTION_KEY = 'gag_safe_mode_enabled';
 
     private static ?self $instance = null;
     private Logger $logger;
@@ -48,21 +48,23 @@ final class Plugin
 
         add_action('plugins_loaded', [$this, 'bootstrap'], 20);
 
-        register_activation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_activation']);
-        register_deactivation_hook(AWI_PLUGIN_FILE, [Cron::class, 'on_deactivation']);
+        register_activation_hook(GAG_PLUGIN_FILE, [Cron::class, 'on_activation']);
+        register_deactivation_hook(GAG_PLUGIN_FILE, [Cron::class, 'on_deactivation']);
     }
 
     private function load_dependencies(): void
     {
-        require_once AWI_PLUGIN_DIR . 'includes/class-logger.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-allegro-auth.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-allegro-client.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-product-mapper.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-channel-guard.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-importer.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-cron.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-cli.php';
-        require_once AWI_PLUGIN_DIR . 'includes/class-settings.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-logger.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-allegro-auth.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-allegro-client.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-secondary-product-meta.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-sync-queue.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-product-mapper.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-channel-guard.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-importer.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-cron.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-cli.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-settings.php';
     }
 
     public function bootstrap(): void
@@ -86,7 +88,7 @@ final class Plugin
             return;
         }
 
-        if (!ChannelGuard::assert_main_allegro_outbound_allowed((int) $product_id, 'woocommerce_stock_status_outofstock', $this->logger)) {
+        if (!ChannelGuard::assert_gearboxes_outbound_allowed((int) $product_id, 'woocommerce_stock_status_outofstock', $this->logger)) {
             return;
         }
 
@@ -99,7 +101,7 @@ final class Plugin
             return;
         }
 
-        echo '<div class="notice notice-error"><p>' . esc_html__('Allegro Woo Importer wymaga aktywnej wtyczki WooCommerce.', 'allegro-woo-importer') . '</p></div>';
+        echo '<div class="notice notice-error"><p>' . esc_html__('GPSwiss Allegro Gearboxes wymaga aktywnej wtyczki WooCommerce.', 'gpswiss-allegro-gearboxes') . '</p></div>';
     }
 
     public static function get_settings(): array
@@ -124,7 +126,7 @@ final class Plugin
             'token_scope' => '',
             'token_type' => '',
             'connected_at' => '',
-            'awi_order_events_access_denied_notice' => 0,
+            'gag_order_events_access_denied_notice' => 0,
             'last_sync_at' => '',
             'last_sync_created' => 0,
             'last_sync_updated' => 0,

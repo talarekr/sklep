@@ -1,6 +1,6 @@
 <?php
 
-namespace AWI;
+namespace GAG;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -8,13 +8,13 @@ if (!defined('ABSPATH')) {
 
 class Importer
 {
-    private const CHECKPOINT_OPTION_KEY = 'awi_import_checkpoint';
-    private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'awi_active_seen_offer_ids';
-    private const CYCLE_STATE_OPTION_KEY = 'awi_import_cycle_state';
-    private const IMPORT_LOCK_OPTION_KEY = 'awi_import_lock';
-    private const MISSING_IMPORT_CHECKPOINT_OPTION_KEY = 'awi_missing_import_checkpoint';
-    private const EVENT_SYNC_CHECKPOINT_OPTION_KEY = 'awi_event_sync_checkpoint';
-    private const EVENT_SYNC_STATUS_OPTION_KEY = 'awi_event_sync_status';
+    private const CHECKPOINT_OPTION_KEY = 'gag_import_checkpoint';
+    private const ACTIVE_SEEN_OFFERS_OPTION_KEY = 'gag_active_seen_offer_ids';
+    private const CYCLE_STATE_OPTION_KEY = 'gag_import_cycle_state';
+    private const IMPORT_LOCK_OPTION_KEY = 'gag_import_lock';
+    private const MISSING_IMPORT_CHECKPOINT_OPTION_KEY = 'gag_missing_import_checkpoint';
+    private const EVENT_SYNC_CHECKPOINT_OPTION_KEY = 'gag_event_sync_checkpoint';
+    private const EVENT_SYNC_STATUS_OPTION_KEY = 'gag_event_sync_status';
     private const BATCH_LIMIT = 50;
     private const MISSING_IMPORT_BATCH_LIMIT = 50;
     private const MAX_EXECUTION_TIME_SECONDS = 900;
@@ -82,8 +82,8 @@ class Importer
                 $resume_offer_index = $has_override_offer_index ? max(0, (int) $resume_override['offer_index']) : $resume_offer_index;
                 $page_token = '';
 
-                if (function_exists('awi_log')) {
-                    awi_log('MANUAL_RESUME_OVERRIDE', [
+                if (function_exists('gag_log')) {
+                    gag_log('MANUAL_RESUME_OVERRIDE', [
                         'offset' => $offset,
                         'page' => $page_no,
                         'index' => $resume_offer_index,
@@ -196,8 +196,8 @@ class Importer
             }
 
             if (memory_get_usage(true) > 256 * 1024 * 1024) {
-                if (function_exists('awi_log')) {
-                    awi_log('MEMORY_LIMIT_APPROACHING', []);
+                if (function_exists('gag_log')) {
+                    gag_log('MEMORY_LIMIT_APPROACHING', []);
                 }
                 $this->logger->warning('MEMORY_LIMIT_APPROACHING', [
                     'memory_usage_bytes' => memory_get_usage(true),
@@ -521,7 +521,7 @@ class Importer
                     ]);
 
                     $settings = Plugin::get_settings();
-                    $settings['awi_order_events_access_denied_notice'] = 1;
+                    $settings['gag_order_events_access_denied_notice'] = 1;
                     Plugin::update_settings($settings);
 
                     $order_events_response = [
@@ -943,16 +943,16 @@ class Importer
             return;
         }
 
-        if (!ChannelGuard::assert_main_allegro_outbound_allowed($product_id, 'sync_woo_sold_out_to_allegro', $this->logger)) {
+        if (!ChannelGuard::assert_gearboxes_outbound_allowed($product_id, 'sync_woo_sold_out_to_allegro', $this->logger)) {
             return;
         }
 
-        $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+        $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_secondary_allegro_offer_id', true));
         if ($offer_id === '') {
             $this->logger->warning('SYNC_WOO_SOLD_OUT_SKIPPED', [
                 'product_id' => $product_id,
-                'reason' => 'missing_allegro_offer_id_meta',
-                'meta_key' => '_allegro_offer_id',
+                'reason' => 'missing_secondary_allegro_offer_id_meta',
+                'meta_key' => '_secondary_allegro_offer_id',
             ]);
             return;
         }
@@ -979,7 +979,7 @@ class Importer
             return;
         }
 
-        if (!ChannelGuard::assert_main_allegro_outbound_allowed($product_id, 'set_offer_stock_to_zero', $this->logger)) {
+        if (!ChannelGuard::assert_gearboxes_outbound_allowed($product_id, 'set_offer_stock_to_zero', $this->logger)) {
             return;
         }
 
@@ -1339,8 +1339,8 @@ class Importer
         ]);
         $details = $this->client->get_offer_details($offer_id);
         if (is_wp_error($details)) {
-            $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : $details->get_error_message();
-            if ($details->get_error_code() !== 'awi_api_error_404') {
+            $reason = $details->get_error_code() === 'gag_api_error_404' ? 'offer_missing' : $details->get_error_message();
+            if ($details->get_error_code() !== 'gag_api_error_404') {
                 $this->logger->error('EVENT_SYNC_ERROR', [
                     'stage' => 'get_offer_details',
                     'stream' => $stream,
@@ -1402,7 +1402,8 @@ class Importer
         $result = $this->mapper->upsert_product($details, $settings);
         $product_id = (int) ($result['product_id'] ?? 0);
         if ($product_id > 0) {
-            update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+            update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+            SecondaryProductMeta::apply((int) $product_id, $offer_id);
         }
         if (($result['result'] ?? '') === 'created') {
             $this->logger->info('EVENT_SYNC_NEW_OFFER_IMPORTED', [
@@ -1671,30 +1672,26 @@ class Importer
             ];
         }
 
-        $product_ids = $this->find_product_ids_by_exact_meta_key('_allegro_offer_id', $offer_id, $attempts);
+        $product_ids = $this->find_product_ids_by_exact_meta_key('_secondary_allegro_offer_id', $offer_id, $attempts);
         if (count($product_ids) > 0) {
             return [
                 'product_ids' => $product_ids,
-                'resolved_by' => '_allegro_offer_id',
+                'resolved_by' => '_secondary_allegro_offer_id',
                 'attempts' => $attempts,
                 'identifiers' => $identifiers,
             ];
         }
 
         $legacy_offer_meta_keys = [
-            'allegro_offer_id',
-            '_awi_allegro_offer_id',
-            '_allegro_offer',
-            '_offer_id',
-            'offer_id',
-            '_allegro_id',
-            'allegro_id',
+            'secondary_allegro_offer_id',
+            '_gag_secondary_allegro_offer_id',
         ];
         foreach ($legacy_offer_meta_keys as $legacy_key) {
             $product_ids = $this->find_product_ids_by_exact_meta_key($legacy_key, $offer_id, $attempts);
             if (count($product_ids) > 0) {
                 foreach ($product_ids as $product_id) {
-                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                    update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
                 }
 
                 return [
@@ -1718,6 +1715,16 @@ class Importer
             }
         }
 
+        // Do not fall back to SKU, external id, part number, or generic Allegro meta here:
+        // those identifiers can belong to products from the main Allegro account.
+        // Gearboxes event lookup is intentionally limited to the secondary offer id keys above.
+        return [
+            'product_ids' => [],
+            'resolved_by' => 'none',
+            'attempts' => $attempts,
+            'identifiers' => $identifiers,
+        ];
+
         $external_id = sanitize_text_field((string) ($offer_details['external']['id'] ?? ''));
         if ($external_id !== '') {
             $identifiers['external_id'] = $external_id;
@@ -1726,7 +1733,8 @@ class Importer
                 $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $external_id, $attempts);
                 if (count($product_ids) > 0) {
                     foreach ($product_ids as $product_id) {
-                        update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                        update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
                     }
 
                     return [
@@ -1751,7 +1759,8 @@ class Importer
                     'matched_count' => $product_id > 0 ? 1 : 0,
                 ];
                 if ($product_id > 0) {
-                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                    update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
 
                     return [
                         'product_ids' => [$product_id],
@@ -1765,7 +1774,8 @@ class Importer
             $product_ids = $this->find_product_ids_by_exact_meta_key('_sku', $sku, $attempts);
             if (count($product_ids) > 0) {
                 foreach ($product_ids as $product_id) {
-                    update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                    update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
                 }
 
                 return [
@@ -1785,7 +1795,8 @@ class Importer
                 $product_ids = $this->find_product_ids_by_exact_meta_key($meta_key, $part_number, $attempts);
                 if (count($product_ids) > 0) {
                     foreach ($product_ids as $product_id) {
-                        update_post_meta($product_id, '_allegro_offer_id', $offer_id);
+                        update_post_meta($product_id, '_secondary_allegro_offer_id', $offer_id);
+                    SecondaryProductMeta::apply((int) $product_id, $offer_id);
                     }
 
                     return [
@@ -1865,7 +1876,7 @@ class Importer
             'posts_per_page' => 100,
             'meta_query' => [
                 [
-                    'key' => '_allegro_offer_id',
+                    'key' => '_secondary_allegro_offer_id',
                     'value' => $offer_id,
                     'compare' => '=',
                 ],
@@ -2063,7 +2074,7 @@ class Importer
                 'paged' => $page,
                 'meta_query' => [
                     [
-                        'key' => '_allegro_offer_id',
+                        'key' => '_secondary_allegro_offer_id',
                         'compare' => 'EXISTS',
                     ],
                 ],
@@ -2075,14 +2086,14 @@ class Importer
                     break 2;
                 }
 
-                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_secondary_allegro_offer_id', true));
                 if ($offer_id === '') {
                     continue;
                 }
 
                 $details = $this->client->get_offer_details($offer_id);
                 if (is_wp_error($details)) {
-                    $reason = $details->get_error_code() === 'awi_api_error_404' ? 'offer_missing' : 'api_error';
+                    $reason = $details->get_error_code() === 'gag_api_error_404' ? 'offer_missing' : 'api_error';
                     if ($reason !== 'offer_missing') {
                         $this->logger->error('SYNC_ERROR', [
                             'offer_id' => $offer_id,
@@ -2175,7 +2186,7 @@ class Importer
                 'paged' => $page,
                 'meta_query' => [
                     [
-                        'key' => '_allegro_offer_id',
+                        'key' => '_secondary_allegro_offer_id',
                         'compare' => 'EXISTS',
                     ],
                     [
@@ -2197,7 +2208,7 @@ class Importer
 
             $product_ids = array_map('intval', (array) $query->posts);
             foreach ($product_ids as $product_id) {
-                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+                $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_secondary_allegro_offer_id', true));
                 if ($offer_id === '') {
                     continue;
                 }
