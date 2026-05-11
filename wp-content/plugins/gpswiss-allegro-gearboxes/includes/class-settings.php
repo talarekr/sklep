@@ -117,22 +117,38 @@ class Settings
         check_admin_referer('gag_allegro_connect');
 
         $authorization_url = $this->auth->get_authorization_url();
-        $authorization_url_host = (string) wp_parse_url($authorization_url, PHP_URL_HOST);
-        $this->logger->info('OAuth redirect to Allegro started.', [
-            'authorize_url_host' => $authorization_url_host,
-            'authorize_url_present' => $authorization_url !== '',
+        $authorization_url_diagnostic = $this->auth->build_safe_authorization_url_diagnostic($authorization_url);
+        $headers_sent_file = '';
+        $headers_sent_line = 0;
+        $headers_already_sent = headers_sent($headers_sent_file, $headers_sent_line);
+
+        $this->logger->info('OAuth redirect to Allegro started.', $authorization_url_diagnostic + [
+            'admin_post_action' => 'gag_allegro_connect',
+            'request_method' => isset($_SERVER['REQUEST_METHOD']) ? sanitize_key((string) wp_unslash($_SERVER['REQUEST_METHOD'])) : '',
+            'headers_already_sent' => $headers_already_sent,
+            'headers_sent_file' => $headers_already_sent ? $headers_sent_file : '',
+            'headers_sent_line' => $headers_already_sent ? $headers_sent_line : 0,
         ]);
 
-        if ($authorization_url === '' || !in_array($authorization_url_host, ['allegro.pl', 'allegro.pl.allegrosandbox.pl'], true)) {
-            $this->logger->error('OAuth redirect to Allegro blocked: invalid authorization URL host.', [
-                'authorize_url_host' => $authorization_url_host,
-                'authorize_url_present' => $authorization_url !== '',
-            ]);
+        if (empty($authorization_url_diagnostic['authorize_url_is_expected_allegro_endpoint'])) {
+            $this->logger->error('OAuth redirect to Allegro blocked: invalid authorization URL endpoint.', $authorization_url_diagnostic);
             $this->store_admin_notice('error', __('Nie udało się rozpocząć autoryzacji Allegro. Sprawdź konfigurację OAuth.', 'gpswiss-allegro-gearboxes'));
             $this->redirect_to_settings();
         }
 
-        wp_redirect($authorization_url);
+        if ($headers_already_sent) {
+            $this->logger->error('OAuth redirect to Allegro blocked: headers already sent.', $authorization_url_diagnostic + [
+                'headers_sent_file' => $headers_sent_file,
+                'headers_sent_line' => $headers_sent_line,
+            ]);
+            $this->store_admin_notice('error', __('Nie udało się przekierować do Allegro, bo WordPress wysłał już nagłówki odpowiedzi. Sprawdź logi wtyczki.', 'gpswiss-allegro-gearboxes'));
+            $this->redirect_to_settings();
+        }
+
+        $redirect_started = wp_redirect($authorization_url);
+        $this->logger->info('OAuth wp_redirect result.', $authorization_url_diagnostic + [
+            'wp_redirect_result' => $redirect_started,
+        ]);
         exit;
     }
 
