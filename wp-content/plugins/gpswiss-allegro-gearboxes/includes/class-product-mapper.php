@@ -669,6 +669,7 @@ class ProductMapper
             return ['result' => 'skipped', 'reason' => 'sync_mode_update_only_missing_product'];
         }
 
+        ImportGuard::suppress_wei_autosync_hooks();
         $product = $existing_id ? wc_get_product($existing_id) : new \WC_Product_Simple();
         if (!$product instanceof WC_Product) {
             return ['result' => 'error', 'error' => 'invalid_product_instance'];
@@ -718,6 +719,8 @@ class ProductMapper
         $product->set_status($target_status);
 
         $this->apply_stock_state($product, $publication_status, $stock_available);
+        $this->apply_channel_meta_before_first_save($product, $offer_id);
+        ImportGuard::suppress_wei_autosync_hooks();
 
         $this->logger->info('PRODUCT_SAVE_START', [
             'offer_id' => $offer_id,
@@ -832,6 +835,7 @@ class ProductMapper
         update_post_meta($product_id, '_secondary_allegro_imported_at', gmdate('Y-m-d H:i:s'));
         update_post_meta($product_id, '_secondary_allegro_parameters', wp_json_encode($offer['parameters'] ?? []));
         SecondaryProductMeta::apply((int) $product_id, $offer_id);
+        delete_post_meta($product_id, '_allegro_offer_id');
 
         $this->logger->info('Product import upsert completed.', [
             'offer_id' => $offer_id,
@@ -876,6 +880,33 @@ class ProductMapper
         }
 
         return ['result' => $existing_id ? 'updated' : 'created', 'product_id' => $product_id];
+    }
+
+
+    private function apply_channel_meta_before_first_save(WC_Product $product, string $offer_id): void
+    {
+        $channel_meta = [
+            '_source_marketplace' => 'allegro',
+            '_source_account' => SecondaryProductMeta::ACCOUNT,
+            '_source_channel' => SecondaryProductMeta::ACCOUNT,
+            '_channel_allegro_gearboxes_enabled' => 'yes',
+            '_allegro_export_blocked' => 'yes',
+            '_channel_allegro_main_enabled' => 'no',
+            '_secondary_allegro_offer_id' => sanitize_text_field($offer_id),
+            '_secondary_allegro_account' => SecondaryProductMeta::ACCOUNT,
+            '_imported_from_secondary_allegro' => 'yes',
+            '_ebay_export_allowed' => 'no',
+            '_wei_ebay_export_blocked' => 'yes',
+            '_wei_ebay_export_status' => 'blocked_gearboxes_import',
+            '_channel_ebay_de_enabled' => 'no',
+            '_channel_woocommerce_enabled' => 'yes',
+        ];
+
+        foreach ($channel_meta as $meta_key => $meta_value) {
+            $product->update_meta_data($meta_key, $meta_value);
+        }
+
+        $product->delete_meta_data('_allegro_offer_id');
     }
 
     public function find_existing_product_id_for_offer(array $offer): int
@@ -1659,7 +1690,22 @@ class ProductMapper
             ]);
         }
 
-        $listing_image_result = $this->ensure_listing_image_for_product($product_id, true);
+        try {
+            $listing_image_result = $this->ensure_listing_image_for_product($product_id, true);
+        } catch (\Throwable $throwable) {
+            $listing_image_result = [
+                'status' => 'error',
+                'reason' => 'listing_image_generation_exception',
+                'error_message' => $throwable->getMessage(),
+            ];
+            update_post_meta($product_id, '_gag_listing_image_last_error', sanitize_text_field($throwable->getMessage()));
+            update_post_meta($product_id, '_gag_listing_image_last_error_at', gmdate('Y-m-d H:i:s'));
+            $this->logger->error('Listing image generation failed without aborting image sync.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
         $listing_status = sanitize_key((string) ($listing_image_result['status'] ?? 'unknown'));
         $listing_diagnostics = $this->get_listing_image_diagnostics($product_id);
         $this->logger->info('Listing image generation after import.', [
@@ -2371,10 +2417,17 @@ class ProductMapper
             return new \WP_Error('listing_attachment_insert_failed', __('Nie udało się dodać załącznika obrazu listingowego.', 'gpswiss-allegro-gearboxes'));
         }
 
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        $attachment_metadata = wp_generate_attachment_metadata((int) $attachment_id, $target_path);
-        if (is_array($attachment_metadata)) {
-            wp_update_attachment_metadata((int) $attachment_id, $attachment_metadata);
+        $metadata_result = $this->safe_generate_listing_attachment_metadata((int) $attachment_id, $target_path, $product_id, $source_attachment_id);
+        if (is_wp_error($metadata_result)) {
+            update_post_meta($product_id, '_gag_listing_image_last_error', $metadata_result->get_error_message());
+            update_post_meta($product_id, '_gag_listing_image_last_error_at', gmdate('Y-m-d H:i:s'));
+            $this->logger->warning('Listing image metadata generation skipped/failed without aborting import.', [
+                'product_id' => $product_id,
+                'source_attachment_id' => $source_attachment_id,
+                'listing_attachment_id' => (int) $attachment_id,
+                'error_code' => $metadata_result->get_error_code(),
+                'error_message' => $metadata_result->get_error_message(),
+            ]);
         }
 
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FLAG_META_KEY, 1);
@@ -2424,6 +2477,41 @@ class ProductMapper
         ]);
 
         return (int) $attachment_id;
+    }
+
+
+    private function safe_generate_listing_attachment_metadata(int $attachment_id, string $target_path, int $product_id, int $source_attachment_id)
+    {
+        if (!file_exists($target_path)) {
+            return new \WP_Error('listing_metadata_missing_file', __('Brak pliku obrazu listingowego do wygenerowania metadanych.', 'gpswiss-allegro-gearboxes'));
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $empty_sizes_filter = static function (array $sizes): array {
+            return [];
+        };
+        $gd_first_filter = [$this, 'prefer_gd_image_editor_for_import'];
+
+        add_filter('intermediate_image_sizes_advanced', $empty_sizes_filter, 999);
+        add_filter('wp_image_editors', $gd_first_filter, 999);
+
+        try {
+            $attachment_metadata = wp_generate_attachment_metadata($attachment_id, $target_path);
+            if (is_array($attachment_metadata)) {
+                wp_update_attachment_metadata($attachment_id, $attachment_metadata);
+                return $attachment_metadata;
+            }
+
+            return new \WP_Error('listing_metadata_generation_failed', __('Nie udało się wygenerować metadanych obrazu listingowego.', 'gpswiss-allegro-gearboxes'));
+        } catch (\Throwable $throwable) {
+            return new \WP_Error('listing_metadata_exception', $throwable->getMessage(), [
+                'product_id' => $product_id,
+                'source_attachment_id' => $source_attachment_id,
+            ]);
+        } finally {
+            remove_filter('intermediate_image_sizes_advanced', $empty_sizes_filter, 999);
+            remove_filter('wp_image_editors', $gd_first_filter, 999);
+        }
     }
 
     private function ensure_listing_attachment_generation_meta(int $listing_attachment_id, int $source_attachment_id): void

@@ -59,6 +59,7 @@ final class Plugin
         require_once GAG_PLUGIN_DIR . 'includes/class-allegro-client.php';
         require_once GAG_PLUGIN_DIR . 'includes/class-secondary-product-meta.php';
         require_once GAG_PLUGIN_DIR . 'includes/class-sync-queue.php';
+        require_once GAG_PLUGIN_DIR . 'includes/class-import-guard.php';
         require_once GAG_PLUGIN_DIR . 'includes/class-product-mapper.php';
         require_once GAG_PLUGIN_DIR . 'includes/class-channel-guard.php';
         require_once GAG_PLUGIN_DIR . 'includes/class-importer.php';

@@ -43,8 +43,13 @@ class Cron
             'registered_callbacks' => $this->describe_registered_callbacks_for_hook(Plugin::CRON_HOOK),
         ]);
 
+        self::clear_schedule();
+        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+            'source' => 'hooks_bootstrap',
+            'hook' => Plugin::CRON_HOOK,
+        ]);
+
         if (Plugin::is_safe_mode_enabled()) {
-            self::clear_schedule();
             $this->logger->warning('Safe mode enabled: cron import schedule cleared.');
             return;
         }
@@ -303,35 +308,20 @@ class Cron
 
         set_transient(self::ADMIN_REPAIR_TRANSIENT_KEY, time(), self::ADMIN_REPAIR_THROTTLE_SECONDS);
         $this->cleanup_duplicate_main_import_actions();
-        $this->schedule_from_settings('admin_repair');
+        self::clear_schedule();
+        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+            'source' => 'admin_repair',
+            'hook' => Plugin::CRON_HOOK,
+        ]);
     }
 
     private function schedule_from_settings(string $source = 'unknown'): void
     {
-        if (Plugin::is_safe_mode_enabled()) {
-            self::clear_schedule();
-            return;
-        }
-
-        $settings = Plugin::get_settings();
-        $interval = $settings['cron_interval'] ?? 'manual';
-
-        if ($interval === 'manual') {
-            self::clear_schedule();
-            return;
-        }
-
-        if ($this->schedule_main_import_with_action_scheduler($interval, $source)) {
-            return;
-        }
-
-        if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
-            wp_schedule_event(time() + 60, $interval, Plugin::CRON_HOOK);
-            $this->logger->warning('BACKGROUND_SYNC_SCHEDULED_WITH_WP_CRON_FALLBACK', [
-                'hook' => Plugin::CRON_HOOK,
-                'interval' => $interval,
-            ]);
-        }
+        self::clear_schedule();
+        $this->logger->info('BACKGROUND_SYNC_REGULAR_CRON_DISABLED', [
+            'source' => $source,
+            'hook' => Plugin::CRON_HOOK,
+        ]);
     }
 
     public static function clear_schedule(): void
@@ -350,28 +340,7 @@ class Cron
 
     public static function on_activation(): void
     {
-        $settings = Plugin::get_settings();
-        $interval = $settings['cron_interval'] ?? 'manual';
-        if ($interval !== 'manual') {
-            $interval_seconds = wp_get_schedules()[$interval]['interval'] ?? 0;
-            if (
-                function_exists('as_next_scheduled_action')
-                && function_exists('as_has_scheduled_action')
-                && function_exists('as_schedule_recurring_action')
-                && $interval_seconds > 0
-            ) {
-                $next_action_timestamp = (int) as_next_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-                $has_any_scheduled_action = as_has_scheduled_action(Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP) !== false;
-                if ($next_action_timestamp <= 0 && !$has_any_scheduled_action) {
-                    as_schedule_recurring_action(time() + 60, (int) $interval_seconds, Plugin::CRON_HOOK, [], self::ACTION_SCHEDULER_GROUP);
-                    return;
-                }
-            }
-
-            if (!wp_next_scheduled(Plugin::CRON_HOOK)) {
-                wp_schedule_event(time() + 60, $interval, Plugin::CRON_HOOK);
-            }
-        }
+        self::clear_schedule();
     }
 
     public static function on_deactivation(): void
