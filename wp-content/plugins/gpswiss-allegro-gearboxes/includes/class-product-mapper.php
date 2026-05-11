@@ -48,6 +48,14 @@ class ProductMapper
     private const LISTING_REQUIRES_BETTER_SOURCE_META_KEY = '_gag_listing_requires_better_source';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
+    public const TARGET_CATEGORY_LABEL = 'Motoryzacja → Części samochodowe → Układ napędowy → Skrzynie biegów → Kompletne skrzynie';
+    public const TARGET_CATEGORY_SLUG_PATH = [
+        'motoryzacja',
+        'czesci-samochodowe',
+        'uklad-napedowy',
+        'skrzynie-biegow',
+        'kompletne-skrzynie',
+    ];
 
     private AllegroClient $client;
     private Logger $logger;
@@ -1148,99 +1156,91 @@ class ProductMapper
         return in_array($inactive, ['draft', 'private'], true) ? $inactive : 'draft';
     }
 
-    private function assign_category(int $product_id, array $offer): void
+    public static function get_target_category_status(): array
     {
-        $allegro_category_id = sanitize_text_field((string) ($offer['category']['id'] ?? ''));
-        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'checkpoint' => 'assign_category_start',
-            'allegro_category_id' => $allegro_category_id,
-        ]);
-        if ($allegro_category_id === '') {
-            $this->logger->warning('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => $product_id,
-                'checkpoint' => 'assign_category_skipped_missing_secondary_allegro_category_id',
-            ]);
-            return;
-        }
+        $term_id = self::find_target_category_term_id();
 
-        $allegro_category_name = sanitize_text_field((string) ($offer['category']['name'] ?? ''));
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'checkpoint' => 'get_category_path_start',
-            'allegro_category_id' => $allegro_category_id,
-        ]);
-        $category_path = $this->extract_allegro_category_path($offer, $allegro_category_id, $allegro_category_name);
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'checkpoint' => 'get_category_path_done',
-            'path_nodes_count' => count($category_path),
-        ]);
-        if ($category_path === []) {
-            $this->logger->warning('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => $product_id,
-                'checkpoint' => 'assign_category_skipped_empty_path',
-                'allegro_category_id' => $allegro_category_id,
-            ]);
-            return;
-        }
+        return [
+            'label' => self::TARGET_CATEGORY_LABEL,
+            'slug_path' => self::TARGET_CATEGORY_SLUG_PATH,
+            'term_id' => $term_id,
+            'found' => $term_id > 0,
+            'status_label' => $term_id > 0
+                ? __('Kategoria znaleziona', 'gpswiss-allegro-gearboxes')
+                : __('Kategoria nie została znaleziona — import nie powinien przypisywać losowej kategorii.', 'gpswiss-allegro-gearboxes'),
+        ];
+    }
 
+    private static function find_target_category_term_id(): int
+    {
         $parent_term_id = 0;
         $leaf_term_id = 0;
-        $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-            'offer_id' => $offer_id,
-            'product_id' => $product_id,
-            'checkpoint' => 'create_or_update_terms_for_path_start',
-            'path_nodes_count' => count($category_path),
-        ]);
 
-        foreach ($category_path as $node) {
-            $node_id = sanitize_text_field((string) ($node['id'] ?? ''));
-            $node_name = sanitize_text_field((string) ($node['name'] ?? ''));
-            if ($node_id === '' || $node_name === '') {
-                continue;
+        foreach (self::TARGET_CATEGORY_SLUG_PATH as $slug) {
+            $terms = get_terms([
+                'taxonomy' => 'product_cat',
+                'hide_empty' => false,
+                'slug' => $slug,
+                'parent' => $parent_term_id,
+                'number' => 1,
+            ]);
+
+            if (is_wp_error($terms) || !is_array($terms) || empty($terms[0]) || !$terms[0] instanceof \WP_Term) {
+                return 0;
             }
 
-            $term_id = $this->find_or_create_category_term($node_id, $node_name, $parent_term_id);
-            if ($term_id <= 0) {
-                continue;
-            }
-
-            $parent_term_id = $term_id;
-            $leaf_term_id = $term_id;
+            $term = $terms[0];
+            $parent_term_id = (int) $term->term_id;
+            $leaf_term_id = (int) $term->term_id;
         }
+
+        return $leaf_term_id;
+    }
+
+    private function assign_category(int $product_id, array $offer): void
+    {
+        $offer_id = sanitize_text_field((string) ($offer['id'] ?? ''));
+        $allegro_category_id = sanitize_text_field((string) ($offer['category']['id'] ?? ''));
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'checkpoint' => 'create_or_update_terms_for_path_done',
-            'leaf_term_id' => $leaf_term_id,
+            'checkpoint' => 'assign_fixed_gearbox_category_start',
+            'allegro_category_id' => $allegro_category_id,
+            'target_slug_path' => self::TARGET_CATEGORY_SLUG_PATH,
         ]);
 
-        if ($leaf_term_id > 0) {
-            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
+        $target_term_id = self::find_target_category_term_id();
+        if ($target_term_id <= 0) {
+            $this->logger->warning('Gearboxes target WooCommerce category missing; product category assignment skipped.', [
                 'offer_id' => $offer_id,
                 'product_id' => $product_id,
-                'checkpoint' => 'wp_set_post_terms_start',
-                'leaf_term_id' => $leaf_term_id,
+                'allegro_category_id' => $allegro_category_id,
+                'target_category' => self::TARGET_CATEGORY_LABEL,
+                'target_slug_path' => self::TARGET_CATEGORY_SLUG_PATH,
             ]);
-            wp_set_post_terms($product_id, [$leaf_term_id], 'product_cat', false);
-            $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
-                'offer_id' => $offer_id,
-                'product_id' => $product_id,
-                'checkpoint' => 'wp_set_post_terms_done',
-                'leaf_term_id' => $leaf_term_id,
-            ]);
+            return;
         }
+
+        $result = wp_set_post_terms($product_id, [$target_term_id], 'product_cat', false);
+        if (is_wp_error($result)) {
+            $this->logger->error('Failed to assign fixed Gearboxes WooCommerce category.', [
+                'offer_id' => $offer_id,
+                'product_id' => $product_id,
+                'target_term_id' => $target_term_id,
+                'target_category' => self::TARGET_CATEGORY_LABEL,
+                'target_slug_path' => self::TARGET_CATEGORY_SLUG_PATH,
+                'error' => $result->get_error_message(),
+            ]);
+            return;
+        }
+
         $this->logger->info('CATEGORY_ASSIGNMENT_CHECKPOINT', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
-            'checkpoint' => 'assign_category_done',
+            'checkpoint' => 'assign_fixed_gearbox_category_done',
+            'target_term_id' => $target_term_id,
+            'target_category' => self::TARGET_CATEGORY_LABEL,
+            'target_slug_path' => self::TARGET_CATEGORY_SLUG_PATH,
         ]);
     }
 

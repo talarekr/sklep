@@ -96,6 +96,8 @@ class Importer
                 ]);
             }
 
+            $max_offers_per_run = isset($resume_override['max_offers']) ? max(0, (int) $resume_override['max_offers']) : 0;
+
             $processed = 0;
             $created = 0;
             $updated = 0;
@@ -117,6 +119,7 @@ class Importer
             'cycle_state' => $this->load_cycle_state(),
             'active_seen_count' => count($this->load_active_seen_offer_ids()),
             'safe_mode_enabled' => Plugin::is_safe_mode_enabled(),
+            'max_offers_per_run' => $max_offers_per_run,
             'php_max_execution_time' => (int) ini_get('max_execution_time'),
             'php_memory_limit' => (string) ini_get('memory_limit'),
         ]);
@@ -312,6 +315,29 @@ class Importer
                     'error' => $throwable->getMessage(),
                 ]);
                 continue;
+            }
+
+            if ($max_offers_per_run > 0 && $processed >= $max_offers_per_run) {
+                $this->save_checkpoint([
+                    'offset' => $offset,
+                    'page_no' => $page_no,
+                    'page_token' => $page_token,
+                    'offer_index' => $index + 1,
+                    'total_processed' => (int) ($checkpoint['total_processed'] ?? 0) + $processed,
+                    'total_count' => $total_count_from_api,
+                    'updated_at' => gmdate('Y-m-d H:i:s'),
+                ]);
+
+                $this->logger->info('Stopping import after requested small manual test limit, checkpoint saved.', [
+                    'offset' => $offset,
+                    'page_no' => $page_no,
+                    'offer_index' => $index + 1,
+                    'batch_size' => $batch_size,
+                    'processed_in_run' => $processed,
+                    'max_offers_per_run' => $max_offers_per_run,
+                ]);
+
+                return $this->finalize_summary($processed, $created, $updated, $skipped, $errors, $fetched_from_api, $total_count_from_api, $last_processed_offer_id, $started_at);
             }
 
             if ($this->should_stop_for_runtime($started_at)) {

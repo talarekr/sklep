@@ -183,17 +183,22 @@ class Settings
                 $raw_override_offset = isset($_POST['gag_start_offset']) ? trim((string) wp_unslash($_POST['gag_start_offset'])) : '';
                 $raw_override_page = isset($_POST['gag_start_page']) ? trim((string) wp_unslash($_POST['gag_start_page'])) : '';
                 $raw_override_index = isset($_POST['gag_start_offer_index']) ? trim((string) wp_unslash($_POST['gag_start_offer_index'])) : '';
+                $raw_max_offers = isset($_POST['gag_max_offers']) ? trim((string) wp_unslash($_POST['gag_max_offers'])) : '1';
 
                 $override_offset = $raw_override_offset !== '' ? max(0, (int) $raw_override_offset) : null;
                 $override_page = $raw_override_page !== '' ? max(1, (int) $raw_override_page) : null;
                 $override_index = $raw_override_index !== '' ? max(0, (int) $raw_override_index) : 0;
+                $max_offers = max(1, min(5, (int) $raw_max_offers));
 
-                $resume_override = [];
+                $resume_override = [
+                    'max_offers' => $max_offers,
+                ];
                 if ($override_offset !== null || $override_page !== null || $raw_override_index !== '') {
                     $resume_override = [
                         'offset' => $override_offset,
                         'page_no' => $override_page,
                         'offer_index' => $override_index,
+                        'max_offers' => $max_offers,
                     ];
 
                     if (function_exists('gag_log')) {
@@ -201,12 +206,14 @@ class Settings
                             'offset' => $override_offset,
                             'page' => $override_page,
                             'index' => $override_index,
+                            'max_offers' => $max_offers,
                         ]);
                     }
                     $this->logger->warning('MANUAL_RESUME_OVERRIDE', [
                         'offset' => $override_offset,
                         'page' => $override_page,
                         'index' => $override_index,
+                        'max_offers' => $max_offers,
                         'trigger' => 'admin_manual_import',
                     ]);
                 }
@@ -529,6 +536,7 @@ class Settings
         $import_lock_status = $this->get_import_lock_status();
         $missing_import_checkpoint = $this->importer->get_missing_import_checkpoint();
         $event_sync_status = $this->importer->get_event_sync_status();
+        $target_category_status = ProductMapper::get_target_category_status();
 
         $log_tail = $this->logger->read_tail(80);
 
