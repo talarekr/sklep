@@ -463,16 +463,25 @@ class Importer
         return $checkpoint;
     }
 
-    public function run_event_based_sync(): array
+    public function get_event_sync_checkpoint_snapshot(): array
+    {
+        return $this->get_event_sync_checkpoint();
+    }
+
+    public function run_event_based_sync(array $context = []): array
     {
         $this->ensure_runtime_limits();
         $started_at = microtime(true);
         $checkpoint = $this->get_event_sync_checkpoint();
+        $checkpoint_before = $checkpoint;
+        $trigger = sanitize_key((string) ($context['trigger'] ?? 'scheduled_event_sync'));
         $lock_context = $this->build_lock_context();
         $lock_context['mode'] = 'event_sync';
+        $lock_context['trigger'] = $trigger;
         $this->logger->info('EVENT_SYNC_START', [
             'stage' => 'attempt',
             'checkpoint' => $checkpoint,
+            'trigger' => $trigger,
         ]);
 
         if (!$this->acquire_import_lock($lock_context)) {
@@ -487,6 +496,12 @@ class Importer
 
             return [
                 'status' => 'skipped_due_to_lock',
+                'processed_events' => 0,
+                'offer_events' => 0,
+                'order_events' => 0,
+                'checkpoint_before' => $checkpoint_before,
+                'checkpoint_after' => $checkpoint,
+                'errors' => 1,
             ];
         }
 
@@ -494,6 +509,7 @@ class Importer
             $this->logger->info('EVENT_SYNC_START', [
                 'stage' => 'running',
                 'checkpoint' => $checkpoint,
+                'trigger' => $trigger,
             ]);
 
             $now = time();
@@ -510,6 +526,12 @@ class Importer
                 return [
                     'status' => 'fallback_required',
                     'reason' => 'checkpoint_gap_exceeded',
+                    'processed_events' => 0,
+                    'offer_events' => 0,
+                    'order_events' => 0,
+                    'checkpoint_before' => $checkpoint_before,
+                    'checkpoint_after' => $checkpoint,
+                    'errors' => 1,
                 ];
             }
 
@@ -526,6 +548,12 @@ class Importer
                 return [
                     'status' => 'fallback_required',
                     'reason' => 'offer_events_api_error',
+                    'processed_events' => 0,
+                    'offer_events' => 0,
+                    'order_events' => 0,
+                    'checkpoint_before' => $checkpoint_before,
+                    'checkpoint_after' => $checkpoint,
+                    'errors' => 1,
                 ];
             }
 
@@ -554,15 +582,21 @@ class Importer
                         'events' => [],
                     ];
                 } else {
-                $this->logger->error('EVENT_SYNC_ERROR', [
-                    'stage' => 'fetch_order_events',
-                    'reason' => $order_events_response->get_error_message(),
-                ]);
+                    $this->logger->error('EVENT_SYNC_ERROR', [
+                        'stage' => 'fetch_order_events',
+                        'reason' => $order_events_response->get_error_message(),
+                    ]);
 
-                return [
-                    'status' => 'fallback_required',
-                    'reason' => 'order_events_api_error',
-                ];
+                    return [
+                        'status' => 'fallback_required',
+                        'reason' => 'order_events_api_error',
+                        'processed_events' => 0,
+                        'offer_events' => 0,
+                        'order_events' => 0,
+                        'checkpoint_before' => $checkpoint_before,
+                        'checkpoint_after' => $checkpoint,
+                        'errors' => 1,
+                    ];
                 }
             }
 
@@ -573,10 +607,20 @@ class Importer
 
             $offer_events = $this->sort_events_by_time_and_id($this->normalize_events_list($offer_events_response, ['offerEvents', 'events']));
             $order_events = $this->sort_events_by_time_and_id($this->normalize_events_list($order_events_response, ['events', 'orderEvents']));
+            $this->logger->info('EVENT_SYNC_EVENTS_FETCHED', [
+                'offer_events' => count($offer_events),
+                'order_events' => count($order_events),
+                'checkpoint_before' => $checkpoint_before,
+                'trigger' => $trigger,
+            ]);
             if (count($offer_events) === 0 && count($order_events) === 0) {
+                $checkpoint['last_success_ts'] = time();
+                $checkpoint['last_success_at'] = gmdate('Y-m-d H:i:s');
+                $this->save_event_sync_checkpoint($checkpoint);
                 $this->logger->info('EVENT_SYNC_NO_EVENTS', [
                     'last_offer_event_id' => (string) ($checkpoint['last_offer_event_id'] ?? ''),
                     'last_order_event_id' => (string) ($checkpoint['last_order_event_id'] ?? ''),
+                    'checkpoint_after' => $checkpoint,
                 ]);
             }
             $processed = 0;
@@ -602,6 +646,12 @@ class Importer
                         return [
                             'status' => 'error',
                             'reason' => $last_error,
+                            'processed_events' => $processed,
+                            'offer_events' => count($offer_events),
+                            'order_events' => count($order_events),
+                            'checkpoint_before' => $checkpoint_before,
+                            'checkpoint_after' => $checkpoint,
+                            'errors' => 1,
                         ];
                     }
                 }
@@ -646,6 +696,12 @@ class Importer
                     return [
                         'status' => 'error',
                         'reason' => $last_error,
+                        'processed_events' => $processed,
+                        'offer_events' => count($offer_events),
+                        'order_events' => count($order_events),
+                        'checkpoint_before' => $checkpoint_before,
+                        'checkpoint_after' => $checkpoint,
+                        'errors' => 1,
                     ];
                 }
 
@@ -663,6 +719,9 @@ class Importer
                 'processed_events' => $processed,
                 'offer_events' => count($offer_events),
                 'order_events' => count($order_events),
+                'checkpoint_before' => $checkpoint_before,
+                'checkpoint_after' => $checkpoint,
+                'errors' => 0,
                 'elapsed_time' => round(max(0, microtime(true) - $started_at), 3),
             ];
             $this->logger->info('EVENT_SYNC_DONE', $summary);

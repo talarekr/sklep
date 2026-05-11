@@ -36,6 +36,7 @@ class Settings
         add_action('admin_post_gag_allegro_connect', [$this, 'handle_allegro_connect']);
         add_action('admin_post_gag_manual_import', [$this, 'handle_manual_import']);
         add_action('admin_post_gag_manual_sync_trigger', [$this, 'handle_manual_sync_trigger']);
+        add_action('admin_post_gag_manual_event_sync_test', [$this, 'handle_manual_event_sync_test']);
         add_action('admin_post_gag_missing_import_start', [$this, 'handle_missing_import_start']);
         add_action('admin_post_gag_missing_import_continue', [$this, 'handle_missing_import_continue']);
         add_action('admin_post_gag_missing_import_pause', [$this, 'handle_missing_import_pause']);
@@ -320,6 +321,117 @@ class Settings
         exit;
     }
 
+    public function handle_manual_event_sync_test(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'gpswiss-allegro-gearboxes'));
+        }
+
+        check_admin_referer('gag_manual_event_sync_test');
+
+        $request_id = wp_generate_uuid4();
+        $checkpoint_before = $this->importer->get_event_sync_checkpoint_snapshot();
+        $summary = [
+            'status' => 'error',
+            'reason' => '',
+            'offer_events' => 0,
+            'order_events' => 0,
+            'processed_events' => 0,
+            'checkpoint_before' => $checkpoint_before,
+            'checkpoint_after' => $checkpoint_before,
+            'errors' => 1,
+        ];
+
+        $this->logger->info('EVENT_SYNC_MANUAL_TEST_START', [
+            'trigger' => 'admin_panel_event_sync_test',
+            'request_id' => $request_id,
+            'user_id' => get_current_user_id(),
+            'safe_mode_enabled' => Plugin::is_safe_mode_enabled(),
+            'cron_not_enabled_by_this_action' => true,
+            'fallback_full_import_allowed' => false,
+            'checkpoint_before' => $checkpoint_before,
+        ]);
+
+        $token = $this->auth->get_valid_access_token();
+        if (is_wp_error($token)) {
+            $summary['reason'] = 'missing_valid_allegro_token';
+            $summary['checkpoint_after'] = $this->importer->get_event_sync_checkpoint_snapshot();
+            $this->logger->error('EVENT_SYNC_MANUAL_TEST_ERROR', [
+                'request_id' => $request_id,
+                'reason' => $token->get_error_message(),
+                'checkpoint_before' => $checkpoint_before,
+                'checkpoint_after' => $summary['checkpoint_after'],
+            ]);
+            $this->store_admin_notice('error', __('Najpierw połącz wtyczkę Gearboxes z Allegro (brak ważnego access tokena).', 'gpswiss-allegro-gearboxes'));
+        } else {
+            try {
+                $summary = $this->importer->run_event_based_sync([
+                    'trigger' => 'admin_manual_event_sync_test',
+                    'request_id' => $request_id,
+                    'fallback_full_import_allowed' => false,
+                ]);
+                $summary['checkpoint_before'] = is_array($summary['checkpoint_before'] ?? null) ? (array) $summary['checkpoint_before'] : $checkpoint_before;
+                $summary['checkpoint_after'] = is_array($summary['checkpoint_after'] ?? null) ? (array) $summary['checkpoint_after'] : $this->importer->get_event_sync_checkpoint_snapshot();
+                $summary['errors'] = max(0, (int) ($summary['errors'] ?? 0));
+
+                if (($summary['status'] ?? '') === 'fallback_required') {
+                    $summary['errors'] = max(1, (int) $summary['errors']);
+                    $this->logger->error('EVENT_SYNC_NO_FALLBACK_FULL_IMPORT', [
+                        'trigger' => 'admin_panel_event_sync_test',
+                        'request_id' => $request_id,
+                        'reason' => (string) ($summary['reason'] ?? 'unknown'),
+                        'message' => 'Manual Gearboxes event sync test never starts a fallback full import.',
+                    ]);
+                    $this->importer->mark_fallback_full_import_blocked((string) ($summary['reason'] ?? 'unknown'));
+                }
+            } catch (\Throwable $exception) {
+                $summary['status'] = 'error';
+                $summary['reason'] = 'unhandled_exception';
+                $summary['checkpoint_after'] = $this->importer->get_event_sync_checkpoint_snapshot();
+                $summary['errors'] = 1;
+                $this->logger->error('EVENT_SYNC_MANUAL_TEST_ERROR', [
+                    'request_id' => $request_id,
+                    'message' => $exception->getMessage(),
+                    'checkpoint_before' => $checkpoint_before,
+                    'checkpoint_after' => $summary['checkpoint_after'],
+                ]);
+            }
+        }
+
+        $this->logger->info('EVENT_SYNC_MANUAL_TEST_SUMMARY', [
+            'request_id' => $request_id,
+            'status' => (string) ($summary['status'] ?? 'unknown'),
+            'reason' => (string) ($summary['reason'] ?? ''),
+            'offer_events' => (int) ($summary['offer_events'] ?? 0),
+            'order_events' => (int) ($summary['order_events'] ?? 0),
+            'processed_events' => (int) ($summary['processed_events'] ?? 0),
+            'checkpoint_before' => is_array($summary['checkpoint_before'] ?? null) ? (array) $summary['checkpoint_before'] : [],
+            'checkpoint_after' => is_array($summary['checkpoint_after'] ?? null) ? (array) $summary['checkpoint_after'] : [],
+            'errors' => (int) ($summary['errors'] ?? 0),
+            'full_scan_started' => false,
+            'full_import_started' => false,
+            'cron_enabled_by_this_action' => false,
+        ]);
+
+        $checkpoint_before_query = is_array($summary['checkpoint_before'] ?? null) ? (array) $summary['checkpoint_before'] : [];
+        $checkpoint_after_query = is_array($summary['checkpoint_after'] ?? null) ? (array) $summary['checkpoint_after'] : [];
+        wp_safe_redirect(add_query_arg([
+            'page' => 'gag-settings',
+            'gag_manual_event_sync_done' => '1',
+            'gag_event_sync_status' => sanitize_key((string) ($summary['status'] ?? 'unknown')),
+            'gag_event_sync_reason' => sanitize_text_field((string) ($summary['reason'] ?? '')),
+            'gag_offer_events' => (int) ($summary['offer_events'] ?? 0),
+            'gag_order_events' => (int) ($summary['order_events'] ?? 0),
+            'gag_processed_events' => (int) ($summary['processed_events'] ?? 0),
+            'gag_event_sync_errors' => (int) ($summary['errors'] ?? 0),
+            'gag_checkpoint_before_offer' => sanitize_text_field((string) ($checkpoint_before_query['last_offer_event_id'] ?? '')),
+            'gag_checkpoint_before_order' => sanitize_text_field((string) ($checkpoint_before_query['last_order_event_id'] ?? '')),
+            'gag_checkpoint_after_offer' => sanitize_text_field((string) ($checkpoint_after_query['last_offer_event_id'] ?? '')),
+            'gag_checkpoint_after_order' => sanitize_text_field((string) ($checkpoint_after_query['last_order_event_id'] ?? '')),
+        ], admin_url('admin.php')));
+        exit;
+    }
+
     public function handle_missing_import_continue(): void
     {
         $this->handle_missing_import_action('gag_missing_import_continue', 'continue');
@@ -414,6 +526,35 @@ class Settings
                     (int) ($_GET['gag_errors'] ?? 0)
                 ),
                 'updated'
+            );
+        }
+
+        if (isset($_GET['gag_manual_event_sync_done'])) {
+            $checkpoint_before = sprintf(
+                'offer=%1$s, order=%2$s',
+                sanitize_text_field((string) ($_GET['gag_checkpoint_before_offer'] ?? '—')) ?: '—',
+                sanitize_text_field((string) ($_GET['gag_checkpoint_before_order'] ?? '—')) ?: '—'
+            );
+            $checkpoint_after = sprintf(
+                'offer=%1$s, order=%2$s',
+                sanitize_text_field((string) ($_GET['gag_checkpoint_after_offer'] ?? '—')) ?: '—',
+                sanitize_text_field((string) ($_GET['gag_checkpoint_after_order'] ?? '—')) ?: '—'
+            );
+            add_settings_error(
+                'gag_messages',
+                'gag_manual_event_sync_done',
+                sprintf(
+                    __('Ręczny test event sync zakończony. Status: %1$s, reason: %2$s, offer_events: %3$d, order_events: %4$d, processed_events: %5$d, checkpoint_before: %6$s, checkpoint_after: %7$s, errors: %8$d. Cron/full import nie były uruchamiane przez ten przycisk.', 'gpswiss-allegro-gearboxes'),
+                    sanitize_text_field((string) ($_GET['gag_event_sync_status'] ?? 'unknown')),
+                    sanitize_text_field((string) ($_GET['gag_event_sync_reason'] ?? '')),
+                    (int) ($_GET['gag_offer_events'] ?? 0),
+                    (int) ($_GET['gag_order_events'] ?? 0),
+                    (int) ($_GET['gag_processed_events'] ?? 0),
+                    $checkpoint_before,
+                    $checkpoint_after,
+                    (int) ($_GET['gag_event_sync_errors'] ?? 0)
+                ),
+                ((int) ($_GET['gag_event_sync_errors'] ?? 0)) > 0 ? 'error' : 'updated'
             );
         }
 
