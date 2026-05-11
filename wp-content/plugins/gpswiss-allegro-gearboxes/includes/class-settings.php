@@ -93,7 +93,7 @@ class Settings
             'client_id' => sanitize_text_field($input['client_id'] ?? ''),
             'client_secret' => sanitize_text_field($input['client_secret'] ?? ''),
             'redirect_uri' => esc_url_raw($input['redirect_uri'] ?? ''),
-            'environment' => in_array(($input['environment'] ?? 'production'), ['production', 'sandbox'], true) ? $input['environment'] : 'production',
+            'environment' => 'production',
             'sync_mode' => in_array(($input['sync_mode'] ?? 'create_update'), ['create_only', 'update_only', 'create_update'], true) ? $input['sync_mode'] : 'create_update',
             'inactive_product_status' => in_array(($input['inactive_product_status'] ?? 'draft'), ['draft', 'private'], true) ? $input['inactive_product_status'] : 'draft',
             'cron_interval' => in_array(($input['cron_interval'] ?? 'manual'), ['manual', 'gag_15_minutes', 'hourly', 'daily'], true) ? $input['cron_interval'] : 'manual',

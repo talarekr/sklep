@@ -139,7 +139,10 @@ final class Plugin
             $settings = [];
         }
 
-        return wp_parse_args($settings, $defaults);
+        $settings = wp_parse_args($settings, $defaults);
+        $settings['environment'] = 'production';
+
+        return $settings;
     }
 
     public static function update_settings(array $new_settings): bool
