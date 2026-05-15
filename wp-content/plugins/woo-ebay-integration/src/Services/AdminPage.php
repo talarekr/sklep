@@ -27,6 +27,12 @@ class AdminPage
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
+        add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
+        add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
+        add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
+        add_action('admin_post_wei_shipping_policy_bulk_resume', [$this, 'shipping_policy_bulk_resume']);
+        add_action('admin_post_wei_shipping_policy_bulk_stop', [$this, 'shipping_policy_bulk_stop']);
+        add_action('admin_post_wei_shipping_policy_bulk_process', [$this, 'shipping_policy_bulk_process']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
@@ -312,6 +318,7 @@ class AdminPage
         $product_sync_status_rows = $load_product_sync_rows ? $this->recent_product_sync_status_rows() : [];
         $shipping_mapping_report = get_option('wei_ebay_shipping_mapping_report', []);
         $shipping_mapping_report = is_array($shipping_mapping_report) ? $shipping_mapping_report : [];
+        $shipping_policy_bulk_status = $this->shipping_policy_bulk_status();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -530,6 +537,288 @@ class AdminPage
         }
 
         $this->go();
+    }
+
+
+    public function update_shipping_policy_one(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_update_shipping_policy_one');
+        $productId = absint($_POST['product_id'] ?? 0);
+        $sku = sanitize_text_field((string) ($_POST['sku'] ?? ''));
+        if ($productId <= 0 && $sku !== '' && function_exists('wc_get_product_id_by_sku')) {
+            $productId = (int) wc_get_product_id_by_sku($sku);
+        }
+        if ($productId <= 0) {
+            $result = ['result' => 'error', 'error' => 'product_id_or_sku_required', 'sku' => $sku];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            $this->set_status('Shipping policy one product: ' . wp_json_encode($result));
+            $this->go();
+        }
+
+        $res = $this->adapter->update_fulfillment_policy_only($productId);
+        $this->set_status('Shipping policy one product: ' . wp_json_encode($this->limit_nested_array($res, 20)));
+        $this->go();
+    }
+
+    public function shipping_policy_bulk_start(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_bulk_start');
+        $batchSize = absint($_POST['batch_size'] ?? 50);
+        $batchSize = max(1, min(50, $batchSize));
+        $this->logger->info('EBAY_SHIPPING_POLICY_BULK_QUEUE_START', [
+            'batch_size' => $batchSize,
+            'safe_update_scope' => 'listingPolicies.fulfillmentPolicyId_only',
+            'called_create_offer' => false,
+            'called_publish_offer' => false,
+        ]);
+        $summary = $this->build_shipping_policy_bulk_queue($batchSize);
+        $this->logger->info('EBAY_SHIPPING_POLICY_BULK_QUEUE_BUILT', $summary);
+        $this->set_status('Shipping policy bulk queue built: ' . wp_json_encode($summary));
+        $this->go();
+    }
+
+    public function shipping_policy_bulk_pause(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_bulk_pause');
+        $status = $this->shipping_policy_bulk_status();
+        $status['state'] = 'paused';
+        $status['updated_at'] = gmdate('Y-m-d H:i:s');
+        update_option('wei_ebay_shipping_policy_bulk_status', $status, false);
+        $this->logger->info('EBAY_SHIPPING_POLICY_BULK_PAUSED', $status);
+        $this->set_status('Shipping policy bulk paused: ' . wp_json_encode($status));
+        $this->go();
+    }
+
+    public function shipping_policy_bulk_resume(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_bulk_resume');
+        $status = $this->shipping_policy_bulk_status();
+        $status['state'] = 'running';
+        $status['updated_at'] = gmdate('Y-m-d H:i:s');
+        update_option('wei_ebay_shipping_policy_bulk_status', $status, false);
+        $this->set_status('Shipping policy bulk resumed: ' . wp_json_encode($status));
+        $this->go();
+    }
+
+    public function shipping_policy_bulk_stop(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_bulk_stop');
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $wpdb->delete($table, ['reason' => 'fulfillment_policy_update']);
+        $status = $this->default_shipping_policy_bulk_status();
+        $status['state'] = 'stopped';
+        $status['updated_at'] = gmdate('Y-m-d H:i:s');
+        update_option('wei_ebay_shipping_policy_bulk_status', $status, false);
+        $this->set_status('Shipping policy bulk stopped and queue cleared: ' . wp_json_encode($status));
+        $this->go();
+    }
+
+    public function shipping_policy_bulk_process(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_bulk_process');
+        $res = $this->process_shipping_policy_bulk_batch();
+        $this->set_status('Shipping policy bulk batch: ' . wp_json_encode($this->limit_nested_array($res, 20)));
+        $this->go();
+    }
+
+    private function build_shipping_policy_bulk_queue(int $batchSize): array
+    {
+        global $wpdb;
+        $queueTable = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $mappingTable = $wpdb->prefix . 'marketplace_mappings';
+        $now = gmdate('Y-m-d H:i:s');
+        $wpdb->delete($queueTable, ['reason' => 'fulfillment_policy_update']);
+
+        $productIds = [];
+        $mappingIds = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT woo_product_id FROM {$mappingTable} WHERE marketplace=%s AND status=%s AND remote_offer_id IS NOT NULL AND remote_offer_id<>''",
+            'ebay',
+            'active'
+        ));
+        foreach ((array) $mappingIds as $id) {
+            $id = (int) $id;
+            if ($id > 0) {
+                $productIds[$id] = $id;
+            }
+        }
+
+        $metaIds = $wpdb->get_col(
+            "SELECT DISTINCT offer_meta.post_id
+             FROM {$wpdb->postmeta} offer_meta
+             LEFT JOIN {$wpdb->postmeta} status_meta ON status_meta.post_id = offer_meta.post_id AND status_meta.meta_key = '_wei_ebay_listing_status'
+             WHERE offer_meta.meta_key = '_wei_ebay_offer_id'
+               AND offer_meta.meta_value <> ''
+               AND status_meta.meta_value IN ('active','published')"
+        );
+        foreach ((array) $metaIds as $id) {
+            $id = (int) $id;
+            if ($id > 0) {
+                $productIds[$id] = $id;
+            }
+        }
+
+        foreach (array_values($productIds) as $productId) {
+            $wpdb->insert($queueTable, [
+                'product_id' => $productId,
+                'reason' => 'fulfillment_policy_update',
+                'status' => 'pending',
+                'queued_at' => $now,
+                'updated_at' => $now,
+                'attempts' => 0,
+                'last_error' => null,
+                'source' => 'shipping_policy_changed',
+            ]);
+        }
+
+        $status = $this->default_shipping_policy_bulk_status();
+        $status['state'] = 'running';
+        $status['batch_size'] = $batchSize;
+        $status['total_queued'] = count($productIds);
+        $status['remaining'] = count($productIds);
+        $status['started_at'] = $now;
+        $status['updated_at'] = $now;
+        update_option('wei_ebay_shipping_policy_bulk_status', $status, false);
+        return $status;
+    }
+
+    private function process_shipping_policy_bulk_batch(): array
+    {
+        global $wpdb;
+        $queueTable = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $status = $this->shipping_policy_bulk_status();
+        if ((string) ($status['state'] ?? '') === 'paused') {
+            $this->logger->info('EBAY_SHIPPING_POLICY_BULK_PAUSED', $status);
+            return $status + ['result' => 'skipped', 'reason' => 'paused'];
+        }
+        if (!in_array((string) ($status['state'] ?? ''), ['running', 'pending'], true)) {
+            return $status + ['result' => 'skipped', 'reason' => 'not_running'];
+        }
+
+        $batchSize = max(1, min(50, (int) ($status['batch_size'] ?? 50)));
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, product_id, attempts FROM {$queueTable} WHERE reason=%s AND status=%s ORDER BY id ASC LIMIT %d",
+            'fulfillment_policy_update',
+            'pending',
+            $batchSize
+        ), ARRAY_A);
+        $rows = is_array($rows) ? $rows : [];
+        $this->logger->info('EBAY_SHIPPING_POLICY_BULK_BATCH_START', [
+            'batch_size' => $batchSize,
+            'selected' => count($rows),
+            'status' => $status,
+        ]);
+
+        foreach ($rows as $row) {
+            $queueId = (int) ($row['id'] ?? 0);
+            $productId = (int) ($row['product_id'] ?? 0);
+            $wpdb->update($queueTable, ['status' => 'processing', 'updated_at' => gmdate('Y-m-d H:i:s')], ['id' => $queueId]);
+            try {
+                $res = $this->adapter->update_fulfillment_policy_only($productId);
+                $status['processed'] = (int) ($status['processed'] ?? 0) + 1;
+                $status['last_product_id'] = $productId;
+                if (($res['result'] ?? '') === 'success') {
+                    if (!empty($res['changed'])) {
+                        $status['changed'] = (int) ($status['changed'] ?? 0) + 1;
+                    } else {
+                        $status['unchanged'] = (int) ($status['unchanged'] ?? 0) + 1;
+                    }
+                    $wpdb->update($queueTable, ['status' => 'done', 'updated_at' => gmdate('Y-m-d H:i:s'), 'last_error' => null], ['id' => $queueId]);
+                } else {
+                    $status['failed'] = (int) ($status['failed'] ?? 0) + 1;
+                    $status['last_error'] = (string) ($res['error'] ?? $res['message'] ?? 'unknown_error');
+                    $this->logger->error('EBAY_SHIPPING_POLICY_PRODUCT_FAILED', ['product_id' => $productId, 'result' => $res]);
+                    $wpdb->update($queueTable, [
+                        'status' => 'failed',
+                        'attempts' => (int) ($row['attempts'] ?? 0) + 1,
+                        'last_error' => $status['last_error'],
+                        'updated_at' => gmdate('Y-m-d H:i:s'),
+                    ], ['id' => $queueId]);
+                }
+            } catch (\Throwable $e) {
+                $status['processed'] = (int) ($status['processed'] ?? 0) + 1;
+                $status['failed'] = (int) ($status['failed'] ?? 0) + 1;
+                $status['last_product_id'] = $productId;
+                $status['last_error'] = $e->getMessage();
+                $this->logger->error('EBAY_SHIPPING_POLICY_PRODUCT_FAILED', ['product_id' => $productId, 'error' => $e->getMessage()]);
+                $wpdb->update($queueTable, [
+                    'status' => 'failed',
+                    'attempts' => (int) ($row['attempts'] ?? 0) + 1,
+                    'last_error' => $e->getMessage(),
+                    'updated_at' => gmdate('Y-m-d H:i:s'),
+                ], ['id' => $queueId]);
+            }
+        }
+
+        $status = array_merge($status, $this->shipping_policy_bulk_queue_counts());
+        $status['updated_at'] = gmdate('Y-m-d H:i:s');
+        if ((int) ($status['remaining'] ?? 0) <= 0) {
+            $status['state'] = 'done';
+            $this->logger->info('EBAY_SHIPPING_POLICY_BULK_DONE', $status);
+        } else {
+            $status['state'] = 'running';
+        }
+        update_option('wei_ebay_shipping_policy_bulk_status', $status, false);
+        $this->logger->info('EBAY_SHIPPING_POLICY_BULK_BATCH_DONE', $status);
+        return $status + ['result' => 'success'];
+    }
+
+    private function shipping_policy_bulk_status(): array
+    {
+        $status = get_option('wei_ebay_shipping_policy_bulk_status', []);
+        $status = is_array($status) ? array_merge($this->default_shipping_policy_bulk_status(), $status) : $this->default_shipping_policy_bulk_status();
+        return array_merge($status, $this->shipping_policy_bulk_queue_counts());
+    }
+
+    private function shipping_policy_bulk_queue_counts(): array
+    {
+        global $wpdb;
+        $queueTable = $wpdb->prefix . 'wei_ebay_sync_queue';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT status, COUNT(*) AS count FROM {$queueTable} WHERE reason=%s GROUP BY status",
+            'fulfillment_policy_update'
+        ), ARRAY_A);
+        $counts = ['pending' => 0, 'processing' => 0, 'done' => 0, 'failed_queue' => 0];
+        foreach ((array) $rows as $row) {
+            $key = (string) ($row['status'] ?? '');
+            if ($key === 'failed') {
+                $counts['failed_queue'] = (int) ($row['count'] ?? 0);
+            } elseif (array_key_exists($key, $counts)) {
+                $counts[$key] = (int) ($row['count'] ?? 0);
+            }
+        }
+        $queued = $counts['pending'] + $counts['processing'] + $counts['done'] + $counts['failed_queue'];
+        return [
+            'total_queued' => $queued,
+            'remaining' => $counts['pending'] + $counts['processing'],
+            'queue_done' => $counts['done'],
+            'queue_failed' => $counts['failed_queue'],
+        ];
+    }
+
+    private function default_shipping_policy_bulk_status(): array
+    {
+        return [
+            'state' => 'idle',
+            'batch_size' => 50,
+            'total_queued' => 0,
+            'processed' => 0,
+            'remaining' => 0,
+            'changed' => 0,
+            'unchanged' => 0,
+            'failed' => 0,
+            'last_product_id' => 0,
+            'last_error' => '',
+            'started_at' => '',
+            'updated_at' => '',
+            'reason' => 'fulfillment_policy_update',
+        ];
     }
 
     public function disconnect(): void { $this->require_manage_options(); check_admin_referer('wei_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }

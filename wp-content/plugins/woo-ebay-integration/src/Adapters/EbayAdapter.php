@@ -719,6 +719,180 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
 
 
+
+    public function update_fulfillment_policy_only(int $product_id, ?int $variation_id = null): array
+    {
+        $product = wc_get_product($variation_id ?: $product_id);
+        $metaProductId = $variation_id ?: $product_id;
+        if (!$product) {
+            $result = ['result' => 'error', 'error' => 'product_not_found', 'product_id' => $product_id, 'variation_id' => $variation_id];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+
+        $settings = $this->settings();
+        $marketplaceId = $this->marketplace_id();
+        $mapping = $this->repo->find_by_product($product_id, $variation_id);
+        $offerId = trim((string) ($mapping['remote_offer_id'] ?? ''));
+        if ($offerId === '') {
+            $offerId = trim((string) get_post_meta($metaProductId, '_wei_ebay_offer_id', true));
+        }
+        $listingId = trim((string) ($mapping['remote_listing_id'] ?? ''));
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($metaProductId, '_wei_ebay_listing_id', true));
+        }
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($metaProductId, '_wei_ebay_item_id', true));
+        }
+
+        $sku = trim((string) ($mapping['sku'] ?? ''));
+        if ($sku === '') {
+            $sku = trim((string) get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        }
+        if ($sku === '' && method_exists($product, 'get_sku')) {
+            $sku = trim((string) $product->get_sku());
+        }
+
+        $baseContext = [
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+            'marketplace_id' => $marketplaceId,
+            'safe_update_scope' => 'listingPolicies.fulfillmentPolicyId_only',
+            'called_create_offer' => false,
+            'called_publish_offer' => false,
+        ];
+        $this->logger->info('EBAY_SHIPPING_POLICY_SINGLE_START', $baseContext);
+
+        if ($offerId === '') {
+            $result = $baseContext + ['result' => 'error', 'error' => 'offer_id_missing', 'message' => 'Existing eBay offer_id is required; this action never creates offers.'];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+
+        $offer = $this->client->get_offer($offerId, $baseContext + ['stage' => 'shippingPolicyOnlyGetOffer']);
+        if (is_wp_error($offer)) {
+            $result = $baseContext + ['result' => 'error', 'error' => $offer->get_error_message(), 'error_details' => $offer->get_error_data()];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+        if (!is_array($offer)) {
+            $result = $baseContext + ['result' => 'error', 'error' => 'invalid_get_offer_response'];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+
+        $resolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $this->log_shipping_policy_resolution($product_id, $sku, $marketplaceId, $resolution);
+        $desiredPolicyId = (string) ($resolution['policy_id'] ?? '');
+        $currentPolicies = is_array($offer['listingPolicies'] ?? null) ? $offer['listingPolicies'] : [];
+        $currentPolicyId = (string) ($currentPolicies['fulfillmentPolicyId'] ?? '');
+        $changeContext = $baseContext + [
+            'shipping_group' => (string) ($resolution['group'] ?? ''),
+            'source' => (string) ($resolution['source'] ?? ''),
+            'current_fulfillment_policy_id' => $currentPolicyId,
+            'desired_fulfillment_policy_id' => $desiredPolicyId,
+            'preserved_payment_policy_id' => (string) ($currentPolicies['paymentPolicyId'] ?? ''),
+            'preserved_return_policy_id' => (string) ($currentPolicies['returnPolicyId'] ?? ''),
+        ];
+
+        if ($desiredPolicyId === '') {
+            $result = $changeContext + ['result' => 'error', 'error' => 'desired_fulfillment_policy_id_missing'];
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+
+        if ($currentPolicyId === $desiredPolicyId) {
+            $result = $changeContext + ['result' => 'success', 'status' => 'unchanged', 'changed' => false, 'ebay_response' => null];
+            $this->logger->info('EBAY_SHIPPING_POLICY_UNCHANGED', $changeContext);
+            $this->logger->info('EBAY_SHIPPING_POLICY_SINGLE_DONE', $result);
+            return $result;
+        }
+
+        $payload = $this->build_policy_only_offer_payload($offer, $sku, $marketplaceId);
+        $payload['listingPolicies'] = $currentPolicies;
+        $payload['listingPolicies']['fulfillmentPolicyId'] = $desiredPolicyId;
+
+        foreach (['paymentPolicyId', 'returnPolicyId'] as $policyKey) {
+            if (empty($payload['listingPolicies'][$policyKey])) {
+                $fallbackKey = $policyKey === 'paymentPolicyId' ? 'ebay_payment_policy_id' : 'ebay_return_policy_id';
+                $payload['listingPolicies'][$policyKey] = (string) ($settings[$fallbackKey] ?? '');
+            }
+        }
+        if (empty($payload['marketplaceId'])) {
+            $payload['marketplaceId'] = $marketplaceId;
+        }
+        if (empty($payload['merchantLocationKey'])) {
+            $payload['merchantLocationKey'] = $this->merchant_location_key();
+        }
+
+        $this->logger->info('EBAY_SHIPPING_POLICY_CHANGED', $changeContext + [
+            'update_payload_policy_ids' => $payload['listingPolicies'],
+            'preserved_offer_fields' => array_keys($payload),
+        ]);
+
+        $updated = $this->client->update_offer($offerId, $payload, $baseContext + [
+            'stage' => 'shippingPolicyOnlyUpdateOffer',
+            'desired_fulfillment_policy_id' => $desiredPolicyId,
+        ]);
+        if (is_wp_error($updated)) {
+            $result = $changeContext + ['result' => 'error', 'error' => $updated->get_error_message(), 'error_details' => $updated->get_error_data()];
+            update_post_meta($metaProductId, '_wei_ebay_last_shipping_policy_error', (string) $result['error']);
+            $this->logger->error('EBAY_SHIPPING_POLICY_SINGLE_ERROR', $result);
+            return $result;
+        }
+
+        update_post_meta($metaProductId, '_wei_ebay_last_shipping_policy_sync_at', gmdate('Y-m-d H:i:s'));
+        update_post_meta($metaProductId, '_wei_ebay_last_fulfillment_policy_id', $desiredPolicyId);
+        delete_post_meta($metaProductId, '_wei_ebay_last_shipping_policy_error');
+
+        $result = $changeContext + ['result' => 'success', 'status' => 'changed', 'changed' => true, 'ebay_response' => is_array($updated) ? $updated : []];
+        $this->logger->info('EBAY_SHIPPING_POLICY_SINGLE_DONE', $result);
+        return $result;
+    }
+
+    private function build_policy_only_offer_payload(array $offer, string $fallbackSku, string $fallbackMarketplaceId): array
+    {
+        $allowed = [
+            'sku',
+            'marketplaceId',
+            'format',
+            'availableQuantity',
+            'quantityLimitPerBuyer',
+            'listingDescription',
+            'listingPolicies',
+            'pricingSummary',
+            'categoryId',
+            'secondaryCategoryId',
+            'merchantLocationKey',
+            'listingDuration',
+            'tax',
+            'storeCategoryNames',
+            'lotSize',
+            'charity',
+            'hideBuyerDetails',
+            'includeCatalogProductDetails',
+        ];
+        $payload = [];
+        foreach ($allowed as $key) {
+            if (array_key_exists($key, $offer)) {
+                $payload[$key] = $offer[$key];
+            }
+        }
+        if (empty($payload['sku']) && $fallbackSku !== '') {
+            $payload['sku'] = $fallbackSku;
+        }
+        if (empty($payload['marketplaceId']) && $fallbackMarketplaceId !== '') {
+            $payload['marketplaceId'] = $fallbackMarketplaceId;
+        }
+        if (!isset($payload['listingPolicies']) || !is_array($payload['listingPolicies'])) {
+            $payload['listingPolicies'] = [];
+        }
+        return $payload;
+    }
+
     public function verify_api_publishing_readiness(int $product_id, ?int $variation_id = null, bool $writeDiagnosticOffer = false): array
     {
         $product = wc_get_product($variation_id ?: $product_id);

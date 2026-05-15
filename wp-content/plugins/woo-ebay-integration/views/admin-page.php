@@ -432,8 +432,52 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
 
     <div class="wei-box">
         <h2>Shipping policy mapping report</h2>
-        <p class="description">Raport jest generowany wyłącznie ręcznie przyciskiem i zapisywany jako ostatni wynik; zwykłe renderowanie panelu nie skanuje produktów. Masowa aktualizacja fulfillment policy pozostaje wyłączona do czasu kompletnego mapowania kategorii Woo.</p>
-        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_shipping_mapping_report'); ?><input type="hidden" name="action" value="wei_generate_shipping_mapping_report" /><button class="button">Generate shipping mapping report</button></form>
+        <p class="description">Raport jest generowany wyłącznie ręcznie przyciskiem i zapisywany jako ostatni wynik; zwykłe renderowanie panelu nie skanuje produktów.</p>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_shipping_mapping_report'); ?><input type="hidden" name="action" value="wei_generate_shipping_mapping_report" /><button class="button">Generate shipping mapping report</button></form>
+        </div>
+
+        <h3>Test fulfillment policy update for one product</h3>
+        <p class="description">Bezpieczny test aktualizuje wyłącznie <code>listingPolicies.fulfillmentPolicyId</code> istniejącej oferty eBay. Nie tworzy oferty, nie publikuje, nie zmienia ceny, tytułu, opisu, kategorii ani stocku Woo.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_update_shipping_policy_one'); ?>
+            <input type="hidden" name="action" value="wei_update_shipping_policy_one" />
+            <label for="wei-shipping-one-product-id">Product ID</label>
+            <input id="wei-shipping-one-product-id" type="number" min="1" name="product_id" class="small-text" />
+            <span>or</span>
+            <label for="wei-shipping-one-sku">SKU</label>
+            <input id="wei-shipping-one-sku" name="sku" class="regular-text" />
+            <button class="button button-secondary">Update shipping policy for one product</button>
+        </form>
+
+        <h3>Bulk fulfillment policy update queue</h3>
+        <p class="notice notice-warning" style="padding:10px 12px;">This will update fulfillment policy only for existing active eBay listings, in batches of 50. It will not publish new listings.</p>
+        <?php $bulkStatus = is_array($shipping_policy_bulk_status ?? null) ? $shipping_policy_bulk_status : []; ?>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($bulkStatus['state'] ?? 'idle')); ?></strong></div>
+            <div class="wei-card"><span>Total queued</span><strong><?php echo esc_html((string) ($bulkStatus['total_queued'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Processed</span><strong><?php echo esc_html((string) ($bulkStatus['processed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Remaining</span><strong><?php echo esc_html((string) ($bulkStatus['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Changed</span><strong><?php echo esc_html((string) ($bulkStatus['changed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Unchanged</span><strong><?php echo esc_html((string) ($bulkStatus['unchanged'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Failed</span><strong><?php echo esc_html((string) ($bulkStatus['failed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Last product ID</span><strong><?php echo esc_html((string) ($bulkStatus['last_product_id'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Started at</span><strong><?php echo esc_html((string) (($bulkStatus['started_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Updated at</span><strong><?php echo esc_html((string) (($bulkStatus['updated_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Last error</span><strong><?php echo esc_html((string) (($bulkStatus['last_error'] ?? '') ?: '-')); ?></strong></div>
+        </div>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return window.confirm('This will update fulfillment policy only for existing active eBay listings, in batches of 50. It will not publish new listings.');">
+                <?php wp_nonce_field('wei_shipping_policy_bulk_start'); ?>
+                <input type="hidden" name="action" value="wei_shipping_policy_bulk_start" />
+                <input type="hidden" name="batch_size" value="50" />
+                <button class="button button-primary">Start fulfillment policy update for all active eBay listings</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_pause'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_pause" /><button class="button">Pause</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_resume'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_resume" /><button class="button">Resume</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_stop'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_stop" /><button class="button button-link-delete">Stop / Clear queue</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_process'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_process" /><button class="button">Process next batch now</button></form>
+        </div>
         <?php if (!empty($shipping_mapping_report)): ?>
             <div class="wei-grid">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($shipping_mapping_report['generated_at'] ?? '-')); ?></strong></div>
