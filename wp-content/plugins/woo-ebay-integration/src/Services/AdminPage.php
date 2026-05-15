@@ -453,10 +453,15 @@ class AdminPage
             $this->guard_shipping_mapping_report_memory($report, 'after_terms');
 
             $totalProducts = $this->count_products_for_shipping_mapping();
-            $products100 = $this->count_products_for_shipping_mapping($categoryIds100);
-            $products50 = $this->count_products_for_shipping_mapping($categoryIds50, $categoryIds100);
-            $productsMapped = $this->count_products_for_shipping_mapping($allMappedCategoryIds);
+            $products100 = $this->count_products_for_shipping_mapping($categoryIds100, [], true);
+            $products50 = $this->count_products_for_shipping_mapping($categoryIds50, $categoryIds100, true);
+            $productsMapped = $this->count_products_for_shipping_mapping($allMappedCategoryIds, [], true);
             $productsDefault30 = max(0, $totalProducts - $productsMapped);
+            $estimatedProductsTotal = $products100 + $products50 + $productsDefault30;
+            $estimatedProductsDifference = $totalProducts - $estimatedProductsTotal;
+            if ($estimatedProductsDifference !== 0) {
+                $warnings[] = 'Shipping mapping estimate total differs from total products by ' . $estimatedProductsDifference . '; check overlapping categories or product category assignments.';
+            }
 
             if ($totalProducts > 100) {
                 $warnings[] = 'Product-level details were not scanned; report uses lightweight SQL counts only.';
@@ -472,6 +477,8 @@ class AdminPage
                 'estimated_products_50' => $products50,
                 'estimated_products_default_30' => $productsDefault30,
                 'total_products' => $totalProducts,
+                'estimated_products_total' => $estimatedProductsTotal,
+                'estimated_products_difference' => $estimatedProductsDifference,
                 'counts' => [
                     '30_eur' => $productsDefault30,
                     '50_eur' => $products50,
@@ -1660,8 +1667,13 @@ class AdminPage
     }
 
     /** @param array<int,int> $includeTermIds @param array<int,int> $excludeTermIds */
-    private function count_products_for_shipping_mapping(array $includeTermIds = [], array $excludeTermIds = []): int
+    private function count_products_for_shipping_mapping(array $includeTermIds = [], array $excludeTermIds = [], bool $requireIncludeTerms = false): int
     {
+        $includeTermIds = array_values(array_unique(array_filter(array_map('absint', $includeTermIds))));
+        if ($requireIncludeTerms && $includeTermIds === []) {
+            return 0;
+        }
+
         global $wpdb;
 
         $statuses = ['publish', 'draft', 'pending', 'private'];
@@ -1671,7 +1683,6 @@ class AdminPage
         $join = '';
         $where = "p.post_type = 'product' AND p.post_status IN ({$statusPlaceholders})";
 
-        $includeTermIds = array_values(array_unique(array_filter(array_map('absint', $includeTermIds))));
         if ($includeTermIds !== []) {
             $includePlaceholders = implode(',', array_fill(0, count($includeTermIds), '%d'));
             $join .= " INNER JOIN {$wpdb->term_relationships} tr_include ON tr_include.object_id = p.ID";
