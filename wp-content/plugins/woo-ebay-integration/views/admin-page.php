@@ -437,12 +437,21 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
         <?php if (!empty($shipping_mapping_report)): ?>
             <div class="wei-grid">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($shipping_mapping_report['generated_at'] ?? '-')); ?></strong></div>
-                <div class="wei-card"><span>Products 30 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['30_eur'] ?? 0)); ?></strong></div>
-                <div class="wei-card"><span>Products 50 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['50_eur'] ?? 0)); ?></strong></div>
-                <div class="wei-card"><span>Products 100 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['100_eur'] ?? 0)); ?></strong></div>
-                <div class="wei-card"><span>Default 30 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['default_30_eur'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Total products</span><strong><?php echo esc_html((string) ($shipping_mapping_report['total_products'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Estimated 30 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['estimated_products_default_30'] ?? ($shipping_mapping_report['counts']['default_30_eur'] ?? 0))); ?></strong></div>
+                <div class="wei-card"><span>Estimated 50 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['estimated_products_50'] ?? ($shipping_mapping_report['counts']['50_eur'] ?? 0))); ?></strong></div>
+                <div class="wei-card"><span>Estimated 100 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['estimated_products_100'] ?? ($shipping_mapping_report['counts']['100_eur'] ?? 0))); ?></strong></div>
+                <div class="wei-card"><span>100 EUR categories</span><strong><?php echo esc_html((string) ($shipping_mapping_report['count_categories_100'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>50 EUR categories</span><strong><?php echo esc_html((string) ($shipping_mapping_report['count_categories_50'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Partial</span><strong><?php echo !empty($shipping_mapping_report['partial']) ? 'yes' : 'no'; ?></strong></div>
             </div>
-            <h3>Categories without shipping mapping</h3>
+            <?php if (!empty($shipping_mapping_report['warnings'])): ?>
+                <h3>Warnings</h3>
+                <pre class="wei-scroll"><?php echo esc_html($technicalPreview($shipping_mapping_report['warnings'], 2000)); ?></pre>
+            <?php endif; ?>
+            <h3>Sample category terms (max 100)</h3>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview($shipping_mapping_report['sample_terms'] ?? [], 4000)); ?></pre>
+            <h3>Sample categories using default 30 EUR (max 100)</h3>
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview($shipping_mapping_report['unmapped_categories'] ?? [], 4000)); ?></pre>
         <?php endif; ?>
     </div>
