@@ -5,6 +5,7 @@ namespace WEI\Services;
 use WEI\Adapters\EbayAdapter;
 use WEI\Plugin;
 use WEI\Repositories\CategoryMappingRepository;
+use WEI\Services\EbayShippingPolicyResolver;
 
 class AdminPage
 {
@@ -25,6 +26,7 @@ class AdminPage
         add_action('admin_post_wei_import_order', [$this, 'import_order']);
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
+        add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
@@ -308,6 +310,8 @@ class AdminPage
         $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
         $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
         $product_sync_status_rows = $load_product_sync_rows ? $this->recent_product_sync_status_rows() : [];
+        $shipping_mapping_report = get_option('wei_ebay_shipping_mapping_report', []);
+        $shipping_mapping_report = is_array($shipping_mapping_report) ? $shipping_mapping_report : [];
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 
@@ -373,13 +377,70 @@ class AdminPage
         $s['inventory_location_postal_code'] = sanitize_text_field((string) ($_POST['inventory_location_postal_code'] ?? '08-460'));
         $s['inventory_location_city'] = sanitize_text_field((string) ($_POST['inventory_location_city'] ?? 'Sobolew'));
         $s['inventory_location_address_line_1'] = sanitize_text_field((string) ($_POST['inventory_location_address_line_1'] ?? ''));
-        $s['ebay_fulfillment_policy_id'] = sanitize_text_field((string) ($_POST['fulfillmentPolicyId'] ?? $_POST['ebay_fulfillment_policy_id'] ?? ''));
+        $s['fulfillment_policy_id_30_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_30_eur'] ?? $_POST['fulfillmentPolicyId'] ?? $_POST['ebay_fulfillment_policy_id'] ?? ''));
+        $s['fulfillment_policy_id_50_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_50_eur'] ?? ''));
+        $s['fulfillment_policy_id_100_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_100_eur'] ?? ''));
+        $s['ebay_fulfillment_policy_id'] = $s['fulfillment_policy_id_30_eur'];
+        $s['shipping_category_ids_50_eur'] = sanitize_textarea_field((string) ($_POST['shipping_category_ids_50_eur'] ?? ''));
+        $s['shipping_category_ids_100_eur'] = sanitize_textarea_field((string) ($_POST['shipping_category_ids_100_eur'] ?? ''));
         $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['paymentPolicyId'] ?? $_POST['ebay_payment_policy_id'] ?? ''));
         $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['returnPolicyId'] ?? $_POST['ebay_return_policy_id'] ?? ''));
         $this->sync_product_category_overrides($s['product_category_overrides']);
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
+    }
+
+    public function generate_shipping_mapping_report(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_shipping_mapping_report');
+        $settings = $this->settings();
+        $ids = get_posts([
+            'post_type' => 'product',
+            'post_status' => ['publish', 'draft', 'pending', 'private'],
+            'fields' => 'ids',
+            'posts_per_page' => -1,
+            'no_found_rows' => true,
+        ]);
+        $report = [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'total_products' => 0,
+            'counts' => ['30_eur' => 0, '50_eur' => 0, '100_eur' => 0, 'default_30_eur' => 0],
+            'unmapped_categories' => [],
+            'mass_update_enabled' => false,
+            'note' => 'Raport generowany ręcznie; panel admina nie skanuje produktów podczas zwykłego renderowania. Masowa aktualizacja fulfillment policy pozostaje wyłączona do czasu gotowego mapowania kategorii Woo.',
+        ];
+        $unmapped = [];
+        foreach ((array) $ids as $productId) {
+            $productId = (int) $productId;
+            $resolution = EbayShippingPolicyResolver::resolve_for_product($productId, $settings);
+            $report['total_products']++;
+            if (($resolution['group'] ?? '') === EbayShippingPolicyResolver::GROUP_PALLET_100_EUR) {
+                $report['counts']['100_eur']++;
+            } elseif (($resolution['group'] ?? '') === EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR) {
+                $report['counts']['50_eur']++;
+            } else {
+                $report['counts']['30_eur']++;
+            }
+            if (!empty($resolution['default_used'])) {
+                $report['counts']['default_30_eur']++;
+            }
+            foreach ((array) ($resolution['missing_terms'] ?? []) as $term) {
+                $termId = (int) ($term['term_id'] ?? 0);
+                if ($termId > 0) {
+                    $unmapped[$termId] = [
+                        'term_id' => $termId,
+                        'name' => (string) ($term['name'] ?? ''),
+                        'slug' => (string) ($term['slug'] ?? ''),
+                    ];
+                }
+            }
+        }
+        $report['unmapped_categories'] = array_values($unmapped);
+        update_option('wei_ebay_shipping_mapping_report', $report, false);
+        $this->set_status('Shipping mapping report: ' . wp_json_encode($report));
+        $this->go();
     }
 
     public function disconnect(): void { $this->require_manage_options(); check_admin_referer('wei_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
@@ -1791,9 +1852,34 @@ class AdminPage
         if (!isset($s['nbp_rate_cache_ttl_hours'])) {
             $s['nbp_rate_cache_ttl_hours'] = 12;
         }
+        $s = $this->with_shipping_policy_defaults($s);
         return $s;
     }
 
+
+    private function with_shipping_policy_defaults(array $s): array
+    {
+        $legacyFulfillmentId = trim((string) ($s['ebay_fulfillment_policy_id'] ?? ''));
+        if (empty($s['fulfillment_policy_id_30_eur'])) {
+            $s['fulfillment_policy_id_30_eur'] = $legacyFulfillmentId !== '' ? $legacyFulfillmentId : EbayShippingPolicyResolver::POLICY_30_EUR;
+        }
+        if (empty($s['ebay_fulfillment_policy_id'])) {
+            $s['ebay_fulfillment_policy_id'] = (string) $s['fulfillment_policy_id_30_eur'];
+        }
+        if (empty($s['fulfillment_policy_id_50_eur'])) {
+            $s['fulfillment_policy_id_50_eur'] = EbayShippingPolicyResolver::POLICY_50_EUR;
+        }
+        if (empty($s['fulfillment_policy_id_100_eur'])) {
+            $s['fulfillment_policy_id_100_eur'] = EbayShippingPolicyResolver::POLICY_100_EUR;
+        }
+        if (!isset($s['shipping_category_ids_50_eur'])) {
+            $s['shipping_category_ids_50_eur'] = '';
+        }
+        if (!isset($s['shipping_category_ids_100_eur'])) {
+            $s['shipping_category_ids_100_eur'] = '';
+        }
+        return $s;
+    }
 
     private function sync_product_category_overrides(string $raw): int
     {

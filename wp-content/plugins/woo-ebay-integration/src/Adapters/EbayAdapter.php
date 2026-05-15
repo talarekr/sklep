@@ -12,6 +12,7 @@ use WEI\Services\EbayTaxonomyService;
 use WEI\Services\EbaySkuGenerator;
 use WEI\Services\EbayPriceResolver;
 use WEI\Services\EbayConditionResolver;
+use WEI\Services\EbayShippingPolicyResolver;
 use WEI\Services\CategoryMappingSafety;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
@@ -66,7 +67,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         $requiredPolicyIds = [
-            'fulfillment_policy' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'fulfillment_policy_30_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings),
+            'fulfillment_policy_50_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR, $settings),
+            'fulfillment_policy_100_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PALLET_100_EUR, $settings),
             'payment_policy' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'return_policy' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
@@ -76,7 +79,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         $policySeen = [
-            'fulfillment_policy' => $this->policy_id_exists($checks['fulfillment_policy']['fulfillmentPolicies'] ?? [], $requiredPolicyIds['fulfillment_policy']),
+            'fulfillment_policy_30_eur' => $this->policy_id_exists($checks['fulfillment_policy']['fulfillmentPolicies'] ?? [], $requiredPolicyIds['fulfillment_policy_30_eur']),
+            'fulfillment_policy_50_eur' => $this->policy_id_exists($checks['fulfillment_policy']['fulfillmentPolicies'] ?? [], $requiredPolicyIds['fulfillment_policy_50_eur']),
+            'fulfillment_policy_100_eur' => $this->policy_id_exists($checks['fulfillment_policy']['fulfillmentPolicies'] ?? [], $requiredPolicyIds['fulfillment_policy_100_eur']),
             'payment_policy' => $this->policy_id_exists($checks['payment_policy']['paymentPolicies'] ?? [], $requiredPolicyIds['payment_policy']),
             'return_policy' => $this->policy_id_exists($checks['return_policy']['returnPolicies'] ?? [], $requiredPolicyIds['return_policy']),
         ];
@@ -261,9 +266,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $priceCurrency = $this->offer_currency($marketplaceId);
         $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
+        $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $this->log_shipping_policy_resolution($product_id, $sku, $marketplaceId, $shippingPolicyResolution);
 
         $listingPolicies = [
-            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
@@ -359,6 +366,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'sku' => $sku,
             ]), $product_id, $sku);
         }
+
+        $this->log_shipping_policy_change_state($offer_id, $product_id, $sku, $marketplaceId, $shippingPolicyResolution);
 
         $this->logger->info('eBay offer payload before updateOffer', [
             'stage' => 'updateOffer',
@@ -741,8 +750,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
         $conditionResolution = EbayConditionResolver::resolve($marketplaceId, $settings);
+        $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $this->log_shipping_policy_resolution($product_id, $sku, $marketplaceId, $shippingPolicyResolution);
         $listingPolicies = [
-            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
@@ -2539,11 +2550,71 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return array_values(array_unique(array_filter($missing)));
     }
 
+    private function log_shipping_policy_resolution(int $productId, string $sku, string $marketplaceId, array $resolution): void
+    {
+        $context = [
+            'product_id' => $productId,
+            'sku' => $sku,
+            'marketplace_id' => $marketplaceId,
+            'shipping_group' => (string) ($resolution['group'] ?? ''),
+            'fulfillment_policy_id' => (string) ($resolution['policy_id'] ?? ''),
+            'source' => (string) ($resolution['source'] ?? ''),
+            'rate_eur' => (int) ($resolution['rate_eur'] ?? 0),
+            'matched_terms' => $resolution['matched_terms'] ?? [],
+            'missing_terms' => $resolution['missing_terms'] ?? [],
+        ];
+        $this->logger->info('EBAY_SHIPPING_POLICY_RESOLVED', $context);
+        if (!empty($resolution['default_used'])) {
+            $this->logger->info('EBAY_SHIPPING_POLICY_DEFAULT_USED', $context);
+        }
+        if (!empty($resolution['missing_terms'])) {
+            $this->logger->warning('EBAY_SHIPPING_POLICY_MAPPING_MISSING', $context);
+        }
+    }
+
+    private function log_shipping_policy_change_state(string $offerId, int $productId, string $sku, string $marketplaceId, array $resolution): void
+    {
+        if ($offerId === '') {
+            return;
+        }
+
+        $desiredPolicyId = (string) ($resolution['policy_id'] ?? '');
+        $currentPolicyId = '';
+        $offer = $this->client->get_offer($offerId, [
+            'stage' => 'shippingPolicyGetOfferBeforeUpdate',
+            'product_id' => $productId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'marketplace_id' => $marketplaceId,
+        ]);
+        if (!is_wp_error($offer) && is_array($offer)) {
+            $currentPolicyId = (string) ($offer['listingPolicies']['fulfillmentPolicyId'] ?? '');
+        }
+
+        $context = [
+            'product_id' => $productId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'marketplace_id' => $marketplaceId,
+            'shipping_group' => (string) ($resolution['group'] ?? ''),
+            'current_fulfillment_policy_id' => $currentPolicyId,
+            'desired_fulfillment_policy_id' => $desiredPolicyId,
+            'source' => (string) ($resolution['source'] ?? ''),
+        ];
+        if ($currentPolicyId !== '' && $currentPolicyId === $desiredPolicyId) {
+            $this->logger->info('EBAY_SHIPPING_POLICY_UNCHANGED', $context);
+            return;
+        }
+        $this->logger->info('EBAY_SHIPPING_POLICY_CHANGED', $context);
+    }
+
     private function validate_selected_policies(array $settings): array
     {
         $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
         $required = [
-            'fulfillmentPolicyId' => (string) ($settings['ebay_fulfillment_policy_id'] ?? ''),
+            'fulfillmentPolicyId_30_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings),
+            'fulfillmentPolicyId_50_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR, $settings),
+            'fulfillmentPolicyId_100_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PALLET_100_EUR, $settings),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
@@ -2568,7 +2639,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 continue;
             }
 
-            if (!$this->policy_id_exists($policySets[$field], $id)) {
+            $policySetKey = str_starts_with($field, 'fulfillmentPolicyId') ? 'fulfillmentPolicyId' : $field;
+            if (!$this->policy_id_exists($policySets[$policySetKey] ?? [], $id)) {
                 $invalid[$field] = $id;
             }
         }
@@ -2701,6 +2773,31 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['nbp_rate_cache_ttl_hours'])) {
             $settings['nbp_rate_cache_ttl_hours'] = 12;
+        }
+        $settings = $this->with_shipping_policy_defaults($settings);
+        return $settings;
+    }
+
+    private function with_shipping_policy_defaults(array $settings): array
+    {
+        $legacyFulfillmentId = trim((string) ($settings['ebay_fulfillment_policy_id'] ?? ''));
+        if (empty($settings['fulfillment_policy_id_30_eur'])) {
+            $settings['fulfillment_policy_id_30_eur'] = $legacyFulfillmentId !== '' ? $legacyFulfillmentId : EbayShippingPolicyResolver::POLICY_30_EUR;
+        }
+        if (empty($settings['ebay_fulfillment_policy_id'])) {
+            $settings['ebay_fulfillment_policy_id'] = (string) $settings['fulfillment_policy_id_30_eur'];
+        }
+        if (empty($settings['fulfillment_policy_id_50_eur'])) {
+            $settings['fulfillment_policy_id_50_eur'] = EbayShippingPolicyResolver::POLICY_50_EUR;
+        }
+        if (empty($settings['fulfillment_policy_id_100_eur'])) {
+            $settings['fulfillment_policy_id_100_eur'] = EbayShippingPolicyResolver::POLICY_100_EUR;
+        }
+        if (!isset($settings['shipping_category_ids_50_eur'])) {
+            $settings['shipping_category_ids_50_eur'] = '';
+        }
+        if (!isset($settings['shipping_category_ids_100_eur'])) {
+            $settings['shipping_category_ids_100_eur'] = '';
         }
         return $settings;
     }

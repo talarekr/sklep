@@ -59,9 +59,12 @@ $findPolicyName = static function (array $policies, string $id, string $idKey): 
 };
 $locationKey = (string) ($s['inventory_location_key'] ?? 'gpswiss-pl');
 $fulfillmentId = (string) ($s['ebay_fulfillment_policy_id'] ?? '');
+$fulfillmentId30 = (string) ($s['fulfillment_policy_id_30_eur'] ?? $fulfillmentId);
+$fulfillmentId50 = (string) ($s['fulfillment_policy_id_50_eur'] ?? '');
+$fulfillmentId100 = (string) ($s['fulfillment_policy_id_100_eur'] ?? '');
 $paymentId = (string) ($s['ebay_payment_policy_id'] ?? '');
 $returnId = (string) ($s['ebay_return_policy_id'] ?? '');
-$accountSetupConfigured = $locationKey !== '' && $fulfillmentId !== '' && $paymentId !== '' && $returnId !== '';
+$accountSetupConfigured = $locationKey !== '' && $fulfillmentId30 !== '' && $fulfillmentId50 !== '' && $fulfillmentId100 !== '' && $paymentId !== '' && $returnId !== '';
 
 $provider = (string) ($s['translation_provider'] ?? 'disabled');
 $translationConfigured = $provider === 'google_cloud_translate' && (string) ($s['translation_api_key'] ?? '') !== '';
@@ -291,7 +294,7 @@ $categoryMissingCount = (int) $categorySummary['needs_category_review'];
 $teachingManualMappingsCount = (int) $categorySummary['mapped_manual'];
 $latestLogMessage = (string) ($logs[0]['message'] ?? '');
 $latestLogHasError = str_contains(strtolower($latestLogMessage), 'error') || str_contains(strtolower($latestLogMessage), 'failed');
-$accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
+$accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId30 === '' ? 1 : 0) + ($fulfillmentId50 === '' ? 1 : 0) + ($fulfillmentId100 === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
 $toScalarString = static function ($value, string $default = ''): string {
     if ($value === null) {
         return $default;
@@ -376,7 +379,11 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <table class="form-table" role="presentation">
                 <tr><th><label for="wei-marketplace-id">Marketplace</label></th><td><input id="wei-marketplace-id" class="regular-text" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" placeholder="EBAY_DE" /></td></tr>
                 <tr><th><label for="wei-location-key">Merchant location key</label></th><td><input id="wei-location-key" class="regular-text" name="inventory_location_key" value="<?php echo esc_attr((string) $setting('inventory_location_key', 'gpswiss-pl')); ?>" /></td></tr>
-                <tr><th><label for="wei-fulfillment-policy">Fulfillment policy ID</label></th><td><input id="wei-fulfillment-policy" class="regular-text" name="ebay_fulfillment_policy_id" value="<?php echo esc_attr($fulfillmentId); ?>" /> <span class="description"><?php echo esc_html($fulfillmentId !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId, 'fulfillmentPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-fulfillment-policy-30">Fulfillment policy ID 30 EUR</label></th><td><input id="wei-fulfillment-policy-30" class="regular-text" name="fulfillment_policy_id_30_eur" value="<?php echo esc_attr($fulfillmentId30); ?>" /> <span class="description"><?php echo esc_html($fulfillmentId30 !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId30, 'fulfillmentPolicyId') : 'missing'); ?> (fallback/default)</span></td></tr>
+                <tr><th><label for="wei-fulfillment-policy-50">Fulfillment policy ID 50 EUR</label></th><td><input id="wei-fulfillment-policy-50" class="regular-text" name="fulfillment_policy_id_50_eur" value="<?php echo esc_attr($fulfillmentId50); ?>" /> <span class="description"><?php echo esc_html($fulfillmentId50 !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId50, 'fulfillmentPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-fulfillment-policy-100">Fulfillment policy ID 100 EUR</label></th><td><input id="wei-fulfillment-policy-100" class="regular-text" name="fulfillment_policy_id_100_eur" value="<?php echo esc_attr($fulfillmentId100); ?>" /> <span class="description"><?php echo esc_html($fulfillmentId100 !== '' ? $findPolicyName($fulfillmentPolicies, $fulfillmentId100, 'fulfillmentPolicyId') : 'missing'); ?></span></td></tr>
+                <tr><th><label for="wei-shipping-categories-50">Woo categories 50 EUR</label></th><td><textarea id="wei-shipping-categories-50" class="large-text code" rows="2" name="shipping_category_ids_50_eur"><?php echo esc_textarea((string) $setting('shipping_category_ids_50_eur', '')); ?></textarea><p class="description">Konkretnie przypisane Woo term IDs; bez dziedziczenia z kategorii nadrzędnej.</p></td></tr>
+                <tr><th><label for="wei-shipping-categories-100">Woo categories 100 EUR</label></th><td><textarea id="wei-shipping-categories-100" class="large-text code" rows="2" name="shipping_category_ids_100_eur"><?php echo esc_textarea((string) $setting('shipping_category_ids_100_eur', '')); ?></textarea><p class="description">Jeżeli produkt ma też kategorię 50 EUR, resolver wybierze 100 EUR.</p></td></tr>
                 <tr><th><label for="wei-payment-policy">Payment policy ID</label></th><td><input id="wei-payment-policy" class="regular-text" name="ebay_payment_policy_id" value="<?php echo esc_attr($paymentId); ?>" /> <span class="description"><?php echo esc_html($paymentId !== '' ? $findPolicyName($paymentPolicies, $paymentId, 'paymentPolicyId') : 'missing'); ?></span></td></tr>
                 <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /> <span class="description"><?php echo esc_html($returnId !== '' ? $findPolicyName($returnPolicies, $returnId, 'returnPolicyId') : 'missing'); ?></span></td></tr>
                 <tr><th><label for="wei-markup">Domyślny markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
@@ -421,6 +428,23 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             </details>
             <p><button class="button button-primary">Save settings</button></p>
         </form>
+    </div>
+
+    <div class="wei-box">
+        <h2>Shipping policy mapping report</h2>
+        <p class="description">Raport jest generowany wyłącznie ręcznie przyciskiem i zapisywany jako ostatni wynik; zwykłe renderowanie panelu nie skanuje produktów. Masowa aktualizacja fulfillment policy pozostaje wyłączona do czasu kompletnego mapowania kategorii Woo.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_shipping_mapping_report'); ?><input type="hidden" name="action" value="wei_generate_shipping_mapping_report" /><button class="button">Generate shipping mapping report</button></form>
+        <?php if (!empty($shipping_mapping_report)): ?>
+            <div class="wei-grid">
+                <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($shipping_mapping_report['generated_at'] ?? '-')); ?></strong></div>
+                <div class="wei-card"><span>Products 30 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['30_eur'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Products 50 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['50_eur'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Products 100 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['100_eur'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Default 30 EUR</span><strong><?php echo esc_html((string) ($shipping_mapping_report['counts']['default_30_eur'] ?? 0)); ?></strong></div>
+            </div>
+            <h3>Categories without shipping mapping</h3>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview($shipping_mapping_report['unmapped_categories'] ?? [], 4000)); ?></pre>
+        <?php endif; ?>
     </div>
 
     <div class="wei-box">
