@@ -395,51 +395,133 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_generate_shipping_mapping_report');
-        $settings = $this->settings();
-        $ids = get_posts([
-            'post_type' => 'product',
-            'post_status' => ['publish', 'draft', 'pending', 'private'],
-            'fields' => 'ids',
-            'posts_per_page' => -1,
-            'no_found_rows' => true,
-        ]);
-        $report = [
-            'generated_at' => gmdate('Y-m-d H:i:s'),
-            'total_products' => 0,
-            'counts' => ['30_eur' => 0, '50_eur' => 0, '100_eur' => 0, 'default_30_eur' => 0],
-            'unmapped_categories' => [],
-            'mass_update_enabled' => false,
-            'note' => 'Raport generowany ręcznie; panel admina nie skanuje produktów podczas zwykłego renderowania. Masowa aktualizacja fulfillment policy pozostaje wyłączona do czasu gotowego mapowania kategorii Woo.',
-        ];
-        $unmapped = [];
-        foreach ((array) $ids as $productId) {
-            $productId = (int) $productId;
-            $resolution = EbayShippingPolicyResolver::resolve_for_product($productId, $settings);
-            $report['total_products']++;
-            if (($resolution['group'] ?? '') === EbayShippingPolicyResolver::GROUP_PALLET_100_EUR) {
-                $report['counts']['100_eur']++;
-            } elseif (($resolution['group'] ?? '') === EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR) {
-                $report['counts']['50_eur']++;
-            } else {
-                $report['counts']['30_eur']++;
-            }
-            if (!empty($resolution['default_used'])) {
-                $report['counts']['default_30_eur']++;
-            }
-            foreach ((array) ($resolution['missing_terms'] ?? []) as $term) {
+
+        $report = $this->empty_shipping_mapping_report();
+        $warnings = [];
+
+        try {
+            $this->logger->info('EBAY_SHIPPING_MAPPING_REPORT_START', [
+                'memory_usage' => memory_get_usage(true),
+                'memory_limit' => ini_get('memory_limit'),
+            ]);
+
+            $settings = $this->settings();
+            $categoryGroups = EbayShippingPolicyResolver::category_group_maps($settings);
+            $categoryIds50 = $categoryGroups[EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR] ?? [];
+            $categoryIds100 = $categoryGroups[EbayShippingPolicyResolver::GROUP_PALLET_100_EUR] ?? [];
+            $allMappedCategoryIds = array_values(array_unique(array_merge($categoryIds50, $categoryIds100)));
+
+            $this->guard_shipping_mapping_report_memory($report, 'after_settings');
+
+            $terms = $this->shipping_mapping_product_category_terms();
+            $termSamples = [];
+            $unmappedSamples = [];
+            foreach ($terms as $term) {
                 $termId = (int) ($term['term_id'] ?? 0);
-                if ($termId > 0) {
-                    $unmapped[$termId] = [
-                        'term_id' => $termId,
-                        'name' => (string) ($term['name'] ?? ''),
-                        'slug' => (string) ($term['slug'] ?? ''),
-                    ];
+                if ($termId <= 0) {
+                    continue;
+                }
+
+                $group = 'default_30_eur';
+                if (in_array($termId, $categoryIds100, true)) {
+                    $group = 'pallet_100_eur';
+                } elseif (in_array($termId, $categoryIds50, true)) {
+                    $group = 'parcel_50_eur';
+                }
+
+                $sample = [
+                    'term_id' => $termId,
+                    'name' => (string) ($term['name'] ?? ''),
+                    'slug' => (string) ($term['slug'] ?? ''),
+                    'parent' => (int) ($term['parent'] ?? 0),
+                    'woo_count' => (int) ($term['count'] ?? 0),
+                    'shipping_group' => $group,
+                ];
+
+                if (count($termSamples) < 100) {
+                    $termSamples[] = $sample;
+                }
+                if ($group === 'default_30_eur' && count($unmappedSamples) < 100) {
+                    $unmappedSamples[] = $sample;
                 }
             }
+
+            if (count($terms) > 100) {
+                $warnings[] = 'Category details were limited to 100 sample terms to keep the report small.';
+            }
+
+            $this->guard_shipping_mapping_report_memory($report, 'after_terms');
+
+            $totalProducts = $this->count_products_for_shipping_mapping();
+            $products100 = $this->count_products_for_shipping_mapping($categoryIds100);
+            $products50 = $this->count_products_for_shipping_mapping($categoryIds50, $categoryIds100);
+            $productsMapped = $this->count_products_for_shipping_mapping($allMappedCategoryIds);
+            $productsDefault30 = max(0, $totalProducts - $productsMapped);
+
+            if ($totalProducts > 100) {
+                $warnings[] = 'Product-level details were not scanned; report uses lightweight SQL counts only.';
+            }
+
+            $report = [
+                'generated_at' => gmdate('Y-m-d H:i:s'),
+                'category_ids_100' => $categoryIds100,
+                'category_ids_50' => $categoryIds50,
+                'count_categories_100' => count($categoryIds100),
+                'count_categories_50' => count($categoryIds50),
+                'estimated_products_100' => $products100,
+                'estimated_products_50' => $products50,
+                'estimated_products_default_30' => $productsDefault30,
+                'total_products' => $totalProducts,
+                'counts' => [
+                    '30_eur' => $productsDefault30,
+                    '50_eur' => $products50,
+                    '100_eur' => $products100,
+                    'default_30_eur' => $productsDefault30,
+                ],
+                'sample_terms' => $termSamples,
+                'unmapped_categories' => $unmappedSamples,
+                'warnings' => $warnings,
+                'mass_update_enabled' => false,
+                'partial' => false,
+                'note' => 'Raport generowany ręcznie i liczony lekkimi zapytaniami SQL po kategoriach; nie ładuje produktów WooCommerce ani pełnego postmeta. Masowa aktualizacja fulfillment policy pozostaje wyłączona.',
+            ];
+
+            $this->guard_shipping_mapping_report_memory($report, 'before_save');
+            update_option('wei_ebay_shipping_mapping_report', $report, false);
+
+            $this->logger->info('EBAY_SHIPPING_MAPPING_REPORT_DONE', [
+                'total_products' => $totalProducts,
+                'estimated_products_100' => $products100,
+                'estimated_products_50' => $products50,
+                'estimated_products_default_30' => $productsDefault30,
+                'sample_terms' => count($termSamples),
+                'warnings' => count($warnings),
+                'memory_usage' => memory_get_usage(true),
+            ]);
+            $this->set_status('Shipping mapping report generated: ' . wp_json_encode([
+                'total_products' => $totalProducts,
+                'estimated_products_100' => $products100,
+                'estimated_products_50' => $products50,
+                'estimated_products_default_30' => $productsDefault30,
+                'warnings' => count($warnings),
+            ]));
+        } catch (\Throwable $e) {
+            $report['partial'] = true;
+            $report['warnings'][] = 'Report stopped before completion: ' . $e->getMessage();
+            update_option('wei_ebay_shipping_mapping_report', $report, false);
+            $this->logger->error('EBAY_SHIPPING_MAPPING_REPORT_ERROR', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'memory_usage' => memory_get_usage(true),
+                'memory_limit' => ini_get('memory_limit'),
+            ]);
+            $this->set_status('Shipping mapping report failed gracefully: ' . wp_json_encode([
+                'error' => $e->getMessage(),
+                'partial' => true,
+            ]));
         }
-        $report['unmapped_categories'] = array_values($unmapped);
-        update_option('wei_ebay_shipping_mapping_report', $report, false);
-        $this->set_status('Shipping mapping report: ' . wp_json_encode($report));
+
         $this->go();
     }
 
@@ -1527,6 +1609,139 @@ class AdminPage
         $res = $this->adapter->refresh_policies();
         $this->set_status('Refresh policies: ' . wp_json_encode($res));
         $this->go();
+    }
+
+    /** @return array<string,mixed> */
+    private function empty_shipping_mapping_report(): array
+    {
+        return [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'category_ids_100' => [],
+            'category_ids_50' => [],
+            'count_categories_100' => 0,
+            'count_categories_50' => 0,
+            'estimated_products_100' => 0,
+            'estimated_products_50' => 0,
+            'estimated_products_default_30' => 0,
+            'total_products' => 0,
+            'counts' => ['30_eur' => 0, '50_eur' => 0, '100_eur' => 0, 'default_30_eur' => 0],
+            'sample_terms' => [],
+            'unmapped_categories' => [],
+            'warnings' => [],
+            'mass_update_enabled' => false,
+            'partial' => true,
+            'note' => 'Raport rozpoczęty, ale nie został jeszcze ukończony.',
+        ];
+    }
+
+    /** @return array<int,array{term_id:int,name:string,slug:string,parent:int,count:int}> */
+    private function shipping_mapping_product_category_terms(): array
+    {
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            "SELECT t.term_id, t.name, t.slug, tt.parent, tt.count
+             FROM {$wpdb->terms} t
+             INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
+             WHERE tt.taxonomy = 'product_cat'
+             ORDER BY t.name ASC",
+            ARRAY_A
+        );
+
+        return is_array($rows) ? array_map(static function (array $row): array {
+            return [
+                'term_id' => (int) ($row['term_id'] ?? 0),
+                'name' => (string) ($row['name'] ?? ''),
+                'slug' => (string) ($row['slug'] ?? ''),
+                'parent' => (int) ($row['parent'] ?? 0),
+                'count' => (int) ($row['count'] ?? 0),
+            ];
+        }, $rows) : [];
+    }
+
+    /** @param array<int,int> $includeTermIds @param array<int,int> $excludeTermIds */
+    private function count_products_for_shipping_mapping(array $includeTermIds = [], array $excludeTermIds = []): int
+    {
+        global $wpdb;
+
+        $statuses = ['publish', 'draft', 'pending', 'private'];
+        $statusPlaceholders = implode(',', array_fill(0, count($statuses), '%s'));
+        $params = $statuses;
+
+        $join = '';
+        $where = "p.post_type = 'product' AND p.post_status IN ({$statusPlaceholders})";
+
+        $includeTermIds = array_values(array_unique(array_filter(array_map('absint', $includeTermIds))));
+        if ($includeTermIds !== []) {
+            $includePlaceholders = implode(',', array_fill(0, count($includeTermIds), '%d'));
+            $join .= " INNER JOIN {$wpdb->term_relationships} tr_include ON tr_include.object_id = p.ID";
+            $join .= " INNER JOIN {$wpdb->term_taxonomy} tt_include ON tt_include.term_taxonomy_id = tr_include.term_taxonomy_id AND tt_include.taxonomy = 'product_cat'";
+            $where .= " AND tt_include.term_id IN ({$includePlaceholders})";
+            $params = array_merge($params, $includeTermIds);
+        }
+
+        $excludeTermIds = array_values(array_unique(array_filter(array_map('absint', $excludeTermIds))));
+        if ($excludeTermIds !== []) {
+            $excludePlaceholders = implode(',', array_fill(0, count($excludeTermIds), '%d'));
+            $where .= " AND NOT EXISTS (
+                SELECT 1
+                FROM {$wpdb->term_relationships} tr_exclude
+                INNER JOIN {$wpdb->term_taxonomy} tt_exclude ON tt_exclude.term_taxonomy_id = tr_exclude.term_taxonomy_id
+                WHERE tr_exclude.object_id = p.ID
+                  AND tt_exclude.taxonomy = 'product_cat'
+                  AND tt_exclude.term_id IN ({$excludePlaceholders})
+            )";
+            $params = array_merge($params, $excludeTermIds);
+        }
+
+        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p{$join} WHERE {$where}";
+        $prepared = $wpdb->prepare($sql, $params);
+
+        return max(0, (int) $wpdb->get_var($prepared));
+    }
+
+    /** @param array<string,mixed> $partialReport */
+    private function guard_shipping_mapping_report_memory(array $partialReport, string $stage): void
+    {
+        $limit = $this->memory_limit_bytes();
+        if ($limit <= 0) {
+            return;
+        }
+
+        $usage = memory_get_usage(true);
+        if ($usage < (int) floor($limit * 0.85)) {
+            return;
+        }
+
+        $partialReport['partial'] = true;
+        $partialReport['warnings'] = array_merge((array) ($partialReport['warnings'] ?? []), [
+            'Report stopped by memory guard at stage: ' . $stage,
+        ]);
+        update_option('wei_ebay_shipping_mapping_report', $partialReport, false);
+        $this->logger->warning('EBAY_SHIPPING_MAPPING_REPORT_MEMORY_GUARD', [
+            'stage' => $stage,
+            'memory_usage' => $usage,
+            'memory_limit' => $limit,
+        ]);
+
+        throw new \RuntimeException('Shipping mapping report stopped by memory guard at ' . $stage . '.');
+    }
+
+    private function memory_limit_bytes(): int
+    {
+        $raw = trim((string) ini_get('memory_limit'));
+        if ($raw === '' || $raw === '-1') {
+            return 0;
+        }
+
+        $unit = strtolower(substr($raw, -1));
+        $value = (float) $raw;
+        return match ($unit) {
+            'g' => (int) ($value * 1024 * 1024 * 1024),
+            'm' => (int) ($value * 1024 * 1024),
+            'k' => (int) ($value * 1024),
+            default => (int) $value,
+        };
     }
 
     private function go(): void
