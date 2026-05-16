@@ -1396,6 +1396,8 @@ class AutoSyncScheduler
                 $res = $this->adapter->sync_stock($productId);
             } elseif ($reason === 'publish_requested' && empty($settings['auto_publish_enabled']) && (string) ($row['source'] ?? '') !== 'manual_publish_requested') {
                 $res = ['result' => 'skipped', 'reason' => 'auto_publish_disabled'];
+            } elseif (in_array($reason, ['price_changed', 'content_changed', 'category_changed'], true) && !$this->has_active_ebay_listing($productId)) {
+                $res = ['result' => 'skipped', 'reason' => 'no_active_ebay_listing'];
             } else {
                 $res = $this->adapter->export_product($productId);
             }
@@ -1420,6 +1422,43 @@ class AutoSyncScheduler
         } catch (\Throwable $throwable) {
             return $this->mark_queue_row_failed($id, $productId, $reason, $attempts, $throwable->getMessage());
         }
+    }
+
+
+    private function has_active_ebay_listing(int $productId): bool
+    {
+        if ($productId <= 0) {
+            return false;
+        }
+
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($productId, '_wei_ebay_item_id', true));
+        }
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        if ($listingId !== '' && $offerId !== '') {
+            return true;
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT remote_offer_id, remote_listing_id, status FROM {$table} WHERE marketplace=%s AND (woo_product_id=%d OR woo_variation_id=%d) ORDER BY updated_at DESC LIMIT 1",
+            'ebay',
+            $productId,
+            $productId
+        ), ARRAY_A);
+        if (!is_array($row)) {
+            return false;
+        }
+
+        $mappingOfferId = trim((string) ($row['remote_offer_id'] ?? ''));
+        $mappingListingId = trim((string) ($row['remote_listing_id'] ?? ''));
+        $mappingStatus = strtolower(trim((string) ($row['status'] ?? '')));
+
+        return $mappingOfferId !== ''
+            && $mappingListingId !== ''
+            && !in_array($mappingStatus, ['ended', 'deleted', 'inactive', 'failed'], true);
     }
 
     private function mark_queue_row_failed(int $id, int $productId, string $reason, int $attempts, string $error): array
