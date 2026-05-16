@@ -253,7 +253,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         if (is_wp_error($item)) return $this->export_error_response('createOrReplaceInventoryItem', $item, $product_id, $sku);
 
-        $policyValidation = $this->validate_selected_policies($settings);
+        $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $this->log_shipping_policy_resolution($product_id, $sku, $marketplaceId, $shippingPolicyResolution);
+        $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
         if (!$policyValidation['valid']) {
             return [
                 'result' => 'error',
@@ -266,8 +268,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $priceCurrency = $this->offer_currency($marketplaceId);
         $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
-        $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
-        $this->log_shipping_policy_resolution($product_id, $sku, $marketplaceId, $shippingPolicyResolution);
 
         $listingPolicies = [
             'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
@@ -389,7 +389,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         if (is_wp_error($updated)) return $this->export_error_response('updateOffer', $updated, $product_id, $sku);
 
-        $policyValidation = $this->validate_selected_policies($this->settings());
+        $policyValidation = $this->validate_selected_policies($this->settings(), [(string) ($listingPolicies['fulfillmentPolicyId'] ?? '')]);
         if (!$policyValidation['valid']) {
             return [
                 'result' => 'error',
@@ -400,7 +400,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         $published = [];
-        $listing_id = '';
+        $publishedNow = false;
+        $metaProductId = $variation_id ?: $product_id;
+        $listing_id = trim((string) ($mapping['remote_listing_id'] ?? ''));
+        if ($listing_id === '') {
+            $listing_id = trim((string) get_post_meta($metaProductId, '_wei_ebay_listing_id', true));
+        }
+        if ($listing_id === '') {
+            $listing_id = trim((string) get_post_meta($metaProductId, '_wei_ebay_item_id', true));
+        }
         if (empty($settings['auto_publish_enabled']) && !$forcePublish) {
             $this->logger->warning('publishOffer skipped because auto publish is disabled', [
                 'stage' => 'publishOffer',
@@ -431,9 +439,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'response' => $published,
             ]);
             $listing_id = (string) ($published['listingId'] ?? '');
+            $publishedNow = true;
         }
 
-        $metaProductId = $variation_id ?: $product_id;
+        $syncStatus = $publishedNow ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory');
         if (!empty($skuResolution['wei_ebay_sku'])) {
             update_post_meta($metaProductId, '_wei_ebay_sku', (string) $skuResolution['wei_ebay_sku']);
         }
@@ -443,15 +452,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         update_post_meta($metaProductId, '_wei_ebay_listing_id', $listing_id);
         update_post_meta($metaProductId, '_wei_ebay_public_url', $this->listing_public_url($listing_id, $marketplaceId));
         update_post_meta($metaProductId, '_wei_ebay_last_export_at', gmdate('Y-m-d H:i:s'));
-        update_post_meta($metaProductId, '_wei_ebay_last_sync_status', $listing_id !== '' ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory'));
+        update_post_meta($metaProductId, '_wei_ebay_last_sync_status', $syncStatus);
         delete_post_meta($metaProductId, '_wei_ebay_last_sync_error');
-        if ($listing_id !== '') {
+        if ($publishedNow) {
             update_post_meta($metaProductId, '_wei_ebay_last_publish_at', gmdate('Y-m-d H:i:s'));
             update_post_meta($metaProductId, '_wei_ebay_listing_status', 'published');
         }
         update_post_meta($product_id, '_wei_ebay_last_payload_hash', hash('sha256', wp_json_encode(['inventory' => $itemPayload, 'offer' => $offerPayload]) ?: ''));
         update_post_meta($metaProductId, '_wei_ebay_last_synced_quantity', (string) max(0, (int) $product->get_stock_quantity()));
-        update_post_meta($product_id, '_wei_ebay_export_status', $listing_id !== '' ? 'published' : ($offer_id !== '' ? 'offer_updated' : 'exported_inventory'));
+        update_post_meta($product_id, '_wei_ebay_export_status', $syncStatus);
         $this->repo->upsert([
             'marketplace' => 'ebay',
             'woo_product_id' => $product_id,
@@ -1891,7 +1900,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
         if ($categoryId === '') { $errors[] = 'Category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
         if ($missingAspects !== [] && $categoryId !== '') { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
-        if (!$this->validate_selected_policies($settings)['valid']) $errors[] = 'business policies missing or invalid';
+        $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
+        if (!$policyValidation['valid']) $errors[] = 'business policies missing or invalid';
         if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
         if ((int) $product->get_stock_quantity() < 0) $errors[] = 'stock invalid';
         if (!$product->get_image_id()) $errors[] = 'image missing';
@@ -1906,7 +1917,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
     }
 
 
@@ -2782,16 +2793,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $this->logger->info('EBAY_SHIPPING_POLICY_CHANGED', $context);
     }
 
-    private function validate_selected_policies(array $settings): array
+    private function validate_selected_policies(array $settings, array $fulfillmentPolicyIds = []): array
     {
         $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
+        $fulfillmentPolicyIds = array_values(array_unique(array_filter(array_map(static fn($id): string => trim((string) $id), $fulfillmentPolicyIds))));
+        if ($fulfillmentPolicyIds === []) {
+            $fulfillmentPolicyIds = [
+                EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings),
+                EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR, $settings),
+                EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PALLET_100_EUR, $settings),
+            ];
+        }
         $required = [
-            'fulfillmentPolicyId_30_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings),
-            'fulfillmentPolicyId_50_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR, $settings),
-            'fulfillmentPolicyId_100_eur' => EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_PALLET_100_EUR, $settings),
             'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
             'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
         ];
+        foreach ($fulfillmentPolicyIds as $idx => $policyId) {
+            $required['fulfillmentPolicyId_' . ($idx + 1)] = $policyId;
+        }
         $policySets = [
             'fulfillmentPolicyId' => is_array($cached['fulfillmentPolicies'] ?? null) ? $cached['fulfillmentPolicies'] : [],
             'paymentPolicyId' => is_array($cached['paymentPolicies'] ?? null) ? $cached['paymentPolicies'] : [],
