@@ -27,6 +27,7 @@ class AdminPage
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
+        add_action('admin_post_wei_generate_listing_quality_audit', [$this, 'generate_listing_quality_audit']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -318,6 +319,8 @@ class AdminPage
         $product_sync_status_rows = $load_product_sync_rows ? $this->recent_product_sync_status_rows() : [];
         $shipping_mapping_report = get_option('wei_ebay_shipping_mapping_report', []);
         $shipping_mapping_report = is_array($shipping_mapping_report) ? $shipping_mapping_report : [];
+        $listing_quality_audit = get_option('wei_ebay_listing_quality_audit', []);
+        $listing_quality_audit = is_array($listing_quality_audit) ? $listing_quality_audit : [];
         $shipping_policy_bulk_status = $this->shipping_policy_bulk_status();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -2044,6 +2047,82 @@ class AdminPage
         };
     }
 
+
+    public function generate_listing_quality_audit(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_listing_quality_audit');
+
+        global $wpdb;
+        $batchSize = 100;
+        $offset = 0;
+        $rows = [];
+        $summary = [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'scanned' => 0,
+            'suspected_wrong_ebay_category' => 0,
+            'missing_fitment' => 0,
+            'missing_description' => 0,
+            'missing_specifics' => 0,
+            'manual_only' => true,
+            'offers' => [],
+            'fitment_analysis' => ['ready' => 0, 'needs_manual_review' => 0],
+            'shipping_policy_audit' => ['policy_30' => 0, 'policy_50' => 0, 'policy_100' => 0, 'other' => 0],
+        ];
+
+        do {
+            $sql = $wpdb->prepare("SELECT p.ID as product_id, p.post_title, sku.meta_value as sku, offer.meta_value as offer_id, listing.meta_value as listing_id, url.meta_value as public_url, cat.meta_value as ebay_category_id, catn.meta_value as ebay_category_name, catp.meta_value as ebay_category_path, pol.meta_value as shipping_policy_id, ship.meta_value as shipping_group, descr.meta_value as de_description, aspects.meta_value as aspects_json, status.meta_value as sync_status FROM {$wpdb->posts} p LEFT JOIN {$wpdb->postmeta} sku ON (sku.post_id=p.ID AND sku.meta_key='_sku') LEFT JOIN {$wpdb->postmeta} offer ON (offer.post_id=p.ID AND offer.meta_key='_wei_ebay_offer_id') LEFT JOIN {$wpdb->postmeta} listing ON (listing.post_id=p.ID AND listing.meta_key='_wei_ebay_listing_id') LEFT JOIN {$wpdb->postmeta} url ON (url.post_id=p.ID AND url.meta_key='_wei_ebay_public_url') LEFT JOIN {$wpdb->postmeta} cat ON (cat.post_id=p.ID AND cat.meta_key='_wei_ebay_category_id') LEFT JOIN {$wpdb->postmeta} catn ON (catn.post_id=p.ID AND catn.meta_key='_wei_ebay_category_name') LEFT JOIN {$wpdb->postmeta} catp ON (catp.post_id=p.ID AND catp.meta_key='_wei_ebay_category_path') LEFT JOIN {$wpdb->postmeta} pol ON (pol.post_id=p.ID AND pol.meta_key='_wei_ebay_last_fulfillment_policy_id') LEFT JOIN {$wpdb->postmeta} ship ON (ship.post_id=p.ID AND ship.meta_key='_wei_ebay_last_shipping_group') LEFT JOIN {$wpdb->postmeta} descr ON (descr.post_id=p.ID AND descr.meta_key='_wei_ebay_de_description') LEFT JOIN {$wpdb->postmeta} aspects ON (aspects.post_id=p.ID AND aspects.meta_key='_wei_ebay_aspects_json') LEFT JOIN {$wpdb->postmeta} status ON (status.post_id=p.ID AND status.meta_key='_wei_ebay_last_sync_status') WHERE p.post_type='product' AND p.post_status IN ('publish','draft','private') AND offer.meta_value IS NOT NULL AND offer.meta_value <> '' ORDER BY p.ID ASC LIMIT %d OFFSET %d", $batchSize, $offset);
+            $batch = $wpdb->get_results($sql, ARRAY_A);
+            if (!is_array($batch) || $batch === []) break;
+            foreach ($batch as $r) {
+                $aspects = json_decode((string)($r['aspects_json'] ?? ''), true);
+                $aspects = is_array($aspects) ? $aspects : [];
+                $title = (string)($r['post_title'] ?? '');
+                $flags = [];
+                if (preg_match('/NEU!+/iu', $title)) $flags[] = 'contains_neu_marker';
+                if (preg_match('/\b(FOTELE|KLAPA|KOM)\b/u', $title)) $flags[] = 'contains_polish_words';
+                if (mb_strtoupper($title,'UTF-8') === $title && preg_match('/[A-ZĄĆĘŁŃÓŚŹŻ]/u',$title)) $flags[] = 'all_caps';
+                $hasPolishSpecifics = false;
+                foreach (array_keys($aspects) as $k){ if (preg_match('/stan|używany|uzywany/iu',(string)$k)) { $hasPolishSpecifics=true; break; }}
+                $wooPath = $this->product_category_path((int)$r['product_id']);
+                $ebayPath = trim((string)($r['ebay_category_path'] ?? $r['ebay_category_name'] ?? ''));
+                $suspectedWrong = str_contains(mb_strtolower($wooPath),'samoch') && preg_match('/Motorrad|Motorblöcke/iu',$ebayPath);
+                $missingDesc = trim((string)($r['de_description'] ?? '')) === '';
+                $missingSpecifics = count($aspects) < 3;
+                $hasFitment = isset($aspects['Fahrzeugmodell']) || isset($aspects['Fahrzeugmarke']) || isset($aspects['KBA-Nummer']);
+                $fitmentReady = $hasFitment && (isset($aspects['OE/OEM Referenznummer']) || isset($aspects['Herstellernummer']));
+                $rows[] = [ 'product_id'=>(int)$r['product_id'],'SKU'=>(string)($r['sku']??''),'offer_id'=>(string)($r['offer_id']??''),'listing_id'=>(string)($r['listing_id']??''),'public_url'=>(string)($r['public_url']??''),'woo_category'=>$wooPath,'ebay_category_id'=>(string)($r['ebay_category_id']??''),'ebay_category_path'=>$ebayPath,'title'=>$title,'title_quality_flags'=>$flags,'image_count'=>0,'has_video'=>false,'item_specifics_count'=>count($aspects),'has_polish_item_specifics'=>$hasPolishSpecifics,'has_fitment'=>$hasFitment,'shipping_policy_id'=>(string)($r['shipping_policy_id']??''),'shipping_group'=>(string)($r['shipping_group']??''),'description_present'=>!$missingDesc,'readiness_status'=>(string)($r['sync_status']??''),'issues'=>array_values(array_filter([ $suspectedWrong?'suspected_wrong_ebay_category':'', $missingDesc?'description_missing':'', $missingSpecifics?'missing_required_specifics':'', !$hasFitment?'missing_fitment':'' ])),'category_validation'=>['suspected_wrong_ebay_category'=>$suspectedWrong,'woo_category_path'=>$wooPath,'current_ebay_category'=>$ebayPath,'suggested_ebay_category'=>$suspectedWrong ? 'Autoersatz- & -reparaturteile' : '','confidence'=>$suspectedWrong?0.72:0.0,'reason'=>$suspectedWrong?'Woo category looks automotive but eBay path points to Motorrad/Motorblöcke':''],'specifics_audit'=>['missing_required_specifics'=>$missingSpecifics ? ['Hersteller','Herstellernummer','Produktart'] : [],'missing_recommended_specifics'=>['Einbauposition','Fahrzeugmarke','Fahrzeugmodell','Motorcode/Getriebecode'],'polish_specifics_found'=>$hasPolishSpecifics ? ['Stan/Używany'] : [],'suggested_specifics'=>['Zustand'=>'Gebraucht']],'title_suggestions'=>['suggested_title'=>$this->suggest_used_title($title,$aspects)],'fitment_status'=>['category_support_unknown'=>true,'fitment_ready'=>$fitmentReady,'requires_manual_review'=>!$fitmentReady],];
+                $summary['scanned']++;
+                if($suspectedWrong)$summary['suspected_wrong_ebay_category']++; if(!$hasFitment)$summary['missing_fitment']++; if($missingDesc)$summary['missing_description']++; if($missingSpecifics)$summary['missing_specifics']++;
+                if($fitmentReady)$summary['fitment_analysis']['ready']++; else $summary['fitment_analysis']['needs_manual_review']++;
+            }
+            $offset += $batchSize;
+        } while (true);
+        $summary['offers'] = $rows;
+        update_option('wei_ebay_listing_quality_audit',$summary,false);
+        $this->set_status('Listing quality audit generated: ' . wp_json_encode(['scanned'=>$summary['scanned'],'issues'=>$summary['suspected_wrong_ebay_category']+$summary['missing_fitment']+$summary['missing_description']+$summary['missing_specifics']]));
+        $this->go();
+    }
+
+    private function product_category_path(int $productId): string
+    {
+        $terms = get_the_terms($productId, 'product_cat');
+        if (!is_array($terms) || $terms === []) { return ''; }
+        $first = reset($terms);
+        return is_object($first) && isset($first->name) ? (string) $first->name : '';
+    }
+
+    private function suggest_used_title(string $title, array $aspects): string
+    {
+        $title = preg_replace('/NEU!+/iu', '', $title) ?: $title;
+        $title = preg_replace('/\b(FOTELE|KLAPA|KOM)\b/iu', '', $title) ?: $title;
+        $title = trim(preg_replace('/\s{2,}/', ' ', $title) ?: $title);
+        $oe = '';
+        foreach (['OE/OEM Referenznummer','Herstellernummer'] as $k) { if (!empty($aspects[$k])) { $v = is_array($aspects[$k]) ? (string) reset($aspects[$k]) : (string)$aspects[$k]; $oe = trim($v); if ($oe !== '') break; } }
+        if ($oe !== '' && !str_contains($title,$oe)) $title .= ' ' . $oe;
+        if (!preg_match('/\bgebraucht\b/iu', $title)) $title .= ' gebraucht';
+        return mb_substr(trim($title),0,80);
+    }
     private function go(): void
     {
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay'));
