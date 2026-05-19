@@ -431,6 +431,20 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
     </div>
 
     <div class="wei-box">
+        
+        <h2>eBay listing quality audit</h2>
+        <p class="description">Manual report only. Scans active existing eBay offers in lightweight SQL batches and stores issues/suggestions. No auto-publish or mass update.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_listing_quality_audit'); ?><input type="hidden" name="action" value="wei_generate_listing_quality_audit" /><button class="button">Generate eBay listing quality audit</button></form>
+        <?php if (!empty($listing_quality_audit)): ?>
+            <div class="wei-grid" style="margin-top:8px;">
+                <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($listing_quality_audit['generated_at'] ?? '-')); ?></strong></div>
+                <div class="wei-card"><span>Scanned offers</span><strong><?php echo esc_html((string) ($listing_quality_audit['scanned'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Wrong category suspects</span><strong><?php echo esc_html((string) ($listing_quality_audit['suspected_wrong_ebay_category'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Missing fitment</span><strong><?php echo esc_html((string) ($listing_quality_audit['missing_fitment'] ?? 0)); ?></strong></div>
+            </div>
+            <details><summary>Audit JSON preview</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($listing_quality_audit, 9000)); ?></pre></details>
+        <?php endif; ?>
+
         <h2>Shipping policy mapping report</h2>
         <p class="description">Raport jest generowany wyłącznie ręcznie przyciskiem i zapisywany jako ostatni wynik; zwykłe renderowanie panelu nie skanuje produktów.</p>
         <div class="wei-actions">
