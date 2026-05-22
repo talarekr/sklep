@@ -29,6 +29,7 @@ class AdminPage
         add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
         add_action('admin_post_wei_generate_listing_quality_audit', [$this, 'generate_listing_quality_audit']);
         add_action('admin_post_wei_condition_cleanup_single', [$this, 'condition_cleanup_single']);
+        add_action('admin_post_wei_description_condition_cleanup_single', [$this, 'description_condition_cleanup_single']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -2075,6 +2076,7 @@ class AdminPage
             'title_contains_neu_count' => 0,
             'polish_condition_aspects_count' => 0,
             'ready_for_condition_cleanup_count' => 0,
+            'description_condition_conflict_count' => 0,
         ];
 
         do {
@@ -2103,10 +2105,20 @@ class AdminPage
                 $skuFallback = trim((string) get_post_meta((int)$r['product_id'], '_wei_ebay_sku', true));
                 if ($skuFallback === '') $skuFallback = trim((string)($r['sku'] ?? ''));
                 if ($skuFallback === '') $skuFallback = 'GPSW-' . (int)$r['product_id'];
-                $issues = array_values(array_filter([ $suspectedWrong?'suspected_wrong_ebay_category':'', $missingDesc?'description_missing':'', $missingSpecifics?'missing_required_specifics':'', !$hasFitment?'missing_fitment':'', $conditionAspectsFound!==[]?'condition_conflict':'' ]));
+                $descriptionText = (string) ($r['de_description'] ?? '');
+                $descriptionContainsNewLikeWords = (bool) preg_match('/\b(neu|neue|neuer|neues|new|nowy|nowa|nowe|fabrikneu|brandneu)\b/iu', wp_strip_all_tags($descriptionText));
+                $descriptionContainsNeu = (bool) preg_match('/\b(neu|neue|neuer|neues)\b/iu', wp_strip_all_tags($descriptionText));
+                $reviewRequired = (bool) preg_match('/\b(neue?\s+version|neues?\s+modell)\b/iu', wp_strip_all_tags($descriptionText));
+                $descriptionCleanupSafe = $descriptionContainsNewLikeWords && !$reviewRequired;
+                $suggestedReplacements = [];
+                foreach (['NEUE ORIGINAL EUROPÄISCHE LAMPEN' => 'GEBRAUCHTE ORIGINALE EUROPÄISCHE LAMPEN', 'Neue Originalteile' => 'Gebrauchte Originalteile', 'NOWE ORYGINALNE' => 'GEBRAUCHTE ORIGINALE', 'NEW ORIGINAL' => 'USED ORIGINAL'] as $from => $to) {
+                    if (mb_stripos($descriptionText, $from, 0, 'UTF-8') !== false) $suggestedReplacements[] = ['from' => $from, 'to' => $to];
+                }
+                $descriptionConditionConflict = $descriptionContainsNewLikeWords;
+                $issues = array_values(array_filter([ $suspectedWrong?'suspected_wrong_ebay_category':'', $missingDesc?'description_missing':'', $missingSpecifics?'missing_required_specifics':'', !$hasFitment?'missing_fitment':'', $conditionAspectsFound!==[]?'condition_conflict':'', $descriptionConditionConflict?'description_condition_conflict':'' ]));
                 $mainCondition = 'USED_EXCELLENT';
                 $cleanupNeeded = $conditionAspectsFound!==[] || in_array('contains_neu',$flags,true) || preg_match('/\bneu|nowy|new\b/iu',(string)($r['de_description'] ?? ''));
-                $rows[] = [ 'product_id'=>(int)$r['product_id'],'SKU'=>$skuFallback,'offer_id'=>(string)($r['offer_id']??''),'listing_id'=>(string)($r['listing_id']??''),'public_url'=>(string)($r['public_url']??''),'woo_category'=>$wooPath,'ebay_category_id'=>(string)($r['ebay_category_id']??''),'ebay_category_path'=>$ebayPath,'title'=>$title,'title_quality_flags'=>$flags,'title_condition_flags'=>$flags,'image_count'=>'unknown_not_checked','image_count_source'=>'unknown','has_video'=>false,'item_specifics_count'=>count($aspects),'item_specifics_count_state'=>'missing_in_local_meta','item_specifics_count_source'=>'local_meta','has_polish_item_specifics'=>$hasPolishSpecifics,'has_fitment'=>$hasFitment,'shipping_policy_id'=>(string)($r['shipping_policy_id']??''),'shipping_group'=>(string)($r['shipping_group']??''),'description_present'=>!$missingDesc,'readiness_status'=>(string)($r['sync_status']??''),'issues'=>$issues,'main_condition'=>$mainCondition,'condition_aspects_found'=>$conditionAspectsFound,'cleanup_needed'=>$cleanupNeeded,'cleanup_safe'=>(bool)((string)($r['offer_id']??'')!=='' && (string)($r['listing_id']??'')!==''),'field_sources'=>['sku'=>'local_meta','ebay_category_id'=>((string)($r['ebay_category_id']??'')!==''?'local_meta':'unknown'),'item_specifics'=>'local_meta'],'category_validation'=>['suspected_wrong_ebay_category'=>$suspectedWrong,'woo_category_path'=>$wooPath,'current_ebay_category'=>$ebayPath,'suggested_ebay_category'=>$suspectedWrong ? 'Autoersatz- & -reparaturteile' : '','confidence'=>$suspectedWrong?0.72:0.0,'reason'=>$suspectedWrong?'Woo category looks automotive but eBay path points to Motorrad/Motorblöcke':''],'specifics_audit'=>['missing_required_specifics'=>$missingSpecifics ? ['Hersteller','Herstellernummer','Produktart'] : [],'missing_recommended_specifics'=>['Einbauposition','Fahrzeugmarke','Fahrzeugmodell','Motorcode/Getriebecode'],'polish_specifics_found'=>$hasPolishSpecifics ? ['Stan/Używany'] : [],'suggested_specifics'=>['Zustand'=>'Gebraucht']],'title_suggestions'=>['suggested_title'=>$this->suggest_used_title($title,$aspects),'suggested_title_still_contains_polish'=>(bool)preg_match('/\b(FOTELE|KLAPA|KOM)\b/u',$this->suggest_used_title($title,$aspects)),'title_suggestion_low_confidence'=>false],'fitment_status'=>['category_support_unknown'=>true,'fitment_ready'=>$fitmentReady,'requires_manual_review'=>!$fitmentReady],];
+                $rows[] = [ 'product_id'=>(int)$r['product_id'],'SKU'=>$skuFallback,'offer_id'=>(string)($r['offer_id']??''),'listing_id'=>(string)($r['listing_id']??''),'public_url'=>(string)($r['public_url']??''),'woo_category'=>$wooPath,'ebay_category_id'=>(string)($r['ebay_category_id']??''),'ebay_category_path'=>$ebayPath,'title'=>$title,'title_quality_flags'=>$flags,'title_condition_flags'=>$flags,'image_count'=>'unknown_not_checked','image_count_source'=>'unknown','has_video'=>false,'item_specifics_count'=>count($aspects),'item_specifics_count_state'=>'missing_in_local_meta','item_specifics_count_source'=>'local_meta','has_polish_item_specifics'=>$hasPolishSpecifics,'has_fitment'=>$hasFitment,'shipping_policy_id'=>(string)($r['shipping_policy_id']??''),'shipping_group'=>(string)($r['shipping_group']??''),'description_present'=>!$missingDesc,'readiness_status'=>(string)($r['sync_status']??''),'issues'=>$issues,'main_condition'=>$mainCondition,'condition_aspects_found'=>$conditionAspectsFound,'cleanup_needed'=>$cleanupNeeded,'cleanup_safe'=>(bool)((string)($r['offer_id']??'')!=='' && (string)($r['listing_id']??'')!==''),'description_contains_neu'=>$descriptionContainsNeu,'description_condition_conflict'=>$descriptionConditionConflict,'description_contains_new_like_words'=>$descriptionContainsNewLikeWords,'description_cleanup_safe'=>$descriptionCleanupSafe,'review_required'=>$reviewRequired,'confidence'=>$descriptionContainsNewLikeWords ? ($reviewRequired ? 0.55 : 0.96) : 0.0,'suggested_replacements'=>$suggestedReplacements,'suggested_description_snippet'=>'Gebrauchtes Originalteil. Zustand siehe Fotos. Funktionsfähig, sofern im Angebot angegeben. Bitte Teilenummer und Kompatibilität vor dem Kauf prüfen.','field_sources'=>['sku'=>'local_meta','ebay_category_id'=>((string)($r['ebay_category_id']??'')!==''?'local_meta':'unknown'),'item_specifics'=>'local_meta'],'category_validation'=>['suspected_wrong_ebay_category'=>$suspectedWrong,'woo_category_path'=>$wooPath,'current_ebay_category'=>$ebayPath,'suggested_ebay_category'=>$suspectedWrong ? 'Autoersatz- & -reparaturteile' : '','confidence'=>$suspectedWrong?0.72:0.0,'reason'=>$suspectedWrong?'Woo category looks automotive but eBay path points to Motorrad/Motorblöcke':''],'specifics_audit'=>['missing_required_specifics'=>$missingSpecifics ? ['Hersteller','Herstellernummer','Produktart'] : [],'missing_recommended_specifics'=>['Einbauposition','Fahrzeugmarke','Fahrzeugmodell','Motorcode/Getriebecode'],'polish_specifics_found'=>$hasPolishSpecifics ? ['Stan/Używany'] : [],'suggested_specifics'=>['Zustand'=>'Gebraucht']],'title_suggestions'=>['suggested_title'=>$this->suggest_used_title($title,$aspects),'suggested_title_still_contains_polish'=>(bool)preg_match('/\b(FOTELE|KLAPA|KOM)\b/u',$this->suggest_used_title($title,$aspects)),'title_suggestion_low_confidence'=>false],'fitment_status'=>['category_support_unknown'=>true,'fitment_ready'=>$fitmentReady,'requires_manual_review'=>!$fitmentReady],];
                 $summary['scanned']++;
                 if($suspectedWrong)$summary['suspected_wrong_ebay_category']++; if(!$hasFitment)$summary['missing_fitment']++; if($missingDesc)$summary['missing_description']++; if($missingSpecifics)$summary['missing_specifics']++;
                 if ($conditionAspectsFound !== []) $summary['custom_stan_aspect_count']++;
@@ -2114,6 +2126,7 @@ class AdminPage
                 if ($hasPolishSpecifics) $summary['polish_condition_aspects_count']++;
                 if (!empty($cleanupNeeded)) $summary['condition_conflict_count']++;
                 if (!empty($cleanupNeeded) && !empty($r['offer_id']) && !empty($r['listing_id'])) $summary['ready_for_condition_cleanup_count']++;
+                if ($descriptionConditionConflict) $summary['description_condition_conflict_count']++;
                 if($fitmentReady)$summary['fitment_analysis']['ready']++; else $summary['fitment_analysis']['needs_manual_review']++;
             }
             $offset += $batchSize;
@@ -2131,6 +2144,16 @@ class AdminPage
         $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
         $res = $this->adapter->clean_condition_aspects_single($input);
         $this->set_status('Single condition cleanup: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+    public function description_condition_cleanup_single(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_description_condition_cleanup_single');
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $res = $this->adapter->clean_description_condition_single($input);
+        $this->set_status('Single description condition cleanup: ' . wp_json_encode($res));
         $this->go();
     }
 
