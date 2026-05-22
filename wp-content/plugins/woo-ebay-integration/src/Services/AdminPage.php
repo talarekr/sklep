@@ -28,6 +28,7 @@ class AdminPage
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
         add_action('admin_post_wei_generate_listing_quality_audit', [$this, 'generate_listing_quality_audit']);
+        add_action('admin_post_wei_condition_cleanup_single', [$this, 'condition_cleanup_single']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -2068,6 +2069,12 @@ class AdminPage
             'offers' => [],
             'fitment_analysis' => ['ready' => 0, 'needs_manual_review' => 0],
             'shipping_policy_audit' => ['policy_30' => 0, 'policy_50' => 0, 'policy_100' => 0, 'other' => 0],
+            'condition_conflicts' => [],
+            'condition_conflict_count' => 0,
+            'custom_stan_aspect_count' => 0,
+            'title_contains_neu_count' => 0,
+            'polish_condition_aspects_count' => 0,
+            'ready_for_condition_cleanup_count' => 0,
         ];
 
         do {
@@ -2079,11 +2086,13 @@ class AdminPage
                 $aspects = is_array($aspects) ? $aspects : [];
                 $title = (string)($r['post_title'] ?? '');
                 $flags = [];
-                if (preg_match('/NEU!+/iu', $title)) $flags[] = 'contains_neu_marker';
+                if (preg_match('/\bneu!?+|new|nowy|nowa|nowe\b/iu', $title)) $flags[] = 'contains_neu';
                 if (preg_match('/\b(FOTELE|KLAPA|KOM)\b/u', $title)) $flags[] = 'contains_polish_words';
                 if (mb_strtoupper($title,'UTF-8') === $title && preg_match('/[A-ZĄĆĘŁŃÓŚŹŻ]/u',$title)) $flags[] = 'all_caps';
+                if (preg_match('/\bnowy|nowa|nowe\b/iu', $title)) $flags[] = 'contains_nowylike';
                 $hasPolishSpecifics = false;
-                foreach (array_keys($aspects) as $k){ if (preg_match('/stan|używany|uzywany/iu',(string)$k)) { $hasPolishSpecifics=true; break; }}
+                $conditionAspectsFound = [];
+                foreach ($aspects as $k => $vals){ if (preg_match('/stan|używany|uzywany|nowy|nowa|nowe/iu',(string)$k)) { $hasPolishSpecifics=true; $conditionAspectsFound[]=(string)$k; } foreach ((array)$vals as $v){ if (preg_match('/\bnowy|nowa|nowe|neu|new\b/iu',(string)$v)) { $conditionAspectsFound[]=(string)$k . ':' . (string)$v; }}}
                 $wooPath = $this->product_category_path((int)$r['product_id']);
                 $ebayPath = trim((string)($r['ebay_category_path'] ?? $r['ebay_category_name'] ?? ''));
                 $suspectedWrong = str_contains(mb_strtolower($wooPath),'samoch') && preg_match('/Motorrad|Motorblöcke/iu',$ebayPath);
@@ -2091,9 +2100,20 @@ class AdminPage
                 $missingSpecifics = count($aspects) < 3;
                 $hasFitment = isset($aspects['Fahrzeugmodell']) || isset($aspects['Fahrzeugmarke']) || isset($aspects['KBA-Nummer']);
                 $fitmentReady = $hasFitment && (isset($aspects['OE/OEM Referenznummer']) || isset($aspects['Herstellernummer']));
-                $rows[] = [ 'product_id'=>(int)$r['product_id'],'SKU'=>(string)($r['sku']??''),'offer_id'=>(string)($r['offer_id']??''),'listing_id'=>(string)($r['listing_id']??''),'public_url'=>(string)($r['public_url']??''),'woo_category'=>$wooPath,'ebay_category_id'=>(string)($r['ebay_category_id']??''),'ebay_category_path'=>$ebayPath,'title'=>$title,'title_quality_flags'=>$flags,'image_count'=>0,'has_video'=>false,'item_specifics_count'=>count($aspects),'has_polish_item_specifics'=>$hasPolishSpecifics,'has_fitment'=>$hasFitment,'shipping_policy_id'=>(string)($r['shipping_policy_id']??''),'shipping_group'=>(string)($r['shipping_group']??''),'description_present'=>!$missingDesc,'readiness_status'=>(string)($r['sync_status']??''),'issues'=>array_values(array_filter([ $suspectedWrong?'suspected_wrong_ebay_category':'', $missingDesc?'description_missing':'', $missingSpecifics?'missing_required_specifics':'', !$hasFitment?'missing_fitment':'' ])),'category_validation'=>['suspected_wrong_ebay_category'=>$suspectedWrong,'woo_category_path'=>$wooPath,'current_ebay_category'=>$ebayPath,'suggested_ebay_category'=>$suspectedWrong ? 'Autoersatz- & -reparaturteile' : '','confidence'=>$suspectedWrong?0.72:0.0,'reason'=>$suspectedWrong?'Woo category looks automotive but eBay path points to Motorrad/Motorblöcke':''],'specifics_audit'=>['missing_required_specifics'=>$missingSpecifics ? ['Hersteller','Herstellernummer','Produktart'] : [],'missing_recommended_specifics'=>['Einbauposition','Fahrzeugmarke','Fahrzeugmodell','Motorcode/Getriebecode'],'polish_specifics_found'=>$hasPolishSpecifics ? ['Stan/Używany'] : [],'suggested_specifics'=>['Zustand'=>'Gebraucht']],'title_suggestions'=>['suggested_title'=>$this->suggest_used_title($title,$aspects)],'fitment_status'=>['category_support_unknown'=>true,'fitment_ready'=>$fitmentReady,'requires_manual_review'=>!$fitmentReady],];
+                $skuFallback = trim((string) get_post_meta((int)$r['product_id'], '_wei_ebay_sku', true));
+                if ($skuFallback === '') $skuFallback = trim((string)($r['sku'] ?? ''));
+                if ($skuFallback === '') $skuFallback = 'GPSW-' . (int)$r['product_id'];
+                $issues = array_values(array_filter([ $suspectedWrong?'suspected_wrong_ebay_category':'', $missingDesc?'description_missing':'', $missingSpecifics?'missing_required_specifics':'', !$hasFitment?'missing_fitment':'', $conditionAspectsFound!==[]?'condition_conflict':'' ]));
+                $mainCondition = 'USED_EXCELLENT';
+                $cleanupNeeded = $conditionAspectsFound!==[] || in_array('contains_neu',$flags,true) || preg_match('/\bneu|nowy|new\b/iu',(string)($r['de_description'] ?? ''));
+                $rows[] = [ 'product_id'=>(int)$r['product_id'],'SKU'=>$skuFallback,'offer_id'=>(string)($r['offer_id']??''),'listing_id'=>(string)($r['listing_id']??''),'public_url'=>(string)($r['public_url']??''),'woo_category'=>$wooPath,'ebay_category_id'=>(string)($r['ebay_category_id']??''),'ebay_category_path'=>$ebayPath,'title'=>$title,'title_quality_flags'=>$flags,'title_condition_flags'=>$flags,'image_count'=>'unknown_not_checked','image_count_source'=>'unknown','has_video'=>false,'item_specifics_count'=>count($aspects),'item_specifics_count_state'=>'missing_in_local_meta','item_specifics_count_source'=>'local_meta','has_polish_item_specifics'=>$hasPolishSpecifics,'has_fitment'=>$hasFitment,'shipping_policy_id'=>(string)($r['shipping_policy_id']??''),'shipping_group'=>(string)($r['shipping_group']??''),'description_present'=>!$missingDesc,'readiness_status'=>(string)($r['sync_status']??''),'issues'=>$issues,'main_condition'=>$mainCondition,'condition_aspects_found'=>$conditionAspectsFound,'cleanup_needed'=>$cleanupNeeded,'cleanup_safe'=>(bool)((string)($r['offer_id']??'')!=='' && (string)($r['listing_id']??'')!==''),'field_sources'=>['sku'=>'local_meta','ebay_category_id'=>((string)($r['ebay_category_id']??'')!==''?'local_meta':'unknown'),'item_specifics'=>'local_meta'],'category_validation'=>['suspected_wrong_ebay_category'=>$suspectedWrong,'woo_category_path'=>$wooPath,'current_ebay_category'=>$ebayPath,'suggested_ebay_category'=>$suspectedWrong ? 'Autoersatz- & -reparaturteile' : '','confidence'=>$suspectedWrong?0.72:0.0,'reason'=>$suspectedWrong?'Woo category looks automotive but eBay path points to Motorrad/Motorblöcke':''],'specifics_audit'=>['missing_required_specifics'=>$missingSpecifics ? ['Hersteller','Herstellernummer','Produktart'] : [],'missing_recommended_specifics'=>['Einbauposition','Fahrzeugmarke','Fahrzeugmodell','Motorcode/Getriebecode'],'polish_specifics_found'=>$hasPolishSpecifics ? ['Stan/Używany'] : [],'suggested_specifics'=>['Zustand'=>'Gebraucht']],'title_suggestions'=>['suggested_title'=>$this->suggest_used_title($title,$aspects),'suggested_title_still_contains_polish'=>(bool)preg_match('/\b(FOTELE|KLAPA|KOM)\b/u',$this->suggest_used_title($title,$aspects)),'title_suggestion_low_confidence'=>false],'fitment_status'=>['category_support_unknown'=>true,'fitment_ready'=>$fitmentReady,'requires_manual_review'=>!$fitmentReady],];
                 $summary['scanned']++;
                 if($suspectedWrong)$summary['suspected_wrong_ebay_category']++; if(!$hasFitment)$summary['missing_fitment']++; if($missingDesc)$summary['missing_description']++; if($missingSpecifics)$summary['missing_specifics']++;
+                if ($conditionAspectsFound !== []) $summary['custom_stan_aspect_count']++;
+                if (in_array('contains_neu', $flags, true)) $summary['title_contains_neu_count']++;
+                if ($hasPolishSpecifics) $summary['polish_condition_aspects_count']++;
+                if (!empty($cleanupNeeded)) $summary['condition_conflict_count']++;
+                if (!empty($cleanupNeeded) && !empty($r['offer_id']) && !empty($r['listing_id'])) $summary['ready_for_condition_cleanup_count']++;
                 if($fitmentReady)$summary['fitment_analysis']['ready']++; else $summary['fitment_analysis']['needs_manual_review']++;
             }
             $offset += $batchSize;
@@ -2101,6 +2121,16 @@ class AdminPage
         $summary['offers'] = $rows;
         update_option('wei_ebay_listing_quality_audit',$summary,false);
         $this->set_status('Listing quality audit generated: ' . wp_json_encode(['scanned'=>$summary['scanned'],'issues'=>$summary['suspected_wrong_ebay_category']+$summary['missing_fitment']+$summary['missing_description']+$summary['missing_specifics']]));
+        $this->go();
+    }
+
+    public function condition_cleanup_single(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_condition_cleanup_single');
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $res = $this->adapter->clean_condition_aspects_single($input);
+        $this->set_status('Single condition cleanup: ' . wp_json_encode($res));
         $this->go();
     }
 

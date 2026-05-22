@@ -2021,6 +2021,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $required = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
         $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpn);
         $resolved = $this->apply_safe_required_aspect_repairs($resolved, $required, $product, $product_id, $categoryId, $settings, $content);
+        $cleanup = $this->cleanup_condition_aspects($resolved);
+        $resolved = $cleanup['aspects'];
+        if ($cleanup['removed'] !== []) {
+            $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', [
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'removed_aspects' => $cleanup['removed'],
+            ]);
+        }
         $missing = array_values(array_filter($required, static fn($name) => empty($resolved[$name])));
         if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
             $this->logger->info('Required aspects for category ' . $categoryId . ': ' . implode(', ', $required), [
@@ -2034,6 +2043,75 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return $resolved;
+    }
+
+    private function cleanup_condition_aspects(array $aspects): array
+    {
+        $removed = [];
+        $blockedNames = ['stan', 'stanopakowania', 'uzywany', 'nowy', 'nowa', 'nowe'];
+        foreach ($aspects as $name => $values) {
+            $normalizedName = $this->normalize_aspect_alias_name((string) $name);
+            $remove = in_array($normalizedName, $blockedNames, true);
+            $reason = $remove ? 'blocked_name' : '';
+            if (!$remove) {
+                foreach ($this->normalize_aspect_values($values) as $value) {
+                    if (preg_match('/\b(nowy|nowa|nowe|neu|new)\b/iu', (string) $value)) {
+                        $remove = true;
+                        $reason = 'blocked_value';
+                        break;
+                    }
+                }
+            }
+            if ($remove) {
+                $removed[] = ['name' => (string) $name, 'reason' => $reason, 'values' => $this->normalize_aspect_values($values)];
+                unset($aspects[$name]);
+            }
+        }
+
+        return ['aspects' => $aspects, 'removed' => $removed];
+    }
+
+    public function clean_condition_aspects_single(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_CONDITION_CLEANUP_SINGLE_START', ['input' => $identifier]);
+        $productId = ctype_digit($identifier) ? (int) $identifier : 0;
+        if ($productId <= 0) {
+            $found = wc_get_products(['limit' => 1, 'sku' => $identifier, 'status' => ['publish', 'draft', 'private']]);
+            $productId = !empty($found[0]) ? (int) $found[0]->get_id() : 0;
+        }
+        if ($productId <= 0) {
+            $this->logger->error('EBAY_CONDITION_CLEANUP_FAILED', ['input' => $identifier, 'reason' => 'product_not_found']);
+            return ['result' => 'error', 'error' => 'product_not_found'];
+        }
+        $product = wc_get_product($productId);
+        if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+        $settings = $this->settings();
+        $sku = (string) $this->resolve_ebay_sku($product, $productId, null, $settings)['sku'];
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($offerId === '' || $listingId === '' || $sku === '') return ['result' => 'error', 'error' => 'missing_offer_listing_sku'];
+        $inventory = $this->client->get_inventory_item($sku, ['stage' => 'condition_cleanup_single', 'product_id' => $productId, 'sku' => $sku]);
+        if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
+        $beforeAspects = (array) ($inventory['product']['aspects'] ?? []);
+        $cleanup = $this->cleanup_condition_aspects($beforeAspects);
+        $changed = $cleanup['removed'] !== [] || (string) ($inventory['condition'] ?? '') !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $inventory['product']['aspects'] = $cleanup['aspects'];
+        $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', ['product_id' => $productId, 'sku' => $sku, 'removed_aspects' => $cleanup['removed']]);
+        if ($changed) {
+            $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'condition_cleanup_single_update', 'product_id' => $productId, 'sku' => $sku]);
+            if (is_wp_error($update)) {
+                $this->logger->error('EBAY_CONDITION_CLEANUP_FAILED', ['product_id' => $productId, 'sku' => $sku, 'error' => $update->get_error_message()]);
+                return ['result' => 'error', 'error' => $update->get_error_message()];
+            }
+            $this->logger->info('EBAY_CONDITION_CLEANUP_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+        } else {
+            $this->logger->info('EBAY_CONDITION_CLEANUP_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+        }
+        $this->logger->info('EBAY_CONDITION_CLEANUP_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'changed' => $changed]);
+        return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'removed_aspects' => $cleanup['removed']];
     }
 
     private function apply_safe_required_aspect_repairs(array $aspects, array $requiredAspects, $product, int $product_id, string $categoryId, array $settings, array $content = []): array

@@ -435,12 +435,24 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
         <h2>eBay listing quality audit</h2>
         <p class="description">Manual report only. Scans active existing eBay offers in lightweight SQL batches and stores issues/suggestions. No auto-publish or mass update.</p>
         <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_listing_quality_audit'); ?><input type="hidden" name="action" value="wei_generate_listing_quality_audit" /><button class="button">Generate eBay listing quality audit</button></form>
+        <h3>Clean condition/aspects for one eBay listing</h3>
+        <p class="description">Safe single-listing cleanup: removes only invalid condition-related custom aspects and keeps main condition as used. No createOffer/publishOffer.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_condition_cleanup_single'); ?>
+            <input type="hidden" name="action" value="wei_condition_cleanup_single" />
+            <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
+            <button class="button button-secondary">Clean condition/aspects for one eBay listing</button>
+        </form>
         <?php if (!empty($listing_quality_audit)): ?>
             <div class="wei-grid" style="margin-top:8px;">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($listing_quality_audit['generated_at'] ?? '-')); ?></strong></div>
                 <div class="wei-card"><span>Scanned offers</span><strong><?php echo esc_html((string) ($listing_quality_audit['scanned'] ?? 0)); ?></strong></div>
                 <div class="wei-card"><span>Wrong category suspects</span><strong><?php echo esc_html((string) ($listing_quality_audit['suspected_wrong_ebay_category'] ?? 0)); ?></strong></div>
                 <div class="wei-card"><span>Missing fitment</span><strong><?php echo esc_html((string) ($listing_quality_audit['missing_fitment'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Condition conflicts</span><strong><?php echo esc_html((string) ($listing_quality_audit['condition_conflict_count'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Custom Stan aspects</span><strong><?php echo esc_html((string) ($listing_quality_audit['custom_stan_aspect_count'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Title contains NEU/NOWY/NEW</span><strong><?php echo esc_html((string) ($listing_quality_audit['title_contains_neu_count'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Ready for condition cleanup</span><strong><?php echo esc_html((string) ($listing_quality_audit['ready_for_condition_cleanup_count'] ?? 0)); ?></strong></div>
             </div>
             <details><summary>Audit JSON preview</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($listing_quality_audit, 9000)); ?></pre></details>
         <?php endif; ?>
