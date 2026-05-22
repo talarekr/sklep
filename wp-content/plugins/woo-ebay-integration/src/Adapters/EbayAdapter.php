@@ -1521,12 +1521,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'target_language' => 'de',
                 'source_title' => $sourceTitle,
                 'source_description' => $sourceDescription,
-                'mpn' => $this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku()),
+                'mpn' => (string) ($this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku())['value'] ?? ''),
                 'manufacturer' => $this->resolve_manufacturer_aspect_value($product, $product_id, '', $settings),
                 'title_limit' => 80,
             ]);
 
-            $mpn = $this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku());
+            $mpn = (string) ($this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku())['value'] ?? '');
             $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, '', $settings);
             $title = $this->sanitize_ebay_de_title((string) ($translated['title_de'] ?? ''), $mpn, $manufacturer);
             $description = trim(wp_kses_post((string) ($translated['description_de'] ?? '')));
@@ -1979,8 +1979,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $aspects = [];
 
         $mpn = $this->resolve_mpn_aspect_value($product, $product_id, $sku, $content);
-        if ($mpn !== '') {
-            $aspects['MPN'] = [$mpn];
+        $mpnValue = (string) ($mpn['value'] ?? '');
+        if ($mpnValue !== '') {
+            $aspects['MPN'] = [$mpnValue];
         }
 
         if (method_exists($product, 'get_attributes')) {
@@ -2320,7 +2321,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         unset($aspects['Kategorie'], $aspects['Stan'], $aspects['Stan opakowania']);
         $content = $this->resolve_german_content($product, $productId, $this->marketplace_id(), $settings);
         $manufacturer = $this->resolve_manufacturer_aspect_value($product, $productId, '', $settings, $content);
-        $mpn = $this->resolve_mpn_aspect_value($product, $productId, $sku, $content);
+        $mpnResolved = $this->resolve_mpn_aspect_value($product, $productId, $sku, $content);
+        $mpn = (string) ($mpnResolved['value'] ?? '');
         if ($manufacturer !== '') $aspects['Hersteller'] = [$manufacturer];
         if ($mpn !== '') {
             $aspects['MPN'] = [$mpn];
@@ -2333,6 +2335,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         return [
             'aspects' => $aspects,
+            'field_sources' => ['manufacturer' => $manufacturer !== '' ? 'meta_or_taxonomy' : 'none', 'part_number' => (string) ($mpnResolved['source'] ?? 'none')],
+            'rejected_tokens' => (array) ($mpnResolved['rejected_tokens'] ?? []),
+            'selected_part_number' => $mpn,
+            'confidence' => (float) ($mpnResolved['confidence'] ?? 0.0),
+            'skipped_weak_part_number' => (bool) ($mpnResolved['skipped_weak_part_number'] ?? false),
             'condition_description_supported' => true,
             'condition_description' => 'Gebrauchtes Originalteil. Zustand siehe Fotos. Bitte Teilenummer und Kompatibilität vor dem Kauf prüfen.',
         ];
@@ -2565,12 +2572,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return '';
     }
 
-    private function resolve_mpn_aspect_value($product, int $product_id, string $sku, array $content = []): string
+    private function resolve_mpn_aspect_value($product, int $product_id, string $sku, array $content = []): array
     {
         foreach (['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number', '_catalog_number', 'catalog_number'] as $metaKey) {
             $value = $this->normalize_part_number_value((string) get_post_meta($product_id, $metaKey, true));
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'meta', 'rejected_tokens' => [], 'confidence' => 0.98, 'skipped_weak_part_number' => false];
             }
         }
 
@@ -2580,10 +2587,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
             $value = $this->normalize_part_number_value((string) $product->get_attribute($attributeName));
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'meta', 'rejected_tokens' => [], 'confidence' => 0.95, 'skipped_weak_part_number' => false];
             }
         }
 
+        $rejectedTokens = [];
         $texts = [];
         if (method_exists($product, 'get_name')) {
             $texts[] = (string) $product->get_name();
@@ -2600,20 +2608,20 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
         foreach ($texts as $text) {
-            $value = $this->extract_part_number_from_text($text);
+            $value = $this->extract_part_number_from_text($text, $rejectedTokens);
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'title_parse', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.72, 'skipped_weak_part_number' => !empty($rejectedTokens)];
             }
         }
 
         if (method_exists($product, 'get_sku')) {
             $wooSku = $this->normalize_part_number_value((string) $product->get_sku());
             if ($wooSku !== '' && !$this->is_generated_ebay_sku($wooSku)) {
-                return $wooSku;
+                return ['value' => $wooSku, 'source' => 'inventory_cache', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.86, 'skipped_weak_part_number' => !empty($rejectedTokens)];
             }
         }
 
-        return '';
+        return ['value' => '', 'source' => 'none', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.0, 'skipped_weak_part_number' => !empty($rejectedTokens)];
     }
 
     private function apply_part_number_aspect_aliases(array $aspects, array $requiredAspects, string $resolvedPartNumber): array
@@ -2680,18 +2688,37 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $value;
     }
 
-    private function extract_part_number_from_text(string $text): string
+    private function extract_part_number_from_text(string $text, array &$rejectedTokens = []): string
     {
         $text = strtoupper(wp_strip_all_tags(html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-        if (preg_match_all('/\b(?:[A-Z0-9]{2,4}\s*){2,5}[A-Z]{0,3}\b/u', $text, $matches)) {
+        if (preg_match_all('/\b[A-Z0-9\-]{3,20}\b/u', $text, $matches)) {
             foreach ((array) ($matches[0] ?? []) as $match) {
                 $value = $this->normalize_part_number_value((string) $match);
-                if ($value !== '' && preg_match('/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{7,18}$/', $value)) {
+                if ($value === '') {
+                    continue;
+                }
+                if ($this->is_weak_title_parse_part_number($value)) {
+                    $rejectedTokens[] = $value;
+                    continue;
+                }
+                if (preg_match('/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{5,20}$/', $value)) {
                     return $value;
                 }
             }
         }
         return '';
+    }
+
+    private function is_weak_title_parse_part_number(string $value): bool
+    {
+        if (strlen($value) < 5) return true;
+        if (!preg_match('/[A-Z]/', $value) || !preg_match('/\d/', $value)) return true;
+        if (preg_match('/^(CYR|TCB|OCK|DNF|DFH|DXR|CDA|CCZ|BLS)$/', $value)) return true;
+        if (preg_match('/^(8W|8P|8R|B6|B7|B8|W177|X204|F3|80A)$/', $value)) return true;
+        if (preg_match('/^(19\d{2}|20[0-2]\d)$/', $value)) return true;
+        if (preg_match('/^\d{2,4}PS$/', $value)) return true;
+        if (preg_match('/^\d[.,]\d$/', $value)) return true;
+        return false;
     }
 
     private function is_generated_ebay_sku(string $value): bool
