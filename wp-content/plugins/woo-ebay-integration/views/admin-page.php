@@ -416,6 +416,7 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                     <tr><th>Translation provider</th><td><select name="translation_provider"><option value="disabled" <?php selected($provider, 'disabled'); ?>>disabled</option><option value="google_cloud_translate" <?php selected($provider, 'google_cloud_translate'); ?>>Google Cloud Translate</option></select> <span class="description"><?php echo esc_html($translationLabel); ?></span></td></tr>
                     <tr><th>Translation API key</th><td><input class="regular-text" type="password" name="translation_api_key" placeholder="<?php echo esc_attr($maskSecret((string) $setting('translation_api_key', ''))); ?>" /></td></tr>
                     <tr><th>German content automation</th><td><label><input type="checkbox" name="auto_generate_german_content_preflight" value="1" <?php checked(!empty($s['auto_generate_german_content_preflight'])); ?> /> generate during preflight</label><br><label><input type="checkbox" name="regenerate_german_content_on_hash_change" value="1" <?php checked(!empty($s['regenerate_german_content_on_hash_change'])); ?> /> regenerate on hash change</label></td></tr>
+                    <tr><th>eBay.de description template on normal export</th><td><label><input type="checkbox" name="enable_ebay_de_description_template" value="1" <?php checked(!empty($s['enable_ebay_de_description_template'])); ?> /> enabled (default: disabled)</label></td></tr>
                     <tr><th>Inventory location details</th><td><input name="inventory_location_name" placeholder="name" value="<?php echo esc_attr((string) $setting('inventory_location_name', 'gpswiss-pl')); ?>" /> <input name="inventory_location_country" placeholder="country" value="<?php echo esc_attr((string) $setting('inventory_location_country', 'PL')); ?>" /> <input name="inventory_location_postal_code" placeholder="postal" value="<?php echo esc_attr((string) $setting('inventory_location_postal_code', '08-460')); ?>" /> <input name="inventory_location_city" placeholder="city" value="<?php echo esc_attr((string) $setting('inventory_location_city', 'Sobolew')); ?>" /> <input class="regular-text" name="inventory_location_address_line_1" placeholder="address" value="<?php echo esc_attr((string) $setting('inventory_location_address_line_1', '')); ?>" /></td></tr>
                     <tr><th>SKU prefix</th><td><input name="ebay_sku_prefix" value="<?php echo esc_attr((string) $setting('ebay_sku_prefix', 'GPSW')); ?>" /> <span class="description">eBay uses plugin-owned <code>_wei_ebay_sku</code>; Woo SKU is not overwritten.</span></td></tr>
                     <tr><th>Auto category threshold</th><td><input type="number" step="0.0001" min="0" max="1" name="auto_category_confidence_threshold" value="<?php echo esc_attr((string) $setting('auto_category_confidence_threshold', \WEI\Services\CategoryMappingSafety::DEFAULT_AUTO_CONFIDENCE_THRESHOLD)); ?>" /></td></tr>
@@ -460,6 +461,30 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
             <button class="button button-secondary">Update basic item specifics for one eBay listing</button>
         </form>
+        <h3>Preview eBay.de description template</h3>
+        <p class="description">Generates HTML template preview and raw HTML only. This action does not send anything to eBay.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_description_template_preview'); ?>
+            <input type="hidden" name="action" value="wei_description_template_preview" />
+            <input type="text" name="product_or_sku" placeholder="Product ID or SKU (test: 6084 / GPSW-6084)" required />
+            <button class="button button-secondary">Preview eBay.de description template</button>
+        </form>
+        <h3>Update eBay.de description template for one listing</h3>
+        <p class="description">Safe single-listing update: changes only inventory <code>product.description</code> and runs safe updateOffer refresh. No createOffer/publishOffer and no title/price/stock/shipping/category/aspects changes.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_description_template_single'); ?>
+            <input type="hidden" name="action" value="wei_description_template_single" />
+            <input type="text" name="product_or_sku" placeholder="Product ID or SKU (test: 6084 / GPSW-6084)" required />
+            <button class="button button-secondary">Update eBay.de description template for one listing</button>
+        </form>
+        <?php $descPreview = get_option('wei_ebay_description_template_preview', []); if (is_array($descPreview) && !empty($descPreview['html'])): ?>
+            <details>
+                <summary>Latest eBay.de description template preview (<?php echo esc_html((string) ($descPreview['product_id'] ?? '')); ?> / <?php echo esc_html((string) ($descPreview['sku'] ?? '')); ?>)</summary>
+                <div class="wei-scroll" style="background:#fff;padding:12px;border:1px solid #ddd;"><?php echo wp_kses_post((string) $descPreview['html']); ?></div>
+                <h4>Raw HTML</h4>
+                <pre class="wei-scroll"><?php echo esc_html((string) $descPreview['html']); ?></pre>
+            </details>
+        <?php endif; ?>
         <?php if (!empty($listing_quality_audit)): ?>
             <div class="wei-grid" style="margin-top:8px;">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($listing_quality_audit['generated_at'] ?? '-')); ?></strong></div>
