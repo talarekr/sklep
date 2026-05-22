@@ -2256,6 +2256,28 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $resolved;
     }
 
+
+    public function basic_item_specifics_build_queue_light_eligibility(array $candidate): array
+    {
+        $productId = (int) ($candidate['product_id'] ?? 0);
+        $sku = trim((string) ($candidate['sku'] ?? ''));
+        $offerId = trim((string) ($candidate['offer_id'] ?? ''));
+        $listingId = trim((string) ($candidate['listing_id'] ?? ''));
+        $manufacturer = trim((string) ($candidate['manufacturer'] ?? ''));
+        $mpn = trim((string) ($candidate['mpn'] ?? ''));
+        if ($productId <= 0) return ['eligible' => false, 'reason' => 'invalid_product_id'];
+        if ($offerId === '') return ['eligible' => false, 'reason' => 'missing_offer'];
+        if ($listingId === '') return ['eligible' => false, 'reason' => 'missing_listing'];
+        if ($sku === '') return ['eligible' => false, 'reason' => 'missing_sku'];
+        if ($manufacturer === '' || $mpn === '') return ['eligible' => false, 'reason' => 'missing_basic_data'];
+        return ['eligible' => true, 'reason' => 'ok', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId];
+    }
+
+    public function basic_item_specifics_process_one_product_eligibility(int $productId): array
+    {
+        return $this->basic_item_specifics_queue_eligibility($productId);
+    }
+
     public function basic_item_specifics_queue_eligibility(int $productId): array
     {
         if ($productId <= 0) return ['eligible' => false, 'reason' => 'invalid_product_id'];
