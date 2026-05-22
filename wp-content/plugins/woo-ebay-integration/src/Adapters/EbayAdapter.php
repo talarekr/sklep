@@ -2256,6 +2256,42 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $resolved;
     }
 
+    public function basic_item_specifics_queue_eligibility(int $productId): array
+    {
+        if ($productId <= 0) return ['eligible' => false, 'reason' => 'invalid_product_id'];
+        $product = wc_get_product($productId);
+        if (!$product) return ['eligible' => false, 'reason' => 'product_not_found'];
+        $settings = $this->settings();
+        $sku = (string) $this->resolve_ebay_sku($product, $productId, null, $settings)['sku'];
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($sku === '' || $offerId === '' || $listingId === '') {
+            return ['eligible' => false, 'reason' => 'missing_offer_listing_sku'];
+        }
+        $resolved = $this->resolve_basic_item_specifics($product, $productId, $sku, $settings, []);
+        $aspects = is_array($resolved['aspects'] ?? null) ? $resolved['aspects'] : [];
+        $hasHersteller = !empty($aspects['Hersteller'][0] ?? '');
+        $hasMpn = !empty($aspects['MPN'][0] ?? '');
+        $hasHerstellernummer = !empty($aspects['Herstellernummer'][0] ?? '');
+        if (!$hasHersteller || (!$hasMpn && !$hasHerstellernummer)) {
+            return ['eligible' => false, 'reason' => 'missing_required_basic_specifics', 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId];
+        }
+        $reviewRequired = false;
+        return [
+            'eligible' => !$reviewRequired,
+            'reason' => $reviewRequired ? 'review_required' : 'ok',
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+            'condition' => EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM,
+            'has_hersteller' => $hasHersteller,
+            'has_mpn' => $hasMpn,
+            'has_herstellernummer' => $hasHerstellernummer,
+            'review_required' => $reviewRequired,
+            'critical_conflicts' => [],
+        ];
+    }
+
     private function resolve_basic_item_specifics($product, int $productId, string $sku, array $settings, array $existingAspects): array
     {
         $aspects = $this->cleanup_condition_aspects($existingAspects)['aspects'];
