@@ -2101,6 +2101,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $descriptionContainsNeu = (bool) $descriptionAudit['description_contains_neu'];
         $descriptionConditionConflict = (bool) $descriptionAudit['description_contains_new_like_words'] && (string) ($inventory['condition'] ?? '') === EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $changed = $cleanup['removed'] !== [] || (string) ($inventory['condition'] ?? '') !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $beforeCondition = (string) ($inventory['condition'] ?? '');
+        $beforeCondition = (string) ($inventory['condition'] ?? '');
         $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['product']['aspects'] = $cleanup['aspects'];
         $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', [
@@ -2142,6 +2144,80 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'confidence' => (float) $descriptionAudit['confidence'],
             'suggested_replacements' => $descriptionAudit['suggested_replacements'],
             'suggested_description_snippet' => (string) $descriptionAudit['suggested_description_snippet'],
+        ];
+    }
+
+    public function update_basic_item_specifics_single(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_BASIC_SPECIFICS_SINGLE_START', ['input' => $identifier]);
+        $productId = ctype_digit($identifier) ? (int) $identifier : 0;
+        if ($productId <= 0) {
+            $found = wc_get_products(['limit' => 1, 'sku' => $identifier, 'status' => ['publish', 'draft', 'private']]);
+            $productId = !empty($found[0]) ? (int) $found[0]->get_id() : 0;
+        }
+        if ($productId <= 0) {
+            $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['input' => $identifier, 'reason' => 'product_not_found']);
+            return ['result' => 'error', 'error' => 'product_not_found'];
+        }
+        $product = wc_get_product($productId);
+        if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+        $settings = $this->settings();
+        $sku = (string) $this->resolve_ebay_sku($product, $productId, null, $settings)['sku'];
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($offerId === '' || $listingId === '' || $sku === '') return ['result' => 'error', 'error' => 'missing_offer_listing_sku'];
+        $inventory = $this->client->get_inventory_item($sku, ['stage' => 'basic_specifics_single', 'product_id' => $productId, 'sku' => $sku]);
+        if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
+
+        $existingAspects = is_array($inventory['product']['aspects'] ?? null) ? $inventory['product']['aspects'] : [];
+        $resolved = $this->resolve_basic_item_specifics($product, $productId, $sku, $settings, $existingAspects);
+        $this->logger->info('EBAY_BASIC_SPECIFICS_RESOLVED', ['product_id' => $productId, 'sku' => $sku, 'resolved' => $resolved]);
+
+        $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $inventory['product']['aspects'] = $resolved['aspects'];
+        if ($resolved['condition_description_supported']) {
+            $inventory['conditionDescription'] = $resolved['condition_description'];
+        }
+        $beforeAspectsHash = md5(wp_json_encode($existingAspects));
+        $afterAspectsHash = md5(wp_json_encode($resolved['aspects']));
+        $changed = $beforeAspectsHash !== $afterAspectsHash || $beforeCondition !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        if ($changed) {
+            $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'basic_specifics_single_update', 'product_id' => $productId, 'sku' => $sku]);
+            if (is_wp_error($update)) {
+                $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['product_id' => $productId, 'sku' => $sku, 'error' => $update->get_error_message()]);
+                return ['result' => 'error', 'error' => $update->get_error_message()];
+            }
+            $this->logger->info('EBAY_BASIC_SPECIFICS_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+        } else {
+            $this->logger->info('EBAY_BASIC_SPECIFICS_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+        }
+        $this->logger->info('EBAY_BASIC_SPECIFICS_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'changed' => $changed]);
+        return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $resolved;
+    }
+
+    private function resolve_basic_item_specifics($product, int $productId, string $sku, array $settings, array $existingAspects): array
+    {
+        $aspects = $this->cleanup_condition_aspects($existingAspects)['aspects'];
+        unset($aspects['Kategorie'], $aspects['Stan'], $aspects['Stan opakowania']);
+        $content = $this->resolve_german_content($product, $productId, $this->marketplace_id(), $settings);
+        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $productId, '', $settings, $content);
+        $mpn = $this->resolve_mpn_aspect_value($product, $productId, $sku, $content);
+        if ($manufacturer !== '') $aspects['Hersteller'] = [$manufacturer];
+        if ($mpn !== '') {
+            $aspects['MPN'] = [$mpn];
+            $aspects['Herstellernummer'] = [$mpn];
+            $aspects['Manufacturer Part Number'] = [$mpn];
+            $aspects['OE/OEM Referenznummer'] = array_values(array_unique(array_filter([$mpn, (string) get_post_meta($productId, '_oem_number', true)])));
+        }
+        $country = strtoupper(trim((string) ($settings['default_country_of_origin'] ?? '')));
+        if ($country !== '') $aspects['Ursprungsland'] = [$country];
+
+        return [
+            'aspects' => $aspects,
+            'condition_description_supported' => true,
+            'condition_description' => 'Gebrauchtes Originalteil. Zustand siehe Fotos. Bitte Teilenummer und Kompatibilität vor dem Kauf prüfen.',
         ];
     }
 

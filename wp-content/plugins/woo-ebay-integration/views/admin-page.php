@@ -388,6 +388,7 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                 <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /> <span class="description"><?php echo esc_html($returnId !== '' ? $findPolicyName($returnPolicies, $returnId, 'returnPolicyId') : 'missing'); ?></span></td></tr>
                 <tr><th><label for="wei-markup">Domyślny markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
                 <tr><th><label for="wei-condition">Domyślny stan przedmiotu</label></th><td><select id="wei-condition" name="default_item_condition"><option value="USED" <?php selected((string) $setting('default_item_condition', 'USED'), 'USED'); ?>>USED</option><option value="USED_EXCELLENT" <?php selected((string) $setting('default_item_condition', 'USED'), 'USED_EXCELLENT'); ?>>USED_EXCELLENT</option></select></td></tr>
+                <tr><th><label for="wei-origin-country">Default country of origin</label></th><td><input id="wei-origin-country" class="small-text" name="default_country_of_origin" value="<?php echo esc_attr((string) $setting('default_country_of_origin', '')); ?>" placeholder="DE" maxlength="2" /> <span class="description">Optional, only if certain.</span></td></tr>
                 <tr><th>Auto publish</th><td><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> enabled</label> <span class="wei-badge <?php echo esc_attr($badgeClass(!empty($s['auto_publish_enabled']))); ?>"><?php echo esc_html($boolLabel(!empty($s['auto_publish_enabled']))); ?></span></td></tr>
                 <tr><th>Auto sync</th><td><select name="auto_sync_mode"><option value="disabled" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'disabled'); ?>>disabled / dry-run only</option><option value="preflight_only" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'preflight_only'); ?>>dry run / diagnostics only</option><option value="export_ready_products" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'export_ready_products'); ?>>export/update offers but do not publish unless auto publish is enabled</option><option value="orders_stock_only" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'orders_stock_only'); ?>>orders + stock only</option><option value="full_sync" <?php selected((string) $setting('auto_sync_mode', 'disabled'), 'full_sync'); ?>>full sync</option></select></td></tr>
                 <tr><th><label for="wei-batch-size">Batch size / limit</label></th><td><input id="wei-batch-size" type="number" min="1" max="50" name="auto_sync_export_batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_export_batch_size', 20)); ?>" /> <span class="description">Export batch</span></td></tr>
@@ -450,6 +451,14 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <input type="hidden" name="action" value="wei_description_condition_cleanup_single" />
             <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
             <button class="button button-secondary">Clean condition wording in description for one eBay listing</button>
+        </form>
+        <h3>Update basic item specifics for one eBay listing</h3>
+        <p class="description">Safe single-listing basic specifics update: only condition/aspects/conditionDescription on inventory item. No createOffer/publishOffer and no price/stock/shipping/category/title/description changes.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_basic_specifics_single'); ?>
+            <input type="hidden" name="action" value="wei_basic_specifics_single" />
+            <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
+            <button class="button button-secondary">Update basic item specifics for one eBay listing</button>
         </form>
         <?php if (!empty($listing_quality_audit)): ?>
             <div class="wei-grid" style="margin-top:8px;">
