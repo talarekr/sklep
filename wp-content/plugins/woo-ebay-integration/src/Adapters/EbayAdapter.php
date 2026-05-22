@@ -1567,16 +1567,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function build_ebay_de_description_template($product, int $productId, array $content, array $aspects, array $category): string
     {
+        $settings = $this->settings();
         $descriptionText = trim(wp_strip_all_tags((string) ($content['description'] ?? '')));
-        if ($descriptionText === '') {
-            $descriptionText = 'Dieser Artikel wurde bereits benutzt. Der Artikel kann optische Gebrauchsspuren aufweisen, ist jedoch voll funktionsfähig und funktioniert wie vorgesehen.';
-        }
-
         $baseDescription = [
             'Dieser Artikel wurde bereits benutzt. Der Artikel kann optische Gebrauchsspuren aufweisen, ist jedoch voll funktionsfähig und funktioniert wie vorgesehen.',
             'Bitte vergleichen Sie Ihre Teilenummer mit der von uns angegebenen Teilenummer und prüfen Sie die Fotos vor dem Kauf sorgfältig.',
             'Sie erhalten genau den Artikel, der auf den Bildern zu sehen ist.',
         ];
+        $blockedNewLikeWords = '/\b(NEU|NEUE|NEUER|NEUES|FABRIKNEU|BRANDNEU|NOWY|NOWA|NOWE|NEW)\b/ui';
+        if ($descriptionText === '' || (bool) preg_match($blockedNewLikeWords, $descriptionText)) {
+            $descriptionText = '';
+        }
 
         $properties = $this->collect_template_properties($product, $productId, $aspects);
         $featureRows = '';
@@ -1593,9 +1594,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         $primaryPartNumber = (string) ($allPartNumbers[0] ?? '');
 
+        $manufacturer = (string) ($aspects['Hersteller'][0] ?? $aspects['Marke'][0] ?? $aspects['Brand'][0] ?? '');
+        if ($manufacturer === '') {
+            $manufacturer = (string) ($category['manufacturer'] ?? '');
+        }
+        if ($manufacturer === '') {
+            $manufacturer = (string) get_post_meta($productId, '_manufacturer', true);
+        }
         $specRows = [];
         $specRows['Artikelzustand'] = (string) ($aspects['Artikelzustand'][0] ?? '');
-        $specRows['Marke / Brand'] = (string) ($aspects['Marke'][0] ?? $aspects['Brand'][0] ?? '');
+        $specRows['Marke / Hersteller'] = $manufacturer;
         $specRows['MPN'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['MPN'][0] ?? '');
         $specRows['Kategorie'] = (string) ($category['category_path'] ?? '');
         $specRows['Herstellernummer'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['Herstellernummer'][0] ?? '');
@@ -1620,36 +1628,43 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $paragraphs .= '<p style="margin:0 0 10px;color:#1f2937;line-height:1.55;">' . esc_html($descriptionText) . '</p>';
         }
 
-        return '<div style="max-width:980px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#111827;border:1px solid #dbe3ef;">'
-            . '<div style="background:#0b2a57;color:#fff;padding:12px 16px;font-size:14px;font-weight:600;">Gebrauchtes Originalteil &nbsp;|&nbsp; Schneller Versand in Europa &nbsp;|&nbsp; Lieferzeit 2–5 Werktage</div>'
-            . '<div style="padding:18px;">'
-            . '<h2 style="margin:0 0 16px;color:#0b2a57;font-size:30px;line-height:1.2;">' . esc_html((string) ($content['title'] ?? $product->get_name())) . '</h2>'
+        $mapUrl = trim((string) ($settings['ebay_de_delivery_map_url'] ?? ''));
+        $deliveryMap = $mapUrl !== ''
+            ? '<img src="' . esc_url($mapUrl) . '" alt="Lieferung in Europa" style="display:block;width:100%;height:auto;border:0;">'
+            : '<div style="height:230px;border:1px dashed #cbd5e1;background:linear-gradient(145deg,#f8fafc,#e2e8f0);display:flex;align-items:center;justify-content:center;text-align:center;color:#0b2a57;font-weight:700;padding:18px;line-height:1.5;">Kartenplatzhalter<br>Lieferung in Europa inkl. UK und Inseln</div>';
+
+        return '<div style="max-width:1080px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#111827;background:#fff;border:1px solid #dbe3ef;">'
+            . '<div style="background:#0b2a57;color:#fff;padding:12px 18px;font-size:15px;font-weight:700;"><table role="presentation" width="100%"><tr><td>✓ Geprüfte gebrauchte Autoteile</td><td>↻ Kundenservice 24/7</td><td>🚚 Schneller Versand in Europa (2–5 Werktage)</td></tr></table></div>'
+            . '<div style="padding:20px;">'
+            . '<h2 style="margin:0 0 18px;color:#0b2a57;font-size:48px;line-height:1.12;font-weight:800;">' . esc_html((string) ($content['title'] ?? $product->get_name())) . '</h2>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
             . '<td valign="top" width="52%" style="padding-right:12px;">'
-            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Beschreibung</h3>' . $paragraphs
-            . '<h3 style="margin:18px 0 10px;color:#0b2a57;font-size:20px;">Produktdetails</h3>'
+            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:34px;line-height:1.2;">🟧 Beschreibung</h3>' . $paragraphs
+            . '<h3 style="margin:20px 0 10px;color:#0b2a57;font-size:34px;line-height:1.2;">⚙️ Produktdetails</h3>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $featureRows
             . ($allPartNumbers !== [] ? '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">Teilenummern</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html(implode(', ', $allPartNumbers)) . '</td></tr>' : '')
             . '</table></td>'
             . '<td valign="top" width="48%" style="padding-left:12px;">'
-            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Artikelmerkmale</h3>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specHtml . '</table></td>'
+            . '<div style="background:#f8fafc;border:1px solid #d1d5db;border-radius:6px;padding:14px;">'
+            . '<h3 style="margin:0 0 12px;color:#0b2a57;font-size:34px;line-height:1.2;">☰ Artikelmerkmale</h3>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#fff;">' . $specHtml . '</table></div></td>'
             . '</tr></table>'
-            . '<div style="margin-top:20px;border:1px solid #d1d5db;background:#f8fafc;">'
-            . '<div style="padding:14px 16px;color:#0b2a57;font-size:22px;font-weight:700;">Lieferung in ganz Europa</div>'
-            . '<div style="padding:0 16px 14px;color:#1f2937;line-height:1.55;">Wir liefern europaweit. Die voraussichtliche Lieferzeit beträgt 2–5 Werktage. UK und benachbarte Inseln sind ebenfalls im Liefergebiet enthalten.</div>'
-            . '</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:20px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;"><tr>'
+            . '<td width="52%" style="padding:0;vertical-align:top;background:#f8fafc;">' . $deliveryMap . '</td>'
+            . '<td width="48%" style="padding:16px;vertical-align:top;background:#fff;">'
+            . '<div style="color:#0b2a57;font-size:34px;font-weight:800;line-height:1.2;margin-bottom:8px;">🚚 Lieferung in ganz Europa</div>'
+            . '<div style="color:#111827;font-size:30px;font-weight:800;line-height:1.2;margin-bottom:12px;">Lieferzeit: 2–5 Werktage</div>'
+            . '<ul style="margin:0;padding-left:18px;color:#1f2937;line-height:1.6;"><li>Schneller und zuverlässiger Versand.</li><li>Sichere Verpackung zum Schutz der Ware.</li><li>Sendungsverfolgung für jede Bestellung.</li><li>Liefergebiet: EU, UK und benachbarte Inseln.</li></ul>'
+            . '</td></tr></table>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:16px;"><tr>'
-            . '<td width="50%" style="padding-right:8px;"><div style="display:block;background:#0b2a57;color:#fff;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</div></td>'
-            . '<td width="50%" style="padding-left:8px;"><div style="display:block;background:#0b2a57;color:#fff;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</div></td>'
+            . '<td width="50%" style="padding-right:8px;"><div style="background:#0b2a57;color:#fff;padding:14px;border-radius:6px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</div></td>'
+            . '<td width="50%" style="padding-left:8px;"><div style="background:#0b2a57;color:#fff;padding:14px;border-radius:6px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</div></td>'
             . '</tr></table>'
-            . '<div style="margin-top:18px;border:1px solid #d1d5db;">'
-            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">FAQ</div><div style="padding:12px 14px;color:#1f2937;">Bitte vergleichen Sie die Teilenummer und Fahrzeugdaten vor dem Kauf.</div>'
-            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Rückgabe</div><div style="padding:12px 14px;color:#1f2937;">Rückgabe innerhalb von 30 Tagen nach Erhalt gemäß den Angebotsbedingungen.</div>'
-            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Versand</div><div style="padding:12px 14px;color:#1f2937;">Schneller und sicherer Versand. Lieferzeit in der Regel 2–5 Werktage.</div>'
-            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Zahlung</div><div style="padding:12px 14px;color:#1f2937;">Zahlungsmethoden gemäß den bei eBay verfügbaren Optionen.</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">'
+            . '<tr><td style="padding:10px 12px;background:#f8fafc;color:#0b2a57;font-weight:700;">FAQ</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Rückgabe</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Versand</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Zahlung</td></tr>'
+            . '<tr><td colspan="4" style="padding:12px 14px;color:#1f2937;line-height:1.55;"><strong>FAQ:</strong> Bitte vergleichen Sie Teilenummer und Fahrzeugdaten vor dem Kauf.<br><strong>Rückgabe:</strong> Rückgabe gemäß eBay-Richtlinien innerhalb der vorgesehenen Frist.<br><strong>Versand:</strong> Zustellung in Europa, inklusive UK und benachbarter Inseln, in der Regel 2–5 Werktage.<br><strong>Zahlung:</strong> Zahlung über die von eBay bereitgestellten sicheren Methoden.</td></tr>'
             . '</div>'
-            . '<div style="margin-top:16px;border:1px solid #d1d5db;padding:12px 14px;background:#fff;"><strong style="color:#0b2a57;">Versanddienstleister:</strong> DHL</div>'
+            . '<div style="margin-top:16px;border:1px solid #d1d5db;padding:12px 14px;background:#fff;color:#0b2a57;font-weight:700;">Versandpartner: <span style="display:inline-block;background:#ffcc00;color:#c60000;padding:4px 12px;border-radius:4px;font-weight:800;">DHL</span></div>'
             . '</div></div>';
     }
     private function should_use_ebay_de_description_template(array $settings): bool
