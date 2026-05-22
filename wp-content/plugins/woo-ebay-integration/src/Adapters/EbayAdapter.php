@@ -2097,8 +2097,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $beforeAspects = (array) ($inventory['product']['aspects'] ?? []);
         $cleanup = $this->cleanup_condition_aspects($beforeAspects);
         $description = (string) ($inventory['product']['description'] ?? '');
-        $descriptionContainsNeu = $this->description_contains_condition_markers($description);
-        $descriptionConditionConflict = $descriptionContainsNeu && (string) ($inventory['condition'] ?? '') === EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $descriptionAudit = $this->analyze_description_condition_conflict($description);
+        $descriptionContainsNeu = (bool) $descriptionAudit['description_contains_neu'];
+        $descriptionConditionConflict = (bool) $descriptionAudit['description_contains_new_like_words'] && (string) ($inventory['condition'] ?? '') === EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $changed = $cleanup['removed'] !== [] || (string) ($inventory['condition'] ?? '') !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['product']['aspects'] = $cleanup['aspects'];
@@ -2108,6 +2109,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'removed_aspects' => $cleanup['removed'],
             'description_contains_neu' => $descriptionContainsNeu,
             'description_condition_conflict' => $descriptionConditionConflict,
+            'description_contains_new_like_words' => (bool) $descriptionAudit['description_contains_new_like_words'],
+            'description_cleanup_safe' => (bool) $descriptionAudit['description_cleanup_safe'],
+            'review_required' => (bool) $descriptionAudit['review_required'],
+            'confidence' => (float) $descriptionAudit['confidence'],
+            'suggested_replacements' => $descriptionAudit['suggested_replacements'],
         ]);
         if ($changed) {
             $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'condition_cleanup_single_update', 'product_id' => $productId, 'sku' => $sku]);
@@ -2130,16 +2136,140 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'removed_aspects' => $cleanup['removed'],
             'description_contains_neu' => $descriptionContainsNeu,
             'description_condition_conflict' => $descriptionConditionConflict,
+            'description_contains_new_like_words' => (bool) $descriptionAudit['description_contains_new_like_words'],
+            'description_cleanup_safe' => (bool) $descriptionAudit['description_cleanup_safe'],
+            'review_required' => (bool) $descriptionAudit['review_required'],
+            'confidence' => (float) $descriptionAudit['confidence'],
+            'suggested_replacements' => $descriptionAudit['suggested_replacements'],
+            'suggested_description_snippet' => (string) $descriptionAudit['suggested_description_snippet'],
         ];
+    }
+
+    public function clean_description_condition_single(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_DESCRIPTION_CONDITION_CLEANUP_START', ['input' => $identifier]);
+        $productId = ctype_digit($identifier) ? (int) $identifier : 0;
+        if ($productId <= 0) {
+            $found = wc_get_products(['limit' => 1, 'sku' => $identifier, 'status' => ['publish', 'draft', 'private']]);
+            $productId = !empty($found[0]) ? (int) $found[0]->get_id() : 0;
+        }
+        if ($productId <= 0) {
+            $this->logger->error('EBAY_DESCRIPTION_CONDITION_CLEANUP_FAILED', ['input' => $identifier, 'reason' => 'product_not_found']);
+            return ['result' => 'error', 'error' => 'product_not_found'];
+        }
+        $product = wc_get_product($productId);
+        if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+        $sku = (string) $this->resolve_ebay_sku($product, $productId, null, $this->settings())['sku'];
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($offerId === '' || $listingId === '' || $sku === '') return ['result' => 'error', 'error' => 'missing_offer_listing_sku'];
+        $inventory = $this->client->get_inventory_item($sku, ['stage' => 'description_condition_cleanup_single', 'product_id' => $productId, 'sku' => $sku]);
+        if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
+
+        $description = (string) ($inventory['product']['description'] ?? '');
+        $audit = $this->analyze_description_condition_conflict($description);
+        $descriptionConflict = (bool) $audit['description_contains_new_like_words'] && (string) ($inventory['condition'] ?? '') === EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        if ($descriptionConflict) {
+            $this->logger->warning('EBAY_DESCRIPTION_CONFLICT_DETECTED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $audit);
+        }
+
+        $replace = $this->apply_description_condition_replacements($description);
+        $currentCondition = (string) ($inventory['condition'] ?? '');
+        $inventory['product']['description'] = (string) $replace['description'];
+        $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        $changed = $replace['description'] !== $description || $currentCondition !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
+        if ($changed) {
+            $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'description_condition_cleanup_single_update', 'product_id' => $productId, 'sku' => $sku]);
+            if (is_wp_error($update)) {
+                $this->logger->error('EBAY_DESCRIPTION_CONDITION_CLEANUP_FAILED', ['product_id' => $productId, 'sku' => $sku, 'error' => $update->get_error_message()]);
+                return ['result' => 'error', 'error' => $update->get_error_message()];
+            }
+            $this->logger->info('EBAY_DESCRIPTION_CONDITION_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'applied_replacements' => $replace['applied']]);
+        } else {
+            $this->logger->info('EBAY_DESCRIPTION_CONDITION_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'applied_replacements' => []]);
+        }
+        $this->logger->info('EBAY_DESCRIPTION_CONDITION_CLEANUP_DONE', ['product_id' => $productId, 'sku' => $sku, 'changed' => $changed]);
+
+        return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'applied_replacements' => $replace['applied']] + $audit;
     }
 
     private function description_contains_condition_markers(string $description): bool
     {
-        if ($description === '') {
-            return false;
+        return $this->analyze_description_condition_conflict($description)['description_contains_new_like_words'];
+    }
+
+    private function analyze_description_condition_conflict(string $description): array
+    {
+        $plain = mb_strtolower(wp_strip_all_tags($description), 'UTF-8');
+        if ($plain === '') {
+            return [
+                'description_contains_neu' => false,
+                'description_contains_new_like_words' => false,
+                'review_required' => false,
+                'confidence' => 0.0,
+                'description_cleanup_safe' => false,
+                'matched_keywords' => [],
+                'suggested_replacements' => [],
+                'suggested_description_snippet' => '',
+            ];
         }
 
-        return (bool) preg_match('/\b(neu|neue|neuer|neues|nowy|nowa|nowe|new)\b/iu', wp_strip_all_tags($description));
+        $keywords = ['neu', 'neue', 'neuer', 'neues', 'new', 'nowy', 'nowa', 'nowe', 'fabrikneu', 'brandneu'];
+        $contains = (bool) preg_match('/\b(neu|neue|neuer|neues|new|nowy|nowa|nowe|fabrikneu|brandneu)\b/iu', $plain);
+        $matched = [];
+        foreach ($keywords as $keyword) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/iu', $plain)) {
+                $matched[] = $keyword;
+            }
+        }
+        $reviewRequired = (bool) preg_match('/\b(neue?\s+version|neues?\s+modell)\b/iu', $plain);
+
+        $suggested = [];
+        $safeMap = [
+            'NEUE ORIGINAL EUROPÄISCHE LAMPEN' => 'GEBRAUCHTE ORIGINALE EUROPÄISCHE LAMPEN',
+            'Neue Originalteile' => 'Gebrauchte Originalteile',
+            'NOWE ORYGINALNE' => 'GEBRAUCHTE ORIGINALE',
+            'NEW ORIGINAL' => 'USED ORIGINAL',
+        ];
+        foreach ($safeMap as $from => $to) {
+            if (mb_stripos($description, $from, 0, 'UTF-8') !== false) {
+                $suggested[] = ['from' => $from, 'to' => $to];
+            }
+        }
+
+        return [
+            'description_contains_neu' => (bool) preg_match('/\b(neu|neue|neuer|neues)\b/iu', $plain),
+            'description_contains_new_like_words' => $contains,
+            'review_required' => $reviewRequired,
+            'confidence' => $contains ? ($reviewRequired ? 0.55 : 0.96) : 0.0,
+            'description_cleanup_safe' => $contains && !$reviewRequired,
+            'matched_keywords' => $matched,
+            'suggested_replacements' => $suggested,
+            'suggested_description_snippet' => 'Gebrauchtes Originalteil. Zustand siehe Fotos. Funktionsfähig, sofern im Angebot angegeben. Bitte Teilenummer und Kompatibilität vor dem Kauf prüfen.',
+        ];
+    }
+
+    private function apply_description_condition_replacements(string $description): array
+    {
+        $replacements = [
+            'NEUE ORIGINAL EUROPÄISCHE LAMPEN' => 'GEBRAUCHTE ORIGINALE EUROPÄISCHE LAMPEN',
+            'Neue Originalteile' => 'Gebrauchte Originalteile',
+            'NOWE ORYGINALNE' => 'GEBRAUCHTE ORIGINALE',
+            'NEW ORIGINAL' => 'USED ORIGINAL',
+        ];
+        $updated = $description;
+        $applied = [];
+        foreach ($replacements as $from => $to) {
+            $next = str_replace($from, $to, $updated);
+            if ($next !== $updated) {
+                $applied[] = ['from' => $from, 'to' => $to];
+                $updated = $next;
+            }
+        }
+
+        return ['description' => $updated, 'applied' => $applied];
     }
 
     private function apply_safe_required_aspect_repairs(array $aspects, array $requiredAspects, $product, int $product_id, string $categoryId, array $settings, array $content = []): array

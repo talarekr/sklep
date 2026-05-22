@@ -443,6 +443,14 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
             <button class="button button-secondary">Clean condition/aspects for one eBay listing</button>
         </form>
+        <h3>Clean condition wording in description for one eBay listing</h3>
+        <p class="description">Safe single-listing description cleanup: updates only inventory item description and enforces USED_EXCELLENT. No createOffer/publishOffer, no price/stock/category/shipping/title changes.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_description_condition_cleanup_single'); ?>
+            <input type="hidden" name="action" value="wei_description_condition_cleanup_single" />
+            <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required />
+            <button class="button button-secondary">Clean condition wording in description for one eBay listing</button>
+        </form>
         <?php if (!empty($listing_quality_audit)): ?>
             <div class="wei-grid" style="margin-top:8px;">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($listing_quality_audit['generated_at'] ?? '-')); ?></strong></div>
@@ -453,6 +461,7 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                 <div class="wei-card"><span>Custom Stan aspects</span><strong><?php echo esc_html((string) ($listing_quality_audit['custom_stan_aspect_count'] ?? 0)); ?></strong></div>
                 <div class="wei-card"><span>Title contains NEU/NOWY/NEW</span><strong><?php echo esc_html((string) ($listing_quality_audit['title_contains_neu_count'] ?? 0)); ?></strong></div>
                 <div class="wei-card"><span>Ready for condition cleanup</span><strong><?php echo esc_html((string) ($listing_quality_audit['ready_for_condition_cleanup_count'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>Description conflicts</span><strong><?php echo esc_html((string) ($listing_quality_audit['description_condition_conflict_count'] ?? 0)); ?></strong></div>
             </div>
             <details><summary>Audit JSON preview</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($listing_quality_audit, 9000)); ?></pre></details>
         <?php endif; ?>
