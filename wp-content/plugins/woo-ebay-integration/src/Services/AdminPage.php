@@ -416,6 +416,7 @@ class AdminPage
         $s['translation_provider'] = in_array($provider, ['disabled', 'google_cloud_translate'], true) ? $provider : 'disabled';
         $s['auto_generate_german_content_preflight'] = !empty($_POST['auto_generate_german_content_preflight']) ? 1 : 0;
         $s['enable_ebay_de_description_template'] = !empty($_POST['enable_ebay_de_description_template']) ? 1 : 0;
+        $s['ebay_de_delivery_map_url'] = esc_url_raw((string) ($_POST['ebay_de_delivery_map_url'] ?? ''));
         $s['regenerate_german_content_on_hash_change'] = !empty($_POST['regenerate_german_content_on_hash_change']) ? 1 : 0;
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
@@ -2506,6 +2507,9 @@ class AdminPage
         }
         if (!isset($s['enable_ebay_de_description_template'])) {
             $s['enable_ebay_de_description_template'] = 0;
+        }
+        if (!isset($s['ebay_de_delivery_map_url'])) {
+            $s['ebay_de_delivery_map_url'] = '';
         }
         if (!isset($s['verbose_debug'])) {
             $s['verbose_debug'] = 0;
