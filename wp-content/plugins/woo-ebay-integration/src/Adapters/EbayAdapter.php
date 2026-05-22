@@ -2103,6 +2103,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $changed = $cleanup['removed'] !== [] || (string) ($inventory['condition'] ?? '') !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $beforeCondition = (string) ($inventory['condition'] ?? '');
         $beforeCondition = (string) ($inventory['condition'] ?? '');
+        $beforeCondition = (string) ($inventory['condition'] ?? '');
+        $beforeCondition = (string) ($inventory['condition'] ?? '');
         $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['product']['aspects'] = $cleanup['aspects'];
         $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', [
@@ -2189,6 +2191,63 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['product_id' => $productId, 'sku' => $sku, 'error' => $update->get_error_message()]);
                 return ['result' => 'error', 'error' => $update->get_error_message()];
             }
+            $inventoryAfterUpdate = $this->client->get_inventory_item($sku, ['stage' => 'basic_specifics_single_inventory_after_update', 'product_id' => $productId, 'sku' => $sku]);
+            if (is_wp_error($inventoryAfterUpdate)) {
+                $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['product_id' => $productId, 'sku' => $sku, 'error' => $inventoryAfterUpdate->get_error_message(), 'phase' => 'get_inventory_item_after_update']);
+                return ['result' => 'error', 'error' => $inventoryAfterUpdate->get_error_message()];
+            }
+            $this->logger->info('EBAY_BASIC_SPECIFICS_INVENTORY_AFTER_UPDATE', [
+                'product_id' => $productId,
+                'sku' => $sku,
+                'offer_id' => $offerId,
+                'listing_id' => $listingId,
+                'condition' => (string) ($inventoryAfterUpdate['condition'] ?? ''),
+                'product_aspects' => is_array($inventoryAfterUpdate['product']['aspects'] ?? null) ? $inventoryAfterUpdate['product']['aspects'] : [],
+            ]);
+
+            $offer = $this->client->get_offer($offerId, ['stage' => 'basic_specifics_single_offer_refresh_get_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+            if (is_wp_error($offer)) {
+                $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'error' => $offer->get_error_message(), 'phase' => 'get_offer_before_refresh']);
+                return ['result' => 'error', 'error' => $offer->get_error_message()];
+            }
+            $this->logger->info('EBAY_BASIC_SPECIFICS_OFFER_REFRESH_START', [
+                'product_id' => $productId,
+                'sku' => $sku,
+                'offer_id' => $offerId,
+                'listing_id' => $listingId,
+                'called_create_offer' => false,
+                'called_publish_offer' => false,
+                'changed_only' => 'basic_item_specifics_refresh',
+                'preserved_price' => true,
+                'preserved_stock' => true,
+                'preserved_shipping' => true,
+                'preserved_category' => true,
+            ]);
+            $refreshed = $this->client->update_offer($offerId, (array) $offer, ['stage' => 'basic_specifics_single_offer_refresh_update_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+            if (is_wp_error($refreshed)) {
+                $this->logger->error('EBAY_BASIC_SPECIFICS_FAILED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'error' => $refreshed->get_error_message(), 'phase' => 'update_offer_refresh']);
+                return ['result' => 'error', 'error' => $refreshed->get_error_message()];
+            }
+            $this->logger->info('EBAY_BASIC_SPECIFICS_OFFER_REFRESH_DONE', [
+                'product_id' => $productId,
+                'sku' => $sku,
+                'offer_id' => $offerId,
+                'listing_id' => $listingId,
+                'called_create_offer' => false,
+                'called_publish_offer' => false,
+                'changed_only' => 'basic_item_specifics_refresh',
+                'preserved_price' => true,
+                'preserved_stock' => true,
+                'preserved_shipping' => true,
+                'preserved_category' => true,
+            ]);
+            $this->logger->info('EBAY_BASIC_SPECIFICS_PUBLIC_REFRESH_HINT', [
+                'product_id' => $productId,
+                'sku' => $sku,
+                'offer_id' => $offerId,
+                'listing_id' => $listingId,
+                'hint' => 'Listing-level aspects can be cached on active offers. Inventory PUT + safe updateOffer refresh was executed without createOffer/publishOffer.',
+            ]);
             $this->logger->info('EBAY_BASIC_SPECIFICS_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
         } else {
             $this->logger->info('EBAY_BASIC_SPECIFICS_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
