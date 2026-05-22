@@ -1584,12 +1584,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $featureRows .= '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">' . esc_html($label) . '</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html($value) . '</td></tr>';
         }
 
+        $allPartNumbers = $this->normalize_part_numbers([
+            $aspects['MPN'] ?? [],
+            $aspects['Herstellernummer'] ?? [],
+            $aspects['Manufacturer Part Number'] ?? [],
+            $aspects['OE/OEM Referenznummer'] ?? [],
+            $aspects['OE/OEM Referenznummer(n)'] ?? [],
+        ]);
+        $primaryPartNumber = (string) ($allPartNumbers[0] ?? '');
+
         $specRows = [];
         $specRows['Artikelzustand'] = (string) ($aspects['Artikelzustand'][0] ?? '');
         $specRows['Marke / Brand'] = (string) ($aspects['Marke'][0] ?? $aspects['Brand'][0] ?? '');
-        $specRows['MPN'] = (string) ($aspects['MPN'][0] ?? '');
+        $specRows['MPN'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['MPN'][0] ?? '');
         $specRows['Kategorie'] = (string) ($category['category_path'] ?? '');
-        $specRows['Manufacturer Part Number'] = (string) ($aspects['Herstellernummer'][0] ?? $aspects['Manufacturer Part Number'][0] ?? '');
+        $specRows['Herstellernummer'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['Herstellernummer'][0] ?? '');
+        $specRows['Manufacturer Part Number'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['Manufacturer Part Number'][0] ?? '');
+        $specRows['OE/OEM Referenznummer'] = $allPartNumbers !== [] ? implode(', ', $allPartNumbers) : '';
         $specRows['Ursprungsland'] = (string) ($aspects['Ursprungsland'][0] ?? '');
         $specRows['Hinweise des Verkäufers'] = 'Gebraucht, geprüft, voll funktionsfähig';
 
@@ -1617,7 +1628,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<td valign="top" width="52%" style="padding-right:12px;">'
             . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Beschreibung</h3>' . $paragraphs
             . '<h3 style="margin:18px 0 10px;color:#0b2a57;font-size:20px;">Produktdetails</h3>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $featureRows . '</table></td>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $featureRows
+            . ($allPartNumbers !== [] ? '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">Teilenummern</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html(implode(', ', $allPartNumbers)) . '</td></tr>' : '')
+            . '</table></td>'
             . '<td valign="top" width="48%" style="padding-left:12px;">'
             . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Artikelmerkmale</h3>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specHtml . '</table></td>'
@@ -2174,7 +2187,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $resolved = $this->merge_aspects($aspects, $settingsOverrides, $productOverrides);
         $required = $this->taxonomy->get_required_aspects($this->marketplace_id(), $categoryId);
-        $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpn);
+        $resolved = $this->apply_part_number_aspect_aliases($resolved, $required, $mpnValue);
         $resolved = $this->apply_safe_required_aspect_repairs($resolved, $required, $product, $product_id, $categoryId, $settings, $content);
         $cleanup = $this->cleanup_condition_aspects($resolved);
         $resolved = $cleanup['aspects'];
@@ -2479,10 +2492,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $mpn = (string) ($mpnResolved['value'] ?? '');
         if ($manufacturer !== '') $aspects['Hersteller'] = [$manufacturer];
         if ($mpn !== '') {
-            $aspects['MPN'] = [$mpn];
-            $aspects['Herstellernummer'] = [$mpn];
-            $aspects['Manufacturer Part Number'] = [$mpn];
-            $aspects['OE/OEM Referenznummer'] = array_values(array_unique(array_filter([$mpn, (string) get_post_meta($productId, '_oem_number', true)])));
+            $partNumbers = $this->normalize_part_numbers([$mpn, get_post_meta($productId, '_oem_number', true)]);
+            $primaryPartNumber = (string) ($partNumbers[0] ?? $mpn);
+            $aspects['MPN'] = [$primaryPartNumber];
+            $aspects['Herstellernummer'] = [$primaryPartNumber];
+            $aspects['Manufacturer Part Number'] = [$primaryPartNumber];
+            $aspects['OE/OEM Referenznummer'] = $partNumbers !== [] ? $partNumbers : [$primaryPartNumber];
         }
         $country = strtoupper(trim((string) ($settings['default_country_of_origin'] ?? '')));
         if ($country !== '') $aspects['Ursprungsland'] = [$country];
@@ -2825,16 +2840,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['value' => '', 'source' => 'none', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.0, 'skipped_weak_part_number' => !empty($rejectedTokens)];
     }
 
-    private function apply_part_number_aspect_aliases(array $aspects, array $requiredAspects, string $resolvedPartNumber): array
+    private function apply_part_number_aspect_aliases(array $aspects, array $requiredAspects, $resolvedPartNumber): array
     {
         if ($this->marketplace_id() !== 'EBAY_DE') {
             return $aspects;
         }
 
-        $partNumber = $this->normalize_part_number_value($resolvedPartNumber);
+        $partNumbers = $this->normalize_part_numbers($resolvedPartNumber);
+        $partNumber = (string) ($partNumbers[0] ?? '');
         foreach ($this->part_number_aspect_aliases() as $alias) {
             if ($partNumber === '' && !empty($aspects[$alias][0])) {
-                $partNumber = $this->normalize_part_number_value((string) $aspects[$alias][0]);
+                $partNumber = (string) ($this->normalize_part_numbers($aspects[$alias])[0] ?? '');
             }
         }
 
@@ -2887,6 +2903,28 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return '';
         }
         return $value;
+    }
+
+    private function normalize_part_numbers($value): array
+    {
+        $source = is_array($value) ? $value : [$value];
+        $queue = $source;
+        $normalized = [];
+        while ($queue !== []) {
+            $current = array_shift($queue);
+            if (is_array($current)) {
+                foreach ($current as $nested) {
+                    $queue[] = $nested;
+                }
+                continue;
+            }
+            $candidate = $this->normalize_part_number_value(trim((string) $current));
+            if ($candidate === '' || in_array($candidate, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $candidate;
+        }
+        return $normalized;
     }
 
     private function extract_part_number_from_text(string $text, array &$rejectedTokens = []): string
