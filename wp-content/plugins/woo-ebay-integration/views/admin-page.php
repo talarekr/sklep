@@ -522,6 +522,29 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_stop'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_stop" /><button class="button button-link-delete">Stop / Clear queue</button></form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_policy_bulk_process'); ?><input type="hidden" name="action" value="wei_shipping_policy_bulk_process" /><button class="button">Process next batch now</button></form>
         </div>
+        <h3>Bulk basic item specifics queue</h3>
+        <?php $basicBulk = is_array($basic_specifics_bulk_status ?? null) ? $basic_specifics_bulk_status : []; ?>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Status</span><strong><?php echo esc_html((string) ($basicBulk['state'] ?? 'idle')); ?></strong></div>
+            <div class="wei-card"><span>Total queued</span><strong><?php echo esc_html((string) ($basicBulk['total_queued'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Processed</span><strong><?php echo esc_html((string) ($basicBulk['processed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Remaining</span><strong><?php echo esc_html((string) ($basicBulk['remaining'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Changed</span><strong><?php echo esc_html((string) ($basicBulk['changed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Unchanged</span><strong><?php echo esc_html((string) ($basicBulk['unchanged'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Failed</span><strong><?php echo esc_html((string) ($basicBulk['failed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Skipped</span><strong><?php echo esc_html((string) ($basicBulk['skipped'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Last product ID</span><strong><?php echo esc_html((string) ($basicBulk['last_product_id'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Started at</span><strong><?php echo esc_html((string) (($basicBulk['started_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Updated at</span><strong><?php echo esc_html((string) (($basicBulk['updated_at'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Last error</span><strong><?php echo esc_html((string) (($basicBulk['last_error'] ?? '') ?: '-')); ?></strong></div>
+        </div>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_basic_specifics_bulk_start'); ?><input type="hidden" name="action" value="wei_basic_specifics_bulk_start" /><input type="number" min="1" max="50" name="batch_size" value="25" /><button class="button button-primary">Build basic item specifics queue</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_basic_specifics_bulk_process'); ?><input type="hidden" name="action" value="wei_basic_specifics_bulk_process" /><button class="button">Process next batch now</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_basic_specifics_bulk_pause'); ?><input type="hidden" name="action" value="wei_basic_specifics_bulk_pause" /><button class="button">Pause</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_basic_specifics_bulk_resume'); ?><input type="hidden" name="action" value="wei_basic_specifics_bulk_resume" /><button class="button">Resume</button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_basic_specifics_bulk_stop'); ?><input type="hidden" name="action" value="wei_basic_specifics_bulk_stop" /><button class="button button-link-delete">Stop / Clear queue</button></form>
+        </div>
         <?php if (!empty($shipping_mapping_report)): ?>
             <div class="wei-grid">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($shipping_mapping_report['generated_at'] ?? '-')); ?></strong></div>
