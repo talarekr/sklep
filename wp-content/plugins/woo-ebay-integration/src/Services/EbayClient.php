@@ -187,6 +187,15 @@ class EbayClient
             $headers['Content-Language'] = $contentLanguage;
         }
 
+        if (str_starts_with($path, '/sell/inventory/v1/') && in_array($method, ['PUT', 'POST'], true)) {
+            $this->logger->info('eBay inventory request headers', array_merge([
+                'stage' => (string) ($context['stage'] ?? 'unknown'),
+                'endpoint' => $path,
+                'method' => $method,
+                'request_headers' => $this->sanitize_sensitive_data($headers),
+            ], $this->sanitize_sensitive_data($context)));
+        }
+
         $args = [
             'method' => $method,
             'timeout' => 25,
@@ -278,10 +287,10 @@ class EbayClient
 
         $marketplaceId = (string) ($context['marketplace_id'] ?? $context['marketplaceId'] ?? $query['marketplace_id'] ?? $query['marketplaceId'] ?? $body['marketplaceId'] ?? '');
         if ($marketplaceId === '') {
-            return '';
+            return self::MARKETPLACE_CONTENT_LANGUAGE['EBAY_DE'];
         }
 
-        return self::MARKETPLACE_CONTENT_LANGUAGE[$marketplaceId] ?? '';
+        return self::MARKETPLACE_CONTENT_LANGUAGE[$marketplaceId] ?? self::MARKETPLACE_CONTENT_LANGUAGE['EBAY_DE'];
     }
 
     private function extract_response_messages(array $response, array $keys): array

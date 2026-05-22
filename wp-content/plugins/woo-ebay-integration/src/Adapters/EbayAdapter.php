@@ -2096,10 +2096,19 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
         $beforeAspects = (array) ($inventory['product']['aspects'] ?? []);
         $cleanup = $this->cleanup_condition_aspects($beforeAspects);
+        $description = (string) ($inventory['product']['description'] ?? '');
+        $descriptionContainsNeu = $this->description_contains_condition_markers($description);
+        $descriptionConditionConflict = $descriptionContainsNeu && (string) ($inventory['condition'] ?? '') === EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $changed = $cleanup['removed'] !== [] || (string) ($inventory['condition'] ?? '') !== EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['condition'] = EbayConditionResolver::DEFAULT_EBAY_CONDITION_ENUM;
         $inventory['product']['aspects'] = $cleanup['aspects'];
-        $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', ['product_id' => $productId, 'sku' => $sku, 'removed_aspects' => $cleanup['removed']]);
+        $this->logger->info('EBAY_CONDITION_ASPECT_CLEANUP', [
+            'product_id' => $productId,
+            'sku' => $sku,
+            'removed_aspects' => $cleanup['removed'],
+            'description_contains_neu' => $descriptionContainsNeu,
+            'description_condition_conflict' => $descriptionConditionConflict,
+        ]);
         if ($changed) {
             $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'condition_cleanup_single_update', 'product_id' => $productId, 'sku' => $sku]);
             if (is_wp_error($update)) {
@@ -2111,7 +2120,26 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $this->logger->info('EBAY_CONDITION_CLEANUP_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
         }
         $this->logger->info('EBAY_CONDITION_CLEANUP_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'changed' => $changed]);
-        return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'removed_aspects' => $cleanup['removed']];
+        return [
+            'result' => 'success',
+            'changed' => $changed,
+            'product_id' => $productId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+            'removed_aspects' => $cleanup['removed'],
+            'description_contains_neu' => $descriptionContainsNeu,
+            'description_condition_conflict' => $descriptionConditionConflict,
+        ];
+    }
+
+    private function description_contains_condition_markers(string $description): bool
+    {
+        if ($description === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\b(neu|neue|neuer|neues|nowy|nowa|nowe|new)\b/iu', wp_strip_all_tags($description));
     }
 
     private function apply_safe_required_aspect_repairs(array $aspects, array $requiredAspects, $product, int $product_id, string $categoryId, array $settings, array $content = []): array
