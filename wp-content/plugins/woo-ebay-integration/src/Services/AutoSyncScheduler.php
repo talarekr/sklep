@@ -65,7 +65,7 @@ class AutoSyncScheduler
         }
 
         $frequency = $this->frequency($settings);
-        if ($this->action_scheduler_available()) {
+        if ($this->action_scheduler_ready()) {
             $next = as_next_scheduled_action(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP);
             if (!$next) {
                 as_schedule_recurring_action(time() + 60, 15 * MINUTE_IN_SECONDS, self::HOOK_DELTA_SYNC, [], self::CRON_GROUP, true);
@@ -80,7 +80,7 @@ class AutoSyncScheduler
 
     public function clear_scheduled(): void
     {
-        if ($this->action_scheduler_available()) {
+        if ($this->action_scheduler_ready()) {
             as_unschedule_all_actions(self::HOOK_RUN, [], self::CRON_GROUP);
             as_unschedule_all_actions(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP);
             as_unschedule_all_actions(self::HOOK_STOCK, [], self::CRON_GROUP);
@@ -1478,7 +1478,7 @@ class AutoSyncScheduler
     {
         global $wpdb;
         $table = $wpdb->prefix . 'wei_ebay_sync_queue';
-        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE status IN ('pending','retry') ORDER BY queued_at ASC, id ASC LIMIT %d", $limit);
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE status IN ('pending','retry') AND reason IN ('stock_changed','price_changed','content_changed','category_changed','publish_requested') ORDER BY queued_at ASC, id ASC LIMIT %d", $limit);
         $rows = $wpdb->get_results($sql, ARRAY_A);
         return is_array($rows) ? $rows : [];
     }
@@ -1578,7 +1578,7 @@ class AutoSyncScheduler
 
     private function schedule_stock_queue_once(): void
     {
-        if ($this->action_scheduler_available()) {
+        if ($this->action_scheduler_ready()) {
             if (!as_next_scheduled_action(self::HOOK_STOCK, [], self::CRON_GROUP)) {
                 as_schedule_single_action(time() + 60, self::HOOK_STOCK, [], self::CRON_GROUP, true);
             }
@@ -1594,7 +1594,8 @@ class AutoSyncScheduler
         $settings = get_option(Plugin::OPTION_KEY, []);
         $settings = is_array($settings) ? $settings : [];
         $frequency = (string) ($settings['auto_sync_frequency'] ?? 'hourly');
-        $next = function_exists('as_next_scheduled_action') ? as_next_scheduled_action(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP) : false;
+        $asReady = function_exists('as_next_scheduled_action') && did_action('action_scheduler_init');
+        $next = $asReady ? as_next_scheduled_action(self::HOOK_DELTA_SYNC, [], self::CRON_GROUP) : false;
         if (!$next) {
             $next = wp_next_scheduled(self::HOOK_DELTA_SYNC);
         }
@@ -1796,6 +1797,11 @@ class AutoSyncScheduler
     private function action_scheduler_available(): bool
     {
         return function_exists('as_schedule_recurring_action') && function_exists('as_next_scheduled_action') && function_exists('as_unschedule_all_actions');
+    }
+
+    private function action_scheduler_ready(): bool
+    {
+        return $this->action_scheduler_available() && did_action('action_scheduler_init');
     }
 
     private function is_account_restriction_result(array $result): bool
