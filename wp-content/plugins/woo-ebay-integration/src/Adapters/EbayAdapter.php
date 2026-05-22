@@ -221,7 +221,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
-                'description' => $content['description'],
+                'description' => $this->build_ebay_de_description_template($product, $product_id, $content, $aspects, $category),
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
                 'aspects' => $aspects,
             ],
@@ -1561,6 +1561,117 @@ class EbayAdapter implements MarketplaceAdapterInterface
     }
 
 
+
+
+    private function build_ebay_de_description_template($product, int $productId, array $content, array $aspects, array $category): string
+    {
+        $descriptionText = trim(wp_strip_all_tags((string) ($content['description'] ?? '')));
+        if ($descriptionText === '') {
+            $descriptionText = 'Dieser Artikel wurde bereits benutzt. Der Artikel kann optische Gebrauchsspuren aufweisen, ist jedoch voll funktionsfähig und funktioniert wie vorgesehen.';
+        }
+
+        $baseDescription = [
+            'Dieser Artikel wurde bereits benutzt. Der Artikel kann optische Gebrauchsspuren aufweisen, ist jedoch voll funktionsfähig und funktioniert wie vorgesehen.',
+            'Bitte vergleichen Sie Ihre Teilenummer mit der von uns angegebenen Teilenummer und prüfen Sie die Fotos vor dem Kauf sorgfältig.',
+            'Sie erhalten genau den Artikel, der auf den Bildern zu sehen ist.',
+        ];
+
+        $properties = $this->collect_template_properties($product, $productId, $aspects);
+        $featureRows = '';
+        foreach ($properties as $label => $value) {
+            $featureRows .= '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">' . esc_html($label) . '</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html($value) . '</td></tr>';
+        }
+
+        $specRows = [];
+        $specRows['Artikelzustand'] = (string) ($aspects['Artikelzustand'][0] ?? '');
+        $specRows['Marke / Brand'] = (string) ($aspects['Marke'][0] ?? $aspects['Brand'][0] ?? '');
+        $specRows['MPN'] = (string) ($aspects['MPN'][0] ?? '');
+        $specRows['Kategorie'] = (string) ($category['category_path'] ?? '');
+        $specRows['Manufacturer Part Number'] = (string) ($aspects['Herstellernummer'][0] ?? $aspects['Manufacturer Part Number'][0] ?? '');
+        $specRows['Ursprungsland'] = (string) ($aspects['Ursprungsland'][0] ?? '');
+        $specRows['Hinweise des Verkäufers'] = 'Gebraucht, geprüft, voll funktionsfähig';
+
+        $specHtml = '';
+        foreach ($specRows as $label => $value) {
+            if (trim($value) === '') {
+                continue;
+            }
+            $specHtml .= '<tr><td style="padding:10px;border:1px solid #d1d5db;background:#f9fafb;font-weight:600;color:#0b2a57;">' . esc_html($label) . '</td><td style="padding:10px;border:1px solid #d1d5db;color:#111827;">' . esc_html($value) . '</td></tr>';
+        }
+
+        $paragraphs = '';
+        foreach ($baseDescription as $paragraph) {
+            $paragraphs .= '<p style="margin:0 0 10px;color:#1f2937;line-height:1.55;">' . esc_html($paragraph) . '</p>';
+        }
+        if ($descriptionText !== '' && mb_stripos(implode(' ', $baseDescription), $descriptionText) === false) {
+            $paragraphs .= '<p style="margin:0 0 10px;color:#1f2937;line-height:1.55;">' . esc_html($descriptionText) . '</p>';
+        }
+
+        return '<div style="max-width:980px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#111827;border:1px solid #dbe3ef;">'
+            . '<div style="background:#0b2a57;color:#fff;padding:12px 16px;font-size:14px;font-weight:600;">Gebrauchtes Originalteil &nbsp;|&nbsp; Schneller Versand in Europa &nbsp;|&nbsp; Lieferzeit 2–5 Werktage</div>'
+            . '<div style="padding:18px;">'
+            . '<h2 style="margin:0 0 16px;color:#0b2a57;font-size:30px;line-height:1.2;">' . esc_html((string) ($content['title'] ?? $product->get_name())) . '</h2>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
+            . '<td valign="top" width="52%" style="padding-right:12px;">'
+            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Beschreibung</h3>' . $paragraphs
+            . '<h3 style="margin:18px 0 10px;color:#0b2a57;font-size:20px;">Produktdetails</h3>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $featureRows . '</table></td>'
+            . '<td valign="top" width="48%" style="padding-left:12px;">'
+            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:22px;">Artikelmerkmale</h3>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specHtml . '</table></td>'
+            . '</tr></table>'
+            . '<div style="margin-top:20px;border:1px solid #d1d5db;background:#f8fafc;">'
+            . '<div style="padding:14px 16px;color:#0b2a57;font-size:22px;font-weight:700;">Lieferung in ganz Europa</div>'
+            . '<div style="padding:0 16px 14px;color:#1f2937;line-height:1.55;">Wir liefern europaweit. Die voraussichtliche Lieferzeit beträgt 2–5 Werktage. UK und benachbarte Inseln sind ebenfalls im Liefergebiet enthalten.</div>'
+            . '</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:16px;"><tr>'
+            . '<td width="50%" style="padding-right:8px;"><a href="#" style="display:block;background:#0b2a57;color:#fff;text-decoration:none;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</a></td>'
+            . '<td width="50%" style="padding-left:8px;"><a href="#" style="display:block;background:#0b2a57;color:#fff;text-decoration:none;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</a></td>'
+            . '</tr></table>'
+            . '<div style="margin-top:18px;border:1px solid #d1d5db;">'
+            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">FAQ</div><div style="padding:12px 14px;color:#1f2937;">Bitte vergleichen Sie die Teilenummer und Fahrzeugdaten vor dem Kauf.</div>'
+            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Rückgabe</div><div style="padding:12px 14px;color:#1f2937;">Rückgabe innerhalb von 30 Tagen nach Erhalt gemäß den Angebotsbedingungen.</div>'
+            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Versand</div><div style="padding:12px 14px;color:#1f2937;">Schneller und sicherer Versand. Lieferzeit in der Regel 2–5 Werktage.</div>'
+            . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">Zahlung</div><div style="padding:12px 14px;color:#1f2937;">Zahlungsmethoden gemäß den bei eBay verfügbaren Optionen.</div>'
+            . '</div>'
+            . '<div style="margin-top:16px;border:1px solid #d1d5db;padding:12px 14px;background:#fff;"><strong style="color:#0b2a57;">Versanddienstleister:</strong> DHL</div>'
+            . '</div></div>';
+    }
+
+    private function collect_template_properties($product, int $productId, array $aspects): array
+    {
+        $map = [
+            'Teilenummer' => ['Teilenummer', 'Part Number', 'Herstellernummer'],
+            'Fahrzeugmarke' => ['Fahrzeugmarke', 'Marke'],
+            'Fahrzeugmodell' => ['Fahrzeugmodell', 'Modell'],
+            'Baujahr' => ['Baujahr'],
+            'Motorkennbuchstabe' => ['Motorkennbuchstabe'],
+            'Motorleistung' => ['Motorleistung'],
+            'Getriebe' => ['Getriebe'],
+            'Farbe' => ['Farbe'],
+        ];
+
+        $rows = [];
+        foreach ($map as $label => $keys) {
+            $value = '';
+            foreach ($keys as $key) {
+                if (!empty($aspects[$key][0])) {
+                    $value = (string) $aspects[$key][0];
+                    break;
+                }
+                $meta = get_post_meta($productId, $key, true);
+                if (is_string($meta) && trim($meta) !== '') {
+                    $value = trim($meta);
+                    break;
+                }
+            }
+            if ($value !== '') {
+                $rows[$label] = $value;
+            }
+        }
+
+        return $rows;
+    }
     private function sanitize_ebay_de_title(string $title, string $mpn = '', string $manufacturer = ''): string
     {
         $title = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($title)) ?: '');
