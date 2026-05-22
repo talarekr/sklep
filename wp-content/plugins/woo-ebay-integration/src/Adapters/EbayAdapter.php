@@ -221,7 +221,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
-                'description' => $this->build_ebay_de_description_template($product, $product_id, $content, $aspects, $category),
+                'description' => $this->should_use_ebay_de_description_template($settings)
+                    ? $this->build_ebay_de_description_template($product, $product_id, $content, $aspects, $category)
+                    : (string) ($content['description'] ?? ''),
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
                 'aspects' => $aspects,
             ],
@@ -1625,8 +1627,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<div style="padding:0 16px 14px;color:#1f2937;line-height:1.55;">Wir liefern europaweit. Die voraussichtliche Lieferzeit beträgt 2–5 Werktage. UK und benachbarte Inseln sind ebenfalls im Liefergebiet enthalten.</div>'
             . '</div>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:16px;"><tr>'
-            . '<td width="50%" style="padding-right:8px;"><a href="#" style="display:block;background:#0b2a57;color:#fff;text-decoration:none;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</a></td>'
-            . '<td width="50%" style="padding-left:8px;"><a href="#" style="display:block;background:#0b2a57;color:#fff;text-decoration:none;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</a></td>'
+            . '<td width="50%" style="padding-right:8px;"><div style="display:block;background:#0b2a57;color:#fff;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</div></td>'
+            . '<td width="50%" style="padding-left:8px;"><div style="display:block;background:#0b2a57;color:#fff;padding:12px 14px;border-radius:4px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</div></td>'
             . '</tr></table>'
             . '<div style="margin-top:18px;border:1px solid #d1d5db;">'
             . '<div style="padding:10px 14px;background:#f9fafb;color:#0b2a57;font-weight:700;">FAQ</div><div style="padding:12px 14px;color:#1f2937;">Bitte vergleichen Sie die Teilenummer und Fahrzeugdaten vor dem Kauf.</div>'
@@ -1636,6 +1638,47 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '</div>'
             . '<div style="margin-top:16px;border:1px solid #d1d5db;padding:12px 14px;background:#fff;"><strong style="color:#0b2a57;">Versanddienstleister:</strong> DHL</div>'
             . '</div></div>';
+    }
+    private function should_use_ebay_de_description_template(array $settings): bool
+    {
+        return !empty($settings['enable_ebay_de_description_template']);
+    }
+
+    private function resolve_product_by_id_or_sku(string $identifier): array
+    {
+        $productId = ctype_digit($identifier) ? (int) $identifier : 0;
+        if ($productId <= 0) {
+            $found = wc_get_products(['limit' => 1, 'sku' => $identifier, 'status' => ['publish', 'draft', 'private']]);
+            $productId = !empty($found[0]) ? (int) $found[0]->get_id() : 0;
+        }
+        if ($productId <= 0) {
+            return ['product_id' => 0, 'product' => null];
+        }
+        $product = wc_get_product($productId);
+        return ['product_id' => $productId, 'product' => $product ?: null];
+    }
+
+    public function preview_ebay_de_description_template(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_START', ['input' => $identifier]);
+        try {
+            $resolved = $this->resolve_product_by_id_or_sku($identifier);
+            $productId = (int) ($resolved['product_id'] ?? 0);
+            $product = $resolved['product'];
+            if ($productId <= 0 || !$product) return ['result' => 'error', 'error' => 'product_not_found'];
+            $settings = $this->settings();
+            $content = $this->resolve_german_content($product, $productId, $this->marketplace_id(), $settings);
+            $category = $this->resolve_category($product, $productId, (string) $product->get_sku(), $this->marketplace_id(), $settings);
+            $aspects = $this->resolve_product_aspects($product, $productId, (string) $product->get_sku(), $settings, (string) ($category['category_id'] ?? ''), $content);
+            $html = $this->build_ebay_de_description_template($product, $productId, $content, $aspects, $category);
+            $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html)]);
+            return ['result' => 'success', 'product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html' => $html];
+        } catch (\Throwable $e) {
+            $this->logger->error('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
+            return ['result' => 'error', 'error' => $e->getMessage()];
+        }
     }
 
     private function collect_template_properties($product, int $productId, array $aspects): array
@@ -2504,6 +2547,53 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $this->logger->info('EBAY_DESCRIPTION_CONDITION_CLEANUP_DONE', ['product_id' => $productId, 'sku' => $sku, 'changed' => $changed]);
 
         return ['result' => 'success', 'changed' => $changed, 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'applied_replacements' => $replace['applied']] + $audit;
+    }
+
+    public function update_description_template_single(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_SINGLE_START', ['input' => $identifier]);
+        try {
+            $resolved = $this->resolve_product_by_id_or_sku($identifier);
+            $productId = (int) ($resolved['product_id'] ?? 0);
+            $product = $resolved['product'];
+            if ($productId <= 0 || !$product) return ['result' => 'error', 'error' => 'product_not_found'];
+            $settings = $this->settings();
+            $sku = (string) $this->resolve_ebay_sku($product, $productId, null, $settings)['sku'];
+            $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+            $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+            if ($offerId === '' || $listingId === '' || $sku === '') return ['result' => 'error', 'error' => 'missing_offer_listing_sku'];
+            $content = $this->resolve_german_content($product, $productId, $this->marketplace_id(), $settings);
+            $category = $this->resolve_category($product, $productId, $sku, $this->marketplace_id(), $settings);
+            $aspects = $this->resolve_product_aspects($product, $productId, $sku, $settings, (string) ($category['category_id'] ?? ''), $content);
+            $html = $this->build_ebay_de_description_template($product, $productId, $content, $aspects, $category);
+            $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+            $inventory = $this->client->get_inventory_item($sku, ['stage' => 'description_template_single', 'product_id' => $productId, 'sku' => $sku]);
+            if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
+            $before = (string) ($inventory['product']['description'] ?? '');
+            $inventory['product']['description'] = $html;
+            $changed = $before !== $html;
+            if ($changed) {
+                $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'description_template_single_update', 'product_id' => $productId, 'sku' => $sku]);
+                if (is_wp_error($update)) return ['result' => 'error', 'error' => $update->get_error_message()];
+                $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+                $offer = $this->client->get_offer($offerId, ['stage' => 'description_template_single_offer_refresh_get_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+                if (is_wp_error($offer)) return ['result' => 'error', 'error' => $offer->get_error_message()];
+                $security = ['called_create_offer' => false, 'called_publish_offer' => false, 'preserved_title' => true, 'preserved_price' => true, 'preserved_stock' => true, 'preserved_shipping' => true, 'preserved_category' => true, 'preserved_aspects' => true, 'changed_only' => 'description_template'];
+                $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_OFFER_REFRESH_START', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $security);
+                $refresh = $this->client->update_offer($offerId, (array) $offer, ['stage' => 'description_template_single_offer_refresh_update_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+                if (is_wp_error($refresh)) return ['result' => 'error', 'error' => $refresh->get_error_message()];
+                $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_OFFER_REFRESH_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $security);
+            } else {
+                $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+            }
+            $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed]);
+            return ['result' => 'success', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed, 'html' => $html];
+        } catch (\Throwable $e) {
+            $this->logger->error('EBAY_DESCRIPTION_TEMPLATE_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
+            return ['result' => 'error', 'error' => $e->getMessage()];
+        }
     }
 
     private function description_contains_condition_markers(string $description): bool
