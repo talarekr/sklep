@@ -75,7 +75,6 @@ class AdminPage
         add_action('admin_post_wei_ebay_rebuild_initial_publish_candidates', [$this, 'ebay_rebuild_initial_publish_candidates']);
         add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
         add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
-        add_action('admin_post_wei_test_ovoko_callback', [$this, 'test_ovoko_callback']);
     }
 
     public function register_menu(): void
@@ -334,24 +333,7 @@ class AdminPage
         $listing_quality_audit = is_array($listing_quality_audit) ? $listing_quality_audit : [];
         $shipping_policy_bulk_status = $this->shipping_policy_bulk_status();
         $basic_specifics_bulk_status = $this->basic_specifics_bulk_status();
-        $ovoko_readiness = $this->ovoko_readiness_summary($s);
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
-    }
-    public function test_ovoko_callback(): void
-    {
-        $this->require_manage_options();
-        check_admin_referer('wei_test_ovoko_callback');
-        $s = OvokoIntegrationService::defaults($this->settings());
-        if (empty($s['ovoko_callback_dry_run'])) {
-            $this->set_status('Ovoko test callback skipped: dry-run is disabled.');
-            $this->go();
-            return;
-        }
-        $partId = sanitize_text_field((string) ($_POST['ovoko_test_part_id'] ?? ''));
-        $status = sanitize_text_field((string) ($_POST['ovoko_test_status'] ?? 'sold'));
-        (new OvokoIntegrationService($this->logger))->process_part_status_changed($partId, $status, true);
-        $this->set_status('Ovoko test callback simulated in dry-run mode.');
-        $this->go();
     }
     public function basic_specifics_bulk_start(): void { $this->require_manage_options(); check_admin_referer('wei_basic_specifics_bulk_start'); $batchSize=max(1,min(25,absint($_POST['batch_size']??1))); $buildLimit=max(1,min(500,absint($_POST['build_limit']??250))); $summary=$this->build_basic_specifics_bulk_queue($batchSize,$buildLimit); $this->logger->info('EBAY_BASIC_SPECIFICS_BULK_QUEUE_BUILT',$summary); $this->set_status('Basic specifics bulk queue built: '.wp_json_encode($summary)); $this->go(); }
     public function basic_specifics_bulk_pause(): void { $this->require_manage_options(); check_admin_referer('wei_basic_specifics_bulk_pause'); $status=$this->basic_specifics_bulk_status(); $status['state']='paused'; $status['updated_at']=gmdate('Y-m-d H:i:s'); update_option('wei_ebay_basic_specifics_bulk_status',$status,false); $this->logger->info('EBAY_BASIC_SPECIFICS_BULK_PAUSED',$status); $this->go(); }
@@ -389,13 +371,6 @@ class AdminPage
             $s['client_secret'] = $postedClientSecret;
         }
         $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
-        $s['ovoko_callback_enabled'] = isset($_POST['ovoko_callback_enabled']) ? 1 : 0;
-        $s['ovoko_callback_dry_run'] = isset($_POST['ovoko_callback_dry_run']) ? 1 : 0;
-        $s['ovoko_callback_header_name'] = sanitize_text_field((string) ($_POST['ovoko_callback_header_name'] ?? ''));
-        $postedOvokoSecret = sanitize_text_field((string) ($_POST['ovoko_callback_header_secret'] ?? ''));
-        if ($postedOvokoSecret !== '') {
-            $s['ovoko_callback_header_secret'] = $postedOvokoSecret;
-        }
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $defaultItemCondition = strtoupper(sanitize_text_field((string) ($_POST['default_item_condition'] ?? EbayConditionResolver::DEFAULT_ITEM_CONDITION)));
@@ -461,31 +436,6 @@ class AdminPage
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
         exit;
-    }
-    private function ovoko_readiness_summary(array $settings): array
-    {
-        $s = OvokoIntegrationService::defaults($settings);
-        $events = array_slice((array) get_option(OvokoIntegrationService::OPTION_EVENTS, []), 0, 10);
-        $stats = (array) get_option(OvokoIntegrationService::OPTION_STATS, []);
-        $withPart = (new \WP_Query(['post_type' => 'product', 'fields' => 'ids', 'posts_per_page' => 1, 'meta_key' => '_ovoko_part_id']))->found_posts;
-        $total = (new \WP_Query(['post_type' => 'product', 'fields' => 'ids', 'posts_per_page' => 1]))->found_posts;
-        $storeUrl = (string) home_url('/');
-        $restUrl = (string) get_rest_url(null, 'wc/v3');
-        return [
-            'callback_url' => (string) rest_url('gpswiss-ovoko/v1/callback'),
-            'enabled' => !empty($s['ovoko_callback_enabled']),
-            'dry_run' => !empty($s['ovoko_callback_dry_run']),
-            'header_name' => (string) ($s['ovoko_callback_header_name'] ?? ''),
-            'header_secret_set' => (string) ($s['ovoko_callback_header_secret'] ?? '') !== '',
-            'store_url' => $storeUrl,
-            'is_https' => str_starts_with($storeUrl, 'https://'),
-            'wc_rest_url' => $restUrl,
-            'wc_rest_available' => function_exists('rest_url'),
-            'stats' => $stats,
-            'events' => $events,
-            'products_with_ovoko_part_id' => (int) $withPart,
-            'products_without_ovoko_part_id' => max(0, (int) $total - (int) $withPart),
-        ];
     }
 
     public function generate_shipping_mapping_report(): void

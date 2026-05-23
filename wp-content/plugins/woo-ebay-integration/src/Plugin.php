@@ -17,7 +17,6 @@ use WEI\Services\SyncService;
 use WEI\Services\AdminPage;
 use WEI\Services\AutoCategoryMappingService;
 use WEI\Services\AutoSyncScheduler;
-use WEI\Services\OvokoIntegrationService;
 
 class Plugin
 {
@@ -38,13 +37,11 @@ class Plugin
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
         $scheduler = new AutoSyncScheduler($adapter, $orders, $logger);
-        $ovoko = new OvokoIntegrationService($logger);
         $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();
         $scheduler->hooks();
-        $ovoko->hooks();
 
         add_action('admin_init', [$auth, 'handle_oauth_callback']);
         add_action('wei_ebay_sync_stock_batch', [$sync, 'sync_stock_batch']);
