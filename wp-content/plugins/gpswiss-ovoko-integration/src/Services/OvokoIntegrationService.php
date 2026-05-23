@@ -167,6 +167,16 @@ class OvokoIntegrationService
             return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => true, 'action' => $action, 'forced_local_dry_run' => $forcedLocalDryRun], 'context' => $context];
         }
 
+        if ($action === 'no_action') {
+            return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => $dryRun, 'action' => $action], 'context' => $context];
+        }
+
+        if ($dryRun) {
+            $this->log('OVOKO_CALLBACK_DRY_RUN', $context);
+            $this->increment_counter('dry_run');
+            return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => true, 'action' => $action, 'forced_local_dry_run' => $forcedLocalDryRun], 'context' => $context];
+        }
+
         $this->log('OVOKO_CALLBACK_APPLIED', $context);
         $this->increment_counter('applied');
         return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => $dryRun, 'action' => $action], 'context' => $context];
@@ -257,8 +267,10 @@ class OvokoIntegrationService
         $restCheck = wp_remote_get($restUrl, ['timeout' => 8]);
         $wooActive = class_exists('WooCommerce');
 
-        $withPartId = (int) $this->count_products_with_meta('_ovoko_part_id');
+        $metaKeyCounts = $this->count_products_for_mapping_meta_keys();
+        $withPartId = (int) array_sum($metaKeyCounts);
         $allProducts = (int) wp_count_posts('product')->publish + (int) wp_count_posts('product')->draft;
+        $lastLookupFoundProduct = $this->did_last_lookup_find_product();
 
         return [
             'callback_url' => rest_url('gpswiss-ovoko/v1/callback'),
@@ -276,25 +288,40 @@ class OvokoIntegrationService
             'with_ovoko_part_id' => $withPartId,
             'without_ovoko_part_id' => max(0, $allProducts - $withPartId),
             'mapping_meta_keys' => self::PART_ID_META_KEYS,
-            'readiness_report' => $this->build_readiness_report($wooActive, $settings, $withPartId),
+            'mapping_meta_key_counts' => $metaKeyCounts,
+            'last_lookup_found_product' => $lastLookupFoundProduct,
+            'readiness_report' => $this->build_readiness_report($wooActive, $settings, $withPartId, $lastLookupFoundProduct),
         ];
     }
 
-    private function count_products_with_meta(string $metaKey): int
+    private function count_products_for_mapping_meta_keys(): array
     {
         global $wpdb;
-        if (!$wpdb) return 0;
-        return (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID WHERE p.post_type = 'product' AND pm.meta_key = %s AND pm.meta_value <> ''",
-            $metaKey
-        ));
+        $counts = array_fill_keys(self::PART_ID_META_KEYS, 0);
+        if (!$wpdb) {
+            return $counts;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count(self::PART_ID_META_KEYS), '%s'));
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- placeholders are prepared via $wpdb->prepare
+        $sql = "SELECT pm.meta_key, COUNT(DISTINCT p.ID) AS cnt FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID WHERE p.post_type = 'product' AND pm.meta_key IN ($placeholders) AND pm.meta_value <> '' GROUP BY pm.meta_key";
+        $rows = $wpdb->get_results($wpdb->prepare($sql, self::PART_ID_META_KEYS), ARRAY_A);
+
+        foreach ((array) $rows as $row) {
+            $key = (string) ($row['meta_key'] ?? '');
+            if (array_key_exists($key, $counts)) {
+                $counts[$key] = (int) ($row['cnt'] ?? 0);
+            }
+        }
+
+        return $counts;
     }
 
-    private function build_readiness_report(bool $wooActive, array $settings, int $withPartId): array
+    private function build_readiness_report(bool $wooActive, array $settings, int $withPartId, bool $lastLookupFoundProduct): array
     {
         return [
             'callback_receiver_ready' => !empty($settings['ovoko_callback_enabled']) && !empty($settings['ovoko_callback_header_secret']),
-            'mapping_ready' => $withPartId > 0,
+            'mapping_ready' => $withPartId > 0 || $lastLookupFoundProduct,
             'full_import_data_ready' => false,
             'ovoko_woocommerceintegration_needed' => true,
             'risks' => [
@@ -303,6 +330,18 @@ class OvokoIntegrationService
             ],
             'source_tagging_proposal' => ['source=allegro_import', 'source=ovoko_master'],
         ];
+    }
+
+    private function did_last_lookup_find_product(): bool
+    {
+        $events = array_reverse((array) get_option(self::EVENTS_OPTION_KEY, []));
+        foreach ($events as $event) {
+            if (!isset($event['part_id']) || $event['part_id'] === '') {
+                continue;
+            }
+            return !empty($event['product_id']);
+        }
+        return false;
     }
 
     public function run_local_test_callback(string $partId, string $status): array

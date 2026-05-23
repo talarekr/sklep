@@ -46,8 +46,16 @@
     <p>received: <?php echo (int) $data['counters']['received']; ?> | auth_failed: <?php echo (int) $data['counters']['auth_failed']; ?> | duplicate: <?php echo (int) $data['counters']['duplicate']; ?> | dry_run: <?php echo (int) $data['counters']['dry_run']; ?> | applied: <?php echo (int) $data['counters']['applied']; ?> | failed: <?php echo (int) $data['counters']['failed']; ?></p>
 
     <h2>Mapping readiness</h2>
-    <p>Products with <code>_ovoko_part_id</code>: <?php echo (int) $data['with_ovoko_part_id']; ?> | without: <?php echo (int) $data['without_ovoko_part_id']; ?></p>
+    <p>Products with any mapping key: <?php echo (int) $data['with_ovoko_part_id']; ?> | without: <?php echo (int) $data['without_ovoko_part_id']; ?></p>
     <p>Mapping meta keys: <code><?php echo esc_html(implode(', ', $data['mapping_meta_keys'])); ?></code></p>
+    <table class="widefat striped" style="max-width:700px;">
+        <thead><tr><th>meta_key</th><th>products_count</th></tr></thead>
+        <tbody>
+        <?php foreach (($data['mapping_meta_key_counts'] ?? []) as $metaKey => $count): ?>
+            <tr><td><code><?php echo esc_html((string) $metaKey); ?></code></td><td><?php echo (int) $count; ?></td></tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
 
     <h2>Technical report (Ovoko → Woo → eBay readiness)</h2>
     <ul>
@@ -62,9 +70,9 @@
     <ul><?php foreach ($data['readiness_report']['risks'] as $risk): ?><li><?php echo esc_html($risk); ?></li><?php endforeach; ?></ul>
 
     <h2>Recent callback events</h2>
-    <table class="widefat striped"><thead><tr><th>event_id</th><th>event_type</th><th>part_id</th><th>status</th><th>product_id</th><th>sku</th><th>dry_run</th><th>action</th></tr></thead><tbody>
+    <table class="widefat striped"><thead><tr><th>event_id</th><th>event_type</th><th>part_id</th><th>status</th><th>product_id</th><th>matched_meta_key</th><th>sku</th><th>dry_run</th><th>action</th></tr></thead><tbody>
     <?php foreach (array_slice($data['recent_events'], 0, 10) as $event): ?>
-        <tr><td><code><?php echo esc_html((string) ($event['event_id'] ?? '')); ?></code></td><td><?php echo esc_html((string) ($event['event_type'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['part_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['status'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['product_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['sku'] ?? '')); ?></td><td><?php echo !empty($event['dry_run']) ? 'Yes' : 'No'; ?></td><td><?php echo esc_html((string) ($event['action_that_would_be_taken'] ?? '')); ?></td></tr>
+        <tr><td><code><?php echo esc_html((string) ($event['event_id'] ?? '')); ?></code></td><td><?php echo esc_html((string) ($event['event_type'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['part_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['status'] ?? '')); ?></td><td><?php echo esc_html((string) ($event['product_id'] ?? '')); ?></td><td><code><?php echo esc_html((string) ($event['matched_meta_key'] ?? '')); ?></code></td><td><?php echo esc_html((string) ($event['sku'] ?? '')); ?></td><td><?php echo !empty($event['dry_run']) ? 'Yes' : 'No'; ?></td><td><?php echo esc_html((string) ($event['action_that_would_be_taken'] ?? '')); ?></td></tr>
     <?php endforeach; ?>
     </tbody></table>
 
