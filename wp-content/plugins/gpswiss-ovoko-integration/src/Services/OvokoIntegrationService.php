@@ -58,7 +58,10 @@ class OvokoIntegrationService
         $clean['ovoko_callback_enabled'] = !empty($settings['ovoko_callback_enabled']);
         $clean['ovoko_callback_dry_run'] = !empty($settings['ovoko_callback_dry_run']);
         $clean['ovoko_callback_header_name'] = sanitize_key((string) ($settings['ovoko_callback_header_name'] ?? 'gpswiss'));
-        $clean['ovoko_callback_header_secret'] = sanitize_text_field((string) ($settings['ovoko_callback_header_secret'] ?? ''));
+        $newSecret = sanitize_text_field((string) ($settings['ovoko_callback_header_secret'] ?? ''));
+        if ($newSecret !== '') {
+            $clean['ovoko_callback_header_secret'] = $newSecret;
+        }
         update_option(self::OPTION_KEY, $clean, false);
     }
 
@@ -126,10 +129,16 @@ class OvokoIntegrationService
         return null;
     }
 
-    private function process_callback(array $payload, array $settings): array
+    private function process_callback(array $payload, array $settings, array $options = []): array
     {
         $context = $this->build_log_context($payload);
         $dryRun = !empty($settings['ovoko_callback_dry_run']);
+        $forcedLocalDryRun = !empty($options['forced_local_dry_run']);
+        if ($forcedLocalDryRun) {
+            $dryRun = true;
+            $context['forced_local_dry_run'] = true;
+            $context['dry_run_reason'] = 'Local callback test enforces dry-run';
+        }
         $context['dry_run'] = $dryRun;
 
         if (($context['event_type'] ?? '') !== 'part.status.changed') {
@@ -155,7 +164,7 @@ class OvokoIntegrationService
         if ($action !== 'no_action' && $dryRun) {
             $this->log('OVOKO_CALLBACK_DRY_RUN', $context);
             $this->increment_counter('dry_run');
-            return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => true, 'action' => $action], 'context' => $context];
+            return ['status' => 200, 'response' => ['ok' => true, 'dry_run' => true, 'action' => $action, 'forced_local_dry_run' => $forcedLocalDryRun], 'context' => $context];
         }
 
         $this->log('OVOKO_CALLBACK_APPLIED', $context);
@@ -299,9 +308,7 @@ class OvokoIntegrationService
     public function run_local_test_callback(string $partId, string $status): array
     {
         $settings = $this->get_settings();
-        if (empty($settings['ovoko_callback_dry_run'])) {
-            return ['ok' => false, 'message' => 'Local test available only in dry-run mode'];
-        }
+        $settings['ovoko_callback_dry_run'] = true;
 
         $payload = [
             'event_id' => wp_generate_uuid4(),
@@ -310,8 +317,9 @@ class OvokoIntegrationService
             'event_data' => ['part_id' => $partId, 'status' => $status],
         ];
 
-        $result = $this->process_callback($payload, $settings);
+        $result = $this->process_callback($payload, $settings, ['forced_local_dry_run' => true]);
         $this->append_recent_event($result['context']);
+        $result['response']['message'] = 'Forced local dry-run executed. No stock changes were applied.';
         return $result['response'];
     }
 }
