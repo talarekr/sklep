@@ -427,9 +427,32 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
                     <tr><th>SKU aspect overrides</th><td><textarea class="large-text code" rows="4" name="sku_aspect_overrides"><?php echo esc_textarea((string) $setting('sku_aspect_overrides', '')); ?></textarea></td></tr>
                     <tr><th>Category aspect fallbacks</th><td><textarea class="large-text code" rows="4" name="category_aspect_fallbacks"><?php echo esc_textarea((string) $setting('category_aspect_fallbacks', '')); ?></textarea></td></tr>
                     <tr><th>Default Hersteller fallback</th><td><input class="regular-text" name="default_hersteller_fallback" value="<?php echo esc_attr((string) $setting('default_hersteller_fallback', '')); ?>" /></td></tr>
+                    <tr><th>Ovoko callback enabled</th><td><label><input type="checkbox" name="ovoko_callback_enabled" value="1" <?php checked(!empty($s['ovoko_callback_enabled'])); ?> /> enabled</label></td></tr>
+                    <tr><th>Ovoko callback dry-run</th><td><label><input type="checkbox" name="ovoko_callback_dry_run" value="1" <?php checked(!array_key_exists('ovoko_callback_dry_run', $s) || !empty($s['ovoko_callback_dry_run'])); ?> /> enabled (default)</label></td></tr>
+                    <tr><th>Ovoko callback header name</th><td><input class="regular-text" name="ovoko_callback_header_name" value="<?php echo esc_attr((string) ($s['ovoko_callback_header_name'] ?? '')); ?>" placeholder="gpswiss" /></td></tr>
+                    <tr><th>Ovoko callback header secret</th><td><input class="regular-text" type="password" name="ovoko_callback_header_secret" placeholder="<?php echo esc_attr($maskSecret((string) ($s['ovoko_callback_header_secret'] ?? ''))); ?>" autocomplete="new-password" /></td></tr>
                 </table>
             </details>
             <p><button class="button button-primary">Save settings</button></p>
+        </form>
+    </div>
+
+    <div class="wei-box">
+        <h2>Ovoko integration readiness</h2>
+        <p><strong>Callback URL:</strong> <code><?php echo esc_html((string) ($ovoko_readiness['callback_url'] ?? '')); ?></code></p>
+        <p><strong>Enabled:</strong> <?php echo !empty($ovoko_readiness['enabled']) ? 'yes' : 'no'; ?> | <strong>Dry-run:</strong> <?php echo !empty($ovoko_readiness['dry_run']) ? 'yes' : 'no'; ?></p>
+        <p><strong>Header name:</strong> <?php echo esc_html((string) ($ovoko_readiness['header_name'] ?? '')); ?> | <strong>Header secret set:</strong> <?php echo !empty($ovoko_readiness['header_secret_set']) ? 'yes' : 'no'; ?></p>
+        <p><strong>Woo REST API:</strong> <?php echo !empty($ovoko_readiness['wc_rest_available']) ? 'available' : 'unavailable'; ?> | <strong>HTTPS:</strong> <?php echo !empty($ovoko_readiness['is_https']) ? 'yes' : 'no'; ?></p>
+        <p><strong>Store URL:</strong> <code><?php echo esc_html((string) ($ovoko_readiness['store_url'] ?? '')); ?></code></p>
+        <p><strong>Counts:</strong> received=<?php echo (int) (($ovoko_readiness['stats']['received'] ?? 0)); ?>, auth_failed=<?php echo (int) (($ovoko_readiness['stats']['auth_failed'] ?? 0)); ?>, duplicate=<?php echo (int) (($ovoko_readiness['stats']['duplicate'] ?? 0)); ?>, dry_run=<?php echo (int) (($ovoko_readiness['stats']['dry_run'] ?? 0)); ?>, applied=<?php echo (int) (($ovoko_readiness['stats']['applied'] ?? 0)); ?></p>
+        <p><strong>Products with _ovoko_part_id:</strong> <?php echo (int) ($ovoko_readiness['products_with_ovoko_part_id'] ?? 0); ?> | <strong>without:</strong> <?php echo (int) ($ovoko_readiness['products_without_ovoko_part_id'] ?? 0); ?></p>
+        <h3>Test Ovoko callback locally (dry-run only)</h3>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_test_ovoko_callback'); ?>
+            <input type="hidden" name="action" value="wei_test_ovoko_callback" />
+            <input type="text" name="ovoko_test_part_id" placeholder="part_id" required />
+            <input type="text" name="ovoko_test_status" value="sold" required />
+            <button class="button button-secondary">Test Ovoko callback locally</button>
         </form>
     </div>
 
