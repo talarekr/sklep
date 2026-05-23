@@ -21,8 +21,8 @@
             <tr><th>Callback enabled</th><td><label><input type="checkbox" name="ovoko_callback_enabled" value="1" <?php checked(!empty($data['settings']['ovoko_callback_enabled'])); ?> /> Enabled</label></td></tr>
             <tr><th>Dry-run mode</th><td><label><input type="checkbox" name="ovoko_callback_dry_run" value="1" <?php checked(!empty($data['settings']['ovoko_callback_dry_run'])); ?> /> Enabled</label></td></tr>
             <tr><th>Header name</th><td><input type="text" name="ovoko_callback_header_name" value="<?php echo esc_attr((string) $data['settings']['ovoko_callback_header_name']); ?>" class="regular-text" /></td></tr>
-            <tr><th>Header secret</th><td><input type="password" name="ovoko_callback_header_secret" value="<?php echo esc_attr((string) $data['settings']['ovoko_callback_header_secret']); ?>" class="regular-text" />
-            <p>Configured: <strong><?php echo !empty($data['settings']['ovoko_callback_header_secret']) ? 'Yes' : 'No'; ?></strong></p></td></tr>
+            <tr><th>Header secret</th><td><input type="password" name="ovoko_callback_header_secret" value="" class="regular-text" autocomplete="new-password" />
+            <p>Secret configured: <strong><?php echo !empty($data['settings']['ovoko_callback_header_secret']) ? 'Yes' : 'No'; ?></strong></p></td></tr>
         </table>
         <?php submit_button('Save settings'); ?>
     </form>
