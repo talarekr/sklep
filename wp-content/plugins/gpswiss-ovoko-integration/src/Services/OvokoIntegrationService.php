@@ -2,6 +2,7 @@
 
 namespace GPSwiss\Ovoko\Services;
 
+use GPSwiss\Ovoko\DTO\NormalizedOvokoPart;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -44,6 +45,16 @@ class OvokoIntegrationService
             'ovoko_callback_dry_run' => true,
             'ovoko_callback_header_name' => 'gpswiss',
             'ovoko_callback_header_secret' => '',
+            'ovoko_supply_connector_enabled' => false,
+            'ovoko_supply_connector_base_url' => 'https://supply-connector.ms.ovoko.com',
+            'ovoko_supply_connector_token' => '',
+            'ovoko_supply_connector_api_key' => '',
+            'ovoko_integration_id' => '',
+            'ovoko_sync_enabled' => false,
+            'ovoko_sync_dry_run' => true,
+            'ovoko_sync_mode' => 'disabled',
+            'ovoko_sync_batch_limit' => 10,
+            'ovoko_last_sync_at' => '',
         ];
     }
 
@@ -62,6 +73,22 @@ class OvokoIntegrationService
         if ($newSecret !== '') {
             $clean['ovoko_callback_header_secret'] = $newSecret;
         }
+        $clean['ovoko_supply_connector_enabled'] = !empty($settings['ovoko_supply_connector_enabled']);
+        $clean['ovoko_supply_connector_base_url'] = esc_url_raw((string) ($settings['ovoko_supply_connector_base_url'] ?? 'https://supply-connector.ms.ovoko.com'));
+        $newToken = sanitize_text_field((string) ($settings['ovoko_supply_connector_token'] ?? ''));
+        if ($newToken !== '') {
+            $clean['ovoko_supply_connector_token'] = $newToken;
+        }
+        $newApiKey = sanitize_text_field((string) ($settings['ovoko_supply_connector_api_key'] ?? ''));
+        if ($newApiKey !== '') {
+            $clean['ovoko_supply_connector_api_key'] = $newApiKey;
+        }
+        $clean['ovoko_integration_id'] = sanitize_text_field((string) ($settings['ovoko_integration_id'] ?? ''));
+        $clean['ovoko_sync_enabled'] = !empty($settings['ovoko_sync_enabled']);
+        $clean['ovoko_sync_dry_run'] = !empty($settings['ovoko_sync_dry_run']);
+        $mode = sanitize_key((string) ($settings['ovoko_sync_mode'] ?? 'disabled'));
+        $clean['ovoko_sync_mode'] = in_array($mode, ['disabled','preview_only','manual_single','batch_dry_run'], true) ? $mode : 'disabled';
+        $clean['ovoko_sync_batch_limit'] = max(1, min(100, (int) ($settings['ovoko_sync_batch_limit'] ?? 10)));
         update_option(self::OPTION_KEY, $clean, false);
     }
 
@@ -273,6 +300,13 @@ class OvokoIntegrationService
         $allProducts = (int) wp_count_posts('product')->publish + (int) wp_count_posts('product')->draft;
         $lastLookupFoundProduct = $this->did_last_lookup_find_product();
 
+        $connectorClient = new OvokoSupplyConnectorClient($settings);
+        $syncService = new OvokoProductSyncService();
+        $connectorCheck = $connectorClient->check_configuration();
+        $fixturePart = NormalizedOvokoPart::from_array($syncService->developer_sample_fixture());
+        $fixtureWithHash = NormalizedOvokoPart::from_array($fixturePart->to_array() + ['payload_hash' => $syncService->calculate_payload_hash($fixturePart)]);
+        $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
+
         return [
             'callback_url' => rest_url('gpswiss-ovoko/v1/callback'),
             'settings' => $settings,
@@ -292,6 +326,11 @@ class OvokoIntegrationService
             'mapping_meta_key_counts' => $metaKeyCounts,
             'last_lookup_found_product' => $lastLookupFoundProduct,
             'readiness_report' => $this->build_readiness_report($wooActive, $settings, $withPartId, $lastLookupFoundProduct),
+            'supply_connector_check' => $connectorCheck,
+            'supply_connector_resources' => $connectorClient->list_supported_resources_from_static_analysis(),
+            'sync_preview_fixture' => $fixtureWithHash->to_array(),
+            'sync_preview_meta_mapping' => $syncService->map_to_woo_meta_preview($fixtureWithHash),
+            'sync_preview_match' => $matchPreview,
         ];
     }
 
@@ -343,6 +382,14 @@ class OvokoIntegrationService
             return !empty($event['product_id']);
         }
         return false;
+    }
+
+    public function check_supply_connector_configuration(): array
+    {
+        $client = new OvokoSupplyConnectorClient($this->get_settings());
+        $result = $client->check_configuration();
+        $result['checked_at'] = gmdate('c');
+        return $result;
     }
 
     public function run_local_test_callback(string $partId, string $status): array
