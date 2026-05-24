@@ -43,7 +43,7 @@
     </ol>
 
     <h2>Callback counters</h2>
-    <p>received: <?php echo (int) $data['counters']['received']; ?> | auth_failed: <?php echo (int) $data['counters']['auth_failed']; ?> | duplicate: <?php echo (int) $data['counters']['duplicate']; ?> | dry_run: <?php echo (int) $data['counters']['dry_run']; ?> | applied: <?php echo (int) $data['counters']['applied']; ?> | failed: <?php echo (int) $data['counters']['failed']; ?></p>
+    <p>received: <?php echo (int) $data['counters']['received']; ?> | auth_failed: <?php echo (int) $data['counters']['auth_failed']; ?> | duplicate: <?php echo (int) $data['counters']['duplicate']; ?> | dry_run: <?php echo (int) $data['counters']['dry_run']; ?> | applied: <?php echo (int) $data['counters']['applied']; ?> | unsupported: <?php echo (int) $data['counters']['unsupported']; ?> | failed: <?php echo (int) $data['counters']['failed']; ?></p>
 
     <h2>Mapping readiness</h2>
     <p>Products with any mapping key: <?php echo (int) $data['with_ovoko_part_id']; ?> | without: <?php echo (int) $data['without_ovoko_part_id']; ?></p>
