@@ -142,9 +142,10 @@ class OvokoIntegrationService
         $context['dry_run'] = $dryRun;
 
         if (($context['event_type'] ?? '') !== 'part.status.changed') {
-            $this->log('OVOKO_CALLBACK_FAILED', $context + ['reason' => 'Unsupported event_type']);
-            $this->increment_counter('failed');
-            return ['status' => 400, 'response' => ['ok' => false, 'message' => 'Unsupported event_type'], 'context' => $context];
+            $context['action_that_would_be_taken'] = 'unsupported_event';
+            $this->log('OVOKO_CALLBACK_UNSUPPORTED_EVENT', $context + ['reason' => 'Unsupported event_type']);
+            $this->increment_counter('unsupported');
+            return ['status' => 200, 'response' => ['ok' => true, 'ignored' => true, 'message' => 'Unsupported event_type'], 'context' => $context];
         }
 
         $context['product'] = $this->find_product_by_part_id((string) ($context['part_id'] ?? ''));
@@ -231,7 +232,7 @@ class OvokoIntegrationService
     private function increment_counter(string $key): void
     {
         $counters = wp_parse_args(get_option(self::COUNTERS_OPTION_KEY, []), [
-            'received' => 0, 'auth_failed' => 0, 'duplicate' => 0, 'dry_run' => 0, 'applied' => 0, 'failed' => 0,
+            'received' => 0, 'auth_failed' => 0, 'duplicate' => 0, 'dry_run' => 0, 'applied' => 0, 'unsupported' => 0, 'failed' => 0,
         ]);
         $counters[$key] = (int) ($counters[$key] ?? 0) + 1;
         update_option(self::COUNTERS_OPTION_KEY, $counters, false);
@@ -276,7 +277,7 @@ class OvokoIntegrationService
             'callback_url' => rest_url('gpswiss-ovoko/v1/callback'),
             'settings' => $settings,
             'counters' => wp_parse_args(get_option(self::COUNTERS_OPTION_KEY, []), [
-                'received' => 0, 'auth_failed' => 0, 'duplicate' => 0, 'dry_run' => 0, 'applied' => 0, 'failed' => 0,
+                'received' => 0, 'auth_failed' => 0, 'duplicate' => 0, 'dry_run' => 0, 'applied' => 0, 'unsupported' => 0, 'failed' => 0,
             ]),
             'recent_events' => array_reverse((array) get_option(self::EVENTS_OPTION_KEY, [])),
             'woo_active' => $wooActive,
