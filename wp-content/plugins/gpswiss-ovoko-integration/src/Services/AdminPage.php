@@ -16,6 +16,7 @@ class AdminPage
         add_action('admin_menu', [$this, 'register_admin_page']);
         add_action('admin_post_gpswiss_ovoko_save_settings', [$this, 'handle_save_settings']);
         add_action('admin_post_gpswiss_ovoko_test_callback', [$this, 'handle_test_callback']);
+        add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
     }
 
     public function register_admin_page(): void
@@ -52,6 +53,21 @@ class AdminPage
 
         $this->service->save_settings($_POST);
         set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'Settings updated.'], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_check_supply_connector(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_check_supply_connector');
+
+        $result = $this->service->check_supply_connector_configuration();
+        $type = (($result['status'] ?? '') === 'configured_for_next_step') ? 'success' : 'warning';
+        set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }

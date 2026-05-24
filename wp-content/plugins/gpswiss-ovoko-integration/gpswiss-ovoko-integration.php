@@ -10,6 +10,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/src/Contracts/OvokoConnectorInterface.php';
+require_once __DIR__ . '/src/DTO/NormalizedOvokoPart.php';
+require_once __DIR__ . '/src/Services/OvokoSupplyConnectorClient.php';
+require_once __DIR__ . '/src/Services/OvokoProductSyncService.php';
 require_once __DIR__ . '/src/Services/OvokoIntegrationService.php';
 require_once __DIR__ . '/src/Services/AdminPage.php';
 require_once __DIR__ . '/src/Plugin.php';
