@@ -65,6 +65,30 @@
         <input id="allegro_match_preview_product_id" type="number" min="1" name="product_id" value="0" />
         <?php submit_button('Preview Allegro to Ovoko match', 'secondary', 'submit', false); ?>
     </form>
+    <h2>Ovoko CSV mapping file</h2>
+    <p><strong>CSV is used only for mapping/enrichment.</strong> No price/stock/images/title updates from CSV.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
+        <?php wp_nonce_field('gpswiss_ovoko_import_csv_mapping'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_import_csv_mapping" />
+        <label for="csv_mapping_file">Upload CSV:</label>
+        <input id="csv_mapping_file" type="file" name="csv_mapping_file" accept=".csv,text/csv" />
+        <br />
+        <label for="csv_file_path">Or local path:</label>
+        <input id="csv_file_path" type="text" class="regular-text" name="csv_file_path" value="/workspace/sklep/parts-stock-2026-05-25.csv" />
+        <?php submit_button('Import CSV mapping', 'secondary', 'submit', false); ?>
+    </form>
+    <?php $csvStatus = (array) ($data['csv_mapping_status'] ?? []); if (!empty($csvStatus)): ?>
+        <ul>
+            <li>rows_total: <code><?php echo esc_html((string) ($csvStatus['rows_total'] ?? '')); ?></code></li>
+            <li>rows_with_part_code: <code><?php echo esc_html((string) ($csvStatus['rows_with_part_code'] ?? '')); ?></code></li>
+            <li>unique_part_codes: <code><?php echo esc_html((string) ($csvStatus['unique_part_codes'] ?? '')); ?></code></li>
+            <li>duplicate_part_codes_count: <code><?php echo esc_html((string) ($csvStatus['duplicate_part_codes_count'] ?? '')); ?></code></li>
+            <li>duplicate_rows_count: <code><?php echo esc_html((string) ($csvStatus['duplicate_rows_count'] ?? '')); ?></code></li>
+            <li>imported_at: <code><?php echo esc_html((string) ($csvStatus['imported_at'] ?? '')); ?></code></li>
+            <li>file_name: <code><?php echo esc_html((string) ($csvStatus['file_name'] ?? '')); ?></code></li>
+            <li>file_hash: <code><?php echo esc_html((string) ($csvStatus['file_hash'] ?? '')); ?></code></li>
+        </ul>
+    <?php endif; ?>
 
     <h2>Probe RRR part search by code</h2>
     <p><strong>Diagnostic only.</strong> Read-only probes on <code>/v2/get/parts</code> with candidate search parameters.</p>
