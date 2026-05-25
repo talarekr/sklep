@@ -110,16 +110,17 @@
         <?php submit_button('Check RRR API configuration', 'secondary', 'submit', false); ?>
     </form>
 
-    <h2>Preview RRR parts sample</h2>
+    <h2>Preview RRR parts status distribution</h2>
     <p><strong>Preview only — no Woo products were created or updated.</strong></p>
+    <p><em>API total_count may include inactive/sold/archived parts until status semantics are confirmed by Ovoko/RRR.</em></p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('gpswiss_ovoko_preview_rrr_parts_sample'); ?>
         <input type="hidden" name="action" value="gpswiss_ovoko_preview_rrr_parts_sample" />
-        <label for="preview_limit">Limit (default 5, max 10):</label>
-        <input id="preview_limit" type="number" min="1" max="10" name="preview_limit" value="5" />
+        <label for="preview_limit">Limit (default 50, max 50):</label>
+        <input id="preview_limit" type="number" min="1" max="50" name="preview_limit" value="50" />
         <label for="preview_page">Page (default 1):</label>
         <input id="preview_page" type="number" min="1" name="preview_page" value="1" />
-        <?php submit_button('Preview RRR parts sample', 'secondary', 'submit', false); ?>
+        <?php submit_button('Preview RRR parts status distribution', 'secondary', 'submit', false); ?>
     </form>
     <?php
     $previewResult = [];
@@ -139,11 +140,13 @@
             <li>pagination.limit: <code><?php echo esc_html((string) ($previewResult['pagination']['limit'] ?? '')); ?></code></li>
             <li>pagination.total_count: <code><?php echo esc_html((string) ($previewResult['pagination']['total_count'] ?? '')); ?></code></li>
             <li>records_count: <code><?php echo esc_html((string) ($previewResult['records_count'] ?? 0)); ?></code></li>
+            <li>status_distribution: <code><?php echo esc_html(wp_json_encode((array) ($previewResult['status_distribution'] ?? []))); ?></code></li>
         </ul>
-        <?php foreach ((array) ($previewResult['records'] ?? []) as $record): ?>
+        <p><em><?php echo esc_html((string) ($previewResult['diagnostic_note'] ?? '')); ?></em></p>
+        <h4>Sample records (id, name, status, updated_at)</h4>
+        <?php foreach (array_slice((array) ($previewResult['records'] ?? []), 0, 10) as $record): ?>
             <p>
-                <code><?php echo esc_html('id=' . (string) ($record['part_id'] ?? '') . ', external_id=' . (string) ($record['external_id'] ?? '') . ', name=' . (string) ($record['title'] ?? '') . ', status=' . (string) ($record['status'] ?? '') . ', updated_at=' . (string) ($record['updated_at'] ?? '')); ?></code><br />
-                <code><?php echo esc_html(wp_json_encode((array) ($record['woo_match_preview'] ?? []))); ?></code>
+                <code><?php echo esc_html('id=' . (string) ($record['part_id'] ?? '') . ', name=' . (string) ($record['title'] ?? '') . ', status=' . (string) ($record['status'] ?? '') . ', updated_at=' . (string) ($record['updated_at'] ?? '')); ?></code>
             </p>
         <?php endforeach; ?>
     <?php endif; ?>

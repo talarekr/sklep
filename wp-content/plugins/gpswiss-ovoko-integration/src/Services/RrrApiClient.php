@@ -65,9 +65,9 @@ class RrrApiClient
         return $this->post_form('/crm/export/parts-v2', ['limit' => $limit]);
     }
 
-    public function preview_fetch_parts_sample(int $limit = 5, int $page = 1): array
+    public function preview_fetch_parts_sample(int $limit = 50, int $page = 1): array
     {
-        $limit = max(1, min(10, $limit));
+        $limit = max(1, min(50, $limit));
         $page = max(1, $page);
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
