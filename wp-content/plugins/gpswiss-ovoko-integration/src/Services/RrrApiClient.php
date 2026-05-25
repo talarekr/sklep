@@ -246,6 +246,131 @@ class RrrApiClient
         return $flattened;
     }
 
+    public function build_sales_channels_diagnostic(array $payload): array
+    {
+        $record = $this->extract_single_part_record($payload);
+        if ($record === []) {
+            return [
+                'allegro_channel_available' => false,
+                'reason' => 'No Allegro/channel fields found in /get/part/{id}; likely requires another endpoint or Ovoko/RRR support confirmation.',
+                'matched_paths' => [],
+                'matched_keys' => [],
+                'safe_scalar_values' => [],
+                'full_payload_omitted' => true,
+            ];
+        }
+
+        $keywords = [
+            'allegro', 'channel', 'channels', 'marketplace', 'marketplaces', 'offer', 'offers',
+            'listing', 'listings', 'aukcja', 'auction', 'external_offer', 'publication', 'integration',
+        ];
+        $safeKeyHints = ['id', 'status', 'name', 'type', 'channel', 'offer_id', 'listing_id', 'price', 'currency'];
+        $flat = $this->flatten_payload_paths($record);
+        $matchedPaths = [];
+        $matchedKeys = [];
+        $safeScalars = [];
+        $matchedPathTypes = [];
+        $allegroOfferId = '';
+        $allegroListingId = '';
+        $allegroPublicationStatus = '';
+        $allegroPrice = null;
+        $allegroPriceLocation = '';
+
+        foreach ($flat as $path => $value) {
+            $pathLower = strtolower($path);
+            $key = (string) substr($path, (int) strrpos('.' . $path, '.') + 1);
+            $keyLower = strtolower($key);
+            $isMatch = false;
+            foreach ($keywords as $keyword) {
+                if (str_contains($pathLower, $keyword) || str_contains($keyLower, $keyword)) {
+                    $isMatch = true;
+                    break;
+                }
+            }
+            if (!$isMatch) {
+                continue;
+            }
+
+            $matchedPaths[$path] = true;
+            $matchedKeys[$key] = true;
+            $matchedPathTypes[$path] = gettype($value);
+
+            $isSafeKey = false;
+            foreach ($safeKeyHints as $hint) {
+                if (str_contains($keyLower, $hint)) {
+                    $isSafeKey = true;
+                    break;
+                }
+            }
+            if ($isSafeKey && (is_scalar($value) || $value === null)) {
+                $safeScalars[] = [
+                    'path' => $path,
+                    'key' => $key,
+                    'value' => is_string($value) ? sanitize_text_field($value) : $value,
+                    'value_type' => gettype($value),
+                ];
+            }
+
+            if ($allegroOfferId === '' && str_contains($pathLower, 'allegro') && str_contains($pathLower, 'offer') && str_contains($keyLower, 'id') && (is_scalar($value) || $value === null)) {
+                $allegroOfferId = sanitize_text_field((string) $value);
+            }
+            if ($allegroListingId === '' && str_contains($pathLower, 'allegro') && (str_contains($pathLower, 'listing') || str_contains($pathLower, 'auction')) && str_contains($keyLower, 'id') && (is_scalar($value) || $value === null)) {
+                $allegroListingId = sanitize_text_field((string) $value);
+            }
+            if ($allegroPublicationStatus === '' && str_contains($pathLower, 'allegro') && str_contains($pathLower, 'publication') && str_contains($keyLower, 'status') && is_scalar($value)) {
+                $allegroPublicationStatus = sanitize_text_field((string) $value);
+            }
+            if ($allegroPrice === null && str_contains($pathLower, 'allegro') && str_contains($pathLower, 'price') && is_numeric($value)) {
+                $allegroPrice = $value + 0;
+                $allegroPriceLocation = $path;
+            }
+        }
+
+        $walker = function (array $node, string $prefix = '') use (&$walker, $keywords, &$matchedPaths, &$matchedKeys, &$matchedPathTypes): void {
+            foreach ($node as $k => $v) {
+                $path = $prefix === '' ? (string) $k : $prefix . '.' . (string) $k;
+                $pathLower = strtolower($path);
+                $keyLower = strtolower((string) $k);
+                foreach ($keywords as $keyword) {
+                    if (str_contains($pathLower, $keyword) || str_contains($keyLower, $keyword)) {
+                        $matchedPaths[$path] = true;
+                        $matchedKeys[(string) $k] = true;
+                        $matchedPathTypes[$path] = gettype($v);
+                        break;
+                    }
+                }
+                if (is_array($v)) {
+                    $walker($v, $path);
+                }
+            }
+        };
+        $walker($record);
+        $hasAny = !empty($matchedPaths);
+
+        $diagnostic = [
+            'allegro_channel_available' => $hasAny,
+            'matched_paths' => array_values(array_keys($matchedPaths)),
+            'matched_keys' => array_values(array_keys($matchedKeys)),
+            'matched_path_types' => $matchedPathTypes,
+            'safe_scalar_values' => $safeScalars,
+            'full_payload_omitted' => true,
+            'allegro_offer_id' => $allegroOfferId,
+            'allegro_listing_id' => $allegroListingId,
+            'allegro_publication_status' => $allegroPublicationStatus,
+            'allegro_price' => $allegroPrice,
+            'allegro_price_location' => $allegroPriceLocation !== '' ? $allegroPriceLocation : 'not_found',
+        ];
+
+        if (($allegroOfferId !== '' || $allegroListingId !== '') && $allegroPrice === null) {
+            $diagnostic['price_resolution_hint'] = 'Allegro offer ID found; Woo target price may need to be fetched from Allegro API, not RRR API.';
+        }
+        if (!$hasAny) {
+            $diagnostic['reason'] = 'No Allegro/channel fields found in /get/part/{id}; likely requires another endpoint or Ovoko/RRR support confirmation.';
+        }
+
+        return $diagnostic;
+    }
+
     private function normalize_gallery(mixed $gallery): array
     {
         if (!is_array($gallery)) {
