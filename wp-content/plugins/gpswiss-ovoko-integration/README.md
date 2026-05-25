@@ -218,6 +218,30 @@ Part fields now preview-normalized (read-only, no import):
 - `original_price`, `original_currency`
 - `manufacturer_code`, `visible_code`, `other_code`
 - `quality`, `notes`
+
+## Ovoko Woo title builder
+
+For Woo product titles created from Ovoko/RRR parts, this plugin now uses a dedicated builder and **does not use raw `name` alone as the final title**.
+
+Title strategy:
+- Ideal title pattern:
+  - `[MAKE] [MODEL] [GENERATION] [ENGINE/MARKETING NAME] [PART NOTES] [MANUFACTURER_CODE]`
+- Example:
+  - `VW TOURAN III 1.4 TSI EKRAN WYŚWIETLACZ RADIA NAWIGACJI EUROPA 3G0919605D`
+
+Rules:
+- If full vehicle data is available (`make`, `model`, `generation`, `engine`), the builder uses the full ideal title.
+- If only `car_id` or partial vehicle data is available, title falls back to:
+  - `notes + manufacturer_code` (or `name + notes + manufacturer_code` when needed),
+  - and marks review metadata:
+    - `_ovoko_title_review_required = yes`
+    - `_ovoko_title_source = fallback_missing_vehicle_data`
+    - `_ovoko_title_missing_vehicle_fields` with missing fields list
+    - `_ovoko_title_generated_from` with rule identifier
+
+Notes:
+- Full title quality like `VW TOURAN III 1.4 TSI ...` requires resolved vehicle details, not only `car_id`.
+- In preview mode, title builder output is shown without creating/updating Woo products.
 - `category_id`, `category_title_path`
 - `position`
 - `shop_url`, `show_url`

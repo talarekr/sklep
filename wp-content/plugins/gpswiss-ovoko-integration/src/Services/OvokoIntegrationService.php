@@ -592,6 +592,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $stockStatusPreview = in_array($statusRaw, ['0', 'active', 'available'], true) ? 'instock' : 'outofstock';
         $notes = (string) ($normalized['notes'] ?? '');
         $description = trim($notes . "\n\n" . 'Używana część samochodowa. Przed zakupem potwierdź kompatybilność po numerze OE/MPN.');
+        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
 
         return [
             'ok' => !empty($result['ok']),
@@ -609,7 +610,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'reason' => $blockedReason,
             'excluded_from_ovoko_sync' => $excludedFromSync,
             'post_draft_preview' => [
-                'post_title' => (string) ($normalized['title'] ?? ''),
+                'post_title' => (string) ($titlePreview['proposed_title'] ?? ''),
                 'post_status' => 'draft',
                 'regular_price' => $priceWriteReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
                 'currency' => 'PLN',
@@ -630,6 +631,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'same_vehicle_grouping' => $this->build_same_vehicle_grouping_preview($normalized),
             ],
             'preview_image_import_plan' => $imagePlanPreview,
+            'title_builder_preview' => $titlePreview,
             'woo_meta_preview' => [
                 '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
                 '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
@@ -645,6 +647,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 '_ovoko_woo_target_price' => $priceWriteReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
                 '_ovoko_woo_target_currency' => $priceWriteReady ? 'PLN' : null,
                 '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
+                '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
+                '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
+                '_ovoko_title_generated_from' => (string) ($titlePreview['_ovoko_title_generated_from'] ?? ''),
                 '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
                 '_ovoko_position' => (string) ($normalized['position'] ?? ''),
                 'source' => 'ovoko_master',
@@ -711,7 +717,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $productId = wp_insert_post([
             'post_type' => 'product',
             'post_status' => 'draft',
-            'post_title' => (string) ($normalized['title'] ?? ''),
+            'post_title' => (string) (($this->build_woo_product_title_from_rrr_part($normalized))['proposed_title'] ?? ''),
             'post_content' => (string) ($normalized['notes'] ?? ''),
             'post_excerpt' => (string) ($normalized['notes'] ?? ''),
         ], true);
@@ -727,6 +733,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             update_post_meta($productId, '_product_version', WC_VERSION);
         }
 
+        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
         $meta = [
             '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
             '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
@@ -742,6 +749,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             '_ovoko_woo_target_price' => (string) ($normalized['woo_target_price'] ?? ''),
             '_ovoko_woo_target_currency' => 'PLN',
             '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
+            '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
+            '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
+            '_ovoko_title_generated_from' => (string) ($titlePreview['_ovoko_title_generated_from'] ?? ''),
             '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
             '_ovoko_position' => (string) ($normalized['position'] ?? ''),
             'source' => 'ovoko_master',
@@ -764,6 +775,64 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'no_allegro_publish' => true,
             'no_batch' => true,
         ];
+    }
+
+    public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
+    {
+        $make = strtoupper(trim((string) ($normalizedPart['vehicle_make'] ?? '')));
+        $model = strtoupper(trim((string) ($normalizedPart['vehicle_model'] ?? '')));
+        $generation = strtoupper(trim((string) ($normalizedPart['vehicle_generation'] ?? '')));
+        $engine = strtoupper(trim((string) (($normalizedPart['vehicle_engine_marketing_name'] ?? '') ?: ($normalizedPart['vehicle_engine_code'] ?? ''))));
+        $notes = strtoupper(trim((string) ($normalizedPart['notes'] ?? '')));
+        $manufacturerCode = strtoupper(trim((string) ($normalizedPart['manufacturer_code'] ?? '')));
+        $name = strtoupper(trim((string) ($normalizedPart['title'] ?? '')));
+        $vehicleDataStatus = (string) ($normalizedPart['vehicle_data_status'] ?? '');
+
+        $missing = [];
+        foreach (['make' => $make, 'model' => $model, 'generation' => $generation, 'engine' => $engine] as $field => $value) {
+            if ($value === '') {
+                $missing[] = $field;
+            }
+        }
+
+        $notesAndCode = $this->join_title_parts([$notes, $manufacturerCode]);
+        $fallbackTitle = $notesAndCode !== '' ? $notesAndCode : $this->join_title_parts([$name, $notes, $manufacturerCode]);
+        if ($fallbackTitle === '') {
+            $fallbackTitle = $name;
+        }
+
+        $hasFullVehicleData = ($make !== '' && $model !== '' && $generation !== '' && $engine !== '');
+        $idealTitle = $this->join_title_parts([$make, $model, $generation, $engine, $notes, $manufacturerCode]);
+        $proposedTitle = $hasFullVehicleData ? $idealTitle : $fallbackTitle;
+        $titleReviewRequired = !$hasFullVehicleData;
+        $idealTitleExample = $idealTitle !== '' ? $idealTitle : 'VW TOURAN III 1.4 TSI EKRAN WYŚWIETLACZ RADIA NAWIGACJI EUROPA 3G0919605D';
+
+        return [
+            'vehicle_data_status' => $vehicleDataStatus,
+            'current_title_from_name' => (string) ($normalizedPart['title'] ?? ''),
+            'proposed_title' => $proposedTitle,
+            'proposed_title_fallback' => $fallbackTitle,
+            'ideal_title_requires_vehicle_data' => true,
+            'ideal_title_example' => $idealTitleExample,
+            'title_review_required' => $titleReviewRequired,
+            'missing_vehicle_fields' => $missing,
+            '_ovoko_title_source' => $titleReviewRequired ? 'fallback_missing_vehicle_data' : 'vehicle_data_full',
+            '_ovoko_title_review_required' => $titleReviewRequired ? 'yes' : 'no',
+            '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
+            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'make+model+generation+engine+notes+manufacturer_code' : 'notes+manufacturer_code_fallback',
+        ];
+    }
+
+    private function join_title_parts(array $parts): string
+    {
+        $clean = [];
+        foreach ($parts as $part) {
+            $value = trim((string) $part);
+            if ($value !== '') {
+                $clean[] = preg_replace('/\s+/', ' ', $value);
+            }
+        }
+        return implode(' ', array_values(array_unique($clean)));
     }
 
     private function build_rrr_manual_create_validations(array $result, array $normalized, array $match): array
