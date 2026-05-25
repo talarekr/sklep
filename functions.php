@@ -1914,7 +1914,7 @@ function gp_is_ovoko_product(?WC_Product $product = null): bool
 
 function gp_get_product_details_rows(int $productId): array
 {
-    $blockedLabels = ['id części ovoko', 'id pojazdu ovoko', 'źródło', 'kategoria ovoko', 'id allegro', 'sku', 'dostępność'];
+    $blockedLabels = ['status', 'pozycja', 'id części ovoko', 'id pojazdu ovoko', 'źródło', 'kategoria ovoko', 'id allegro', 'sku', 'dostępność'];
     $blockedTokens = ['debug', 'allegro', 'ebay', 'batch', 'cron', 'cache', 'import', 'technic'];
     $internalStatuses = ['kupiony', 'reserved', 'rezerwacja', 'sold', 'sprzedany'];
 
@@ -1951,6 +1951,20 @@ function gp_get_product_details_rows(int $productId): array
         }
 
         $rows[$name] = $value;
+    }
+
+    if (class_exists('Collator')) {
+        $collator = new Collator('pl_PL');
+        uksort($rows, static function (string $left, string $right) use ($collator): int {
+            return $collator->compare($left, $right);
+        });
+    } else {
+        uksort($rows, static function (string $left, string $right): int {
+            $leftFolded = function_exists('mb_strtolower') ? mb_strtolower($left) : strtolower($left);
+            $rightFolded = function_exists('mb_strtolower') ? mb_strtolower($right) : strtolower($right);
+
+            return strnatcmp($leftFolded, $rightFolded);
+        });
     }
 
     return $rows;
