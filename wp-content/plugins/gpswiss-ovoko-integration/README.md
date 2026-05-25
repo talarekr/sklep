@@ -405,3 +405,27 @@ Saved meta:
 
 Duplicate protection:
 - If `_ovoko_part_id={part_id}` (or equivalent existing match) already exists, action does not create second product and returns existing product link.
+
+## Ovoko image handling and Allegro image model compatibility
+
+Produkty Ovoko muszą używać tego samego modelu zdjęć Woo co importer Allegro (`allegro-woo-importer`), aby zachować identyczne zachowanie miniatury, galerii i kolejności zdjęć.
+
+Przeanalizowane elementy Allegro dotyczące zdjęć:
+- `includes/class-product-mapper.php`:
+  - `sync_product_images()` — normalizacja URL-i, deduplikacja, przypisanie featured + gallery.
+  - `extract_image_urls_from_offer_payload()` i `extract_single_image_url_from_payload_item()` — ekstrakcja i porządkowanie URL-i obrazów.
+  - `find_existing_attachment_by_source()` — ponowne użycie attachmentów po źródłowym URL.
+  - `sideload_image_attachment()` — bezpieczne pobieranie zdjęć i zapis do media library.
+  - `ensure_listing_image_for_product()` — logika obrazu listingowego oparta o istniejące zdjęcia produktu.
+
+Źródła zdjęć Ovoko (RRR) do modelu kompatybilnego z Allegro:
+- `photo` (główne zdjęcie),
+- `part_photo_gallery` (galeria).
+
+Na tym etapie wdrożony jest wyłącznie preview/scaffold planu importu zdjęć (`preview_image_import_plan`) bez żadnego zapisu do Woo/media:
+- bez pobierania zdjęć,
+- bez tworzenia attachmentów,
+- bez ustawiania featured image,
+- bez ustawiania `_product_image_gallery`.
+
+Realny import zdjęć będzie osobnym krokiem po zatwierdzeniu modelu kompatybilności.
