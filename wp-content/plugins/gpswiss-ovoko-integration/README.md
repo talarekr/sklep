@@ -627,3 +627,41 @@ No automatic eBay/Allegro publish was added and no batch/cron was introduced.
 - Token nie jest ujawniany w HTML; panel pokazuje wyłącznie `original_image_token_configured: yes/no`.
 - Probe testuje kandydaty `/original/` z `Authorization` + `User-Agent: GPSwissWooImporter/1.0`.
 - Import clean images nie jest przełączany globalnie „na sztywno”; najpierw probe musi potwierdzić działający authenticated-original URL.
+
+## Existing Allegro products → Ovoko details enrichment
+
+Manual-only flow (single product):
+- **Preview Allegro to Ovoko match** (`admin_post_gpswiss_ovoko_preview_allegro_to_ovoko_match`) reports detected Allegro markers, current Ovoko IDs, old description preview, proposed enrichment, and no-write safety flags.
+- **Apply Allegro to Ovoko details enrichment** (`admin_post_gpswiss_ovoko_apply_allegro_to_ovoko_details`) writes only safe details fields for one product.
+
+### Allegro product detection
+Product is treated as Allegro when at least one of these is present:
+- `_allegro_offer_id`, `allegro_offer_id`, `_awi_offer_id`
+- `_awi_source`/`source` contains `allegro`
+
+### Matching strategy to Ovoko/RRR
+1. If `_ovoko_part_id` already exists: validate via read-only `/get/part/{id}`.
+2. Otherwise try part number keys: `_part_number`, `_mpn`, `mpn`, `_manufacturer_code`, `_gpswiss_part_number`.
+3. Current implementation uses read-only `/v2/get/parts` preview sampling and exact code compare (`manufacturer_code`/`visible_code`/`other_code`).
+4. If ambiguous or none -> no write; manual review required.
+
+### What apply may write
+Only:
+- `_ovoko_part_id` (when high-confidence)
+- `_ovoko_car_id`
+- `_part_number` (only if missing)
+- customer-visible technical attributes for the frontend details table
+- `post_content` cleanup when `replace_description=true`
+
+### Old description policy
+`replace_description=true` clears legacy text description to align legacy Allegro cards with Ovoko-style details presentation in “Opis oraz informacje szczegółowe”.
+
+### Explicit non-goals in this stage
+No changes to:
+- prices
+- stock
+- images/gallery/listing image
+- titles
+- publication status
+- eBay/Allegro publishing
+- batch/cron automation
