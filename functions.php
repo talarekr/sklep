@@ -1885,8 +1885,37 @@ function gp_is_ovoko_product(?WC_Product $product = null): bool
     $productId = $product->get_id();
     $source = strtolower(trim((string) get_post_meta($productId, 'source', true)));
     $hasPartId = trim((string) get_post_meta($productId, '_ovoko_part_id', true)) !== '';
+    $hasCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true)) !== '';
+    $visibleDetails = gp_get_product_details_rows($productId);
 
-    return $source === 'ovoko_master' || $hasPartId;
+    return $source === 'ovoko_master' || $hasPartId || $hasCarId || !empty($visibleDetails);
+}
+
+function gp_get_product_details_rows(int $productId): array
+{
+    $metaLabelMap = [
+        '_ovoko_part_number' => 'Numer części', '_ovoko_vehicle_make' => 'Producent', '_ovoko_vehicle_model' => 'Model', '_ovoko_vehicle_generation' => 'Modyfikacja',
+        '_ovoko_vehicle_fuel' => 'Rodzaj paliwa', '_ovoko_vehicle_engine_capacity_l' => 'Pojemność silnika', '_ovoko_vehicle_engine_power_kw' => 'Moc silnika', '_ovoko_engine_code' => 'Kod silnika',
+        '_ovoko_gearbox_type' => 'Typ skrzyni biegów', '_ovoko_vehicle_body_type' => 'Typ sylwetki', '_ovoko_vehicle_drive_wheels' => 'Koła napędowe', '_ovoko_vehicle_steering_position' => 'Pozycja kierownicy',
+        '_ovoko_vehicle_color' => 'Kolor', '_ovoko_vehicle_color_code' => 'Kod koloru', '_ovoko_vehicle_year' => 'Rok produkcji samochodu',
+    ];
+    $rows = [];
+    foreach ($metaLabelMap as $metaKey => $label) {
+        $value = trim((string) get_post_meta($productId, $metaKey, true));
+        if ($value !== '' && $value !== '-' && !in_array(strtolower($value), ['brak', 'null'], true)) {
+            $rows[$label] = $value;
+        }
+    }
+    $attributes = (array) get_post_meta($productId, '_product_attributes', true);
+    foreach ($attributes as $attribute) {
+        $name = trim((string) ($attribute['name'] ?? ''));
+        $value = trim((string) ($attribute['value'] ?? ''));
+        $visible = !empty($attribute['is_visible']);
+        if ($visible && isset($rows[$name]) === false && $value !== '') {
+            $rows[$name] = $value;
+        }
+    }
+    return $rows;
 }
 
 add_filter('woocommerce_product_tabs', function (array $tabs): array {
@@ -1917,33 +1946,9 @@ function gp_render_ovoko_description_and_details_tab(): void
         return;
     }
 
-    $labels = [
-        '_ovoko_part_number' => __('Numer części', 'gp-clone'),
-        '_ovoko_vehicle_make' => __('Producent', 'gp-clone'),
-        '_ovoko_vehicle_model' => __('Model', 'gp-clone'),
-        '_ovoko_vehicle_generation' => __('Modyfikacja', 'gp-clone'),
-        '_ovoko_vehicle_fuel' => __('Rodzaj paliwa', 'gp-clone'),
-        '_ovoko_vehicle_engine_capacity_l' => __('Pojemność silnika', 'gp-clone'),
-        '_ovoko_vehicle_engine_power_kw' => __('Moc silnika', 'gp-clone'),
-        '_ovoko_engine_code' => __('Kod silnika', 'gp-clone'),
-        '_ovoko_gearbox_type' => __('Typ skrzyni biegów', 'gp-clone'),
-        '_ovoko_vehicle_body_type' => __('Typ sylwetki', 'gp-clone'),
-        '_ovoko_vehicle_drive_wheels' => __('Koła napędowe', 'gp-clone'),
-        '_ovoko_vehicle_steering_position' => __('Pozycja kierownicy', 'gp-clone'),
-        '_ovoko_vehicle_color' => __('Kolor', 'gp-clone'),
-        '_ovoko_vehicle_color_code' => __('Kod koloru', 'gp-clone'),
-        '_ovoko_vehicle_year' => __('Rok produkcji samochodu', 'gp-clone'),
-    ];
-
+    $rawRows = gp_get_product_details_rows($product->get_id());
     $rows = [];
-    foreach ($labels as $metaKey => $label) {
-        $value = trim((string) get_post_meta($product->get_id(), $metaKey, true));
-        $lower = strtolower($value);
-        if ($value === '' || $value === '-' || $lower === 'brak' || $lower === 'null') {
-            continue;
-        }
-        $rows[] = ['label' => $label, 'value' => $value];
-    }
+    foreach ($rawRows as $label => $value) { $rows[] = ['label' => $label, 'value' => $value]; }
 
     if (empty($rows)) {
         return;

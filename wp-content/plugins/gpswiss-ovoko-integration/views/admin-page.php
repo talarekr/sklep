@@ -114,6 +114,18 @@
         <?php submit_button('Preview paginated RRR part code lookup', 'secondary', 'submit', false); ?>
     </form>
 
+
+
+    <h2>Preview product details table render status</h2>
+    <p><strong>Preview only.</strong> No Woo writes.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_product_details_table_render_status'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_product_details_table_render_status" />
+        <label for="details_render_status_product_id">Product ID:</label>
+        <input id="details_render_status_product_id" type="number" min="1" name="product_id" value="52878" />
+        <?php submit_button('Preview product details table render status', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Apply Allegro to Ovoko details enrichment</h2>
     <p><strong>Manual action.</strong> Writes only detail attributes/meta and can replace old Allegro description.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
