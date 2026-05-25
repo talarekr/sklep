@@ -1797,18 +1797,54 @@ class OvokoIntegrationService
         $partId = (int) ($audit['current_ovoko_part_id'] ?? 0);
         if ($partId > 0) { $single=$client->preview_fetch_single_part($partId); $norm=$client->normalize_rrr_single_part_payload((array)($single['payload']??[])); return ['match_confidence'=>!empty($single['ok'])?'high_existing_ovoko_part_id':'none','review_required'=>empty($single['ok']),'part_normalized'=>$norm,'identifiers_used'=>['_ovoko_part_id'],'rrr_endpoint'=>'/get/part/{id}']; }
         $candidate=''; foreach(['_part_number','_mpn','mpn','_manufacturer_code','_gpswiss_part_number'] as $k){$v=sanitize_text_field((string)get_post_meta($productId,$k,true)); if($v!==''){ $candidate=$v; break; }}
-        $probe = $candidate !== '' ? $client->probe_part_search_by_code($candidate) : [];
-        $effective = [];
-        foreach ((array) ($probe['candidates'] ?? []) as $candidateProbe) {
-            if (!empty($candidateProbe['filter_effective'])) {
-                $effective[] = $candidateProbe;
+        if ($candidate !== '') {
+            $search = $client->preview_search_part_by_code($candidate, 10, 1);
+            $records = (array) ($search['records'] ?? []);
+            $totalCount = (int) (($search['pagination']['total_count'] ?? 0));
+            $recordsCount = (int) ($search['records_count'] ?? count($records));
+            $statusCode = (string) ($search['status_code'] ?? '');
+            $exactAllowed = ['manufacturer_code', 'visible_code', 'other_code', 'external_id'];
+            $exactField = '';
+            $matchedRecord = [];
+            if ($recordsCount === 1 && !empty($records[0]) && is_array($records[0])) {
+                $row = (array) $records[0];
+                foreach ($exactAllowed as $field) {
+                    $value = isset($row[$field]) ? (string) $row[$field] : '';
+                    if ($value !== '' && strcasecmp($value, $candidate) === 0) {
+                        $exactField = $field;
+                        $matchedRecord = $row;
+                        break;
+                    }
+                }
             }
-        }
-        if ($effective !== []) {
-            $first = (array) $effective[0];
-            $exactMatches = (array) ($first['exact_code_matches'] ?? []);
-            $confidence = count($exactMatches) === 1 ? 'high' : (count($exactMatches) > 1 ? 'ambiguous' : 'unknown_low_coverage');
-            return ['match_confidence' => $confidence, 'review_required' => $confidence !== 'high', 'identifiers_used' => ['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'], 'part_number_candidate' => $candidate, 'matches_found' => count($exactMatches), 'part_normalized' => [], 'search_method' => 'rrr_search_filter:' . (string) ($first['path'] ?? ''), 'coverage' => 'search_endpoint', 'searched_pages' => [1], 'searched_total_records' => (int) ($first['records_count'] ?? 0), 'total_count' => $first['pagination']['total_count'] ?? null, 'reason' => $confidence === 'high' ? 'Exact single match via search filter.' : 'Search endpoint returned non-single exact results.', 'rrr_endpoint' => (string) ($first['path'] ?? '')];
+            $isHigh = $statusCode === 'R200' && $totalCount === 1 && $recordsCount === 1 && $exactField !== '' && !empty($matchedRecord['id']);
+            if ($isHigh) {
+                $single = $client->preview_fetch_single_part((int) $matchedRecord['id']);
+                $norm = $client->normalize_rrr_single_part_payload((array) ($single['payload'] ?? []));
+                $carId = (string) ($norm['car_id'] ?? '');
+                return [
+                    'match_confidence' => 'high',
+                    'review_required' => false,
+                    'matched_by' => 'search_exact_code',
+                    'exact_match_field' => $exactField,
+                    'matched_ovoko_part_id' => sanitize_text_field((string) ($matchedRecord['id'] ?? '')),
+                    'matched_ovoko_name' => sanitize_text_field((string) ($matchedRecord['name'] ?? '')),
+                    'part_number_candidate' => $candidate,
+                    'search_endpoint' => (string) ($search['path'] ?? ''),
+                    'part_normalized' => $norm,
+                    'proposed_enrichment' => [
+                        'proposed_ovoko_part_id' => sanitize_text_field((string) ($matchedRecord['id'] ?? '')),
+                        'proposed_ovoko_car_id' => $carId,
+                        'proposed_visible_attributes' => array_keys($this->build_ovoko_technical_attributes_from_normalized($norm)),
+                        'old_description_preview' => mb_substr(wp_strip_all_tags((string) get_post_field('post_content', $productId)), 0, 220),
+                        'description_after_policy' => 'clear_post_content_for_ovoko_style_tabs',
+                        'replace_description' => true,
+                    ],
+                    'car_data_fetch' => ['car_id' => $carId, 'car_fetch_attempted' => $carId !== ''],
+                    'rrr_endpoint' => '/get/part/' . (int) ($matchedRecord['id'] ?? 0),
+                ];
+            }
+            return ['match_confidence' => 'unknown_low_coverage', 'review_required' => true, 'identifiers_used' => ['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'], 'part_number_candidate' => $candidate, 'matches_found' => $recordsCount, 'part_normalized' => [], 'search_method' => 'rrr_search:' . (string) ($search['path'] ?? ''), 'coverage' => 'search_endpoint', 'searched_pages' => [1], 'searched_total_records' => $recordsCount, 'total_count' => $totalCount, 'reason' => 'Search endpoint returned non-single exact results.', 'rrr_endpoint' => (string) ($search['path'] ?? '')];
         }
         $sample=$client->preview_fetch_parts_sample(100,1); $rows=(array)($sample['records']??[]);
         return ['match_confidence'=>'unknown_low_coverage','review_required'=>true,'identifiers_used'=>['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'],'part_number_candidate'=>$candidate,'matches_found'=>'0_sample_only','part_normalized'=>[],'search_method'=>'sample_page_1_only','coverage'=>'sample_only','searched_pages'=>[1],'searched_total_records'=>count($rows),'total_count'=>$sample['pagination']['total_count'] ?? null,'reason'=>'Only first page sampled; cannot conclude no match.','rrr_endpoint'=>'/v2/get/parts?limit=100&page=1','diagnostics_readme_question'=>'Need confirmed search endpoint by part code to avoid low-coverage sampling.','next_recommended_action'=>'Run Probe RRR part search by code; if still unavailable run Preview paginated RRR part code lookup.'];

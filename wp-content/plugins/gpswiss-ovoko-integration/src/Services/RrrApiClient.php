@@ -166,6 +166,27 @@ class RrrApiClient
         ];
     }
 
+    public function preview_search_part_by_code(string $partNumber, int $limit = 10, int $page = 1): array
+    {
+        $partNumber = trim($partNumber);
+        if ($partNumber === '') {
+            return ['ok' => false, 'reason' => 'missing_part_number'];
+        }
+        $limit = max(1, min(50, $limit));
+        $page = max(1, $page);
+        $path = '/v2/get/parts?limit=' . $limit . '&page=' . $page . '&search=' . rawurlencode($partNumber);
+        $result = $this->post_form($path, [], true);
+        $records = is_array($result['records'] ?? null) ? $result['records'] : [];
+        return [
+            'ok' => true,
+            'path' => $path,
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'pagination' => (array) ($result['pagination'] ?? []),
+            'records_count' => (int) ($result['records_count'] ?? count($records)),
+            'records' => $records,
+        ];
+    }
+
 
     public function preview_fetch_car_by_id(string $carId): array
     {

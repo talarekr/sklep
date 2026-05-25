@@ -642,14 +642,17 @@ Product is treated as Allegro when at least one of these is present:
 ### Matching strategy to Ovoko/RRR
 1. If `_ovoko_part_id` already exists: validate via read-only `/get/part/{id}`.
 2. Otherwise try part number keys: `_part_number`, `_mpn`, `mpn`, `_manufacturer_code`, `_gpswiss_part_number`.
-3. Plugin now first runs diagnostic read-only search probe for `/v2/get/parts` candidate query params (`manufacturer_code`, `visible_code`, `other_code`, `code`, `search`, `q`, `external_id`, `part_code`, `part_number`, `query`, `name`).
-4. If a filter is effective and returns exact code match, preview reports search-endpoint method.
-5. If no confirmed search filter is found, preview uses page-1 sample coverage only and returns:
+3. If `_ovoko_part_id` is missing and part number exists, plugin uses read-only endpoint: `/v2/get/parts?limit=10&page=1&search={part_number}`.
+4. High confidence is allowed only when: `status_code=R200`, `pagination.total_count=1`, `records_count=1`, and exact code match is in one of: `manufacturer_code|visible_code|other_code|external_id` with non-empty `id`.
+5. On high match, preview fetches `/get/part/{id}` (and `/get/car/{car_id}` when available) to build enrichment preview.
+6. If search does not satisfy strict exact-single criteria, preview uses safe low-confidence response and returns:
    - `match_confidence=unknown_low_coverage`
    - `coverage=sample_only`
    - `review_required=true`
    - reason: `Only first page sampled; cannot conclude no match.`
-6. Apply remains blocked unless confidence is high.
+7. Apply remains blocked unless confidence is high.
+
+RRR part search uses `/v2/get/parts?search={part_number}` for exact-code matching, with high confidence only when `total_count=1` and exact code field matches.
 
 ## RRR part code search / Allegro enrichment matching coverage
 
