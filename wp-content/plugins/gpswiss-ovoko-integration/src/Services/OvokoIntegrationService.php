@@ -772,6 +772,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $this->upsert_custom_product_attributes($productId, $this->build_ovoko_technical_attributes_from_normalized($normalized));
         wp_set_object_terms($productId, 'simple', 'product_type');
         $imageImportResult = $this->import_ovoko_images_for_product($productId, $normalized, $partId);
+        $listingImageResult = $this->generate_listing_image_for_ovoko_product($productId);
 
         return [
             'ok' => true,
@@ -791,11 +792,90 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'featured_attachment_id' => (int) $imageImportResult['featured_attachment_id'],
             'gallery_attachment_ids' => (array) $imageImportResult['gallery_attachment_ids'],
             'image_model' => 'allegro_compatible',
+            'listing_image_attempted' => (bool) ($listingImageResult['listing_image_attempted'] ?? false),
+            'listing_image_generated' => (bool) ($listingImageResult['listing_image_generated'] ?? false),
+            'listing_image_id' => (int) ($listingImageResult['listing_image_id'] ?? 0),
+            'listing_image_source_id' => (int) ($listingImageResult['listing_image_source_id'] ?? 0),
+            'listing_image_strategy' => (string) ($listingImageResult['listing_image_strategy'] ?? 'thumbnail_fallback'),
+            'listing_image_meta_written' => (array) ($listingImageResult['listing_image_meta_written'] ?? []),
+            'listing_image_errors' => (array) ($listingImageResult['errors'] ?? []),
             'validations' => $validations,
             'no_ebay_publish' => true,
             'no_allegro_publish' => true,
             'no_batch' => true,
         ];
+    }
+
+    public function preview_listing_image_status(int $productId): array
+    {
+        $productId = max(1, $productId);
+        $thumbnailId = (int) get_post_thumbnail_id($productId);
+        $galleryRaw = (string) get_post_meta($productId, '_product_image_gallery', true);
+        $galleryIds = array_values(array_filter(array_map('intval', array_map('trim', explode(',', $galleryRaw)))));
+        $listingImageId = (int) get_post_meta($productId, '_awi_listing_image_id', true);
+        $listingSourceId = (int) get_post_meta($productId, '_awi_listing_image_source_id', true);
+        $generatedAt = (string) get_post_meta($productId, '_awi_listing_image_generated_at', true);
+        $frontendSource = $listingImageId > 0 ? 'awi_listing_image_id' : ($thumbnailId > 0 ? '_thumbnail_id' : 'none');
+
+        return [
+            'ok' => true,
+            'product_id' => $productId,
+            'thumbnail_id' => $thumbnailId,
+            'gallery_ids' => $galleryIds,
+            'listing_image_id' => $listingImageId,
+            'listing_image_source_id' => $listingSourceId,
+            'listing_image_generated_at' => $generatedAt,
+            'frontend_image_source' => $frontendSource,
+            'frontend_expected_meta_key' => '_awi_listing_image_id',
+            'needs_listing_image_generation' => $listingImageId <= 0 && $thumbnailId > 0,
+            'reason' => $listingImageId > 0 ? 'listing_image_present' : ($thumbnailId > 0 ? 'missing_listing_image_meta' : 'missing_thumbnail'),
+        ];
+    }
+
+    public function generate_listing_image_for_ovoko_product(int $productId): array
+    {
+        $status = $this->preview_listing_image_status($productId);
+        $thumbnailId = (int) ($status['thumbnail_id'] ?? 0);
+        $result = [
+            'ok' => true,
+            'product_id' => $productId,
+            'listing_image_attempted' => true,
+            'listing_image_generated' => false,
+            'listing_image_id' => 0,
+            'listing_image_source_id' => 0,
+            'listing_image_strategy' => 'thumbnail_fallback',
+            'listing_image_meta_written' => [],
+            'errors' => [],
+        ];
+
+        if ($thumbnailId <= 0) {
+            $result['errors'][] = 'missing_thumbnail';
+            return $result;
+        }
+
+        if (class_exists('\\AWI\\Plugin')) {
+            $preferred = (int) \AWI\Plugin::get_listing_image_id_for_product($productId);
+            if ($preferred > 0) {
+                $result['listing_image_id'] = $preferred;
+                $result['listing_image_source_id'] = (int) get_post_meta($productId, '_awi_listing_image_source_id', true);
+                $result['listing_image_generated'] = (int) get_post_meta($productId, '_awi_listing_image_id', true) > 0;
+                $result['listing_image_strategy'] = 'allegro_importer_adapter';
+                return $result;
+            }
+            $result['errors'][] = 'allegro_adapter_no_listing_returned';
+        } else {
+            $result['errors'][] = 'allegro_importer_unavailable';
+        }
+
+        update_post_meta($productId, '_awi_listing_image_id', $thumbnailId);
+        update_post_meta($productId, '_awi_listing_image_source_id', $thumbnailId);
+        update_post_meta($productId, '_awi_listing_image_generated_at', gmdate('Y-m-d H:i:s'));
+        $result['listing_image_id'] = $thumbnailId;
+        $result['listing_image_source_id'] = $thumbnailId;
+        $result['listing_image_strategy'] = 'thumbnail_fallback';
+        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at'];
+
+        return $result;
     }
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array

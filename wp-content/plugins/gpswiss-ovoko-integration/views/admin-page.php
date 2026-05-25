@@ -8,6 +8,24 @@
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>"><p><?php echo esc_html($notice['text']); ?></p></div>
     <?php endif; ?>
 
+    <h2>Preview listing image status</h2>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_listing_image_status'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_listing_image_status" />
+        <label for="listing_status_product_id">Product ID:</label>
+        <input id="listing_status_product_id" type="number" min="1" name="product_id" value="60407" />
+        <?php submit_button('Preview listing image status', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Generate listing image for Ovoko product</h2>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_generate_listing_image'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_generate_listing_image" />
+        <label for="generate_listing_product_id">Product ID:</label>
+        <input id="generate_listing_product_id" type="number" min="1" name="product_id" value="60407" />
+        <?php submit_button('Generate listing image for Ovoko product', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Apply Ovoko technical attributes to Woo product</h2>
     <p><strong>Manual action.</strong> Updates only product technical meta/attributes (no price, no stock, no publish).</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
