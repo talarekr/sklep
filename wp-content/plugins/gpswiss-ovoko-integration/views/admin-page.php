@@ -224,6 +224,42 @@
         </ul>
     <?php endif; ?>
 
+
+
+    <h2>Create Woo draft product from RRR part</h2>
+    <p><strong>Manual test action.</strong> Creates only Woo draft product. No eBay, no Allegro, no batch, no publish.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_create_rrr_woo_draft'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_create_rrr_woo_draft" />
+        <label for="create_woo_part_id">Part ID:</label>
+        <input id="create_woo_part_id" type="number" min="1" name="part_id" value="10994" />
+        <?php submit_button('Create Woo draft product from RRR part', 'secondary', 'submit', false); ?>
+    </form>
+    <?php
+    $createWooDraft = [];
+    if (!empty($notice['text'])) {
+        $decodedNotice = json_decode((string) $notice['text'], true);
+        if (is_array($decodedNotice) && (($decodedNotice['action_name'] ?? '') === 'Create Woo draft product from RRR part')) {
+            $createWooDraft = $decodedNotice;
+        }
+    }
+    ?>
+    <?php if (!empty($createWooDraft)): ?>
+        <ul>
+            <li>created: <code><?php echo esc_html(!empty($createWooDraft['created']) ? 'true' : 'false'); ?></code></li>
+            <li>existing_product_found: <code><?php echo esc_html(!empty($createWooDraft['existing_product_found']) ? 'true' : 'false'); ?></code></li>
+            <li>created_product_id: <code><?php echo esc_html((string) ($createWooDraft['created_product_id'] ?? '')); ?></code></li>
+            <li>edit_link: <code><?php echo esc_html((string) ($createWooDraft['edit_link'] ?? '')); ?></code></li>
+            <li>status: <code><?php echo esc_html((string) ($createWooDraft['status'] ?? '')); ?></code></li>
+            <li>sku: <code><?php echo esc_html((string) ($createWooDraft['sku'] ?? '')); ?></code></li>
+            <li>price: <code><?php echo esc_html((string) ($createWooDraft['price'] ?? '')); ?></code></li>
+            <li>no_ebay_publish: <code><?php echo esc_html(!empty($createWooDraft['no_ebay_publish']) ? 'true' : 'false'); ?></code></li>
+            <li>no_allegro_publish: <code><?php echo esc_html(!empty($createWooDraft['no_allegro_publish']) ? 'true' : 'false'); ?></code></li>
+            <li>no_batch: <code><?php echo esc_html(!empty($createWooDraft['no_batch']) ? 'true' : 'false'); ?></code></li>
+            <li>validations: <code><?php echo esc_html(wp_json_encode((array) ($createWooDraft['validations'] ?? []))); ?></code></li>
+        </ul>
+    <?php endif; ?>
+
     <h2>Preview sync flow (dry-run only)</h2>
     <p>Sample fixture (developer/sample only, no outbound/no import): <code><?php echo esc_html(wp_json_encode($data['sync_preview_fixture'])); ?></code></p>
     <p>Preview Woo meta mapping: <code><?php echo esc_html(wp_json_encode($data['sync_preview_meta_mapping'])); ?></code></p>

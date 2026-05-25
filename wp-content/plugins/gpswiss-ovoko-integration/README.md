@@ -350,3 +350,58 @@ Vehicle data behavior:
 - Open question to confirm with RRR/Ovoko:
   - `Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.`
 - The plugin does **not** guess undocumented vehicle endpoints.
+
+## Create Woo draft product from RRR part
+
+Admin action: **Create Woo draft product from RRR part**
+
+- Manual test action only (admin-triggered).
+- Input: `part_id` (default: `10994`).
+- Scope: creates only WooCommerce `draft` simple product.
+- Safety guarantees:
+  - no publish,
+  - no eBay actions,
+  - no Allegro actions,
+  - no batch/cron,
+  - no stock updates on existing products,
+  - no media library image import.
+
+Validation gates before create:
+- `POST /get/part/{id}` must return business `status_code=R200`.
+- Existing Woo match must not exist (checked against part identifiers).
+- `create_blocked=false` equivalent checks:
+  - `price_source=internal_notes_plain_price`,
+  - `price_review_required=false`,
+  - `woo_target_price > 0`.
+- Gearbox exclusion must be false.
+- Missing photos produces warning only (does not block create).
+
+Created product fields:
+- `post_status=draft`
+- product type `simple`
+- title from Ovoko/RRR `title`
+- `regular_price` from `woo_target_price`
+- SKU `GPSW-OVK-{part_id}`
+- `description` and `short_description` from Ovoko/RRR `notes`
+
+Saved meta:
+- `_ovoko_part_id`
+- `_ovoko_car_id`
+- `_ovoko_status`
+- `_ovoko_updated_at`
+- `_ovoko_category`
+- `_ovoko_category_id`
+- `_ovoko_source_url`
+- `_ovoko_images` (URLs only)
+- `_ovoko_price`
+- `_ovoko_original_price`
+- `_ovoko_internal_notes_price_source`
+- `_ovoko_woo_target_price`
+- `_ovoko_woo_target_currency`
+- `_ovoko_manufacturer_code`
+- `_ovoko_quality`
+- `_ovoko_position`
+- `source=ovoko_master`
+
+Duplicate protection:
+- If `_ovoko_part_id={part_id}` (or equivalent existing match) already exists, action does not create second product and returns existing product link.
