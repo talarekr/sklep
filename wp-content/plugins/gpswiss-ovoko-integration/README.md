@@ -575,3 +575,20 @@ Additional preview added:
 - Vehicle title builder uses vehicle prefix when data is available: `[MAKE_SHORT] [MODEL] [GENERATION] [ENGINE_MARKETING] [NOTES] [MANUFACTURER_CODE]`.
 - Fallback remains `[NOTES] [MANUFACTURER_CODE]` with `_ovoko_title_review_required=yes` when vehicle fields are missing.
 - No eBay/Allegro publish flow is changed here.
+
+## RRR vehicle data discovery and car_id mapping
+
+Added read-only diagnostics action **Probe RRR vehicle endpoints** for candidate endpoints:
+`/get/car/{id}`, `/get/cars`, `/v2/get/cars`, `/get/vehicles`, `/v2/get/vehicles` (including `limit=1&page=1` variants).
+
+The probe reports: path, executed, http_code, status_code, msg, success, response keys, candidate record keys, car-id match flags, vehicle fields flag, safe sample, and `full_payload_omitted=true`.
+
+If vehicle endpoint is confirmed, create-draft and repair flow can persist vehicle meta/attributes and generate vehicle-aware title format:
+`[MAKE_SHORT] [MODEL] [GENERATION] [ENGINE_MARKETING] [NOTES] [MANUFACTURER_CODE]`.
+
+Fallback stays enabled when vehicle endpoint is not confirmed:
+- title: `[NOTES] [MANUFACTURER_CODE]`
+- `_ovoko_title_review_required=yes`
+- `_ovoko_title_source=fallback_missing_vehicle_data`
+
+No automatic eBay/Allegro publish was added and no batch/cron was introduced.

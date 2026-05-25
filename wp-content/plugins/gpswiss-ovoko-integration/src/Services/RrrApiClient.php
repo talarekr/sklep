@@ -80,13 +80,38 @@ class RrrApiClient
             return ['ok' => false, 'message' => 'Missing car id for preview'];
         }
 
-        return [
-            'ok' => false,
-            'endpoint_confirmed' => false,
-            'car_id' => $carId,
-            'message' => 'Read-only car details endpoint by car_id is not confirmed in accessible RRR docs.',
-            'diagnostics_question' => 'Please confirm official read-only endpoint for car details by car_id (e.g. /get/car/{id} or /v2/get/cars).',
-        ];
+        $probe = $this->probe_vehicle_endpoints((int) $carId);
+        foreach ((array) ($probe['endpoints'] ?? []) as $row) {
+            if (!empty($row['success']) && !empty($row['contains_car_id_requested'])) {
+                $record = (array) ($row['candidate_record'] ?? []);
+                return [
+                    'ok' => true,
+                    'endpoint_confirmed' => true,
+                    'endpoint_used' => (string) ($row['path'] ?? ''),
+                    'car_id' => $carId,
+                    'normalized' => $this->normalize_vehicle_record($record, $carId),
+                ];
+            }
+        }
+
+        return ['ok'=>false,'endpoint_confirmed'=>false,'car_id'=>$carId,'probe'=>$probe,'message'=>'No confirmed read-only endpoint returned vehicle details for requested car_id.'];
+    }
+
+    public function probe_vehicle_endpoints(int $carId = 458): array
+    {
+        $carId=max(1,$carId);
+        $paths=['/get/car/'.$carId,'/get/cars?limit=1&page=1','/v2/get/cars?limit=1&page=1','/v2/get/car/'.$carId,'/get/cars','/get/vehicles?limit=1&page=1','/v2/get/vehicles?limit=1&page=1'];
+        $results=[];
+        foreach($paths as $path){
+            $raw=$this->post_form($path,[],true);
+            $payload=(array)($raw['payload']??[]);
+            $candidate=$this->extract_candidate_record($payload);
+            $candidateKeys=array_values(array_map('strval',array_keys((array)$candidate)));
+            $contains=(string)($this->first_non_empty_value((array)$candidate,['car_id','id','vehicle_id']))===(string)$carId;
+            $norm=$this->normalize_vehicle_record((array)$candidate,(string)$carId);
+            $results[]=['path'=>$path,'executed'=>!empty($raw['executed']),'http_code'=>$raw['http_code']??null,'status_code'=>(string)($raw['status_code']??''),'msg'=>(string)($raw['msg']??$raw['message']??''),'success'=>!empty($raw['success']),'response_top_level_keys'=>array_values(array_map('strval',array_keys($payload))),'candidate_record_keys'=>$candidateKeys,'contains_car_id_458'=>$carId===458?$contains:null,'contains_car_id_requested'=>$contains,'contains_vehicle_fields'=>$this->has_vehicle_fields($norm),'safe_sample'=>$this->safe_sample($candidate),'full_payload_omitted'=>true,'candidate_record'=>$candidate];
+        }
+        return ['ok'=>true,'car_id'=>$carId,'endpoints'=>$results];
     }
     public function preview_fetch_single_part(int $partId): array
     {
@@ -524,6 +549,52 @@ class RrrApiClient
     }
 
 
+
+    private function extract_candidate_record(array $payload): array
+    {
+        foreach (['data','list','cars','vehicles'] as $k) {
+            if (isset($payload[$k][0]) && is_array($payload[$k][0])) { return (array) $payload[$k][0]; }
+            if (isset($payload[$k]) && is_array($payload[$k]) && array_keys($payload[$k]) !== range(0, count($payload[$k]) - 1)) { return (array) $payload[$k]; }
+        }
+        return $payload;
+    }
+
+    private function normalize_vehicle_record(array $record, string $fallbackCarId): array
+    {
+        return [
+            'car_id' => (string) ($this->first_non_empty_value($record, ['car_id', 'id', 'vehicle_id']) ?: $fallbackCarId),
+            'make' => sanitize_text_field((string) ($record['make'] ?? $record['manufacturer'] ?? $record['brand'] ?? '')),
+            'model' => sanitize_text_field((string) ($record['model'] ?? '')),
+            'generation' => sanitize_text_field((string) ($record['generation'] ?? '')),
+            'modification' => sanitize_text_field((string) ($record['modification'] ?? '')),
+            'engine_marketing' => sanitize_text_field((string) ($record['engine_marketing'] ?? $record['engine'] ?? '')),
+            'year' => sanitize_text_field((string) ($record['year'] ?? '')),
+            'fuel' => sanitize_text_field((string) ($record['fuel'] ?? '')),
+            'engine_capacity' => sanitize_text_field((string) ($record['engine_capacity'] ?? '')),
+            'engine_power_kw' => sanitize_text_field((string) ($record['engine_power_kw'] ?? '')),
+            'engine_code' => sanitize_text_field((string) ($record['engine_code'] ?? '')),
+            'gearbox_type' => sanitize_text_field((string) ($record['gearbox_type'] ?? '')),
+            'body_type' => sanitize_text_field((string) ($record['body_type'] ?? '')),
+            'drive_wheels' => sanitize_text_field((string) ($record['drive_wheels'] ?? '')),
+            'steering_position' => sanitize_text_field((string) ($record['steering_position'] ?? '')),
+            'color' => sanitize_text_field((string) ($record['color'] ?? '')),
+            'color_code' => sanitize_text_field((string) ($record['color_code'] ?? '')),
+            'raw_payload_summary' => ['keys' => array_values(array_map('strval', array_keys($record)))],
+        ];
+    }
+
+    private function has_vehicle_fields(array $normalized): bool
+    {
+        foreach (['make','model','generation','modification','engine_marketing'] as $k) { if (!empty($normalized[$k])) return true; }
+        return false;
+    }
+
+    private function safe_sample(array $candidate): array
+    {
+        $out=[];
+        foreach($candidate as $k=>$v){ if(is_scalar($v) && !in_array($k,['username','password','user_token'],true)){$out[(string)$k]=sanitize_text_field((string)$v);} }
+        return $out;
+    }
     private function run_public_probes(string $baseUrl): array
     {
         if ($baseUrl === '') {

@@ -65,7 +65,26 @@
         <?php submit_button('Preview RRR car details', 'secondary', 'submit', false); ?>
     </form>
 
-    <h2>Preview Ovoko title with vehicle data</h2>
+    <h2>Probe RRR vehicle endpoints</h2>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_probe_rrr_vehicle_endpoints'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_probe_rrr_vehicle_endpoints" />
+        <label for="probe_car_id">Car ID:</label>
+        <input id="probe_car_id" type="number" min="1" name="car_id" value="458" />
+        <?php submit_button('Probe RRR vehicle endpoints', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Apply RRR vehicle data to Ovoko product</h2>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_apply_rrr_vehicle_data'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_apply_rrr_vehicle_data" />
+        <label for="apply_vehicle_product_id">Product ID:</label>
+        <input id="apply_vehicle_product_id" type="number" min="1" name="product_id" value="0" />
+        <label><input type="checkbox" name="update_title" value="1" /> Update title</label>
+        <?php submit_button('Apply RRR vehicle data to Ovoko product', 'secondary', 'submit', false); ?>
+    </form>
+
+<h2>Preview Ovoko title with vehicle data</h2>
     <p><strong>Preview only.</strong> No title updates are applied automatically.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('gpswiss_ovoko_preview_title_with_vehicle'); ?>
