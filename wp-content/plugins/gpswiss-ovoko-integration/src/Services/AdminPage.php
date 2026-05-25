@@ -19,6 +19,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
         add_action('admin_post_gpswiss_ovoko_check_rrr_api', [$this, 'handle_check_rrr_api']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_parts_sample', [$this, 'handle_preview_rrr_parts_sample']);
+        add_action('admin_post_gpswiss_ovoko_preview_rrr_single_part', [$this, 'handle_preview_rrr_single_part']);
     }
 
     public function register_admin_page(): void
@@ -101,6 +102,23 @@ class AdminPage
         $result = $this->service->run_local_test_callback($partId, $status);
 
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'error', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+
+    public function handle_preview_rrr_single_part(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_preview_rrr_single_part');
+
+        $partId = isset($_POST['part_id']) ? (int) $_POST['part_id'] : 15;
+        $result = $this->service->preview_rrr_single_part($partId);
+        $type = !empty($result['ok']) ? 'success' : 'warning';
+        set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }

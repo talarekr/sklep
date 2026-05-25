@@ -72,6 +72,40 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
 
+    public function preview_fetch_single_part(int $partId): array
+    {
+        $partId = max(1, $partId);
+        return $this->post_form('/get/part/' . $partId, [], true);
+    }
+
+    public function normalize_rrr_single_part_payload(array $payload): array
+    {
+        $summary = [
+            'part_id' => sanitize_text_field((string) ($payload['id'] ?? '')),
+            'title' => sanitize_text_field((string) ($payload['name'] ?? '')),
+            'status' => sanitize_text_field((string) ($payload['status'] ?? '')),
+            'external_id' => sanitize_text_field((string) ($payload['external_id'] ?? '')),
+            'updated_at' => sanitize_text_field((string) ($payload['updated_at'] ?? '')),
+        ];
+
+        foreach (['price', 'category', 'images', 'oe_numbers'] as $optional) {
+            if (array_key_exists($optional, $payload)) {
+                $summary[$optional] = $payload[$optional];
+            }
+        }
+        foreach (['car', 'vehicle', 'vehicle_data'] as $vehicleKey) {
+            if (array_key_exists($vehicleKey, $payload)) {
+                $summary['vehicle_data'] = $payload[$vehicleKey];
+                break;
+            }
+        }
+        if (isset($payload['images']) && is_array($payload['images'])) {
+            $summary['images_count'] = count($payload['images']);
+        }
+
+        return $summary;
+    }
+
     public function normalize_rrr_part_payload(array $payload): array
     {
         return [
@@ -115,7 +149,7 @@ class RrrApiClient
         return $results;
     }
 
-    private function post_form(string $path, array $payload): array
+    private function post_form(string $path, array $payload, bool $includeRawPayload = false): array
     {
         $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
         if ($baseUrl === '') {
@@ -173,6 +207,7 @@ class RrrApiClient
             'first_record' => $firstRecord,
             'records' => $records,
             'records_count' => count($records),
+            'payload' => $includeRawPayload && is_array($decoded) ? $decoded : [],
         ];
     }
 

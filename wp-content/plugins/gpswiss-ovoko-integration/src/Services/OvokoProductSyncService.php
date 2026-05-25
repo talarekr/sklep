@@ -8,6 +8,7 @@ class OvokoProductSyncService
 {
     private const PART_MATCH_META_KEYS = ['_ovoko_part_id', 'ovoko_part_id', 'part_id'];
     private const EXTERNAL_META_KEYS = ['external_id', 'source_part_id', 'external_part_id', '_allegro_source_id', '_ovoko_source_id'];
+    private const GEARBOX_HARD_META_KEYS = ['_allegro_gearbox_id', '_gearbox_id', '_gpswiss_allegro_gearboxes'];
 
     public function calculate_payload_hash(NormalizedOvokoPart $part): string
     {
@@ -46,24 +47,103 @@ class OvokoProductSyncService
         $partId = $part->get_part_id();
         foreach (self::PART_MATCH_META_KEYS as $metaKey) {
             $ids = $this->find_ids_by_meta($metaKey, $partId);
-            if (count($ids) === 1) return $this->match_result($ids[0], 'part_id_meta', $metaKey, 'high', false, 'Unique exact part_id meta match', []);
-            if (count($ids) > 1) return $this->match_result(null, 'part_id_meta', $metaKey, 'low', true, 'Multiple products with same part_id meta', $ids);
+            if (count($ids) === 1) return $this->apply_exclusion_to_match($this->match_result($ids[0], 'part_id_meta', $metaKey, 'high', false, 'Unique exact part_id meta match', []));
+            if (count($ids) > 1) return $this->apply_exclusion_to_match($this->match_result(null, 'part_id_meta', $metaKey, 'low', true, 'Multiple products with same part_id meta', $ids));
         }
         foreach (self::EXTERNAL_META_KEYS as $metaKey) {
             $ids = $this->find_ids_by_meta($metaKey, $partId);
-            if (count($ids) === 1) return $this->match_result($ids[0], 'external_meta', $metaKey, 'medium', false, 'Matched external source meta', []);
+            if (count($ids) === 1) return $this->apply_exclusion_to_match($this->match_result($ids[0], 'external_meta', $metaKey, 'medium', false, 'Matched external source meta', []));
         }
         $sku = (string) ($part->to_array()['part_id'] ?? '');
         if ($sku !== '') {
             $ids = $this->find_ids_by_meta('_sku', $sku);
-            if (count($ids) === 1) return $this->match_result($ids[0], 'sku', '_sku', 'medium', true, 'SKU candidate only, requires review', []);
+            if (count($ids) === 1) return $this->apply_exclusion_to_match($this->match_result($ids[0], 'sku', '_sku', 'medium', true, 'SKU candidate only, requires review', []));
         }
-        return $this->match_result(null, 'title_candidate', 'post_title', 'low', true, 'No safe exact identifier match. Title matching should be manual review.', []);
+        return $this->apply_exclusion_to_match($this->match_result(null, 'title_candidate', 'post_title', 'low', true, 'No safe exact identifier match. Title matching should be manual review.', []));
+    }
+
+
+
+    public function is_product_excluded_from_ovoko_sync(int $productId): array
+    {
+        if ($productId <= 0) {
+            return ['excluded' => false, 'reason' => '', 'review_required' => false, 'signals' => []];
+        }
+
+        $signals = [];
+        foreach (self::GEARBOX_HARD_META_KEYS as $metaKey) {
+            $value = (string) get_post_meta($productId, $metaKey, true);
+            if ($value !== '') {
+                $signals[] = 'meta_key_present:' . $metaKey;
+            }
+        }
+
+        $sourceValues = [
+            'source' => (string) get_post_meta($productId, 'source', true),
+            '_source' => (string) get_post_meta($productId, '_source', true),
+            '_gpswiss_source' => (string) get_post_meta($productId, '_gpswiss_source', true),
+        ];
+        foreach ($sourceValues as $sourceKey => $sourceValue) {
+            $normalized = strtolower(trim($sourceValue));
+            if (in_array($normalized, ['gearboxes', 'allegro_gearboxes'], true)) {
+                $signals[] = 'source_match:' . $sourceKey . '=' . $normalized;
+            }
+        }
+
+        $warnings = [];
+        $post = get_post($productId);
+        $sku = strtolower((string) get_post_meta($productId, '_sku', true));
+        $slug = $post ? strtolower((string) $post->post_name) : '';
+        if ($sku !== '' && str_contains($sku, 'gearbox')) $warnings[] = 'sku_contains_gearbox';
+        if ($slug !== '' && (str_contains($slug, 'gearbox') || str_contains($slug, 'skrzyn'))) $warnings[] = 'slug_contains_gearbox';
+
+        $excluded = !empty($signals);
+        return [
+            'excluded' => $excluded,
+            'reason' => $excluded ? 'gearbox_standalone_catalog' : '',
+            'review_required' => $excluded || !empty($warnings),
+            'signals' => $signals,
+            'warnings' => $warnings,
+        ];
+    }
+
+    public function count_excluded_gearbox_products(): int
+    {
+        if (!post_type_exists('product')) return 0;
+
+        $ids = get_posts(['post_type' => 'product', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids']);
+        $count = 0;
+        foreach ((array) $ids as $id) {
+            $result = $this->is_product_excluded_from_ovoko_sync((int) $id);
+            if (!empty($result['excluded'])) $count++;
+        }
+        return $count;
+    }
+
+    private function apply_exclusion_to_match(array $match): array
+    {
+        $productId = (int) ($match['matched_product_id'] ?? 0);
+        if ($productId <= 0) return $match + ['excluded_from_ovoko_sync' => false, 'exclusion_reason' => null];
+
+        $excluded = $this->is_product_excluded_from_ovoko_sync($productId);
+        if (!empty($excluded['excluded'])) {
+            $match['excluded_from_ovoko_sync'] = true;
+            $match['exclusion_reason'] = 'gearbox_standalone_catalog';
+            $match['review_required'] = true;
+            $match['confidence'] = 'excluded';
+            $match['reason'] = 'Matched product belongs to standalone gearbox catalog and is excluded from Ovoko sync.';
+            return $match;
+        }
+
+        $match['excluded_from_ovoko_sync'] = false;
+        $match['exclusion_reason'] = null;
+        return $match;
     }
 
     public function preview_update_existing_product(int $productId, NormalizedOvokoPart $part): array
     {
-        return ['mode' => 'preview_only', 'product_id' => $productId, 'changes' => $this->detect_changes($productId, $part), 'no_write_performed' => true];
+        $excluded = $this->is_product_excluded_from_ovoko_sync($productId);
+        return ['mode' => 'preview_only', 'product_id' => $productId, 'changes' => $this->detect_changes($productId, $part), 'no_write_performed' => true, 'excluded_from_ovoko_sync' => !empty($excluded['excluded']), 'exclusion_reason' => !empty($excluded['excluded']) ? 'gearbox_standalone_catalog' : null, 'update_blocked' => !empty($excluded['excluded'])];
     }
 
     public function preview_match_rrr_record(array $record): array
@@ -73,17 +153,17 @@ class OvokoProductSyncService
 
         foreach (self::PART_MATCH_META_KEYS as $metaKey) {
             $ids = $this->find_ids_by_meta($metaKey, $partId);
-            if (count($ids) === 1) return $this->match_result($ids[0], 'part_id_meta', $metaKey, 'high', false, 'Unique exact part_id meta match', []);
-            if (count($ids) > 1) return $this->match_result(null, 'part_id_meta', $metaKey, 'low', true, 'Multiple products with same part_id meta', $ids);
+            if (count($ids) === 1) return $this->apply_exclusion_to_match($this->match_result($ids[0], 'part_id_meta', $metaKey, 'high', false, 'Unique exact part_id meta match', []));
+            if (count($ids) > 1) return $this->apply_exclusion_to_match($this->match_result(null, 'part_id_meta', $metaKey, 'low', true, 'Multiple products with same part_id meta', $ids));
         }
 
         foreach (self::EXTERNAL_META_KEYS as $metaKey) {
             $ids = $this->find_ids_by_meta($metaKey, $externalId);
-            if (count($ids) === 1) return $this->match_result($ids[0], 'external_meta', $metaKey, 'medium', false, 'Matched external ID source meta', []);
-            if (count($ids) > 1) return $this->match_result(null, 'external_meta', $metaKey, 'low', true, 'Multiple products with same external id meta', $ids);
+            if (count($ids) === 1) return $this->apply_exclusion_to_match($this->match_result($ids[0], 'external_meta', $metaKey, 'medium', false, 'Matched external ID source meta', []));
+            if (count($ids) > 1) return $this->apply_exclusion_to_match($this->match_result(null, 'external_meta', $metaKey, 'low', true, 'Multiple products with same external id meta', $ids));
         }
 
-        return $this->match_result(null, 'none', '', 'low', true, 'No safe exact identifier match.', []);
+        return $this->apply_exclusion_to_match($this->match_result(null, 'none', '', 'low', true, 'No safe exact identifier match.', []));
     }
 
     public function preview_import_part(string $partId, OvokoSupplyConnectorClient $client): array

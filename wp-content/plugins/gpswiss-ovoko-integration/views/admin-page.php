@@ -32,6 +32,7 @@
             <tr><th>Sync dry-run</th><td><label><input type="checkbox" name="ovoko_sync_dry_run" value="1" <?php checked(!empty($data['settings']['ovoko_sync_dry_run'])); ?> /> Enabled</label></td></tr>
             <tr><th>Sync mode</th><td><select name="ovoko_sync_mode"><?php foreach (['disabled','preview_only','manual_single','batch_dry_run'] as $mode): ?><option value="<?php echo esc_attr($mode); ?>" <?php selected($data['settings']['ovoko_sync_mode'], $mode); ?>><?php echo esc_html($mode); ?></option><?php endforeach; ?></select></td></tr>
             <tr><th>Sync batch limit</th><td><input type="number" min="1" max="100" name="ovoko_sync_batch_limit" value="<?php echo (int) $data['settings']['ovoko_sync_batch_limit']; ?>" /></td></tr>
+            <tr><th>Exclude gearbox products from Ovoko</th><td><label><input type="checkbox" name="ovoko_exclude_gearbox_products" value="1" <?php checked(!empty($data['settings']['ovoko_exclude_gearbox_products'])); ?> /> Enabled</label></td></tr>
 
             <tr><th>RRR API enabled</th><td><label><input type="checkbox" name="rrr_api_enabled" value="1" <?php checked(!empty($data['settings']['rrr_api_enabled'])); ?> /> Enabled</label></td></tr>
             <tr><th>RRR API dry-run</th><td><label><input type="checkbox" name="rrr_api_dry_run" value="1" <?php checked(!empty($data['settings']['rrr_api_dry_run'])); ?> /> Enabled</label></td></tr>
@@ -149,6 +150,47 @@
                 <code><?php echo esc_html('id=' . (string) ($record['part_id'] ?? '') . ', name=' . (string) ($record['title'] ?? '') . ', status=' . (string) ($record['status'] ?? '') . ', updated_at=' . (string) ($record['updated_at'] ?? '')); ?></code>
             </p>
         <?php endforeach; ?>
+    <?php endif; ?>
+
+
+
+    <h2>Excluded from Ovoko sync</h2>
+    <ul>
+        <li>ovoko_exclude_gearbox_products enabled: <strong><?php echo !empty($data['excluded_from_ovoko_sync']['enabled']) ? 'Yes' : 'No'; ?></strong></li>
+        <li>Detected gearbox products: <strong><?php echo (int) ($data['excluded_from_ovoko_sync']['detected_products_count'] ?? 0); ?></strong></li>
+        <li><em><?php echo esc_html((string) ($data['excluded_from_ovoko_sync']['info'] ?? '')); ?></em></li>
+    </ul>
+
+
+
+    <h2>Preview RRR single part</h2>
+    <p><strong>Read-only preview.</strong> No import, no product writes, no meta writes, no stock changes.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_rrr_single_part'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_rrr_single_part" />
+        <label for="part_id">Part ID:</label>
+        <input id="part_id" type="number" min="1" name="part_id" value="15" />
+        <?php submit_button('Preview RRR single part', 'secondary', 'submit', false); ?>
+    </form>
+    <?php
+    $singlePartPreview = [];
+    if (!empty($notice['text'])) {
+        $decodedNotice = json_decode((string) $notice['text'], true);
+        if (is_array($decodedNotice) && (($decodedNotice['mode'] ?? '') === 'preview_only') && isset($decodedNotice['single_part_summary'])) {
+            $singlePartPreview = $decodedNotice;
+        }
+    }
+    ?>
+    <?php if (!empty($singlePartPreview)): ?>
+        <ul>
+            <li>status_code: <code><?php echo esc_html((string) ($singlePartPreview['status_code'] ?? '')); ?></code></li>
+            <li>msg: <code><?php echo esc_html((string) ($singlePartPreview['msg'] ?? '')); ?></code></li>
+            <li>part_id: <code><?php echo esc_html((string) ($singlePartPreview['part_id'] ?? '')); ?></code></li>
+            <li>top-level keys: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['response_top_level_keys'] ?? []))); ?></code></li>
+            <li>single part summary: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['single_part_summary'] ?? []))); ?></code></li>
+            <li>woo match preview: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['woo_match_preview'] ?? []))); ?></code></li>
+            <li>raw_payload_summary: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['raw_payload_summary'] ?? []))); ?></code></li>
+        </ul>
     <?php endif; ?>
 
     <h2>Preview sync flow (dry-run only)</h2>

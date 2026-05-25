@@ -186,3 +186,21 @@ Questions to confirm with Ovoko/RRR:
 - What are all possible values of `status`?
 - How to filter only active/available parts in `/v2/get/parts`?
 - Does `pagination.total_count` include sold/archived/inactive parts?
+
+## Gearbox standalone catalog exclusion
+
+Products managed by `wp-content/plugins/gpswiss-allegro-gearboxes/` are treated as a standalone gearbox catalog and are outside Ovoko scope.
+
+- They are excluded from Ovoko sync/import/matching when `ovoko_exclude_gearbox_products` is enabled (default: enabled).
+- Name/title matching must not auto-link gearbox standalone products to Ovoko parts.
+- These products remain Woo-only gearbox catalog entries.
+
+## Preview RRR single part
+
+Admin action: **Preview RRR single part**
+
+- Endpoint: `POST /get/part/{id}`
+- Content type: `application/x-www-form-urlencoded`
+- Auth form fields: `username`, `password`, `user_token` (from plugin settings; never displayed)
+- Read-only mode only: no import, no product creation, no product update, no stock/meta writes.
+- Purpose: inspect which full fields are returned by `/get/part/{id}` before any future importer work.
