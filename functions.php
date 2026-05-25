@@ -1917,8 +1917,6 @@ function gp_render_ovoko_description_and_details_tab(): void
         return;
     }
 
-    the_content();
-
     $labels = [
         '_ovoko_part_number' => __('Numer części', 'gp-clone'),
         '_ovoko_vehicle_make' => __('Producent', 'gp-clone'),
