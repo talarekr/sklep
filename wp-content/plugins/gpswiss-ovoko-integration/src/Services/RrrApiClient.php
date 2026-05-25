@@ -78,29 +78,64 @@ class RrrApiClient
         return $this->post_form('/get/part/' . $partId, [], true);
     }
 
+    public function extract_single_part_record(array $payload): array
+    {
+        $candidates = [];
+
+        if (isset($payload['list'][0][0]) && is_array($payload['list'][0][0])) {
+            $candidates[] = $payload['list'][0][0];
+        }
+        if (isset($payload['list'][0]) && is_array($payload['list'][0])) {
+            $candidates[] = $payload['list'][0];
+        }
+        if (isset($payload['data'][0]) && is_array($payload['data'][0])) {
+            $candidates[] = $payload['data'][0];
+        }
+        if (isset($payload['data']) && is_array($payload['data'])) {
+            $candidates[] = $payload['data'];
+        }
+        $candidates[] = $payload;
+
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $hasId = isset($candidate['id']) && (string) $candidate['id'] !== '';
+            $hasName = isset($candidate['name']) && (string) $candidate['name'] !== '';
+            if ($hasId || $hasName) {
+                return $candidate;
+            }
+        }
+
+        return [];
+    }
+
     public function normalize_rrr_single_part_payload(array $payload): array
     {
+        $record = $this->extract_single_part_record($payload);
+
         $summary = [
-            'part_id' => sanitize_text_field((string) ($payload['id'] ?? '')),
-            'title' => sanitize_text_field((string) ($payload['name'] ?? '')),
-            'status' => sanitize_text_field((string) ($payload['status'] ?? '')),
-            'external_id' => sanitize_text_field((string) ($payload['external_id'] ?? '')),
-            'updated_at' => sanitize_text_field((string) ($payload['updated_at'] ?? '')),
+            'part_id' => sanitize_text_field((string) ($record['part_id'] ?? $record['id'] ?? '')),
+            'title' => sanitize_text_field((string) ($record['name'] ?? '')),
+            'status' => sanitize_text_field((string) ($record['status'] ?? '')),
+            'external_id' => sanitize_text_field((string) ($record['external_id'] ?? '')),
+            'updated_at' => sanitize_text_field((string) ($record['updated_at'] ?? '')),
         ];
 
         foreach (['price', 'category', 'images', 'oe_numbers'] as $optional) {
-            if (array_key_exists($optional, $payload)) {
-                $summary[$optional] = $payload[$optional];
+            if (array_key_exists($optional, $record)) {
+                $summary[$optional] = $record[$optional];
             }
         }
         foreach (['car', 'vehicle', 'vehicle_data'] as $vehicleKey) {
-            if (array_key_exists($vehicleKey, $payload)) {
-                $summary['vehicle_data'] = $payload[$vehicleKey];
+            if (array_key_exists($vehicleKey, $record)) {
+                $summary['vehicle_data'] = $record[$vehicleKey];
                 break;
             }
         }
-        if (isset($payload['images']) && is_array($payload['images'])) {
-            $summary['images_count'] = count($payload['images']);
+        if (isset($record['images']) && is_array($record['images'])) {
+            $summary['images_count'] = count($record['images']);
         }
 
         return $summary;

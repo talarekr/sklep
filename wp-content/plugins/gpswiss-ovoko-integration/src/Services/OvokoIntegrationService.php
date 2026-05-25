@@ -493,6 +493,7 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         $client = new RrrApiClient($this->get_settings());
         $result = $client->preview_fetch_single_part($partId);
         $payload = (array) ($result['payload'] ?? []);
+        $record = $client->extract_single_part_record($payload);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
@@ -515,7 +516,11 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
             'single_part_summary' => $normalized,
             'woo_match_preview' => $match,
-            'raw_payload_summary' => ['keys' => array_values(array_map('strval', array_keys($payload))), 'full_payload_omitted' => true],
+            'raw_payload_summary' => [
+                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'record_keys' => array_values(array_map('strval', array_keys((array) $record))),
+                'full_payload_omitted' => true,
+            ],
             'no_write_to_woo' => true,
             'checked_at' => gmdate('c'),
         ];
