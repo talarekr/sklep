@@ -516,12 +516,19 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $payload = (array) ($result['payload'] ?? []);
         $record = $client->extract_single_part_record($payload);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $imagePlanPreview = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId);
+        $imageUrlFields = $this->scan_image_url_fields($payload);
+        $imageFieldDiagnostics = $this->build_image_field_diagnostics($payload);
         $salesChannelsDiagnostic = $client->build_sales_channels_diagnostic($payload);
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
             'part_id' => (string) ($normalized['part_id'] ?? ''),
             'external_id' => (string) ($normalized['external_id'] ?? ''),
         ]);
+        $imagePlan = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId);
+        $imagePolicy = (array) ($imagePlan['image_source_policy'] ?? []);
+        $imageCleanSourceFound = !empty($imagePolicy['clean_source_found']);
+        $imageWarning = $imageCleanSourceFound ? '' : 'Only public Ovoko watermarked image URLs found.';
 
         return [
             'ok' => !empty($result['ok']),
@@ -537,6 +544,8 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'part_id' => $partId,
             'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
             'single_part_summary' => $normalized,
+            'image_url_fields_found' => $imageUrlFields,
+            'image_field_diagnostics' => $imageFieldDiagnostics,
             'woo_meta_mapping_preview' => $this->build_rrr_single_part_woo_meta_preview($normalized),
             'same_vehicle_grouping_preview' => $this->build_same_vehicle_grouping_preview($normalized),
             'woo_match_preview' => $match,
@@ -608,6 +617,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         ]);
         $imagePlanBuilder = new OvokoImageImportPlan();
         $imagePlanPreview = $imagePlanBuilder->preview_image_import_plan($normalized, $partId);
+        $imageUrlFields = $this->scan_image_url_fields($payload);
 
         $hasExisting = !empty($match['matched_product_id']);
         $wouldAction = $hasExisting ? 'would_update_existing_product' : 'would_create_new_product';
@@ -663,6 +673,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'same_vehicle_grouping' => $this->build_same_vehicle_grouping_preview($normalized),
             ],
             'preview_image_import_plan' => $imagePlanPreview,
+            'image_url_fields_found' => $imageUrlFields,
             'title_builder_preview' => $titlePreview,
             'woo_meta_preview' => [
                 '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
@@ -910,6 +921,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'no_ebay_publish' => true,
             'no_allegro_publish' => true,
             'no_batch' => true,
+            'image_watermark_policy_checked' => true,
+            'image_clean_source_found' => $imageCleanSourceFound,
+            'image_source_selected' => (string) ($imagePlan['selected_source'] ?? ''),
+            'image_watermark_warning' => $imageWarning,
+            'image_url_fields_found' => $this->scan_image_url_fields($payload),
         ];
     }
 
@@ -978,6 +994,99 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'final_rendered_width' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_width', true),
             'final_rendered_height' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_height', true),
         ];
+    }
+
+    public function probe_ovoko_image_url_variants(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($result['payload'] ?? []);
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $sourceUrls = array_slice((array) ($normalized['part_photo_gallery'] ?? []), 0, 3);
+        $variants = ['', '/original/', '/raw/', '/source/', '/private/', '/nowm/', '/no_watermark/', '/crm/', '/uploaded/'];
+        $probes = [];
+        foreach ($sourceUrls as $sourceUrl) {
+            $sourceUrl = trim((string) $sourceUrl);
+            if ($sourceUrl === '') {
+                continue;
+            }
+            $perUrl = [];
+            foreach ($variants as $variant) {
+                $candidateUrl = $this->build_candidate_image_variant_url($sourceUrl, $variant);
+                if ($candidateUrl === '') {
+                    continue;
+                }
+                $head = wp_remote_head($candidateUrl, ['timeout' => 7, 'redirection' => 3]);
+                $headers = !is_wp_error($head) ? (array) wp_remote_retrieve_headers($head) : [];
+                $perUrl[] = [
+                    'candidate_url' => $candidateUrl,
+                    'http_code' => !is_wp_error($head) ? (int) wp_remote_retrieve_response_code($head) : 0,
+                    'content_type' => (string) ($headers['content-type'] ?? ''),
+                    'content_length' => (string) ($headers['content-length'] ?? ''),
+                    'dimensions' => '',
+                    'likely_watermarked' => $this->is_likely_watermarked_url($candidateUrl),
+                ];
+            }
+            $probes[] = ['source_url' => $sourceUrl, 'probes' => $perUrl];
+        }
+
+        return ['ok' => !empty($result['ok']), 'mode' => 'diagnostic_probe', 'action_name' => 'Probe Ovoko image URL variants', 'part_id' => $partId, 'limits' => ['max_images' => 3, 'variant_count' => count($variants)], 'probes' => $probes, 'checked_at' => gmdate('c')];
+    }
+
+    private function scan_image_url_fields(array $payload): array
+    {
+        $found = [];
+        $walker = function ($value, string $path) use (&$walker, &$found): void {
+            if (is_array($value)) {
+                foreach ($value as $k => $v) {
+                    $walker($v, $path === '' ? (string) $k : $path . '.' . (string) $k);
+                }
+                return;
+            }
+            if (!is_string($value)) {
+                return;
+            }
+            $url = trim($value);
+            if ($url === '' || stripos($url, 'http') !== 0) {
+                return;
+            }
+            if (preg_match('~\.(jpg|jpeg|png|webp)(\?.*)?$~i', $url) || str_contains($url, 'images.ovoko.com') || preg_match('~(cdn|photo|gallery|image)~i', $url)) {
+                $found[] = ['field_path' => $path, 'url' => $url];
+            }
+        };
+        $walker($payload, '');
+        return array_values($found);
+    }
+
+    private function build_image_field_diagnostics(array $payload): array
+    {
+        $out = [];
+        foreach ($this->scan_image_url_fields($payload) as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $parsed = wp_parse_url($url);
+            $path = (string) ($parsed['path'] ?? '');
+            preg_match('~/(\\d{2,4}x\\d{2,4})/~', $path, $m);
+            $out[] = ['field_path' => (string) ($row['field_path'] ?? ''), 'url_sample' => $url, 'host' => (string) ($parsed['host'] ?? ''), 'path' => $path, 'detected_size_variant' => (string) ($m[1] ?? ''), 'contains_watermark_likely' => $this->is_likely_watermarked_url($url), 'reason' => str_contains($url, 'images.ovoko.com') ? 'public_ovoko_image_host' : 'url_pattern_review_required'];
+        }
+        return $out;
+    }
+
+    private function is_likely_watermarked_url(string $url): bool
+    {
+        return str_contains($url, 'images.ovoko.com') || (bool) preg_match('~/(br|tl|bl)/~', $url);
+    }
+
+    private function build_candidate_image_variant_url(string $sourceUrl, string $variant): string
+    {
+        if ($variant === '') return $sourceUrl;
+        $parsed = wp_parse_url($sourceUrl);
+        $scheme = (string) ($parsed['scheme'] ?? '');
+        $host = (string) ($parsed['host'] ?? '');
+        $path = (string) ($parsed['path'] ?? '');
+        if ($scheme === '' || $host === '' || $path === '') return '';
+        $newPath = preg_replace('~/((br|bl|tl)/)?\\d{2,4}x\\d{2,4}/~', $variant, $path, 1);
+        return is_string($newPath) && $newPath !== '' ? ($scheme . '://' . $host . $newPath) : '';
     }
 
     public function generate_listing_image_for_ovoko_product(int $productId): array
