@@ -117,17 +117,36 @@ class RrrApiClient
         $carId = $this->first_non_empty_value($record, ['car_id', 'carId', 'vehicle_id', 'vehicleId']);
         $vehicle = $this->extract_vehicle_data($record);
         $priceDiagnostics = $this->extract_allegro_price_diagnostics($record);
+        $internalNotesPrice = $this->parse_internal_notes_price($record);
         $ovokoPrice = $record['price'] ?? null;
         $ovokoCurrency = sanitize_text_field((string) ($record['currency'] ?? ''));
         $ovokoOriginalPrice = $record['original_price'] ?? null;
         $ovokoOriginalCurrency = sanitize_text_field((string) ($record['original_currency'] ?? ''));
         $allegroPrice = $priceDiagnostics['allegro_channel_price'];
         $allegroCurrency = sanitize_text_field((string) $priceDiagnostics['allegro_channel_currency']);
-        $priceSource = $allegroPrice !== null ? 'allegro_channel_price' : 'missing_allegro_channel_price';
-        $priceReviewRequired = $allegroPrice === null;
-        $priceReason = $priceReviewRequired
-            ? 'Allegro channel price not found; do not import Ovoko price as Woo price.'
-            : 'Woo target price sourced from Allegro channel price.';
+
+        $priceSource = 'missing_woo_price';
+        $priceReviewRequired = true;
+        $priceReason = 'No plain numeric Woo price found in internal notes and no Allegro channel price available.';
+        $wooTargetPrice = null;
+        $wooTargetCurrency = '';
+
+        if (!empty($internalNotesPrice['price_found'])) {
+            $priceSource = 'internal_notes_plain_price';
+            $priceReviewRequired = false;
+            $priceReason = 'Woo price parsed from Ovoko internal notes plain numeric value.';
+            $wooTargetPrice = $internalNotesPrice['price_value'];
+            $wooTargetCurrency = 'PLN';
+        } elseif (!empty($internalNotesPrice['field_exists']) && empty($internalNotesPrice['price_format_valid'])) {
+            $priceSource = 'invalid_internal_notes_price';
+            $priceReason = 'Internal notes contain invalid price format. Expected plain numeric value like 250 or 250.50.';
+        } elseif ($allegroPrice !== null) {
+            $priceSource = 'allegro_channel_price';
+            $priceReviewRequired = false;
+            $priceReason = 'Woo target price sourced from Allegro channel price.';
+            $wooTargetPrice = $allegroPrice;
+            $wooTargetCurrency = $allegroCurrency !== '' ? $allegroCurrency : $ovokoOriginalCurrency;
+        }
 
         $images = $this->normalize_gallery($record['part_photo_gallery'] ?? $record['images'] ?? []);
         $singlePhoto = sanitize_text_field((string) ($record['photo'] ?? ''));
@@ -147,12 +166,12 @@ class RrrApiClient
             'ovoko_original_currency' => $ovokoOriginalCurrency,
             'allegro_channel_price' => $allegroPrice,
             'allegro_channel_currency' => $allegroCurrency,
-            'woo_target_price' => $allegroPrice,
-            'woo_target_currency' => $allegroPrice !== null ? ($allegroCurrency !== '' ? $allegroCurrency : $ovokoOriginalCurrency) : '',
+            'woo_target_price' => $wooTargetPrice,
+            'woo_target_currency' => $wooTargetCurrency,
             'price_source' => $priceSource,
             'price_review_required' => $priceReviewRequired,
             'price_reason' => $priceReason,
-            'allegro_price_available' => !$priceReviewRequired,
+            'allegro_price_available' => $allegroPrice !== null,
             'allegro_price_location' => (string) ($priceDiagnostics['allegro_price_location'] ?? 'not_found_in_get_part_payload'),
             'price_diagnostic_channel_keys' => (array) ($priceDiagnostics['diagnostic_channel_keys'] ?? []),
             'manufacturer_code' => sanitize_text_field((string) ($record['manufacturer_code'] ?? '')),
@@ -175,6 +194,11 @@ class RrrApiClient
             'allegro_id' => sanitize_text_field((string) ($record['allegro_id'] ?? '')),
             'vehicle_data_status' => 'not_available',
             'internal_notes_field_exists' => array_key_exists('internal_notes', $record),
+            'internal_notes_price_found' => !empty($internalNotesPrice['price_found']),
+            'internal_notes_price_value' => $internalNotesPrice['price_value'],
+            'internal_notes_price_currency' => 'PLN',
+            'internal_notes_price_format_valid' => !empty($internalNotesPrice['price_format_valid']),
+            'internal_notes_price_error' => (string) ($internalNotesPrice['price_error'] ?? ''),
             'reserved_user_field_exists' => array_key_exists('reserved_user', $record),
             'reserved_date_field_exists' => array_key_exists('reserved_date', $record),
         ];
@@ -187,6 +211,31 @@ class RrrApiClient
         }
 
         return $summary;
+    }
+
+    private function parse_internal_notes_price(array $record): array
+    {
+        $fieldExists = array_key_exists('internal_notes', $record);
+        if (!$fieldExists) {
+            return ['field_exists' => false, 'price_found' => false, 'price_value' => null, 'price_format_valid' => false, 'price_error' => ''];
+        }
+
+        $raw = is_scalar($record['internal_notes']) ? trim((string) $record['internal_notes']) : '';
+        if ($raw === '') {
+            return ['field_exists' => true, 'price_found' => false, 'price_value' => null, 'price_format_valid' => false, 'price_error' => ''];
+        }
+
+        if (!preg_match('/^\d+(?:[.,]\d+)?$/', $raw)) {
+            return ['field_exists' => true, 'price_found' => false, 'price_value' => null, 'price_format_valid' => false, 'price_error' => 'Invalid format. Expected plain numeric value like 250 or 250.50.'];
+        }
+
+        $normalized = str_replace(',', '.', $raw);
+        $value = (float) $normalized;
+        if ($value <= 0) {
+            return ['field_exists' => true, 'price_found' => false, 'price_value' => null, 'price_format_valid' => false, 'price_error' => 'Price must be a positive number greater than 0.'];
+        }
+
+        return ['field_exists' => true, 'price_found' => true, 'price_value' => $value + 0, 'price_format_valid' => true, 'price_error' => ''];
     }
 
     private function extract_allegro_price_diagnostics(array $record): array

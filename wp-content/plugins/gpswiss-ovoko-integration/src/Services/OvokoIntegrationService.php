@@ -542,10 +542,11 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
 
     private function build_rrr_single_part_woo_meta_preview(array $normalized): array
     {
-        $isAllegroSource = (($normalized['price_source'] ?? '') === 'allegro_channel_price');
+        $priceSource = (string) ($normalized['price_source'] ?? '');
+        $isPriceReady = in_array($priceSource, ['internal_notes_plain_price', 'allegro_channel_price'], true);
         return [
             'source' => 'ovoko_master',
-            'price_source' => (string) ($normalized['price_source'] ?? ''),
+            'price_source' => $priceSource,
             'price_review_required' => !empty($normalized['price_review_required']),
             'price_reason' => (string) ($normalized['price_reason'] ?? ''),
             'part_meta' => [
@@ -558,8 +559,10 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 '_ovoko_images' => (array) ($normalized['part_photo_gallery'] ?? []),
                 '_ovoko_price' => (string) ($normalized['price'] ?? ''),
                 '_ovoko_original_price' => (string) ($normalized['original_price'] ?? ''),
-                '_ovoko_allegro_price' => $isAllegroSource ? (string) ($normalized['allegro_channel_price'] ?? '') : null,
-                '_ovoko_woo_target_price' => $isAllegroSource ? (string) ($normalized['woo_target_price'] ?? '') : null,
+                '_ovoko_allegro_price' => (($priceSource === 'allegro_channel_price') ? (string) ($normalized['allegro_channel_price'] ?? '') : null),
+                '_ovoko_internal_notes_price_source' => (($priceSource === 'internal_notes_plain_price') ? 'internal_notes_plain_price' : null),
+                '_ovoko_woo_target_price' => $isPriceReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
+                '_ovoko_woo_target_currency' => $isPriceReady ? (string) ($normalized['woo_target_currency'] ?? '') : null,
                 '_ovoko_currency' => (string) ($normalized['currency'] ?? ''),
                 '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_ovoko_visible_code' => (string) ($normalized['visible_code'] ?? ''),
@@ -569,14 +572,16 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 '_ovoko_place' => (string) ($normalized['place'] ?? ''),
                 '_ovoko_raw_payload' => 'preview_only_omitted',
             ],
-            'woo_price_write_preview' => $isAllegroSource ? [
-                '_regular_price' => (string) ($normalized['woo_target_price'] ?? ''),
-                '_price' => (string) ($normalized['woo_target_price'] ?? ''),
-                '_currency' => (string) ($normalized['woo_target_currency'] ?? ''),
+            'woo_price_write_preview' => $isPriceReady ? [
+                'source' => $priceSource,
+                'target_price' => (string) ($normalized['woo_target_price'] ?? ''),
+                'target_currency' => (string) ($normalized['woo_target_currency'] ?? ''),
                 'write_ready' => true,
+                'no_write_to_woo' => true,
             ] : [
                 'write_ready' => false,
                 'blocked_reason' => (string) ($normalized['price_reason'] ?? ''),
+                'no_write_to_woo' => true,
             ],
             'vehicle_meta' => [
                 '_ovoko_car_id' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),

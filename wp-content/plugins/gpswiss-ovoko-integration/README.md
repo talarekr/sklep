@@ -237,21 +237,51 @@ Safety/visibility notes:
 - `internal_notes`, `reserved_user`, `reserved_date` are not shown as user data; only `*_field_exists` booleans are shown in preview.
 - No Woo product/meta writes are performed in preview mode.
 
-## Price source policy
+## Woo price from Ovoko internal notes
 
-- Ovoko main price (`price`/`original_price`) is **not** automatically treated as WooCommerce selling price.
-- Woo target price must come from **Allegro channel price** from RRR/Ovoko payload.
-- Policy in preview normalization:
-  - `ovoko_price` = payload `price`
-  - `ovoko_original_price` = payload `original_price`
-  - `allegro_channel_price` = value found in channel/Allegro price fields (if present)
-  - `woo_target_price` = `allegro_channel_price`
-  - if `allegro_channel_price` is missing:
-    - `woo_target_price = null`
-    - `price_review_required = true`
-    - `price_reason = "Allegro channel price not found; do not import Ovoko price as Woo price."`
-- Woo `_price` / `_regular_price` preview mapping is shown as write-ready only when `price_source=allegro_channel_price`.
-- If Allegro price is missing, price write preview is blocked in diagnostics.
+- Ovoko **internal notes** field is now the manual source of Woo price in preview policy.
+- Required format in `internal_notes`: plain numeric value only, for example:
+  - `250`
+  - `250.50`
+  - `250,50` (comma is accepted and normalized to `.`)
+- Currency is fixed to `PLN`.
+- `internal_notes` must contain only the price value (no text like `250 zł`, `cena 250`, `Allegro 250`).
+- Ovoko `price` / `original_price` are informational only (`_ovoko_price`, `_ovoko_original_price`) and are **not** imported as final Woo price.
+- If no valid numeric value is found in internal notes, `price_review_required = true`.
+
+### Price source policy (preview only)
+
+Woo target price priority:
+1. valid parsed price from `internal_notes`,
+2. Allegro channel price (if available in payload),
+3. otherwise missing price → review required.
+
+Outcomes:
+- valid internal notes price:
+  - `price_source = internal_notes_plain_price`
+  - `woo_target_price = parsed value`
+  - `woo_target_currency = PLN`
+  - `price_review_required = false`
+- invalid internal notes format:
+  - `price_source = invalid_internal_notes_price`
+  - `woo_target_price = null`
+  - `woo_target_currency = ""`
+  - `price_review_required = true`
+- missing internal notes price and missing Allegro channel price:
+  - `price_source = missing_woo_price`
+  - `woo_target_price = null`
+  - `woo_target_currency = ""`
+  - `price_review_required = true`
+
+Preview mapping includes:
+- `_ovoko_internal_notes_price_source` (when internal notes price is valid),
+- `_ovoko_woo_target_price`,
+- `_ovoko_woo_target_currency`.
+
+Safety:
+- preview/dry-run only,
+- no writes to Woo `_price` / `_regular_price`,
+- no import/batch/cron/product/stock updates.
 
 Diagnostic key search in `/get/part/{id}` preview checks for channel-related fields including:
 - `allegro`
