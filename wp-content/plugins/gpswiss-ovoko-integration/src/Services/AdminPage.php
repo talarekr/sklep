@@ -406,20 +406,35 @@ class AdminPage
         check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
         $options = [
             'dry_run' => !empty($_POST['dry_run']),
+            'match_only' => !empty($_POST['match_only']) || !empty($_POST['preview_only']),
             'replace_description' => !empty($_POST['replace_description']),
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
             'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
             'page' => isset($_POST['page']) ? (int) $_POST['page'] : 1,
-            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 20,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 5,
             'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
             'only_matched' => !empty($_POST['only_matched']),
             'skip_already_enriched' => !empty($_POST['skip_already_enriched']),
             'include_existing_ovoko' => !empty($_POST['include_existing_ovoko']),
         ];
-        $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
-        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 120);
-        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
-        exit;
+        try {
+            $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
+            wp_send_json($result, !empty($result['ok']) ? 200 : 500);
+        } catch (\Throwable $e) {
+            $this->service->log_event('bulk_allegro_to_ovoko_details_enrichment_exception', [
+                'message' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            wp_send_json([
+                'ok' => false,
+                'partial' => false,
+                'action_name' => 'Bulk Allegro to Ovoko details enrichment',
+                'error' => 'bulk_request_failed',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
 }
