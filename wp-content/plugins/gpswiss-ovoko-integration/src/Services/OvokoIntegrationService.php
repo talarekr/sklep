@@ -1975,6 +1975,72 @@ class OvokoIntegrationService
         return ['ok'=>true,'action_name'=>'Import Ovoko CSV mapping','status'=>$status];
     }
 
+    public function bulk_allegro_to_ovoko_details_enrichment(array $options = []): array
+    {
+        $started = microtime(true);
+        $dryRun = array_key_exists('dry_run', $options) ? !empty($options['dry_run']) : true;
+        $replaceDescription = !empty($options['replace_description']);
+        $batchSize = max(1, (int) ($options['batch_size'] ?? 20));
+        $offset = max(0, (int) ($options['offset'] ?? 0));
+        $page = max(1, (int) ($options['page'] ?? 1));
+        $limit = max(1, (int) ($options['limit'] ?? $batchSize));
+        $onlyMatched = !empty($options['only_matched']);
+        $skipAlreadyEnriched = !empty($options['skip_already_enriched']);
+        $includeExistingOvoko = !empty($options['include_existing_ovoko']);
+        $csvMap = (array) ($this->get_settings()['ovoko_csv_mapping'] ?? []);
+        if (empty($csvMap)) {
+            return ['ok' => false, 'action_name' => 'Bulk Allegro to Ovoko details enrichment', 'reason' => 'csv_mapping_not_loaded'];
+        }
+        $ids = $this->resolve_bulk_product_ids($options, $offset, $limit, $batchSize, $page, $includeExistingOvoko);
+        $results = []; $counts = ['no_match'=>0,'review_required'=>0,'already_enriched_skipped'=>0,'not_allegro_product'=>0,'safety_violation'=>0,'enriched'=>0,'dry_run'=>0,'error'=>0];
+        $matched = 0; $enriched = 0; $skipped = 0; $reviewRequired = 0; $errors = 0; $processed = 0;
+        foreach ($ids as $productId) {
+            $processed++;
+            $title = (string) get_the_title($productId);
+            $audit = $this->collect_allegro_product_context($productId);
+            if (!$includeExistingOvoko && empty($audit['is_allegro_product'])) { $skipped++; $counts['not_allegro_product']++; continue; }
+            if ($skipAlreadyEnriched && (string)($audit['current_ovoko_part_id'] ?? '') !== '') { $skipped++; $counts['already_enriched_skipped']++; continue; }
+            $match = $this->resolve_ovoko_match_for_allegro_product($productId, $audit);
+            $confidence = (string) ($match['match_confidence'] ?? 'none');
+            $isMatched = in_array($confidence, ['high','high_existing_ovoko_part_id'], true);
+            if ($isMatched) { $matched++; }
+            $row = ['product_id'=>$productId,'title'=>$title,'allegro_offer_id'=>(string)($audit['allegro_offer_id'] ?? ''),'current_part_number'=>(string)($audit['current_part_number'] ?? ''),'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($match['part_normalized']['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($match['part_normalized']['car_id'] ?? ''),'match_confidence'=>$confidence,'review_required'=>!empty($match['review_required']),'action'=>'skipped','attributes_count'=>0,'attributes_written'=>[],'skipped_fields'=>[]];
+            if (!$isMatched) { $skipped++; if (!empty($match['review_required'])) { $reviewRequired++; $counts['review_required']++; } else { $counts['no_match']++; } if ($onlyMatched) { continue; } $results[] = $row + ['action'=>'skipped']; continue; }
+            if ($dryRun) { $counts['dry_run']++; $results[] = $row + ['action'=>'dry_run']; continue; }
+            $before = $this->capture_product_safety_snapshot($productId);
+            $apply = $this->apply_allegro_to_ovoko_details($productId, $replaceDescription);
+            if (empty($apply['ok'])) { $errors++; $counts['error']++; $results[] = $row + ['action'=>'error']; continue; }
+            $after = $this->capture_product_safety_snapshot($productId);
+            $safety = $this->compare_product_safety_snapshot($before, $after);
+            if (in_array(false, $safety, true)) { $errors++; $counts['safety_violation']++; $results[] = $row + ['action'=>'error'] + $safety; continue; }
+            $enriched++; $counts['enriched']++;
+            $results[] = $row + ['action'=>'enriched','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? [])] + $safety;
+        }
+        $duration = round(microtime(true) - $started, 3);
+        return ['ok'=>true,'action_name'=>'Bulk Allegro to Ovoko details enrichment','total_scanned'=>count($ids),'processed'=>$processed,'matched'=>$matched,'enriched'=>$enriched,'skipped'=>$skipped,'review_required'=>$reviewRequired,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,50),'next_offset'=>$offset + count($ids),'next_page'=>$page + 1,'duration'=>$duration];
+    }
+
+    private function resolve_bulk_product_ids(array $options, int $offset, int $limit, int $batchSize, int $page, bool $includeExistingOvoko): array
+    {
+        $csv = trim((string) ($options['product_ids_csv'] ?? ''));
+        if ($csv !== '') { return array_values(array_filter(array_map('intval', array_map('trim', explode(',', $csv))))); }
+        $perPage = min($batchSize, $limit);
+        $queryOffset = $offset > 0 ? $offset : (($page - 1) * $perPage);
+        $metaQuery = ['relation'=>'OR',['key'=>'_allegro_offer_id','compare'=>'EXISTS'],['key'=>'_part_number','compare'=>'EXISTS'],['key'=>'_mpn','compare'=>'EXISTS'],['key'=>'_manufacturer_code','compare'=>'EXISTS']];
+        if (!$includeExistingOvoko) { $metaQuery[] = ['key'=>'source','value'=>'ovoko_master','compare'=>'!=']; }
+        return get_posts(['post_type'=>'product','post_status'=>'any','fields'=>'ids','posts_per_page'=>$perPage,'offset'=>$queryOffset,'meta_query'=>$metaQuery,'orderby'=>'ID','order'=>'ASC']);
+    }
+
+    private function capture_product_safety_snapshot(int $productId): array
+    {
+        return ['price'=>(string)get_post_meta($productId,'_price',true),'regular_price'=>(string)get_post_meta($productId,'_regular_price',true),'sale_price'=>(string)get_post_meta($productId,'_sale_price',true),'stock_quantity'=>(string)get_post_meta($productId,'_stock',true),'stock_status'=>(string)get_post_meta($productId,'_stock_status',true),'manage_stock'=>(string)get_post_meta($productId,'_manage_stock',true),'thumbnail_id'=>(string)get_post_thumbnail_id($productId),'gallery'=>(string)get_post_meta($productId,'_product_image_gallery',true),'listing_image'=>(string)get_post_meta($productId,'_listing_image',true),'post_title'=>(string)get_the_title($productId),'post_status'=>(string)get_post_status($productId)];
+    }
+
+    private function compare_product_safety_snapshot(array $before, array $after): array
+    {
+        return ['no_price_change'=>($before['price']??'')===($after['price']??'') && ($before['regular_price']??'')===($after['regular_price']??'') && ($before['sale_price']??'')===($after['sale_price']??''),'no_stock_change'=>($before['stock_quantity']??'')===($after['stock_quantity']??'') && ($before['stock_status']??'')===($after['stock_status']??'') && ($before['manage_stock']??'')===($after['manage_stock']??''),'no_images_change'=>($before['thumbnail_id']??'')===($after['thumbnail_id']??'') && ($before['gallery']??'')===($after['gallery']??'') && ($before['listing_image']??'')===($after['listing_image']??''),'no_title_change'=>($before['post_title']??'')===($after['post_title']??''),'no_status_change'=>($before['post_status']??'')===($after['post_status']??'')];
+    }
+
     private function detect_best_csv_delimiter_and_header(string $sourcePath, array $delimiters): array
     {
         $best = ['score' => -1, 'ok' => false];
