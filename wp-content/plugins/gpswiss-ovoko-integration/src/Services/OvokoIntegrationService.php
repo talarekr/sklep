@@ -540,6 +540,101 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         ];
     }
 
+    public function preview_woo_product_create_from_rrr_part(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($result['payload'] ?? []);
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $syncService = new OvokoProductSyncService();
+        $match = $syncService->preview_match_rrr_record([
+            'part_id' => (string) ($normalized['part_id'] ?? ''),
+            'external_id' => (string) ($normalized['external_id'] ?? ''),
+        ]);
+
+        $hasExisting = !empty($match['matched_product_id']);
+        $wouldAction = $hasExisting ? 'would_update_existing_product' : 'would_create_new_product';
+        $priceWriteReady = (($normalized['price_source'] ?? '') === 'internal_notes_plain_price') && empty($normalized['price_review_required']);
+        $createBlocked = !$priceWriteReady;
+        $blockedReason = $createBlocked ? 'missing_valid_woo_price' : '';
+        $excludedFromSync = !empty($match['excluded_from_ovoko_sync']);
+        if ($excludedFromSync) {
+            $createBlocked = true;
+            $blockedReason = 'gearbox_standalone_catalog';
+        }
+
+        $statusRaw = (string) ($normalized['status'] ?? '');
+        $stockStatusPreview = in_array($statusRaw, ['0', 'active', 'available'], true) ? 'instock' : 'outofstock';
+        $notes = (string) ($normalized['notes'] ?? '');
+        $description = trim($notes . "\n\n" . 'Używana część samochodowa. Przed zakupem potwierdź kompatybilność po numerze OE/MPN.');
+
+        return [
+            'ok' => !empty($result['ok']),
+            'mode' => 'preview_only',
+            'action_name' => 'Preview Woo product create from RRR part',
+            'notice' => 'Preview only — no Woo product was created or updated.',
+            'request' => ['method' => 'POST', 'path' => '/get/part/' . $partId, 'form_data_fields' => ['username', 'password', 'user_token']],
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'msg' => (string) ($result['msg'] ?? ''),
+            'part_id' => $partId,
+            'single_part_summary' => $normalized,
+            'woo_match_preview' => $match,
+            'would_action' => $wouldAction,
+            'create_blocked' => $createBlocked,
+            'reason' => $blockedReason,
+            'excluded_from_ovoko_sync' => $excludedFromSync,
+            'post_draft_preview' => [
+                'post_title' => (string) ($normalized['title'] ?? ''),
+                'post_status' => 'draft',
+                'regular_price' => $priceWriteReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
+                'currency' => 'PLN',
+                'stock_status_preview' => $stockStatusPreview,
+                'description' => $description,
+                'short_description' => $notes,
+                'sku_candidate' => 'GPSW-OVK-' . (string) $partId,
+                'category_preview' => (string) ($normalized['category_title_path'] ?? ''),
+                'images_preview' => [
+                    'images_count' => count((array) ($normalized['part_photo_gallery'] ?? [])),
+                    'urls' => (array) ($normalized['part_photo_gallery'] ?? []),
+                    'download_to_media_library' => false,
+                ],
+                'source_url' => (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')),
+                'manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                'mpn_oe_candidate' => (string) ($normalized['manufacturer_code'] ?? ''),
+                'car_id' => (string) ($normalized['car_id'] ?? ''),
+                'same_vehicle_grouping' => $this->build_same_vehicle_grouping_preview($normalized),
+            ],
+            'woo_meta_preview' => [
+                '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
+                '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
+                '_ovoko_status' => (string) ($normalized['status'] ?? ''),
+                '_ovoko_updated_at' => (string) ($normalized['updated_at'] ?? ''),
+                '_ovoko_category' => (string) ($normalized['category_title_path'] ?? ''),
+                '_ovoko_category_id' => (string) ($normalized['category_id'] ?? ''),
+                '_ovoko_source_url' => (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')),
+                '_ovoko_images' => (array) ($normalized['part_photo_gallery'] ?? []),
+                '_ovoko_price' => (string) ($normalized['price'] ?? ''),
+                '_ovoko_original_price' => (string) ($normalized['original_price'] ?? ''),
+                '_ovoko_internal_notes_price_source' => (string) ($normalized['price_source'] ?? ''),
+                '_ovoko_woo_target_price' => $priceWriteReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
+                '_ovoko_woo_target_currency' => $priceWriteReady ? 'PLN' : null,
+                '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
+                '_ovoko_position' => (string) ($normalized['position'] ?? ''),
+                'source' => 'ovoko_master',
+            ],
+            'price_safety' => [
+                'price_source' => (string) ($normalized['price_source'] ?? ''),
+                'price_review_required' => !empty($normalized['price_review_required']),
+                'write_ready' => $priceWriteReady,
+                'ovoko_price_informational' => ['price' => $normalized['price'] ?? null, 'original_price' => $normalized['original_price'] ?? null],
+            ],
+            'no_write_to_woo' => true,
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
     private function build_rrr_single_part_woo_meta_preview(array $normalized): array
     {
         $priceSource = (string) ($normalized['price_source'] ?? '');

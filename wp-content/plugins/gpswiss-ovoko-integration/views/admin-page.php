@@ -193,6 +193,37 @@
         </ul>
     <?php endif; ?>
 
+    <h2>Preview Woo product create from RRR part</h2>
+    <p><strong>Preview only — no Woo product was created or updated.</strong></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_rrr_woo_create'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_rrr_woo_create" />
+        <label for="preview_woo_part_id">Part ID:</label>
+        <input id="preview_woo_part_id" type="number" min="1" name="part_id" value="10994" />
+        <?php submit_button('Preview Woo product create from RRR part', 'secondary', 'submit', false); ?>
+    </form>
+    <?php
+    $previewWooCreate = [];
+    if (!empty($notice['text'])) {
+        $decodedNotice = json_decode((string) $notice['text'], true);
+        if (is_array($decodedNotice) && (($decodedNotice['action_name'] ?? '') === 'Preview Woo product create from RRR part')) {
+            $previewWooCreate = $decodedNotice;
+        }
+    }
+    ?>
+    <?php if (!empty($previewWooCreate)): ?>
+        <ul>
+            <li>would_action: <code><?php echo esc_html((string) ($previewWooCreate['would_action'] ?? '')); ?></code></li>
+            <li>create_blocked: <code><?php echo esc_html(!empty($previewWooCreate['create_blocked']) ? 'true' : 'false'); ?></code></li>
+            <li>reason: <code><?php echo esc_html((string) ($previewWooCreate['reason'] ?? '')); ?></code></li>
+            <li>excluded_from_ovoko_sync: <code><?php echo esc_html(!empty($previewWooCreate['excluded_from_ovoko_sync']) ? 'true' : 'false'); ?></code></li>
+            <li>post_draft_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview'] ?? []))); ?></code></li>
+            <li>woo_meta_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['woo_meta_preview'] ?? []))); ?></code></li>
+            <li>same_vehicle_grouping: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview']['same_vehicle_grouping'] ?? []))); ?></code></li>
+            <li>no_write_to_woo: <code><?php echo esc_html(!empty($previewWooCreate['no_write_to_woo']) ? 'true' : 'false'); ?></code></li>
+        </ul>
+    <?php endif; ?>
+
     <h2>Preview sync flow (dry-run only)</h2>
     <p>Sample fixture (developer/sample only, no outbound/no import): <code><?php echo esc_html(wp_json_encode($data['sync_preview_fixture'])); ?></code></p>
     <p>Preview Woo meta mapping: <code><?php echo esc_html(wp_json_encode($data['sync_preview_meta_mapping'])); ?></code></p>
