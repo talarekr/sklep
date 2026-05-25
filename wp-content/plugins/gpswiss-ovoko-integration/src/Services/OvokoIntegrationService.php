@@ -1009,47 +1009,34 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
     {
-        $make = strtoupper(trim((string) ($normalizedPart['vehicle_make'] ?? '')));
+        $makeRaw = trim((string) ($normalizedPart['vehicle_make'] ?? ''));
+        $makeMap = ['Volkswagen' => 'VW', 'Mercedes-Benz' => 'Mercedes', 'BMW' => 'BMW', 'Audi' => 'Audi'];
+        $make = strtoupper($makeMap[$makeRaw] ?? $makeRaw);
         $model = strtoupper(trim((string) ($normalizedPart['vehicle_model'] ?? '')));
         $generation = strtoupper(trim((string) ($normalizedPart['vehicle_generation'] ?? '')));
-        $engine = strtoupper(trim((string) (($normalizedPart['vehicle_engine_marketing_name'] ?? '') ?: ($normalizedPart['vehicle_engine_code'] ?? ''))));
+        $engine = strtoupper(trim((string) (($normalizedPart['vehicle_engine_marketing'] ?? '') ?: ($normalizedPart['vehicle_engine_marketing_name'] ?? ''))));
         $notes = strtoupper(trim((string) ($normalizedPart['notes'] ?? '')));
         $manufacturerCode = strtoupper(trim((string) ($normalizedPart['manufacturer_code'] ?? '')));
         $name = strtoupper(trim((string) ($normalizedPart['title'] ?? '')));
-        $vehicleDataStatus = (string) ($normalizedPart['vehicle_data_status'] ?? '');
-
+        $required = ['vehicle_make' => $make, 'vehicle_model' => $model, 'vehicle_generation' => $generation, 'vehicle_engine_marketing' => $engine];
         $missing = [];
-        foreach (['make' => $make, 'model' => $model, 'generation' => $generation, 'engine' => $engine] as $field => $value) {
-            if ($value === '') {
-                $missing[] = $field;
-            }
-        }
-
-        $notesAndCode = $this->join_title_parts([$notes, $manufacturerCode]);
-        $fallbackTitle = $notesAndCode !== '' ? $notesAndCode : $this->join_title_parts([$name, $notes, $manufacturerCode]);
-        if ($fallbackTitle === '') {
-            $fallbackTitle = $name;
-        }
-
-        $hasFullVehicleData = ($make !== '' && $model !== '' && $generation !== '' && $engine !== '');
-        $idealTitle = $this->join_title_parts([$make, $model, $generation, $engine, $notes, $manufacturerCode]);
-        $proposedTitle = $hasFullVehicleData ? $idealTitle : $fallbackTitle;
-        $titleReviewRequired = !$hasFullVehicleData;
-        $idealTitleExample = $idealTitle !== '' ? $idealTitle : 'VW TOURAN III 1.4 TSI EKRAN WYŚWIETLACZ RADIA NAWIGACJI EUROPA 3G0919605D';
+        foreach ($required as $field => $value) { if ($value === '') { $missing[] = $field; } }
+        $hasFullVehicleData = empty($missing);
+        $fallbackTitle = $this->join_title_parts([$notes, $manufacturerCode]);
+        if ($fallbackTitle === '') { $fallbackTitle = $this->join_title_parts([$name, $notes, $manufacturerCode]); }
+        $vehiclePrefix = $this->join_title_parts([$make, $model, $generation, $engine]);
+        $proposedTitle = $hasFullVehicleData ? $this->join_title_parts([$vehiclePrefix, $notes, $manufacturerCode]) : $fallbackTitle;
 
         return [
-            'vehicle_data_status' => $vehicleDataStatus,
-            'current_title_from_name' => (string) ($normalizedPart['title'] ?? ''),
             'proposed_title' => $proposedTitle,
             'proposed_title_fallback' => $fallbackTitle,
-            'ideal_title_requires_vehicle_data' => true,
-            'ideal_title_example' => $idealTitleExample,
-            'title_review_required' => $titleReviewRequired,
+            'vehicle_title_prefix' => $vehiclePrefix,
+            'title_review_required' => !$hasFullVehicleData,
             'missing_vehicle_fields' => $missing,
-            '_ovoko_title_source' => $titleReviewRequired ? 'fallback_missing_vehicle_data' : 'vehicle_data_full',
-            '_ovoko_title_review_required' => $titleReviewRequired ? 'yes' : 'no',
+            '_ovoko_title_source' => $hasFullVehicleData ? 'vehicle_data_rrr' : 'fallback_missing_vehicle_data',
+            '_ovoko_title_review_required' => $hasFullVehicleData ? 'no' : 'yes',
             '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
-            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'make+model+generation+engine+notes+manufacturer_code' : 'notes+manufacturer_code_fallback',
+            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'make+model+generation+engine_marketing+notes+manufacturer_code' : 'notes+manufacturer_code_fallback',
         ];
     }
 
@@ -1347,7 +1334,21 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
 
     public function preview_rrr_car_details(int $carId = 458): array
     {
-        return ['ok' => false, 'mode' => 'preview_only', 'action_name' => 'Preview RRR car details', 'car_id' => max(1, $carId), 'endpoint_confirmed' => false, 'readme_question' => 'Which endpoint returns full car details for car_id?', 'details' => null];
+        $carId = max(1, $carId);
+        $client = new RrrApiClient($this->get_settings());
+        $preview = $client->preview_fetch_car_by_id((string) $carId);
+
+        return [
+            'ok' => !empty($preview['ok']),
+            'mode' => 'preview_only',
+            'action_name' => 'Preview RRR car details',
+            'car_id' => $carId,
+            'endpoint_confirmed' => !empty($preview['endpoint_confirmed']),
+            'request' => ['method' => 'POST', 'form_data_fields' => ['username', 'password', 'user_token'], 'path' => 'unconfirmed'],
+            'details' => ['car_id' => (string) $carId, 'make' => '', 'model' => '', 'generation_modification' => '', 'year_period' => '', 'fuel' => '', 'engine_capacity' => '', 'engine_power_kw' => '', 'engine_code' => '', 'gearbox_type' => '', 'body_type' => '', 'drive_wheels' => '', 'steering_position' => '', 'color' => '', 'color_code' => '', 'raw_payload_summary' => ['keys' => []]],
+            'diagnostics' => ['message' => (string) ($preview['message'] ?? ''), 'question_for_rrr' => (string) ($preview['diagnostics_question'] ?? 'Please confirm official read-only car details endpoint by car_id.')],
+            'vehicle_data_status' => 'car_id_only',
+        ];
     }
 
     public function preview_ovoko_title_with_vehicle_data(int $partId = 60271): array
@@ -1357,7 +1358,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $result = $client->preview_fetch_single_part($partId);
         $normalized = $client->normalize_rrr_single_part_payload((array) ($result['payload'] ?? []));
         $title = $this->build_woo_product_title_from_rrr_part($normalized);
-        return ['ok' => !empty($result['ok']), 'mode' => 'preview_only', 'action_name' => 'Preview Ovoko title with vehicle data', 'part_id' => $partId, 'car_id' => (string) ($normalized['car_id'] ?? ''), 'current_title' => (string) ($normalized['title'] ?? ''), 'fallback_title' => (string) ($title['proposed_title_fallback'] ?? ''), 'ideal_title' => (string) ($title['ideal_title_example'] ?? ''), 'missing_fields' => (array) ($title['missing_vehicle_fields'] ?? []), 'can_build_full_vehicle_title' => empty($title['missing_vehicle_fields']) ? 'yes' : 'no'];
+        return ['ok' => !empty($result['ok']), 'mode' => 'preview_only', 'action_name' => 'Preview Ovoko title with vehicle data', 'part_id' => $partId, 'car_id' => (string) ($normalized['car_id'] ?? ''), 'fallback_title' => (string) ($title['proposed_title_fallback'] ?? ''), 'vehicle_title_prefix' => (string) ($title['vehicle_title_prefix'] ?? ''), 'proposed_full_title' => (string) ($title['proposed_title'] ?? ''), 'title_review_required' => (string) ($title['_ovoko_title_review_required'] ?? 'yes'), 'missing_vehicle_fields' => (array) ($title['missing_vehicle_fields'] ?? []), 'vehicle_data_source' => (string) ($title['_ovoko_title_source'] ?? '')];
     }
 
     private function build_ovoko_technical_attributes_from_normalized(array $normalized): array
@@ -1368,6 +1369,18 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'Inny kod części' => (string) ($normalized['other_code'] ?? ''),
             'ID części Ovoko' => (string) ($normalized['part_id'] ?? ''),
             'ID pojazdu Ovoko' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),
+            'Marka pojazdu' => (string) ($normalized['vehicle_make'] ?? ''),
+            'Model pojazdu' => (string) ($normalized['vehicle_model'] ?? ''),
+            'Generacja' => (string) ($normalized['vehicle_generation'] ?? ''),
+            'Rok' => (string) ($normalized['vehicle_year'] ?? ''),
+            'Paliwo' => (string) ($normalized['vehicle_fuel'] ?? ''),
+            'Pojemność silnika' => (string) ($normalized['vehicle_engine_capacity'] ?? ''),
+            'Moc silnika' => (string) ($normalized['vehicle_engine_power_kw'] ?? ''),
+            'Kod silnika' => (string) ($normalized['vehicle_engine_code'] ?? ''),
+            'Skrzynia biegów' => (string) ($normalized['vehicle_gearbox_type'] ?? ''),
+            'Nadwozie' => (string) ($normalized['vehicle_body_type'] ?? ''),
+            'Kolor' => (string) ($normalized['vehicle_color'] ?? ''),
+            'Kod koloru' => (string) ($normalized['vehicle_color_code'] ?? ''),
             'Kategoria Ovoko' => (string) ($normalized['category_title_path'] ?? ''),
             'Stan części' => (string) (($normalized['quality'] ?? '') ?: ($normalized['status'] ?? '')),
             'Pozycja' => (string) ($normalized['position'] ?? ''),

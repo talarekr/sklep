@@ -567,3 +567,11 @@ Status: **not confirmed in-session**.
 
 Additional preview added:
 - **Preview Ovoko title with vehicle data** (current title, fallback title, ideal title, missing fields, can_build_full_vehicle_title yes/no).
+
+## RRR vehicle data by car_id
+
+- Endpoint for full vehicle data by `car_id` is currently **not confirmed** in accessible RRR docs from this environment (HTTP 403 on docs/spec URL).
+- Plugin now has preview diagnostics (`preview_fetch_car_by_id` and `preview_rrr_car_details`) that keep requests read-only and explicitly ask RRR/Ovoko to confirm official car endpoint.
+- Vehicle title builder uses vehicle prefix when data is available: `[MAKE_SHORT] [MODEL] [GENERATION] [ENGINE_MARKETING] [NOTES] [MANUFACTURER_CODE]`.
+- Fallback remains `[NOTES] [MANUFACTURER_CODE]` with `_ovoko_title_review_required=yes` when vehicle fields are missing.
+- No eBay/Allegro publish flow is changed here.
