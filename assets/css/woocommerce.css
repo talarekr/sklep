@@ -1582,12 +1582,22 @@
 }
 .gpswiss-product-details__heading {
   margin: 0;
-  padding: 14px 18px;
+  padding: 14px 18px 16px;
   font-size: 18px;
   font-weight: 800;
   color: #123a7a;
+  text-align: center;
   border-bottom: 1px solid #dbe5f3;
   background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+.gpswiss-product-details__heading::after {
+  content: "";
+  display: block;
+  width: clamp(120px, 36%, 220px);
+  height: 2px;
+  margin: 10px auto 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(18, 58, 122, 0.05) 0%, rgba(18, 58, 122, 0.38) 50%, rgba(18, 58, 122, 0.05) 100%);
 }
 .gpswiss-product-details__row {
   display: grid;
