@@ -718,3 +718,38 @@ No changes to:
 - offset,
 - skip ambiguous,
 - log zmian.
+
+## Product details style rendering (unified)
+- Allegro style is no longer used as product-card style baseline.
+- Product details style is enabled when product has at least one of:
+  - `_ovoko_part_id`
+  - `_ovoko_car_id`
+  - customer-visible whitelist detail attributes
+- Unified tab layout is: **Opis oraz informacje szczegółowe**.
+- Legacy Allegro description is hidden/replaced for products using this style.
+- Details table renders only non-empty whitelist fields (no empty table output).
+- Same-vehicle button is shown when `_ovoko_car_id` exists.
+
+## Existing Allegro products → Ovoko details enrichment
+- `Apply Allegro to Ovoko details enrichment` now writes both:
+  - visible custom Woo attributes (`_product_attributes`, visible=true, variation=false),
+  - Ovoko detail meta keys read by frontend details table.
+- Apply result includes:
+  - `details_style_enabled_after_apply`
+  - `table_rows_after_apply`
+  - `attributes_written`
+  - `meta_written_for_table`
+- Safety guarantees remain:
+  - no price/stock/images/title/publication changes,
+  - no eBay/Allegro publish,
+  - no batch mode.
+
+## CSV parser: "Informacje o samochodzie"
+- Parser supports pattern: `{label} ({period}), {year}, {power} kw, {capacity} cm3/cm³`.
+- Extraction:
+  - vehicle label (before bracket),
+  - period (inside bracket),
+  - year (4-digit),
+  - power via `(\d+)\s*kw`,
+  - capacity via `(\d+)\s*cm3|cm³`.
+- Known make dictionary is used for safe split (e.g. Mercedes-Benz, Volkswagen, VW, Audi, BMW, Peugeot, Citroen/Citroën, Renault, Opel, Ford, Toyota, Nissan, Hyundai, Kia, Fiat, Volvo, Skoda/Škoda, Seat).
