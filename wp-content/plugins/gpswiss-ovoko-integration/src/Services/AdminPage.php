@@ -112,7 +112,7 @@ class AdminPage
         }
         check_admin_referer('gpswiss_ovoko_preview_rrr_parts_sample');
 
-        $limit = isset($_POST['preview_limit']) ? (int) $_POST['preview_limit'] : 5;
+        $limit = isset($_POST['preview_limit']) ? (int) $_POST['preview_limit'] : 50;
         $page = isset($_POST['preview_page']) ? (int) $_POST['preview_page'] : 1;
         $result = $this->service->preview_rrr_parts_sample($limit, $page);
         $type = !empty($result['ok']) ? 'success' : 'warning';

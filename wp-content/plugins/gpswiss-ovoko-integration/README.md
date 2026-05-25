@@ -154,12 +154,12 @@ Probe behavior in this plugin:
 - Does not update stock.
 - Does not run batch/cron import.
 
-## Preview RRR parts sample (admin action)
+## Preview RRR parts status distribution (admin action)
 
-- Admin action: **Preview RRR parts sample**.
-- Request: `POST /v2/get/parts?limit={limit}&page={page}` with form-data auth fields:
+- Admin action: **Preview RRR parts status distribution**.
+- Request: `POST /v2/get/parts?limit=50&page=1` with form-data auth fields:
   `username`, `password`, `user_token`.
-- Defaults: `limit=5`, `page=1`; `limit` is capped at max `10`.
+- Defaults: `limit=50`, `page=1`; `limit` is capped at max `50`.
 - Read-only preview only:
   - no product create/update,
   - no Woo meta writes,
@@ -169,5 +169,20 @@ Probe behavior in this plugin:
   - `status_code`, `msg`,
   - `pagination.page`, `pagination.limit`, `pagination.total_count`,
   - `records_count`,
+  - status distribution from sample (for example `status=0: X`, `status=1: Y`),
   - per-record safe summary: `id`, `external_id`, `name`, `status`, `updated_at`.
+- Admin diagnostic note:
+  - `API total_count may include inactive/sold/archived parts until status semantics are confirmed by Ovoko/RRR.`
 - Current fields expected from `/v2/get/parts` list endpoint are treated as minimal list payload only (no assumptions about full photos/price/OE schema in this step).
+
+## RRR API docs check: status/activity filters
+
+- Attempted source of truth: `https://api.rrr.lt/docs/` and `https://api.rrr.lt/openapi/swagger.yaml`.
+- In this environment, direct fetch currently returns HTTP `403`, so filter parameters could not be confirmed from docs in-session.
+- Because docs were not readable from here, this plugin does **not** guess any undocumented status/activity filter.
+
+Questions to confirm with Ovoko/RRR:
+- What does `status=0` mean?
+- What are all possible values of `status`?
+- How to filter only active/available parts in `/v2/get/parts`?
+- Does `pagination.total_count` include sold/archived/inactive parts?

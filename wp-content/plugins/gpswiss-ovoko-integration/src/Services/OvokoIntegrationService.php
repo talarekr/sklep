@@ -424,20 +424,26 @@ class OvokoIntegrationService
         return $result;
     }
 
-    public function preview_rrr_parts_sample(int $limit = 5, int $page = 1): array
+    public function preview_rrr_parts_sample(int $limit = 50, int $page = 1): array
     {
-        $limit = max(1, min(10, $limit));
+        $limit = max(1, min(50, $limit));
         $page = max(1, $page);
         $client = new RrrApiClient($this->get_settings());
-        $syncService = new OvokoProductSyncService();
         $result = $client->preview_fetch_parts_sample($limit, $page);
         $records = (array) ($result['records'] ?? []);
         $normalized = [];
+        $statusDistribution = [];
         foreach ($records as $record) {
+            $status = sanitize_text_field((string) ($record['status'] ?? ''));
+            if (!isset($statusDistribution[$status])) {
+                $statusDistribution[$status] = 0;
+            }
+            $statusDistribution[$status]++;
+
             $previewRecord = [
                 'part_id' => sanitize_text_field((string) ($record['id'] ?? '')),
                 'title' => sanitize_text_field((string) ($record['name'] ?? '')),
-                'status' => sanitize_text_field((string) ($record['status'] ?? '')),
+                'status' => $status,
                 'updated_at' => sanitize_text_field((string) ($record['updated_at'] ?? '')),
                 'external_id' => isset($record['external_id']) ? sanitize_text_field((string) $record['external_id']) : null,
                 'raw_payload_summary' => [
@@ -446,7 +452,6 @@ class OvokoIntegrationService
                     'full_payload_omitted' => true,
                 ],
             ];
-            $previewRecord['woo_match_preview'] = $syncService->preview_match_rrr_record($previewRecord);
             $normalized[] = $previewRecord;
         }
 
@@ -463,8 +468,10 @@ class OvokoIntegrationService
             'msg' => $result['msg'] ?? '',
             'pagination' => (array) ($result['pagination'] ?? []),
             'records_count' => count($normalized),
+            'status_distribution' => $statusDistribution,
             'records' => $normalized,
             'no_write_to_woo' => true,
+            'diagnostic_note' => 'API total_count may include inactive/sold/archived parts until status semantics are confirmed by Ovoko/RRR.',
             'checked_at' => gmdate('c'),
         ];
     }
