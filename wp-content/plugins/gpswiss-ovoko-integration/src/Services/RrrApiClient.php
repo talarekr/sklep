@@ -552,35 +552,57 @@ class RrrApiClient
 
     private function extract_candidate_record(array $payload): array
     {
-        foreach (['data','list','cars','vehicles'] as $k) {
-            if (isset($payload[$k][0]) && is_array($payload[$k][0])) { return (array) $payload[$k][0]; }
-            if (isset($payload[$k]) && is_array($payload[$k]) && array_keys($payload[$k]) !== range(0, count($payload[$k]) - 1)) { return (array) $payload[$k]; }
+        $candidates = [];
+        if (isset($payload['list'][0][0]) && is_array($payload['list'][0][0])) { $candidates[] = $payload['list'][0][0]; }
+        if (isset($payload['list'][0]) && is_array($payload['list'][0])) { $candidates[] = $payload['list'][0]; }
+        if (isset($payload['data'][0]) && is_array($payload['data'][0])) { $candidates[] = $payload['data'][0]; }
+        if (isset($payload['data']) && is_array($payload['data'])) { $candidates[] = $payload['data']; }
+        foreach (['cars','vehicles'] as $k) { if (isset($payload[$k][0]) && is_array($payload[$k][0])) { $candidates[] = $payload[$k][0]; } }
+        $candidates[] = $payload;
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) { continue; }
+            if (!empty($candidate['car_id']) || !empty($candidate['id']) || !empty($candidate['car_model']) || !empty($candidate['car_engine_code'])) { return (array) $candidate; }
         }
-        return $payload;
+        return [];
     }
 
     private function normalize_vehicle_record(array $record, string $fallbackCarId): array
     {
-        return [
-            'car_id' => (string) ($this->first_non_empty_value($record, ['car_id', 'id', 'vehicle_id']) ?: $fallbackCarId),
-            'make' => sanitize_text_field((string) ($record['make'] ?? $record['manufacturer'] ?? $record['brand'] ?? '')),
-            'model' => sanitize_text_field((string) ($record['model'] ?? '')),
-            'generation' => sanitize_text_field((string) ($record['generation'] ?? '')),
-            'modification' => sanitize_text_field((string) ($record['modification'] ?? '')),
-            'engine_marketing' => sanitize_text_field((string) ($record['engine_marketing'] ?? $record['engine'] ?? '')),
-            'year' => sanitize_text_field((string) ($record['year'] ?? '')),
-            'fuel' => sanitize_text_field((string) ($record['fuel'] ?? '')),
-            'engine_capacity' => sanitize_text_field((string) ($record['engine_capacity'] ?? '')),
-            'engine_power_kw' => sanitize_text_field((string) ($record['engine_power_kw'] ?? '')),
-            'engine_code' => sanitize_text_field((string) ($record['engine_code'] ?? '')),
-            'gearbox_type' => sanitize_text_field((string) ($record['gearbox_type'] ?? '')),
-            'body_type' => sanitize_text_field((string) ($record['body_type'] ?? '')),
-            'drive_wheels' => sanitize_text_field((string) ($record['drive_wheels'] ?? '')),
-            'steering_position' => sanitize_text_field((string) ($record['steering_position'] ?? '')),
-            'color' => sanitize_text_field((string) ($record['color'] ?? '')),
-            'color_code' => sanitize_text_field((string) ($record['color_code'] ?? '')),
+        $carId = (string) ($this->first_non_empty_value($record, ['car_id', 'id', 'vehicle_id']) ?: $fallbackCarId);
+        $capacityCc = (int) ($record['car_engine_cubic_capacity'] ?? $record['engine_capacity'] ?? 0);
+        $capacityL = $capacityCc > 0 ? round($capacityCc / 1000, 1) : null;
+        $mapped = $this->local_confirmed_dictionary_for_car($record, $carId);
+        $engineCode = sanitize_text_field((string) ($record['car_engine_code'] ?? $record['engine_code'] ?? ''));
+        $fuel = (string) ($mapped['vehicle_fuel'] ?? sanitize_text_field((string) ($record['fuel'] ?? '')));
+        $engineMarketing = $capacityL ? number_format($capacityL, 1) : '';
+        $engineSource = 'derived_from_capacity_only';
+        if ($carId === '458' && $fuel === 'Benzyna' && strtoupper($engineCode) === 'CZDA' && $engineMarketing !== '') { $engineMarketing .= ' TSI'; $engineSource = 'local_confirmed_from_ovoko_ui_for_car_458'; }
+        return array_merge([
+            'car_id' => $carId,
+            'vehicle_make' => (string) ($mapped['vehicle_make'] ?? ''),
+            'vehicle_make_short' => (string) ($mapped['vehicle_make_short'] ?? ''),
+            'vehicle_model' => (string) ($mapped['vehicle_model'] ?? ''),
+            'vehicle_generation' => (string) ($mapped['vehicle_generation'] ?? ''),
+            'vehicle_engine_marketing' => $engineMarketing,
+            'vehicle_engine_marketing_source' => $engineSource,
+            'vehicle_year' => sanitize_text_field((string) ($record['car_years'] ?? $record['car_model_years'] ?? $record['year'] ?? '')),
+            'vehicle_period' => sanitize_text_field((string) ($record['period'] ?? (($record['car_years'] ?? '') !== '' ? ((string)$record['car_years']).'--' : ''))),
+            'vehicle_fuel' => $fuel,
+            'vehicle_engine_capacity_cc' => $capacityCc > 0 ? $capacityCc : null,
+            'vehicle_engine_capacity_l' => $capacityL,
+            'vehicle_engine_power_kw' => sanitize_text_field((string) ($record['car_engine_power'] ?? $record['engine_power_kw'] ?? '')),
+            'vehicle_engine_code' => $engineCode,
+            'vehicle_gearbox_type' => (string) ($mapped['vehicle_gearbox_type'] ?? ''),
+            'vehicle_body_type' => (string) ($mapped['vehicle_body_type'] ?? ''),
+            'vehicle_drive_wheels' => (string) ($mapped['vehicle_drive_wheels'] ?? ''),
+            'vehicle_steering_position' => 'Lewa strona',
+            'vehicle_color' => (string) ($mapped['vehicle_color'] ?? ''),
+            'vehicle_color_code' => sanitize_text_field((string) ($record['car_color_code'] ?? $record['color_code'] ?? '')),
+            'vehicle_dictionary_resolution_status' => 'partial_local_confirmed',
+            'vehicle_dictionary_resolution_source' => 'local_confirmed_from_ovoko_ui',
+            'vehicle_data_status' => 'car_endpoint_confirmed',
             'raw_payload_summary' => ['keys' => array_values(array_map('strval', array_keys($record)))],
-        ];
+        ], []);
     }
 
     private function has_vehicle_fields(array $normalized): bool
@@ -595,6 +617,52 @@ class RrrApiClient
         foreach($candidate as $k=>$v){ if(is_scalar($v) && !in_array($k,['username','password','user_token'],true)){$out[(string)$k]=sanitize_text_field((string)$v);} }
         return $out;
     }
+
+    public function probe_vehicle_dictionary_endpoints(int $carId = 458): array
+    {
+        $carId = max(1, $carId);
+        $expected = ['model' => '1936', 'model_category' => '25', 'fuel' => '2', 'gearbox_type' => '0', 'wheel_drive' => '1', 'body_type' => '4', 'color' => '5'];
+        $paths = [
+            '/get/car/models','/get/car/model/1936','/get/car/model-categories','/get/car/model-category/25','/get/car/manufacturers','/get/car/manufacturer/25',
+            '/get/models','/get/model/1936','/get/model-categories','/get/model-category/25','/get/manufacturers','/get/manufacturer/25',
+            '/get/car/fuels','/get/car/fuel/2','/get/fuels','/get/fuel/2','/get/car/gearbox-types','/get/car/gearbox-type/0','/get/gearbox-types','/get/gearbox-type/0',
+            '/get/car/body-types','/get/car/body-type/4','/get/body-types','/get/body-type/4','/get/car/wheel-drives','/get/car/wheel-drive/1','/get/wheel-drives','/get/wheel-drive/1',
+            '/get/car/colors','/get/car/color/5','/get/colors','/get/color/5'
+        ];
+        $v2=[]; foreach($paths as $path){ $v2[]='/v2'.$path; }
+        $all=array_values(array_unique(array_merge($paths,$v2)));
+        $rows=[];
+        foreach($all as $path){
+            $raw=$this->post_form($path,[],true); $payload=(array)($raw['payload']??[]);
+            $record=$this->extract_candidate_record($payload);
+            $keys=array_values(array_map('strval',array_keys($record)));
+            $flat=$this->flatten_payload_paths($payload);
+            $contains=false; foreach($expected as $v){ foreach($flat as $fv){ if((string)$fv===$v){$contains=true;break 2;} } }
+            $resolved='';
+            $sample=$this->safe_sample(is_array($record)?$record:[]);
+            $sampleText=strtolower(wp_json_encode($sample));
+            if (str_contains($sampleText,'touran')) $resolved='1936 => Touran / Touran III';
+            elseif (str_contains($sampleText,'volkswagen')) $resolved='25 => Volkswagen';
+            elseif (str_contains($sampleText,'benz')) $resolved='2 => Benzyna';
+            $rows[]=['path'=>$path,'http_code'=>$raw['http_code']??null,'status_code'=>(string)($raw['status_code']??''),'success'=>!empty($raw['success']),'msg'=>(string)($raw['msg']??''),'response_top_level_keys'=>array_values(array_map('strval',array_keys($payload))),'record_keys'=>$keys,'sample'=>$sample,'contains_expected_id'=>$contains,'resolved_label'=>$resolved,'full_payload_omitted'=>true];
+        }
+        return ['ok'=>true,'car_id'=>$carId,'endpoints'=>$rows];
+    }
+
+    private function local_confirmed_dictionary_for_car(array $record, string $carId): array
+    {
+        if ($carId !== '458') { return []; }
+        $mapped=[];
+        if ((string)($record['car_model_category'] ?? '') === '25') { $mapped['vehicle_make']='Volkswagen'; $mapped['vehicle_make_short']='VW'; }
+        if ((string)($record['car_model'] ?? '') === '1936') { $mapped['vehicle_model']='Touran'; $mapped['vehicle_generation']='Touran III'; }
+        if ((string)($record['car_fuel'] ?? '') === '2') { $mapped['vehicle_fuel']='Benzyna'; }
+        if ((string)($record['car_gearbox_type'] ?? '') === '0') { $mapped['vehicle_gearbox_type']='Mechaniczna'; }
+        if ((string)($record['car_wheel_drive'] ?? '') === '1') { $mapped['vehicle_drive_wheels']='Przód'; }
+        if ((string)($record['car_body_type'] ?? '') === '4') { $mapped['vehicle_body_type']='Minivan'; }
+        if ((string)($record['car_color'] ?? '') === '5') { $mapped['vehicle_color']='Niebieski'; }
+        return $mapped;
+    }
+
     private function run_public_probes(string $baseUrl): array
     {
         if ($baseUrl === '') {

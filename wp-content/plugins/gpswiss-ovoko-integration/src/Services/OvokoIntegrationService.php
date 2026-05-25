@@ -569,6 +569,13 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $result = $client->preview_fetch_single_part($partId);
         $payload = (array) ($result['payload'] ?? []);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $carId = (string) ($normalized['car_id'] ?? '');
+        if ($carId !== '') {
+            $vehiclePreview = $client->preview_fetch_car_by_id($carId);
+            if (!empty($vehiclePreview['ok'])) {
+                $normalized = array_merge($normalized, (array) ($vehiclePreview['normalized'] ?? []));
+            }
+        }
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
             'part_id' => (string) ($normalized['part_id'] ?? ''),
@@ -766,6 +773,26 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             '_ovoko_title_generated_from' => (string) ($titlePreview['_ovoko_title_generated_from'] ?? ''),
             '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
             '_ovoko_position' => (string) ($normalized['position'] ?? ''),
+            '_ovoko_vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
+            '_ovoko_vehicle_make_short' => (string) ($normalized['vehicle_make_short'] ?? ''),
+            '_ovoko_vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
+            '_ovoko_vehicle_generation' => (string) ($normalized['vehicle_generation'] ?? ''),
+            '_ovoko_vehicle_engine_marketing' => (string) ($normalized['vehicle_engine_marketing'] ?? ''),
+            '_ovoko_vehicle_year' => (string) ($normalized['vehicle_year'] ?? ''),
+            '_ovoko_vehicle_period' => (string) ($normalized['vehicle_period'] ?? ''),
+            '_ovoko_vehicle_fuel' => (string) ($normalized['vehicle_fuel'] ?? ''),
+            '_ovoko_vehicle_engine_capacity_cc' => (string) ($normalized['vehicle_engine_capacity_cc'] ?? ''),
+            '_ovoko_vehicle_engine_capacity_l' => (string) ($normalized['vehicle_engine_capacity_l'] ?? ''),
+            '_ovoko_vehicle_engine_power_kw' => (string) ($normalized['vehicle_engine_power_kw'] ?? ''),
+            '_ovoko_engine_code' => (string) ($normalized['vehicle_engine_code'] ?? ''),
+            '_ovoko_gearbox_type' => (string) ($normalized['vehicle_gearbox_type'] ?? ''),
+            '_ovoko_vehicle_body_type' => (string) ($normalized['vehicle_body_type'] ?? ''),
+            '_ovoko_vehicle_drive_wheels' => (string) ($normalized['vehicle_drive_wheels'] ?? ''),
+            '_ovoko_vehicle_steering_position' => (string) ($normalized['vehicle_steering_position'] ?? ''),
+            '_ovoko_vehicle_color' => (string) ($normalized['vehicle_color'] ?? ''),
+            '_ovoko_vehicle_color_code' => (string) ($normalized['vehicle_color_code'] ?? ''),
+            '_ovoko_vehicle_dictionary_resolution_status' => (string) ($normalized['vehicle_dictionary_resolution_status'] ?? ''),
+            '_ovoko_vehicle_dictionary_resolution_source' => (string) ($normalized['vehicle_dictionary_resolution_source'] ?? ''),
             'source' => 'ovoko_master',
         ];
         foreach ($meta as $k=>$v) update_post_meta($productId,$k,$v);
@@ -1033,10 +1060,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'vehicle_title_prefix' => $vehiclePrefix,
             'title_review_required' => !$hasFullVehicleData,
             'missing_vehicle_fields' => $missing,
-            '_ovoko_title_source' => $hasFullVehicleData ? 'vehicle_data_rrr' : 'fallback_missing_vehicle_data',
+            '_ovoko_title_source' => $hasFullVehicleData ? 'vehicle_data_rrr_with_local_confirmed_dictionary' : 'fallback_missing_vehicle_data',
             '_ovoko_title_review_required' => $hasFullVehicleData ? 'no' : 'yes',
             '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
-            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'make+model+generation+engine_marketing+notes+manufacturer_code' : 'notes+manufacturer_code_fallback',
+            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'vehicle_make_short + vehicle_model_generation + vehicle_engine_marketing + notes + manufacturer_code' : 'notes+manufacturer_code_fallback',
         ];
     }
 
@@ -1354,7 +1381,9 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
     public function probe_rrr_vehicle_endpoints(int $carId = 458): array
     {
         $client = new RrrApiClient($this->get_settings());
-        return ['ok'=>true,'mode'=>'preview_only','action_name'=>'Probe RRR vehicle endpoints'] + $client->probe_vehicle_endpoints($carId);
+        $vehicleProbe = $client->probe_vehicle_endpoints($carId);
+        $dictProbe = $client->probe_vehicle_dictionary_endpoints($carId);
+        return ['ok'=>true,'mode'=>'preview_only','action_name'=>'Probe RRR vehicle endpoints','vehicle_probe'=>$vehicleProbe,'dictionary_probe'=>$dictProbe];
     }
 
     public function preview_ovoko_title_with_vehicle_data(int $partId = 60271): array
@@ -1376,11 +1405,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $metaWritten = 0; $attributesWritten = 0; $titleUpdated = false; $proposedTitle = $oldTitle;
         if (!empty($vehicle['ok'])) {
             $v=(array)$vehicle['normalized'];
-            $map=['_ovoko_vehicle_make'=>'make','_ovoko_vehicle_model'=>'model','_ovoko_vehicle_generation'=>'generation','_ovoko_vehicle_modification'=>'modification','_ovoko_vehicle_engine_marketing'=>'engine_marketing','_ovoko_vehicle_year'=>'year','_ovoko_vehicle_fuel'=>'fuel','_ovoko_vehicle_engine_capacity'=>'engine_capacity','_ovoko_vehicle_engine_power_kw'=>'engine_power_kw','_ovoko_engine_code'=>'engine_code','_ovoko_gearbox_type'=>'gearbox_type','_ovoko_vehicle_body_type'=>'body_type','_ovoko_vehicle_drive_wheels'=>'drive_wheels','_ovoko_vehicle_steering_position'=>'steering_position','_ovoko_vehicle_color'=>'color','_ovoko_vehicle_color_code'=>'color_code'];
+            $map=['_ovoko_vehicle_make'=>'vehicle_make','_ovoko_vehicle_make_short'=>'vehicle_make_short','_ovoko_vehicle_model'=>'vehicle_model','_ovoko_vehicle_generation'=>'vehicle_generation','_ovoko_vehicle_engine_marketing'=>'vehicle_engine_marketing','_ovoko_vehicle_year'=>'vehicle_year','_ovoko_vehicle_period'=>'vehicle_period','_ovoko_vehicle_fuel'=>'vehicle_fuel','_ovoko_vehicle_engine_capacity_cc'=>'vehicle_engine_capacity_cc','_ovoko_vehicle_engine_capacity_l'=>'vehicle_engine_capacity_l','_ovoko_vehicle_engine_power_kw'=>'vehicle_engine_power_kw','_ovoko_engine_code'=>'vehicle_engine_code','_ovoko_gearbox_type'=>'vehicle_gearbox_type','_ovoko_vehicle_body_type'=>'vehicle_body_type','_ovoko_vehicle_drive_wheels'=>'vehicle_drive_wheels','_ovoko_vehicle_steering_position'=>'vehicle_steering_position','_ovoko_vehicle_color'=>'vehicle_color','_ovoko_vehicle_color_code'=>'vehicle_color_code','_ovoko_vehicle_dictionary_resolution_status'=>'vehicle_dictionary_resolution_status','_ovoko_vehicle_dictionary_resolution_source'=>'vehicle_dictionary_resolution_source'];
             foreach($map as $k=>$f){ update_post_meta($productId,$k,(string)($v[$f]??'')); $metaWritten++; }
-            $this->upsert_custom_product_attributes($productId,array_filter(['Marka pojazdu'=>$v['make']??'','Model pojazdu'=>$v['model']??'','Generacja'=>$v['generation']??'','Wersja / modyfikacja'=>$v['modification']??'','Silnik'=>$v['engine_marketing']??'','Rok'=>$v['year']??'','Paliwo'=>$v['fuel']??'','Pojemność silnika'=>$v['engine_capacity']??'','Moc silnika'=>$v['engine_power_kw']??'','Kod silnika'=>$v['engine_code']??'','Skrzynia biegów'=>$v['gearbox_type']??'','Nadwozie'=>$v['body_type']??'','Napęd'=>$v['drive_wheels']??'','Strona kierownicy'=>$v['steering_position']??'','Kolor'=>$v['color']??'','Kod koloru'=>$v['color_code']??'']));
-            $attributesWritten=16;
-            if($updateTitle){ $notes=(string)get_post_field('post_excerpt',$productId); $mpn=(string)get_post_meta($productId,'_ovoko_manufacturer_code',true); $proposedTitle=trim(implode(' ',array_filter([$this->short_make((string)($v['make']??'')),$v['model']??'',$v['generation']??'',$v['engine_marketing']??'',$notes,$mpn]))); wp_update_post(['ID'=>$productId,'post_title'=>$proposedTitle]); $titleUpdated=true; }
+            $this->upsert_custom_product_attributes($productId,array_filter(['Producent'=>$v['vehicle_make']??'','Model'=>$v['vehicle_model']??'','Modyfikacja'=>$v['vehicle_generation']??'','Rodzaj paliwa'=>$v['vehicle_fuel']??'','Pojemność silnika'=>!empty($v['vehicle_engine_capacity_cc']) ? ((string)$v['vehicle_engine_capacity_cc']).' cm³' : '','Moc silnika'=>!empty($v['vehicle_engine_power_kw']) ? ((string)$v['vehicle_engine_power_kw']).' kW' : '','Kod silnika'=>$v['vehicle_engine_code']??'','Typ skrzyni biegów'=>$v['vehicle_gearbox_type']??'','Typ sylwetki'=>$v['vehicle_body_type']??'','Koła napędowe'=>$v['vehicle_drive_wheels']??'','Pozycja kierownicy'=>$v['vehicle_steering_position']??'','Kolor'=>$v['vehicle_color']??'','Kod koloru'=>$v['vehicle_color_code']??'','Okres'=>$v['vehicle_period']??'','Rok produkcji samochodu'=>$v['vehicle_year']??'']));
+            $attributesWritten=15;
+            if($updateTitle){ $notes=(string)get_post_field('post_excerpt',$productId); $mpn=(string)get_post_meta($productId,'_ovoko_manufacturer_code',true); $proposedTitle=trim(implode(' ',array_filter([(string)($v['vehicle_make_short']??$this->short_make((string)($v['vehicle_make']??''))),$v['vehicle_model']??'',$v['vehicle_generation']??'',$v['vehicle_engine_marketing']??'',$notes,$mpn]))); wp_update_post(['ID'=>$productId,'post_title'=>$proposedTitle]); $titleUpdated=true; }
         }
         return ['ok'=>true,'action_name'=>'Apply RRR vehicle data to Ovoko product','product_id'=>$productId,'car_id'=>$carId,'vehicle_data_found'=>!empty($vehicle['ok']),'endpoint_used'=>(string)($vehicle['endpoint_used']??''),'vehicle_meta_written'=>$metaWritten,'vehicle_attributes_written'=>$attributesWritten,'old_title'=>$oldTitle,'proposed_title'=>$proposedTitle,'title_updated'=>$titleUpdated,'no_price_change'=>true,'no_stock_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
     }
@@ -1395,18 +1424,21 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'Inny kod części' => (string) ($normalized['other_code'] ?? ''),
             'ID części Ovoko' => (string) ($normalized['part_id'] ?? ''),
             'ID pojazdu Ovoko' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),
-            'Marka pojazdu' => (string) ($normalized['vehicle_make'] ?? ''),
-            'Model pojazdu' => (string) ($normalized['vehicle_model'] ?? ''),
-            'Generacja' => (string) ($normalized['vehicle_generation'] ?? ''),
-            'Rok' => (string) ($normalized['vehicle_year'] ?? ''),
-            'Paliwo' => (string) ($normalized['vehicle_fuel'] ?? ''),
-            'Pojemność silnika' => (string) ($normalized['vehicle_engine_capacity'] ?? ''),
-            'Moc silnika' => (string) ($normalized['vehicle_engine_power_kw'] ?? ''),
+            'Producent' => (string) ($normalized['vehicle_make'] ?? ''),
+            'Model' => (string) ($normalized['vehicle_model'] ?? ''),
+            'Modyfikacja' => (string) ($normalized['vehicle_generation'] ?? ''),
+            'Rodzaj paliwa' => (string) ($normalized['vehicle_fuel'] ?? ''),
+            'Pojemność silnika' => !empty($normalized['vehicle_engine_capacity_cc']) ? ((string) $normalized['vehicle_engine_capacity_cc']) . ' cm³' : '',
+            'Moc silnika' => !empty($normalized['vehicle_engine_power_kw']) ? ((string) $normalized['vehicle_engine_power_kw']) . ' kW' : '',
             'Kod silnika' => (string) ($normalized['vehicle_engine_code'] ?? ''),
-            'Skrzynia biegów' => (string) ($normalized['vehicle_gearbox_type'] ?? ''),
-            'Nadwozie' => (string) ($normalized['vehicle_body_type'] ?? ''),
+            'Typ skrzyni biegów' => (string) ($normalized['vehicle_gearbox_type'] ?? ''),
+            'Typ sylwetki' => (string) ($normalized['vehicle_body_type'] ?? ''),
+            'Koła napędowe' => (string) ($normalized['vehicle_drive_wheels'] ?? ''),
+            'Pozycja kierownicy' => (string) ($normalized['vehicle_steering_position'] ?? ''),
             'Kolor' => (string) ($normalized['vehicle_color'] ?? ''),
             'Kod koloru' => (string) ($normalized['vehicle_color_code'] ?? ''),
+            'Okres' => (string) ($normalized['vehicle_period'] ?? ''),
+            'Rok produkcji samochodu' => (string) ($normalized['vehicle_year'] ?? ''),
             'Kategoria Ovoko' => (string) ($normalized['category_title_path'] ?? ''),
             'Stan części' => (string) (($normalized['quality'] ?? '') ?: ($normalized['status'] ?? '')),
             'Pozycja' => (string) ($normalized['position'] ?? ''),
