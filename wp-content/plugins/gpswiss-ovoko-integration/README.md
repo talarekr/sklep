@@ -95,3 +95,34 @@ Used for:
 - payload hash preview,
 - Woo meta mapping preview,
 - matching preview.
+
+## RRR API / api.rrr.lt analysis
+
+Documentation references:
+- Docs UI: `https://api.rrr.lt/docs/`
+- OpenAPI spec: `https://api.rrr.lt/openapi/swagger.yaml`
+
+Important behavior:
+- Auth fields: `username`, `password`, `user_token`.
+- Request format: POST form-data (not JSON) for CRM API calls.
+- Success semantics: HTTP 200 alone is not enough; evaluate `status_code` in JSON body.
+
+Observed API areas (from docs guidance):
+- CRM EXPORT: Part, Parts v2, Car, Cars v2.
+- CRM INFO: categories, models and dictionaries.
+- WEBHOOKS.
+
+What we implemented in this phase (safe preview):
+- RRR API settings with secure secret handling (blank input preserves stored value).
+- Readiness check that confirms saved credentials presence and probes public docs URLs only.
+- Preview helpers (dry-run only):
+  - `preview_fetch_part_by_id($part_id)`
+  - `preview_fetch_parts_page($limit)`
+  - `normalize_rrr_part_payload($payload)`
+  - `map_rrr_part_to_woo_meta($normalized)`
+
+What is still required before safe import execution:
+- Confirm exact non-mutating authenticated endpoint for production-grade connection test.
+- Confirm canonical payload schema for parts export paging/filtering.
+- Define mapping contract from RRR payload to Woo product/meta fields.
+- Add guarded importer workflow (still disabled in this plugin currently).
