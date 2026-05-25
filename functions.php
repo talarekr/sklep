@@ -1914,28 +1914,45 @@ function gp_is_ovoko_product(?WC_Product $product = null): bool
 
 function gp_get_product_details_rows(int $productId): array
 {
-    $metaLabelMap = [
-        '_ovoko_part_number' => 'Numer części', '_ovoko_vehicle_make' => 'Producent', '_ovoko_vehicle_model' => 'Model', '_ovoko_vehicle_generation' => 'Modyfikacja',
-        '_ovoko_vehicle_fuel' => 'Rodzaj paliwa', '_ovoko_vehicle_engine_capacity_l' => 'Pojemność silnika', '_ovoko_vehicle_engine_power_kw' => 'Moc silnika', '_ovoko_engine_code' => 'Kod silnika',
-        '_ovoko_gearbox_type' => 'Typ skrzyni biegów', '_ovoko_vehicle_body_type' => 'Typ sylwetki', '_ovoko_vehicle_drive_wheels' => 'Koła napędowe', '_ovoko_vehicle_steering_position' => 'Pozycja kierownicy',
-        '_ovoko_vehicle_color' => 'Kolor', '_ovoko_vehicle_color_code' => 'Kod koloru', '_ovoko_vehicle_year' => 'Rok produkcji samochodu',
-    ];
+    $blockedLabels = ['id części ovoko', 'id pojazdu ovoko', 'źródło', 'kategoria ovoko', 'id allegro', 'sku', 'dostępność'];
+    $blockedTokens = ['debug', 'allegro', 'ebay', 'batch', 'cron', 'cache', 'import', 'technic'];
+    $internalStatuses = ['kupiony', 'reserved', 'rezerwacja', 'sold', 'sprzedany'];
+
     $rows = [];
-    foreach ($metaLabelMap as $metaKey => $label) {
-        $value = trim((string) get_post_meta($productId, $metaKey, true));
-        if ($value !== '' && $value !== '-' && !in_array(strtolower($value), ['brak', 'null'], true)) {
-            $rows[$label] = $value;
-        }
-    }
     $attributes = (array) get_post_meta($productId, '_product_attributes', true);
     foreach ($attributes as $attribute) {
         $name = trim((string) ($attribute['name'] ?? ''));
         $value = trim((string) ($attribute['value'] ?? ''));
         $visible = !empty($attribute['is_visible']);
-        if ($visible && isset($rows[$name]) === false && $value !== '') {
-            $rows[$name] = $value;
+        if (!$visible || $name === '') {
+            continue;
         }
+
+        $labelLower = function_exists('mb_strtolower') ? mb_strtolower($name) : strtolower($name);
+        $valueLower = function_exists('mb_strtolower') ? mb_strtolower($value) : strtolower($value);
+        if ($value === '' || $value === '-' || in_array($valueLower, ['brak', 'null', 'n/a'], true)) {
+            continue;
+        }
+        if (in_array($labelLower, $blockedLabels, true)) {
+            continue;
+        }
+        $skip = false;
+        foreach ($blockedTokens as $token) {
+            if (str_contains($labelLower, $token)) {
+                $skip = true;
+                break;
+            }
+        }
+        if ($skip) {
+            continue;
+        }
+        if (str_contains($labelLower, 'status') && in_array($valueLower, $internalStatuses, true)) {
+            continue;
+        }
+
+        $rows[$name] = $value;
     }
+
     return $rows;
 }
 
