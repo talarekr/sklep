@@ -708,6 +708,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'vehicle_engine_marketing' => (string) ($normalized['vehicle_engine_marketing'] ?? ''),
                 'title_builder_input_keys' => array_values(array_map('strval', array_keys($normalized))),
                 'title_builder_vehicle_prefix' => (string) ($titlePreview['vehicle_title_prefix'] ?? ''),
+                'title_builder_vehicle_model' => (string) ($titlePreview['vehicle_model'] ?? ''),
+                'title_builder_vehicle_generation' => (string) ($titlePreview['vehicle_generation'] ?? ''),
+                'title_builder_generation_contains_model' => !empty($titlePreview['generation_contains_model']),
+                'title_builder_vehicle_prefix_before_dedupe' => (string) ($titlePreview['vehicle_prefix_before_dedupe'] ?? ''),
+                'title_builder_vehicle_prefix_after_dedupe' => (string) ($titlePreview['vehicle_prefix_after_dedupe'] ?? ''),
                 'title_builder_notes' => (string) ($normalized['notes'] ?? ''),
                 'title_builder_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
                 'title_builder_output' => (string) ($titlePreview['proposed_title'] ?? ''),
@@ -890,6 +895,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'vehicle_engine_marketing' => (string) ($normalized['vehicle_engine_marketing'] ?? ''),
                 'title_builder_input_keys' => array_values(array_map('strval', array_keys($normalized))),
                 'title_builder_vehicle_prefix' => (string) ($titlePreview['vehicle_title_prefix'] ?? ''),
+                'title_builder_vehicle_model' => (string) ($titlePreview['vehicle_model'] ?? ''),
+                'title_builder_vehicle_generation' => (string) ($titlePreview['vehicle_generation'] ?? ''),
+                'title_builder_generation_contains_model' => !empty($titlePreview['generation_contains_model']),
+                'title_builder_vehicle_prefix_before_dedupe' => (string) ($titlePreview['vehicle_prefix_before_dedupe'] ?? ''),
+                'title_builder_vehicle_prefix_after_dedupe' => (string) ($titlePreview['vehicle_prefix_after_dedupe'] ?? ''),
                 'title_builder_notes' => (string) ($normalized['notes'] ?? ''),
                 'title_builder_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
                 'title_builder_output' => (string) ($titlePreview['proposed_title'] ?? ''),
@@ -1106,9 +1116,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
     {
+        $makeShortRaw = trim((string) ($normalizedPart['vehicle_make_short'] ?? ''));
         $makeRaw = trim((string) ($normalizedPart['vehicle_make'] ?? ''));
         $makeMap = ['Volkswagen' => 'VW', 'Mercedes-Benz' => 'Mercedes', 'BMW' => 'BMW', 'Audi' => 'Audi'];
-        $make = strtoupper($makeMap[$makeRaw] ?? $makeRaw);
+        $make = strtoupper($makeShortRaw !== '' ? $makeShortRaw : ($makeMap[$makeRaw] ?? $makeRaw));
         $model = strtoupper(trim((string) ($normalizedPart['vehicle_model'] ?? '')));
         $generation = strtoupper(trim((string) ($normalizedPart['vehicle_generation'] ?? '')));
         $engine = strtoupper(trim((string) (($normalizedPart['vehicle_engine_marketing'] ?? '') ?: ($normalizedPart['vehicle_engine_marketing_name'] ?? ''))));
@@ -1121,13 +1132,19 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $hasFullVehicleData = empty($missing);
         $fallbackTitle = $this->join_title_parts([$notes, $manufacturerCode]);
         if ($fallbackTitle === '') { $fallbackTitle = $this->join_title_parts([$name, $notes, $manufacturerCode]); }
-        $vehiclePrefix = $this->join_title_parts([$make, $model, $generation, $engine]);
+        $vehiclePrefixData = $this->build_vehicle_title_prefix($normalizedPart);
+        $vehiclePrefix = (string) ($vehiclePrefixData['vehicle_prefix_after_dedupe'] ?? '');
         $proposedTitle = $hasFullVehicleData ? $this->join_title_parts([$vehiclePrefix, $notes, $manufacturerCode]) : $fallbackTitle;
 
         return [
             'proposed_title' => $proposedTitle,
             'proposed_title_fallback' => $fallbackTitle,
             'vehicle_title_prefix' => $vehiclePrefix,
+            'vehicle_model' => (string) ($vehiclePrefixData['vehicle_model'] ?? ''),
+            'vehicle_generation' => (string) ($vehiclePrefixData['vehicle_generation'] ?? ''),
+            'generation_contains_model' => !empty($vehiclePrefixData['generation_contains_model']),
+            'vehicle_prefix_before_dedupe' => (string) ($vehiclePrefixData['vehicle_prefix_before_dedupe'] ?? ''),
+            'vehicle_prefix_after_dedupe' => (string) ($vehiclePrefixData['vehicle_prefix_after_dedupe'] ?? ''),
             'title_review_required' => !$hasFullVehicleData,
             'missing_vehicle_fields' => $missing,
             '_ovoko_title_source' => $hasFullVehicleData ? 'vehicle_data_rrr_with_local_confirmed_dictionary' : 'fallback_missing_vehicle_data',
@@ -1135,6 +1152,38 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
             '_ovoko_title_generated_from' => $hasFullVehicleData ? 'vehicle_make_short + vehicle_model_generation + vehicle_engine_marketing + notes + manufacturer_code' : 'notes+manufacturer_code_fallback',
         ];
+    }
+
+    private function build_vehicle_title_prefix(array $vehicleData): array
+    {
+        $makeShortRaw = trim((string) ($vehicleData['vehicle_make_short'] ?? ''));
+        $makeRaw = trim((string) ($vehicleData['vehicle_make'] ?? ''));
+        $makeMap = ['Volkswagen' => 'VW', 'Mercedes-Benz' => 'Mercedes', 'BMW' => 'BMW', 'Audi' => 'Audi'];
+        $make = strtoupper($makeShortRaw !== '' ? $makeShortRaw : ($makeMap[$makeRaw] ?? $makeRaw));
+        $model = strtoupper(trim((string) ($vehicleData['vehicle_model'] ?? '')));
+        $generation = strtoupper(trim((string) ($vehicleData['vehicle_generation'] ?? '')));
+        $engine = strtoupper(trim((string) (($vehicleData['vehicle_engine_marketing'] ?? '') ?: ($vehicleData['vehicle_engine_marketing_name'] ?? ''))));
+        $vehiclePrefixBeforeDedupe = $this->join_title_parts([$make, $model, $generation, $engine]);
+
+        $modelNormalized = $this->normalize_vehicle_compare_value($model);
+        $generationNormalized = $this->normalize_vehicle_compare_value($generation);
+        $generationContainsModel = $modelNormalized !== '' && $generationNormalized !== '' && str_starts_with($generationNormalized, $modelNormalized);
+
+        $modelAndGenerationPart = $generationContainsModel ? $generation : $this->join_title_parts([$model, $generation]);
+        $vehiclePrefixAfterDedupe = $this->join_title_parts([$make, $modelAndGenerationPart, $engine]);
+
+        return [
+            'vehicle_model' => $model,
+            'vehicle_generation' => $generation,
+            'generation_contains_model' => $generationContainsModel,
+            'vehicle_prefix_before_dedupe' => $vehiclePrefixBeforeDedupe,
+            'vehicle_prefix_after_dedupe' => $vehiclePrefixAfterDedupe,
+        ];
+    }
+
+    private function normalize_vehicle_compare_value(string $value): string
+    {
+        return trim((string) preg_replace('/\s+/', ' ', mb_strtolower(trim($value), 'UTF-8')));
     }
 
     private function join_title_parts(array $parts): string
