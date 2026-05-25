@@ -1778,7 +1778,7 @@ class OvokoIntegrationService
         if($carId!==''){ update_post_meta($productId,'_ovoko_car_id',$carId); $writtenMeta[]='_ovoko_car_id'; }
         if (!empty($normalized['part_id'])) { update_post_meta($productId,'_ovoko_part_id',(string)$normalized['part_id']); $writtenMeta[]='_ovoko_part_id'; }
         $pn=(string)($normalized['manufacturer_code']??''); if($pn!=='' && (string)get_post_meta($productId,'_part_number',true)===''){ update_post_meta($productId,'_part_number',$pn); $writtenMeta[]='_part_number';}
-        $attrs = array_filter($this->build_ovoko_technical_attributes_from_normalized($normalized), fn($k)=>in_array($k,['Numer części','Producent','Model','Modyfikacja','Rodzaj paliwa','Pojemność silnika','Moc silnika','Kod silnika','Typ skrzyni biegów','Typ sylwetki','Koła napędowe','Pozycja kierownicy','Kolor','Kod koloru','Rok produkcji samochodu'],true), ARRAY_FILTER_USE_KEY);
+        $attrs = $this->filter_customer_facing_technical_attributes($this->build_ovoko_technical_attributes_from_normalized($normalized));
         $this->upsert_custom_product_attributes($productId,$attrs);
         $metaWrittenForTable = $this->write_ovoko_table_meta_from_attributes($productId, $attrs);
         $replaced=false; if($replaceDescription){ wp_update_post(['ID'=>$productId,'post_content'=>'']); $replaced=true; }
@@ -2076,8 +2076,10 @@ class OvokoIntegrationService
             'Kod koloru' => (string) ($normalized['vehicle_color_code'] ?? ''),
             'Okres' => (string) ($normalized['vehicle_period'] ?? ''),
             'Rok produkcji samochodu' => (string) ($normalized['vehicle_year'] ?? ''),
+            'Przebieg' => !empty($normalized['mileage_km']) ? ((string) $normalized['mileage_km']) . ' km' : '',
             'Kategoria Ovoko' => (string) ($normalized['category_title_path'] ?? ''),
-            'Stan części' => (string) (($normalized['quality'] ?? '') ?: ($normalized['status'] ?? '')),
+            'Stan' => (string) (($normalized['quality'] ?? '') ?: ''),
+            'Status' => (string) ($normalized['status'] ?? ''),
             'Pozycja' => (string) ($normalized['position'] ?? ''),
             'Źródło' => 'Ovoko / RRR',
         ], static fn($v) => $v !== '');
@@ -2097,17 +2099,40 @@ class OvokoIntegrationService
 
     private function write_ovoko_table_meta_from_attributes(int $productId, array $attrs): array
     {
-        $map=['Numer części'=>'_ovoko_part_number','Producent'=>'_ovoko_vehicle_make','Model'=>'_ovoko_vehicle_model','Modyfikacja'=>'_ovoko_vehicle_generation','Rodzaj paliwa'=>'_ovoko_vehicle_fuel','Pojemność silnika'=>'_ovoko_vehicle_engine_capacity_l','Moc silnika'=>'_ovoko_vehicle_engine_power_kw','Kod silnika'=>'_ovoko_engine_code','Typ skrzyni biegów'=>'_ovoko_gearbox_type','Typ sylwetki'=>'_ovoko_vehicle_body_type','Koła napędowe'=>'_ovoko_vehicle_drive_wheels','Pozycja kierownicy'=>'_ovoko_vehicle_steering_position','Kolor'=>'_ovoko_vehicle_color','Kod koloru'=>'_ovoko_vehicle_color_code','Rok produkcji samochodu'=>'_ovoko_vehicle_year'];
+        $map=['Numer części'=>'_ovoko_part_number','Producent'=>'_ovoko_vehicle_make','Model'=>'_ovoko_vehicle_model','Modyfikacja'=>'_ovoko_vehicle_generation','Rodzaj paliwa'=>'_ovoko_vehicle_fuel','Pojemność silnika'=>'_ovoko_vehicle_engine_capacity_l','Moc silnika'=>'_ovoko_vehicle_engine_power_kw','Kod silnika'=>'_ovoko_engine_code','Typ skrzyni biegów'=>'_ovoko_gearbox_type','Typ sylwetki'=>'_ovoko_vehicle_body_type','Koła napędowe'=>'_ovoko_vehicle_drive_wheels','Pozycja kierownicy'=>'_ovoko_vehicle_steering_position','Kolor'=>'_ovoko_vehicle_color','Kod koloru'=>'_ovoko_vehicle_color_code','Okres'=>'_ovoko_vehicle_period','Rok produkcji samochodu'=>'_ovoko_vehicle_year','Przebieg'=>'_ovoko_mileage_km'];
         $written=[]; foreach ($map as $label=>$key) { if (!empty($attrs[$label])) { update_post_meta($productId,$key,(string)$attrs[$label]); $written[]=$key; } }
         return $written;
     }
 
+    private function filter_customer_facing_technical_attributes(array $attrs): array
+    {
+        $blocked=['id części ovoko','id pojazdu ovoko','źródło','kategoria ovoko','id allegro','sku','dostępność'];
+        $blockedTokens=['debug','allegro','ebay','batch','cron','cache','import','technical','technicz'];
+        $internalStatus=['kupiony','reserved','rezerwacja','sold','sprzedany'];
+        $result=[];
+        foreach($attrs as $label=>$value){
+            $name=mb_strtolower(trim((string)$label));
+            $v=trim((string)$value);
+            if($v===''||$v==='-'||in_array(mb_strtolower($v),['null','brak','n/a'],true)){continue;}
+            if(in_array($name,$blocked,true)){continue;}
+            if(str_contains($name,'status') && in_array(mb_strtolower($v),$internalStatus,true)){continue;}
+            $skip=false; foreach($blockedTokens as $t){ if(str_contains($name,$t)){ $skip=true; break; } }
+            if($skip){continue;}
+            $result[$label]=$v;
+        }
+        return $result;
+    }
+
     private function get_product_details_table_rows(int $productId): array
     {
-        $metaMap=['Numer części'=>'_ovoko_part_number','Producent'=>'_ovoko_vehicle_make','Model'=>'_ovoko_vehicle_model','Modyfikacja'=>'_ovoko_vehicle_generation','Rodzaj paliwa'=>'_ovoko_vehicle_fuel','Pojemność silnika'=>'_ovoko_vehicle_engine_capacity_l','Moc silnika'=>'_ovoko_vehicle_engine_power_kw','Kod silnika'=>'_ovoko_engine_code','Typ skrzyni biegów'=>'_ovoko_gearbox_type','Typ sylwetki'=>'_ovoko_vehicle_body_type','Koła napędowe'=>'_ovoko_vehicle_drive_wheels','Pozycja kierownicy'=>'_ovoko_vehicle_steering_position','Kolor'=>'_ovoko_vehicle_color','Kod koloru'=>'_ovoko_vehicle_color_code','Rok produkcji samochodu'=>'_ovoko_vehicle_year'];
-        $rows=[]; foreach($metaMap as $label=>$key){$v=trim((string)get_post_meta($productId,$key,true)); if($v!==''){$rows[$label]=$v;}}
-        $attrs=(array)get_post_meta($productId,'_product_attributes',true); foreach($attrs as $a){$name=(string)($a['name']??''); $v=trim((string)($a['value']??'')); if(!empty($a['is_visible']) && isset($metaMap[$name]) && $v!=='' && !isset($rows[$name])){$rows[$name]=$v;}}
-        return $rows;
+        $rows=[];
+        $attrs=(array)get_post_meta($productId,'_product_attributes',true);
+        foreach($attrs as $a){
+            $name=trim((string)($a['name']??''));
+            $v=trim((string)($a['value']??''));
+            if(!empty($a['is_visible']) && $name!==''){$rows[$name]=$v;}
+        }
+        return $this->filter_customer_facing_technical_attributes($rows);
     }
 
     public function run_local_test_callback(string $partId, string $status): array
