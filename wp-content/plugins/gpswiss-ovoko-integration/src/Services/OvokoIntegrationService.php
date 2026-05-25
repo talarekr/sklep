@@ -61,6 +61,7 @@ class OvokoIntegrationService
             'rrr_api_username' => '',
             'rrr_api_password' => '',
             'rrr_api_user_token' => '',
+            'ovoko_exclude_gearbox_products' => true,
         ];
     }
 
@@ -106,10 +107,11 @@ class OvokoIntegrationService
         if ($newRrrPassword !== '') {
             $clean['rrr_api_password'] = $newRrrPassword;
         }
-        $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token'] ?? ''));
+$newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token'] ?? ''));
         if ($newRrrUserToken !== '') {
             $clean['rrr_api_user_token'] = $newRrrUserToken;
         }
+        $clean['ovoko_exclude_gearbox_products'] = !isset($settings['ovoko_exclude_gearbox_products']) || !empty($settings['ovoko_exclude_gearbox_products']);
         update_option(self::OPTION_KEY, $clean, false);
     }
 
@@ -328,7 +330,9 @@ class OvokoIntegrationService
         $rrrCheck = $rrrClient->check_configuration();
         $fixturePart = NormalizedOvokoPart::from_array($syncService->developer_sample_fixture());
         $fixtureWithHash = NormalizedOvokoPart::from_array($fixturePart->to_array() + ['payload_hash' => $syncService->calculate_payload_hash($fixturePart)]);
-        $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
+$matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
+        $excludeEnabled = !empty($settings['ovoko_exclude_gearbox_products']);
+        $excludedCount = $excludeEnabled ? $syncService->count_excluded_gearbox_products() : 0;
 
         return [
             'callback_url' => rest_url('gpswiss-ovoko/v1/callback'),
@@ -355,6 +359,11 @@ class OvokoIntegrationService
             'sync_preview_fixture' => $fixtureWithHash->to_array(),
             'sync_preview_meta_mapping' => $syncService->map_to_woo_meta_preview($fixtureWithHash),
             'sync_preview_match' => $matchPreview,
+            'excluded_from_ovoko_sync' => [
+                'enabled' => $excludeEnabled,
+                'detected_products_count' => $excludedCount,
+                'info' => 'gearbox standalone products are excluded from Ovoko sync/import/matching',
+            ],
         ];
     }
 
@@ -472,6 +481,42 @@ class OvokoIntegrationService
             'records' => $normalized,
             'no_write_to_woo' => true,
             'diagnostic_note' => 'API total_count may include inactive/sold/archived parts until status semantics are confirmed by Ovoko/RRR.',
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
+
+
+    public function preview_rrr_single_part(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($result['payload'] ?? []);
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $syncService = new OvokoProductSyncService();
+        $match = $syncService->preview_match_rrr_record([
+            'part_id' => (string) ($normalized['part_id'] ?? ''),
+            'external_id' => (string) ($normalized['external_id'] ?? ''),
+        ]);
+
+        return [
+            'ok' => !empty($result['ok']),
+            'mode' => 'preview_only',
+            'request' => [
+                'method' => 'POST',
+                'path' => '/get/part/' . $partId,
+                'content_type' => 'application/x-www-form-urlencoded',
+                'form_data_fields' => ['username', 'password', 'user_token'],
+            ],
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'msg' => (string) ($result['msg'] ?? ''),
+            'part_id' => $partId,
+            'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'single_part_summary' => $normalized,
+            'woo_match_preview' => $match,
+            'raw_payload_summary' => ['keys' => array_values(array_map('strval', array_keys($payload))), 'full_payload_omitted' => true],
+            'no_write_to_woo' => true,
             'checked_at' => gmdate('c'),
         ];
     }
