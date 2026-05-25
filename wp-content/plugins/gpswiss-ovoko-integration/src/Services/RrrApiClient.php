@@ -13,26 +13,41 @@ class RrrApiClient
         $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
         $credentialsConfigured = $this->has_credentials();
         $publicProbes = $this->run_public_probes($baseUrl);
+        $authProbe = ['executed' => false, 'success' => false, 'reason' => 'Credentials are not configured.'];
+
+        if ($credentialsConfigured) {
+            $authProbe = $this->check_auth_readonly();
+        }
+        $authSuccess = !empty($authProbe['success']);
 
         return [
             'base_url_set' => $baseUrl !== '',
             'credentials_configured' => $credentialsConfigured,
             'enabled' => !empty($this->settings['rrr_api_enabled']),
             'dry_run' => !empty($this->settings['rrr_api_dry_run']),
-            'status' => ($baseUrl !== '' && $credentialsConfigured) ? 'credentials_saved_endpoint_confirmation_needed' : 'needs_configuration_or_endpoint_confirmation',
+            'status' => ($baseUrl !== '' && $credentialsConfigured && $authSuccess) ? 'authenticated_readonly_probe_confirmed' : 'needs_configuration_or_endpoint_confirmation',
             'message' => ($baseUrl !== '' && $credentialsConfigured)
-                ? 'RRR credentials saved. Configuration test uses POST form-data and validates status_code from JSON body only.'
+                ? 'RRR credentials saved. Configuration test uses POST form-data and validates status_code=R200 from JSON body.'
                 : 'RRR API credentials are incomplete. Fill username/password/user_token in settings.',
             'test_request' => [
-                'method' => 'GET',
-                'paths' => ['/docs/', '/openapi/swagger.yaml'],
-                'uses_form_data' => false,
-                'includes_auth_fields' => false,
-                'notes' => 'Public documentation availability probe only; authenticated POST form-data endpoint test requires confirmed non-mutating endpoint.',
+                'method' => 'POST',
+                'path' => '/v2/get/parts?limit=1&page=1',
+                'content_type' => 'application/x-www-form-urlencoded',
+                'uses_form_data' => true,
+                'includes_auth_fields' => true,
+                'auth_fields' => ['username', 'password', 'user_token'],
+                'notes' => 'Read-only probe only. Success requires JSON body status_code === R200.',
             ],
             'public_probes' => $publicProbes,
-            'auth_probe' => ['executed' => false, 'reason' => 'Awaiting confirmed non-mutating authenticated endpoint from RRR docs/support.'],
+            'authenticated_endpoint_confirmed' => $authSuccess,
+            'read_only_endpoint' => '/v2/get/parts?limit=1&page=1',
+            'auth_probe' => $authProbe,
         ];
+    }
+
+    public function check_auth_readonly(): array
+    {
+        return $this->post_form('/v2/get/parts?limit=1&page=1', []);
     }
 
     public function preview_fetch_part_by_id(string $partId): array
@@ -104,6 +119,9 @@ class RrrApiClient
         $response = wp_remote_post($baseUrl . $path, [
             'timeout' => 12,
             'body' => $body,
+            'headers' => [
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
         ]);
 
         if (is_wp_error($response)) {
@@ -112,14 +130,35 @@ class RrrApiClient
 
         $httpCode = (int) wp_remote_retrieve_response_code($response);
         $decoded = json_decode((string) wp_remote_retrieve_body($response), true);
-        $statusCode = is_array($decoded) ? (int) ($decoded['status_code'] ?? 0) : 0;
-        $ok = $httpCode === 200 && $statusCode > 0 && $statusCode < 300;
+        $statusCode = is_array($decoded) ? sanitize_text_field((string) ($decoded['status_code'] ?? '')) : '';
+        $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
+        $ok = $httpCode === 200 && $statusCode === 'R200';
+        $pagination = is_array($decoded['pagination'] ?? null) ? $decoded['pagination'] : [];
+        $firstRecord = [];
+        if (is_array($decoded['data'] ?? null) && !empty($decoded['data'][0]) && is_array($decoded['data'][0])) {
+            $row = $decoded['data'][0];
+            $firstRecord = [
+                'id' => sanitize_text_field((string) ($row['id'] ?? '')),
+                'external_id' => isset($row['external_id']) ? sanitize_text_field((string) $row['external_id']) : null,
+                'name' => sanitize_text_field((string) ($row['name'] ?? '')),
+                'status' => sanitize_text_field((string) ($row['status'] ?? '')),
+                'updated_at' => sanitize_text_field((string) ($row['updated_at'] ?? '')),
+            ];
+        }
 
         return [
             'ok' => $ok,
+            'executed' => true,
+            'success' => $ok,
             'http_code' => $httpCode,
             'status_code' => $statusCode,
-            'message' => is_array($decoded) ? (string) ($decoded['message'] ?? '') : 'Non-JSON response',
+            'msg' => $message,
+            'pagination' => [
+                'page' => isset($pagination['page']) ? (int) $pagination['page'] : null,
+                'limit' => isset($pagination['limit']) ? (int) $pagination['limit'] : null,
+                'total_count' => isset($pagination['total_count']) ? (int) $pagination['total_count'] : null,
+            ],
+            'first_record' => $firstRecord,
         ];
     }
 
