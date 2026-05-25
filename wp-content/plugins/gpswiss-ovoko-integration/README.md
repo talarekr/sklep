@@ -592,3 +592,11 @@ Fallback stays enabled when vehicle endpoint is not confirmed:
 - `_ovoko_title_source=fallback_missing_vehicle_data`
 
 No automatic eBay/Allegro publish was added and no batch/cron was introduced.
+
+## Vehicle data (/get/car/{id}) update
+
+- Endpoint `/get/car/{id}` is confirmed and parser now supports `list[0][0]`, `list[0]`, `data[0]`, `data`, and root fallback.
+- Some vehicle fields come as raw IDs (`car_model`, `car_model_category`, `car_fuel`, `car_gearbox_type`, `car_wheel_drive`, `car_body_type`, `car_color`).
+- Local confirmed dictionary fallback is implemented only for `car_id=458` and only for confirmed values from Ovoko UI.
+- Next step: confirm full dictionary endpoints in RRR/Ovoko API and replace local partial fallback.
+- Title builder is confirmed for `part_id=10994` + `car_id=458` with full vehicle prefix.
