@@ -562,6 +562,35 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         ];
     }
 
+
+    private function enrich_with_vehicle_data(array $normalized, RrrApiClient $client): array
+    {
+        $carId = (string) ($normalized['car_id'] ?? '');
+        $vehicleDebug = [
+            'vehicle_fetch_attempted' => $carId !== '',
+            'vehicle_fetch_success' => false,
+            'vehicle_endpoint_used' => '',
+            'vehicle_raw_car_id' => $carId,
+            'vehicle_data_status' => (string) ($normalized['vehicle_data_status'] ?? ''),
+            'vehicle_dictionary_resolution_status' => (string) ($normalized['vehicle_dictionary_resolution_status'] ?? ''),
+            'vehicle_dictionary_resolution_source' => (string) ($normalized['vehicle_dictionary_resolution_source'] ?? ''),
+        ];
+
+        if ($carId !== '') {
+            $vehiclePreview = $client->preview_fetch_car_by_id($carId);
+            if (!empty($vehiclePreview['ok'])) {
+                $normalized = array_merge($normalized, (array) ($vehiclePreview['normalized'] ?? []));
+                $vehicleDebug['vehicle_fetch_success'] = true;
+                $vehicleDebug['vehicle_endpoint_used'] = (string) ($vehiclePreview['endpoint_used'] ?? '');
+            }
+            $vehicleDebug['vehicle_data_status'] = (string) ($normalized['vehicle_data_status'] ?? $vehicleDebug['vehicle_data_status']);
+            $vehicleDebug['vehicle_dictionary_resolution_status'] = (string) ($normalized['vehicle_dictionary_resolution_status'] ?? $vehicleDebug['vehicle_dictionary_resolution_status']);
+            $vehicleDebug['vehicle_dictionary_resolution_source'] = (string) ($normalized['vehicle_dictionary_resolution_source'] ?? $vehicleDebug['vehicle_dictionary_resolution_source']);
+        }
+
+        return ['normalized' => $normalized, 'vehicle_debug' => $vehicleDebug];
+    }
+
     public function preview_woo_product_create_from_rrr_part(int $partId): array
     {
         $partId = max(1, $partId);
@@ -569,13 +598,9 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $result = $client->preview_fetch_single_part($partId);
         $payload = (array) ($result['payload'] ?? []);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
-        $carId = (string) ($normalized['car_id'] ?? '');
-        if ($carId !== '') {
-            $vehiclePreview = $client->preview_fetch_car_by_id($carId);
-            if (!empty($vehiclePreview['ok'])) {
-                $normalized = array_merge($normalized, (array) ($vehiclePreview['normalized'] ?? []));
-            }
-        }
+        $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
+        $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+        $vehicleDebug = (array) ($vehicleEnriched['vehicle_debug'] ?? []);
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
             'part_id' => (string) ($normalized['part_id'] ?? ''),
@@ -668,6 +693,27 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'source' => 'ovoko_master',
                 'product_attributes_preview' => $this->build_ovoko_technical_attributes_from_normalized($normalized),
             ],
+            'create_flow_debug' => [
+                'vehicle_fetch_attempted' => (bool) ($vehicleDebug['vehicle_fetch_attempted'] ?? false),
+                'vehicle_fetch_success' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
+                'vehicle_endpoint_used' => (string) ($vehicleDebug['vehicle_endpoint_used'] ?? ''),
+                'vehicle_raw_car_id' => (string) ($vehicleDebug['vehicle_raw_car_id'] ?? ''),
+                'vehicle_data_status' => (string) ($vehicleDebug['vehicle_data_status'] ?? ''),
+                'vehicle_dictionary_resolution_status' => (string) ($vehicleDebug['vehicle_dictionary_resolution_status'] ?? ''),
+                'vehicle_dictionary_resolution_source' => (string) ($vehicleDebug['vehicle_dictionary_resolution_source'] ?? ''),
+                'vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
+                'vehicle_make_short' => (string) ($normalized['vehicle_make_short'] ?? ''),
+                'vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
+                'vehicle_generation' => (string) ($normalized['vehicle_generation'] ?? ''),
+                'vehicle_engine_marketing' => (string) ($normalized['vehicle_engine_marketing'] ?? ''),
+                'title_builder_input_keys' => array_values(array_map('strval', array_keys($normalized))),
+                'title_builder_vehicle_prefix' => (string) ($titlePreview['vehicle_title_prefix'] ?? ''),
+                'title_builder_notes' => (string) ($normalized['notes'] ?? ''),
+                'title_builder_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                'title_builder_output' => (string) ($titlePreview['proposed_title'] ?? ''),
+                'title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
+                'title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? 'yes') === 'yes',
+            ],
             'price_safety' => [
                 'price_source' => (string) ($normalized['price_source'] ?? ''),
                 'price_review_required' => !empty($normalized['price_review_required']),
@@ -687,6 +733,9 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $result = $client->preview_fetch_single_part($partId);
         $payload = (array) ($result['payload'] ?? []);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
+        $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+        $vehicleDebug = (array) ($vehicleEnriched['vehicle_debug'] ?? []);
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
             'part_id' => (string) ($normalized['part_id'] ?? ''),
@@ -727,10 +776,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             ];
         }
 
+        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
         $productId = wp_insert_post([
             'post_type' => 'product',
             'post_status' => 'draft',
-            'post_title' => (string) (($this->build_woo_product_title_from_rrr_part($normalized))['proposed_title'] ?? ''),
+            'post_title' => (string) ($titlePreview['proposed_title'] ?? ''),
             'post_content' => (string) ($normalized['notes'] ?? ''),
             'post_excerpt' => (string) ($normalized['notes'] ?? ''),
         ], true);
@@ -738,7 +788,6 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             return ['ok' => false, 'action_name' => 'Create Woo draft product from RRR part', 'created' => false, 'error' => $productId->get_error_message()];
         }
         $productId = (int) $productId;
-        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
 
         update_post_meta($productId, '_sku', 'GPSW-OVK-' . $partId);
         update_post_meta($productId, '_regular_price', (string) ($normalized['woo_target_price'] ?? ''));
@@ -826,6 +875,27 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'listing_image_strategy' => (string) ($listingImageResult['listing_image_strategy'] ?? 'thumbnail_fallback'),
             'listing_image_meta_written' => (array) ($listingImageResult['listing_image_meta_written'] ?? []),
             'listing_image_errors' => (array) ($listingImageResult['errors'] ?? []),
+            'create_flow_debug' => [
+                'vehicle_fetch_attempted' => (bool) ($vehicleDebug['vehicle_fetch_attempted'] ?? false),
+                'vehicle_fetch_success' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
+                'vehicle_endpoint_used' => (string) ($vehicleDebug['vehicle_endpoint_used'] ?? ''),
+                'vehicle_raw_car_id' => (string) ($vehicleDebug['vehicle_raw_car_id'] ?? ''),
+                'vehicle_data_status' => (string) ($vehicleDebug['vehicle_data_status'] ?? ''),
+                'vehicle_dictionary_resolution_status' => (string) ($vehicleDebug['vehicle_dictionary_resolution_status'] ?? ''),
+                'vehicle_dictionary_resolution_source' => (string) ($vehicleDebug['vehicle_dictionary_resolution_source'] ?? ''),
+                'vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
+                'vehicle_make_short' => (string) ($normalized['vehicle_make_short'] ?? ''),
+                'vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
+                'vehicle_generation' => (string) ($normalized['vehicle_generation'] ?? ''),
+                'vehicle_engine_marketing' => (string) ($normalized['vehicle_engine_marketing'] ?? ''),
+                'title_builder_input_keys' => array_values(array_map('strval', array_keys($normalized))),
+                'title_builder_vehicle_prefix' => (string) ($titlePreview['vehicle_title_prefix'] ?? ''),
+                'title_builder_notes' => (string) ($normalized['notes'] ?? ''),
+                'title_builder_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                'title_builder_output' => (string) ($titlePreview['proposed_title'] ?? ''),
+                'title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
+                'title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? 'yes') === 'yes',
+            ],
             'validations' => $validations,
             'no_ebay_publish' => true,
             'no_allegro_publish' => true,
@@ -1409,7 +1479,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             foreach($map as $k=>$f){ update_post_meta($productId,$k,(string)($v[$f]??'')); $metaWritten++; }
             $this->upsert_custom_product_attributes($productId,array_filter(['Producent'=>$v['vehicle_make']??'','Model'=>$v['vehicle_model']??'','Modyfikacja'=>$v['vehicle_generation']??'','Rodzaj paliwa'=>$v['vehicle_fuel']??'','Pojemność silnika'=>!empty($v['vehicle_engine_capacity_cc']) ? ((string)$v['vehicle_engine_capacity_cc']).' cm³' : '','Moc silnika'=>!empty($v['vehicle_engine_power_kw']) ? ((string)$v['vehicle_engine_power_kw']).' kW' : '','Kod silnika'=>$v['vehicle_engine_code']??'','Typ skrzyni biegów'=>$v['vehicle_gearbox_type']??'','Typ sylwetki'=>$v['vehicle_body_type']??'','Koła napędowe'=>$v['vehicle_drive_wheels']??'','Pozycja kierownicy'=>$v['vehicle_steering_position']??'','Kolor'=>$v['vehicle_color']??'','Kod koloru'=>$v['vehicle_color_code']??'','Okres'=>$v['vehicle_period']??'','Rok produkcji samochodu'=>$v['vehicle_year']??'']));
             $attributesWritten=15;
-            if($updateTitle){ $notes=(string)get_post_field('post_excerpt',$productId); $mpn=(string)get_post_meta($productId,'_ovoko_manufacturer_code',true); $proposedTitle=trim(implode(' ',array_filter([(string)($v['vehicle_make_short']??$this->short_make((string)($v['vehicle_make']??''))),$v['vehicle_model']??'',$v['vehicle_generation']??'',$v['vehicle_engine_marketing']??'',$notes,$mpn]))); wp_update_post(['ID'=>$productId,'post_title'=>$proposedTitle]); $titleUpdated=true; }
+            if($updateTitle){ $normalizedForTitle=['notes'=>(string)get_post_field('post_excerpt',$productId),'manufacturer_code'=>(string)get_post_meta($productId,'_ovoko_manufacturer_code',true)]+$v; $titleData=$this->build_woo_product_title_from_rrr_part($normalizedForTitle); $proposedTitle=(string)($titleData['proposed_title']??$oldTitle); wp_update_post(['ID'=>$productId,'post_title'=>$proposedTitle]); $titleUpdated=true; }
         }
         return ['ok'=>true,'action_name'=>'Apply RRR vehicle data to Ovoko product','product_id'=>$productId,'car_id'=>$carId,'vehicle_data_found'=>!empty($vehicle['ok']),'endpoint_used'=>(string)($vehicle['endpoint_used']??''),'vehicle_meta_written'=>$metaWritten,'vehicle_attributes_written'=>$attributesWritten,'old_title'=>$oldTitle,'proposed_title'=>$proposedTitle,'title_updated'=>$titleUpdated,'no_price_change'=>true,'no_stock_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
     }
