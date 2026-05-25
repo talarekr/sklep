@@ -1786,7 +1786,7 @@ class OvokoIntegrationService
         $metaWrittenForTable = $this->write_ovoko_table_meta_from_attributes($productId, $attrs);
         $replaced=false; if($replaceDescription){ wp_update_post(['ID'=>$productId,'post_content'=>'']); $replaced=true; }
         $previewTable = $this->preview_product_details_table_render_status($productId);
-        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
+        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs,'source_used'=>['Producent'=>(string)(($enriched['_vehicle_field_sources']['vehicle_make'] ?? 'unknown')),'Model'=>(string)(($enriched['_vehicle_field_sources']['vehicle_model'] ?? 'unknown')),'Modyfikacja'=>(string)(($enriched['_vehicle_field_sources']['vehicle_generation'] ?? 'unknown')),'Okres'=>(string)(($enriched['_vehicle_field_sources']['vehicle_period'] ?? 'unknown')),'Przebieg'=>(string)(($enriched['_vehicle_field_sources']['mileage_km'] ?? 'unknown')),'Typ sylwetki'=>(string)(($enriched['_vehicle_field_sources']['vehicle_body_type'] ?? 'unknown'))],'car_raw_selected_fields'=>(array)($enriched['_car_raw_selected_fields'] ?? []),'dictionary_local_mapping'=>['status'=>(string)($enriched['vehicle_dictionary_resolution_status'] ?? ''),'source'=>(string)($enriched['vehicle_dictionary_resolution_source'] ?? ''),'hits'=>array_intersect_key($enriched,array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_color','vehicle_period','vehicle_year','mileage_km']))]],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
     }
 
     public function preview_product_details_table_render_status(int $productId): array
@@ -2040,14 +2040,18 @@ class OvokoIntegrationService
     private function build_normalized_from_csv_row(array $csvRow): array
     {
         $vehicleParsed = $this->parse_vehicle_info_from_csv((string) ($csvRow['vehicle_info'] ?? ''));
-        return ['part_id'=>(string)($csvRow['id']??''),'manufacturer_code'=>(string)($csvRow['manufacturer_code']??''),'vehicle_make'=>(string)($vehicleParsed['manufacturer']??''),'vehicle_model'=>(string)($vehicleParsed['model']??''),'vehicle_generation'=>(string)($vehicleParsed['model_modification']??''),'vehicle_year'=>(string)(($csvRow['year']??'')?:($vehicleParsed['year']??'')),'vehicle_fuel'=>(string)($csvRow['fuel_type']??''),'vehicle_engine_capacity_cc'=>(string)($vehicleParsed['engine_capacity_cc']??''),'vehicle_engine_power_kw'=>(string)($vehicleParsed['engine_power_kw']??''),'vehicle_gearbox_type'=>(string)($csvRow['gearbox_type']??''),'vehicle_drive_wheels'=>(string)($csvRow['drive']??''),'vehicle_color'=>(string)($csvRow['color']??''),'vehicle_period'=>(string)($vehicleParsed['period']??''),'vehicle_raw_info'=>(string)($vehicleParsed['raw_value']??''),'vehicle_parse_confidence'=>(string)($vehicleParsed['confidence']??'low')];
+        return ['part_id'=>(string)($csvRow['id']??''),'manufacturer_code'=>(string)($csvRow['manufacturer_code']??''),'vehicle_make'=>(string)($vehicleParsed['manufacturer']??''),'vehicle_model'=>(string)($vehicleParsed['model']??''),'vehicle_generation'=>(string)($vehicleParsed['model_modification']??''),'vehicle_year'=>(string)(($csvRow['year']??'')?:($vehicleParsed['year']??'')),'vehicle_fuel'=>(string)($csvRow['fuel_type']??''),'vehicle_engine_capacity_cc'=>(string)($vehicleParsed['engine_capacity_cc']??''),'vehicle_engine_power_kw'=>(string)($vehicleParsed['engine_power_kw']??''),'vehicle_gearbox_type'=>(string)($csvRow['gearbox_type']??''),'vehicle_drive_wheels'=>(string)($csvRow['drive']??''),'vehicle_color'=>(string)($csvRow['color']??''),'vehicle_period'=>(string)($vehicleParsed['period']??''),'vehicle_raw_info'=>(string)($vehicleParsed['raw_value']??''),'vehicle_parse_confidence'=>(string)($vehicleParsed['confidence']??'low'),'csv_parse_debug'=>(array)$vehicleParsed];
     }
 
     private function parse_vehicle_info_from_csv(string $vehicleInfo): array
     {
         $raw=trim($vehicleInfo); $result=['raw_value'=>$raw,'confidence'=>'low']; if($raw==='') return $result;
-        preg_match('/^([^,(]+?)(?:\s*\(([^)]*)\))?(?:,\s*(\d{4}))?/u', $raw, $base);
+        preg_match('/^([^,(]+)(?:\s*\(([^)]*)\))?(?:,\s*(\d{4}))?/u', $raw, $base);
         $label = trim((string)($base[1] ?? '')); $period = trim((string)($base[2] ?? '')); $year = trim((string)($base[3] ?? ''));
+        $period = preg_replace('/\s*-\s*/u', '-', $period) ?? $period;
+        $period = str_replace('-)', '--', $period);
+        $period = str_replace(['(',')',' '], '', $period);
+        if (preg_match('/^\d{4}-$/', $period)) { $period .= '-'; }
         preg_match('/(\d+)\s*k[wW]/u', $raw, $power); preg_match('/(\d+)\s*cm(?:3|³)/u', $raw, $cap);
         $known = ['Mercedes-Benz','Volkswagen','VW','Audi','BMW','Peugeot','Citroen','Citroën','Renault','Opel','Ford','Toyota','Nissan','Hyundai','Kia','Fiat','Volvo','Skoda','Škoda','Seat'];
         $make=''; $model=$label;
@@ -2111,25 +2115,35 @@ class OvokoIntegrationService
     private function build_enriched_normalized_for_apply(array $normalized): array
     {
         $enriched = $normalized;
+        $debugSources = [];
+        $applySource = static function(array &$target, string $field, $value, string $source, bool $overwrite = false) use (&$debugSources): void {
+            if ($value === '' || $value === null) { return; }
+            if (!$overwrite && !empty($target[$field])) { return; }
+            $target[$field] = $value;
+            $debugSources[$field] = $source;
+        };
         $csvMap=(array)($this->get_settings()['ovoko_csv_mapping']??[]);
         $code=$this->normalize_part_code((string)($normalized['manufacturer_code']??''));
         $csvRow=[];
         if($code!=='' && !empty($csvMap[$code][0]) && is_array($csvMap[$code][0])){
             $csvRow=(array)$csvMap[$code][0];
-            $enriched=array_merge($this->build_normalized_from_csv_row($csvRow), $enriched);
+            $csvNormalized = $this->build_normalized_from_csv_row($csvRow);
+            foreach ($csvNormalized as $k => $v) { $applySource($enriched, (string)$k, $v, 'csv_row', false); }
         }
         $client = new RrrApiClient($this->get_settings());
         $carId = (string)($enriched['car_id'] ?? '');
+        $carRaw = [];
         if($carId!==''){
             $car = $client->preview_fetch_car_by_id($carId);
             if(!empty($car['ok'])){
+                $carRaw = (array)($car['raw_record'] ?? []);
                 foreach((array)($car['normalized'] ?? []) as $k=>$v){
-                    if($v !== '' && $v !== null){
-                        $enriched[(string)$k] = $v;
-                    }
+                    $applySource($enriched, (string)$k, $v, 'car_endpoint', true);
                 }
             }
         }
+        $enriched['_vehicle_field_sources'] = $debugSources;
+        $enriched['_car_raw_selected_fields'] = array_intersect_key($carRaw, array_flip(['car_model','car_model_category','car_model_years','car_years','car_mileage','car_body_type','car_engine_code','car_gearbox_code','car_interior','defectation_notes','car_body_number','car_engine_number']));
         return $enriched;
     }
 
