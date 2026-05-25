@@ -43,9 +43,11 @@ $same_vehicle_url = $ovoko_car_id !== '' ? add_query_arg('ovoko_car_id', rawurle
                     </li>
                 </ul>
                 <?php if ($is_ovoko_product && $same_vehicle_url !== '') : ?>
-                    <a class="gpswiss-same-vehicle-button" href="<?php echo esc_url($same_vehicle_url); ?>">
-                        <?php esc_html_e('Pokaż więcej części z tego pojazdu', 'gp-clone'); ?>
-                    </a>
+                    <div class="gpswiss-same-vehicle-button-wrap">
+                        <a class="gpswiss-same-vehicle-button" href="<?php echo esc_url($same_vehicle_url); ?>">
+                            <?php esc_html_e('Pokaż więcej części z tego pojazdu', 'gp-clone'); ?>
+                        </a>
+                    </div>
                 <?php elseif (!$is_ovoko_product && $product->get_short_description() !== '') : ?>
                     <div class="gp-product-info-card__short-description">
                         <?php echo wp_kses_post(wpautop($product->get_short_description())); ?>

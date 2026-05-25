@@ -1533,11 +1533,16 @@
   margin: 0 0 6px;
 }
 
+.gpswiss-same-vehicle-button-wrap {
+  margin-top: 14px;
+  text-align: center;
+}
+
 .gpswiss-same-vehicle-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 14px;
+  margin: 0 auto;
   padding: 10px 16px;
   border: 1px solid #0f5fbf;
   border-radius: 999px;
@@ -1566,8 +1571,10 @@
 }
 
 .gpswiss-product-details {
-  margin-top: 28px;
-  border: 1px solid #e2e8f0;
+  width: 100%;
+  max-width: 960px;
+  margin: 28px auto 0;
+  border: 1px solid #dbe5f3;
   border-radius: 12px;
   background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
@@ -1577,9 +1584,10 @@
   margin: 0;
   padding: 14px 18px;
   font-size: 18px;
-  font-weight: 700;
-  color: #0f172a;
-  border-bottom: 1px solid #e2e8f0;
+  font-weight: 800;
+  color: #123a7a;
+  border-bottom: 1px solid #dbe5f3;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
 }
 .gpswiss-product-details__row {
   display: grid;
@@ -1588,11 +1596,11 @@
   padding: 12px 18px;
 }
 .gpswiss-product-details__row:nth-child(even) {
-  background: #f8fafc;
+  background: #f8fbff;
 }
 .gpswiss-product-details__label {
   font-weight: 700;
-  color: #1e293b;
+  color: #123a7a;
 }
 .gpswiss-product-details__value {
   color: #334155;
@@ -1689,8 +1697,12 @@
     grid-template-columns: 1fr;
     gap: 6px;
   }
+  .gpswiss-same-vehicle-button-wrap {
+    text-align: center;
+  }
   .gpswiss-same-vehicle-button {
     width: 100%;
+    max-width: 420px;
   }
   .gp-footer__cols { grid-template-columns: 1fr; }
   .gp-cat-filter__summary {
