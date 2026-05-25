@@ -731,6 +731,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             return ['ok' => false, 'action_name' => 'Create Woo draft product from RRR part', 'created' => false, 'error' => $productId->get_error_message()];
         }
         $productId = (int) $productId;
+        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
 
         update_post_meta($productId, '_sku', 'GPSW-OVK-' . $partId);
         update_post_meta($productId, '_regular_price', (string) ($normalized['woo_target_price'] ?? ''));
@@ -739,7 +740,6 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             update_post_meta($productId, '_product_version', WC_VERSION);
         }
 
-        $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
         $meta = [
             '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
             '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
@@ -771,6 +771,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         foreach ($meta as $k=>$v) update_post_meta($productId,$k,$v);
         $this->upsert_custom_product_attributes($productId, $this->build_ovoko_technical_attributes_from_normalized($normalized));
         wp_set_object_terms($productId, 'simple', 'product_type');
+        $imageImportResult = $this->import_ovoko_images_for_product($productId, $normalized, $partId);
 
         return [
             'ok' => true,
@@ -781,7 +782,15 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'status' => 'draft',
             'sku' => 'GPSW-OVK-' . $partId,
             'price' => (string) ($normalized['woo_target_price'] ?? ''),
-            'images_warning' => empty($normalized['part_photo_gallery']) ? 'No images in source payload; product created without media import.' : '',
+            'images_import_attempted' => true,
+            'images_count' => (int) $imageImportResult['images_count'],
+            'images_import_failed' => (bool) $imageImportResult['images_import_failed'],
+            'imported_attachment_ids' => (array) $imageImportResult['imported_attachment_ids'],
+            'reused_attachment_ids' => (array) $imageImportResult['reused_attachment_ids'],
+            'failed_urls' => (array) $imageImportResult['failed_urls'],
+            'featured_attachment_id' => (int) $imageImportResult['featured_attachment_id'],
+            'gallery_attachment_ids' => (array) $imageImportResult['gallery_attachment_ids'],
+            'image_model' => 'allegro_compatible',
             'validations' => $validations,
             'no_ebay_publish' => true,
             'no_allegro_publish' => true,
@@ -845,6 +854,112 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             }
         }
         return implode(' ', array_values(array_unique($clean)));
+    }
+
+    private function import_ovoko_images_for_product(int $productId, array $normalized, int $partId): array
+    {
+        $imagePlan = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId);
+        $urls = (array) ($imagePlan['source_image_urls'] ?? []);
+        $urls = array_values(array_slice($urls, 0, OvokoImageImportPlan::MAX_IMAGES_PER_PRODUCT));
+        $importedAttachmentIds = [];
+        $reusedAttachmentIds = [];
+        $failedUrls = [];
+        $attachmentIdsInOrder = [];
+
+        if (empty($urls)) {
+            return ['images_count' => 0, 'images_import_failed' => true, 'imported_attachment_ids' => [], 'reused_attachment_ids' => [], 'failed_urls' => [], 'featured_attachment_id' => 0, 'gallery_attachment_ids' => []];
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        foreach ($urls as $imageUrl) {
+            $attachmentId = $this->find_attachment_by_awi_source_url($imageUrl);
+            if ($attachmentId > 0) {
+                $attachmentIdsInOrder[] = $attachmentId;
+                $reusedAttachmentIds[] = $attachmentId;
+                continue;
+            }
+
+            $attachmentId = $this->sideload_ovoko_image($imageUrl, $productId, $partId);
+            if ($attachmentId <= 0) {
+                $failedUrls[] = $imageUrl;
+                continue;
+            }
+            $attachmentIdsInOrder[] = $attachmentId;
+            $importedAttachmentIds[] = $attachmentId;
+        }
+
+        $attachmentIdsInOrder = array_values(array_unique(array_map('intval', $attachmentIdsInOrder)));
+        $featuredId = (int) ($attachmentIdsInOrder[0] ?? 0);
+        $galleryIds = array_values(array_slice($attachmentIdsInOrder, 1));
+
+        if ($featuredId > 0) {
+            update_post_meta($productId, '_thumbnail_id', $featuredId);
+        }
+        update_post_meta($productId, '_product_image_gallery', implode(',', $galleryIds));
+
+        return [
+            'images_count' => count($urls),
+            'images_import_failed' => empty($attachmentIdsInOrder),
+            'imported_attachment_ids' => array_values(array_unique(array_map('intval', $importedAttachmentIds))),
+            'reused_attachment_ids' => array_values(array_unique(array_map('intval', $reusedAttachmentIds))),
+            'failed_urls' => $failedUrls,
+            'featured_attachment_id' => $featuredId,
+            'gallery_attachment_ids' => $galleryIds,
+        ];
+    }
+
+    private function find_attachment_by_awi_source_url(string $imageUrl): int
+    {
+        $imageUrl = trim($imageUrl);
+        if ($imageUrl === '') {
+            return 0;
+        }
+        $ids = get_posts([
+            'post_type' => 'attachment',
+            'post_status' => 'inherit',
+            'numberposts' => 1,
+            'fields' => 'ids',
+            'meta_key' => '_awi_source_url',
+            'meta_value' => $imageUrl,
+        ]);
+        return (int) ($ids[0] ?? 0);
+    }
+
+    private function sideload_ovoko_image(string $imageUrl, int $productId, int $partId): int
+    {
+        add_filter('http_request_timeout', [$this, 'ovoko_image_download_timeout']);
+        $tmp = download_url($imageUrl);
+        remove_filter('http_request_timeout', [$this, 'ovoko_image_download_timeout']);
+        if (is_wp_error($tmp)) {
+            return 0;
+        }
+
+        $path = wp_parse_url($imageUrl, PHP_URL_PATH);
+        $filename = basename((string) $path);
+        if ($filename === '' || $filename === '0') {
+            $filename = 'ovoko-' . $partId . '.jpg';
+        }
+        $fileArray = ['name' => sanitize_file_name($filename), 'tmp_name' => $tmp];
+        $attachmentId = media_handle_sideload($fileArray, $productId);
+        if (is_wp_error($attachmentId)) {
+            @unlink($tmp);
+            return 0;
+        }
+
+        $attachmentId = (int) $attachmentId;
+        update_post_meta($attachmentId, '_awi_source_url', $imageUrl);
+        update_post_meta($attachmentId, '_ovoko_source_url', $imageUrl);
+        update_post_meta($attachmentId, '_ovoko_part_id', (string) $partId);
+        update_post_meta($attachmentId, '_ovoko_imported_image', 'yes');
+        return $attachmentId;
+    }
+
+    public function ovoko_image_download_timeout(): int
+    {
+        return 20;
     }
 
     private function build_rrr_manual_create_validations(array $result, array $normalized, array $match): array

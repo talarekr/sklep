@@ -2,6 +2,38 @@
 
 Standalone plugin for Ovoko→Woo callback ingestion and Supply Connector readiness scaffolding in disabled/dry-run mode.
 
+## Create Woo draft product from RRR part (complete draft)
+
+Manual admin action **Create Woo draft product from RRR part** now creates a complete Woo draft product in one step (no separate image-import action required):
+
+- creates Woo product as `draft`,
+- writes price from `internal_notes`-derived target price,
+- writes Ovoko meta and part number mapping (`manufacturer_code -> _part_number` plus `_mpn`, `mpn`, `_manufacturer_code`, `_gpswiss_part_number`, `_ovoko_manufacturer_code`),
+- writes technical attributes as **custom per-product attributes** (not global taxonomies),
+- imports images using Allegro-compatible ordering model:
+  - source: full-size `part_photo_gallery` (thumbnail `photo` is ignored when gallery exists),
+  - preserves order,
+  - deduplicates URLs,
+  - first image -> featured (`_thumbnail_id`),
+  - remaining images -> gallery (`_product_image_gallery`),
+  - max 10 images per product.
+
+Attachment URL deduplication:
+- before sideload, plugin checks attachment by `_awi_source_url = image_url`,
+- if found, attachment is reused,
+- if not found, image is sideloaded and attachment meta is saved:
+  - `_awi_source_url`
+  - `_ovoko_source_url`
+  - `_ovoko_part_id`
+  - `_ovoko_imported_image = yes`.
+
+Safety constraints remain unchanged:
+- no eBay publish,
+- no Allegro publish,
+- no batch/cron,
+- no auto mass updates,
+- no stock/publish side effects beyond existing draft-create behavior.
+
 ## REST callback endpoint
 
 `POST /wp-json/gpswiss-ovoko/v1/callback`

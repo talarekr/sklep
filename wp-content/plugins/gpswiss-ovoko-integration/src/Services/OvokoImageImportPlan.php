@@ -4,10 +4,12 @@ namespace GPSwiss\Ovoko\Services;
 
 class OvokoImageImportPlan
 {
+    public const MAX_IMAGES_PER_PRODUCT = 10;
+
     public function preview_image_import_plan(array $normalizedPart, int $partId): array
     {
         $selection = $this->select_source_image_urls($normalizedPart);
-        $sourceUrls = $selection['selected_urls'];
+        $sourceUrls = array_values(array_slice($selection['selected_urls'], 0, self::MAX_IMAGES_PER_PRODUCT));
         $featured = $sourceUrls[0] ?? '';
         $gallery = array_values(array_slice($sourceUrls, 1));
 
@@ -31,8 +33,10 @@ class OvokoImageImportPlan
                 'Woo gallery should contain remaining URLs in source order and be persisted to _product_image_gallery after media import step.',
                 'Source URL tracking should reuse _awi_source_url to enable future cross-channel attachment de-duplication by URL.',
             ],
-            'image_import_blocked' => true,
-            'reason' => 'prefer_full_size_gallery_over_thumbnail_photo',
+            'max_images_per_product' => self::MAX_IMAGES_PER_PRODUCT,
+            'image_model' => 'allegro_compatible',
+            'image_import_blocked' => false,
+            'reason' => 'ready_for_create_draft_media_import',
             'preview_mode_reason' => 'preview_only_no_media_write',
         ];
     }
