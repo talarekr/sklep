@@ -463,3 +463,37 @@ For Woo featured/gallery image ordering, the plugin now prefers full-size images
 - `photo` is used only as a fallback when `part_photo_gallery` is empty.
 
 This policy is preview-only in current scope: no image download, no attachment creation, no `_thumbnail_id`, and no `_product_image_gallery` write.
+
+## Ovoko technical attributes and part number mapping
+
+The plugin now persists `manufacturer_code` to Woo fields commonly used by storefront themes for **Numer części / MPN**:
+- `_ovoko_manufacturer_code`
+- `_mpn`
+- `mpn`
+- `_manufacturer_code`
+- `_gpswiss_part_number`
+
+It also writes per-product custom attributes (`_product_attributes`, no global taxonomy attributes):
+- `Numer części` (from `manufacturer_code`) — visible=true, variation=false
+- Optional: `Kod widoczny` (from `visible_code`), `Inny kod części` (from `other_code`)
+- `ID części Ovoko`, `ID pojazdu Ovoko`, `Kategoria Ovoko`, `Stan części`, `Pozycja`, `Źródło`
+
+Manual admin action added:
+- **Apply Ovoko technical attributes to Woo product** (`product_id` input).
+- Scope: technical meta + attributes only.
+- Explicitly does not modify price, stock, publication status, eBay, Allegro, or batch flows.
+
+## car_id vehicle details endpoint status
+
+Status: **not confirmed in-session**.
+
+- Attempted official source URLs:
+  - `https://api.rrr.lt/docs/`
+  - `https://api.rrr.lt/openapi/swagger.yaml`
+- In this environment, direct fetch currently returns HTTP `403`, so a full read-only vehicle endpoint path could not be verified from docs.
+- Because endpoint is not confirmed, plugin does **not** guess mutating/read paths.
+- Added diagnostic preview output with question:
+  - `Which endpoint returns full car details for car_id?`
+
+Additional preview added:
+- **Preview Ovoko title with vehicle data** (current title, fallback title, ideal title, missing fields, can_build_full_vehicle_title yes/no).

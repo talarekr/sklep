@@ -647,6 +647,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 '_ovoko_woo_target_price' => $priceWriteReady ? (string) ($normalized['woo_target_price'] ?? '') : null,
                 '_ovoko_woo_target_currency' => $priceWriteReady ? 'PLN' : null,
                 '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
+                'mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_gpswiss_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
                 '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
                 '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
@@ -654,6 +658,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
                 '_ovoko_position' => (string) ($normalized['position'] ?? ''),
                 'source' => 'ovoko_master',
+                'product_attributes_preview' => $this->build_ovoko_technical_attributes_from_normalized($normalized),
             ],
             'price_safety' => [
                 'price_source' => (string) ($normalized['price_source'] ?? ''),
@@ -749,6 +754,10 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             '_ovoko_woo_target_price' => (string) ($normalized['woo_target_price'] ?? ''),
             '_ovoko_woo_target_currency' => 'PLN',
             '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
+            'mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_gpswiss_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
             '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
             '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
             '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
@@ -758,6 +767,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'source' => 'ovoko_master',
         ];
         foreach ($meta as $k=>$v) update_post_meta($productId,$k,$v);
+        $this->upsert_custom_product_attributes($productId, $this->build_ovoko_technical_attributes_from_normalized($normalized));
         wp_set_object_terms($productId, 'simple', 'product_type');
 
         return [
@@ -925,6 +935,74 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'future_query' => $carId !== '' ? 'products where _ovoko_car_id = ' . $carId : 'unavailable_without_car_id',
             'message' => 'This will enable ‘Other parts from this vehicle’ links after import/mapping.',
         ];
+    }
+
+    public function apply_ovoko_technical_attributes_to_product(int $productId): array
+    {
+        $productId = max(1, $productId);
+        if (get_post_type($productId) !== 'product') {
+            return ['ok' => false, 'action_name' => 'Apply Ovoko technical attributes to Woo product', 'reason' => 'invalid_product_id', 'product_id' => $productId];
+        }
+        $partId = (int) get_post_meta($productId, '_ovoko_part_id', true);
+        if ($partId <= 0) {
+            return ['ok' => false, 'action_name' => 'Apply Ovoko technical attributes to Woo product', 'reason' => 'missing_ovoko_part_id', 'product_id' => $productId];
+        }
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $normalized = $client->normalize_rrr_single_part_payload((array) ($result['payload'] ?? []));
+
+        $manufacturerCode = (string) ($normalized['manufacturer_code'] ?? '');
+        update_post_meta($productId, '_ovoko_manufacturer_code', $manufacturerCode);
+        update_post_meta($productId, '_mpn', $manufacturerCode);
+        update_post_meta($productId, 'mpn', $manufacturerCode);
+        update_post_meta($productId, '_manufacturer_code', $manufacturerCode);
+        update_post_meta($productId, '_gpswiss_part_number', $manufacturerCode);
+
+        $attrs = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+        $this->upsert_custom_product_attributes($productId, $attrs);
+
+        return ['ok' => true, 'action_name' => 'Apply Ovoko technical attributes to Woo product', 'product_id' => $productId, 'part_id' => $partId, 'saved_meta' => ['_ovoko_manufacturer_code','_mpn','mpn','_manufacturer_code','_gpswiss_part_number'], 'saved_attributes' => $attrs, 'price_unchanged' => true, 'stock_unchanged' => true, 'no_ebay_publish' => true, 'no_allegro_publish' => true];
+    }
+
+    public function preview_rrr_car_details(int $carId = 458): array
+    {
+        return ['ok' => false, 'mode' => 'preview_only', 'action_name' => 'Preview RRR car details', 'car_id' => max(1, $carId), 'endpoint_confirmed' => false, 'readme_question' => 'Which endpoint returns full car details for car_id?', 'details' => null];
+    }
+
+    public function preview_ovoko_title_with_vehicle_data(int $partId = 60271): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $normalized = $client->normalize_rrr_single_part_payload((array) ($result['payload'] ?? []));
+        $title = $this->build_woo_product_title_from_rrr_part($normalized);
+        return ['ok' => !empty($result['ok']), 'mode' => 'preview_only', 'action_name' => 'Preview Ovoko title with vehicle data', 'part_id' => $partId, 'car_id' => (string) ($normalized['car_id'] ?? ''), 'current_title' => (string) ($normalized['title'] ?? ''), 'fallback_title' => (string) ($title['proposed_title_fallback'] ?? ''), 'ideal_title' => (string) ($title['ideal_title_example'] ?? ''), 'missing_fields' => (array) ($title['missing_vehicle_fields'] ?? []), 'can_build_full_vehicle_title' => empty($title['missing_vehicle_fields']) ? 'yes' : 'no'];
+    }
+
+    private function build_ovoko_technical_attributes_from_normalized(array $normalized): array
+    {
+        return array_filter([
+            'Numer części' => (string) ($normalized['manufacturer_code'] ?? ''),
+            'Kod widoczny' => (string) ($normalized['visible_code'] ?? ''),
+            'Inny kod części' => (string) ($normalized['other_code'] ?? ''),
+            'ID części Ovoko' => (string) ($normalized['part_id'] ?? ''),
+            'ID pojazdu Ovoko' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),
+            'Kategoria Ovoko' => (string) ($normalized['category_title_path'] ?? ''),
+            'Stan części' => (string) (($normalized['quality'] ?? '') ?: ($normalized['status'] ?? '')),
+            'Pozycja' => (string) ($normalized['position'] ?? ''),
+            'Źródło' => 'Ovoko / RRR',
+        ], static fn($v) => $v !== '');
+    }
+
+    private function upsert_custom_product_attributes(int $productId, array $technicalAttributes): void
+    {
+        $existing = (array) get_post_meta($productId, '_product_attributes', true);
+        $position = count($existing);
+        foreach ($technicalAttributes as $label => $value) {
+            $key = sanitize_title($label);
+            $existing[$key] = ['name' => $label, 'value' => $value, 'position' => $position++, 'is_visible' => 1, 'is_variation' => 0, 'is_taxonomy' => 0];
+        }
+        update_post_meta($productId, '_product_attributes', $existing);
     }
 
     public function run_local_test_callback(string $partId, string $status): array

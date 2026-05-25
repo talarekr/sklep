@@ -8,6 +8,36 @@
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>"><p><?php echo esc_html($notice['text']); ?></p></div>
     <?php endif; ?>
 
+    <h2>Apply Ovoko technical attributes to Woo product</h2>
+    <p><strong>Manual action.</strong> Updates only product technical meta/attributes (no price, no stock, no publish).</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_apply_technical_attributes'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_apply_technical_attributes" />
+        <label for="technical_product_id">Product ID:</label>
+        <input id="technical_product_id" type="number" min="1" name="product_id" value="60271" />
+        <?php submit_button('Apply Ovoko technical attributes to Woo product', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Preview RRR car details</h2>
+    <p><strong>Preview only.</strong> No Woo writes.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_rrr_car_details'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_rrr_car_details" />
+        <label for="preview_car_id">Car ID:</label>
+        <input id="preview_car_id" type="number" min="1" name="car_id" value="458" />
+        <?php submit_button('Preview RRR car details', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Preview Ovoko title with vehicle data</h2>
+    <p><strong>Preview only.</strong> No title updates are applied automatically.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_title_with_vehicle'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_title_with_vehicle" />
+        <label for="preview_title_part_id">Part ID:</label>
+        <input id="preview_title_part_id" type="number" min="1" name="part_id" value="60271" />
+        <?php submit_button('Preview Ovoko title with vehicle data', 'secondary', 'submit', false); ?>
+    </form>
+
     <?php if (empty($data['woo_active'])): ?>
         <div class="notice notice-warning"><p>WooCommerce is not active. Callback receiver still works, but product mapping/readiness is limited.</p></div>
     <?php endif; ?>
