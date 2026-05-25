@@ -206,3 +206,45 @@ Admin action: **Preview RRR single part**
 - Purpose: inspect which full fields are returned by `/get/part/{id}` before any future importer work.
 
 - RRR `/get/part/{id}` may return part data nested under `list[0][0]`, so parser normalizes nested list responses.
+
+### Normalized preview fields for `/get/part/{id}`
+
+Part fields now preview-normalized (read-only, no import):
+- `part_id` (from `id`)
+- `car_id`
+- `title` (from `name`)
+- `status`
+- `price`, `currency`
+- `original_price`, `original_currency`
+- `manufacturer_code`, `visible_code`, `other_code`
+- `quality`, `notes`
+- `category_id`, `category_title_path`
+- `position`
+- `shop_url`, `show_url`
+- `photo`, `part_photo_gallery`
+- `create_date`, `updated_at`
+- `external_id`
+- `place`
+- `allegro_channel`, `allegro_id` (only if provided by payload)
+
+Safety/visibility notes:
+- `internal_notes`, `reserved_user`, `reserved_date` are not shown as user data; only `*_field_exists` booleans are shown in preview.
+- No Woo product/meta writes are performed in preview mode.
+
+## Ovoko car_id / same vehicle grouping
+
+- `car_id` is treated as the grouping key for parts from the same donor vehicle.
+- Target Woo meta key for future mapping is `_ovoko_car_id`.
+- This enables future CTA/link blocks like **“Other parts from this vehicle”** (`Andere Teile aus diesem Fahrzeug ansehen`).
+- Preview includes **Same vehicle grouping** diagnostics:
+  - `car_id`
+  - `car_id_available` yes/no
+  - future query preview: `products where _ovoko_car_id = {car_id}`
+  - message: `This will enable ‘Other parts from this vehicle’ links after import/mapping.`
+
+Vehicle data behavior:
+- If `/get/part/{id}` includes full embedded vehicle data, those fields are normalized in preview.
+- If payload contains only `car_id`, preview sets `vehicle_data_status = car_id_only`.
+- Open question to confirm with RRR/Ovoko:
+  - `Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.`
+- The plugin does **not** guess undocumented vehicle endpoints.

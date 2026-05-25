@@ -114,31 +114,119 @@ class RrrApiClient
     public function normalize_rrr_single_part_payload(array $payload): array
     {
         $record = $this->extract_single_part_record($payload);
+        $carId = $this->first_non_empty_value($record, ['car_id', 'carId', 'vehicle_id', 'vehicleId']);
+        $vehicle = $this->extract_vehicle_data($record);
+
+        $images = $this->normalize_gallery($record['part_photo_gallery'] ?? $record['images'] ?? []);
+        $singlePhoto = sanitize_text_field((string) ($record['photo'] ?? ''));
 
         $summary = [
-            'part_id' => sanitize_text_field((string) ($record['part_id'] ?? $record['id'] ?? '')),
+            'part_id' => sanitize_text_field((string) ($record['id'] ?? '')),
+            'car_id' => sanitize_text_field((string) $carId),
             'title' => sanitize_text_field((string) ($record['name'] ?? '')),
             'status' => sanitize_text_field((string) ($record['status'] ?? '')),
-            'external_id' => sanitize_text_field((string) ($record['external_id'] ?? '')),
+            'price' => $record['price'] ?? null,
+            'currency' => sanitize_text_field((string) ($record['currency'] ?? '')),
+            'original_price' => $record['original_price'] ?? null,
+            'original_currency' => sanitize_text_field((string) ($record['original_currency'] ?? '')),
+            'manufacturer_code' => sanitize_text_field((string) ($record['manufacturer_code'] ?? '')),
+            'visible_code' => sanitize_text_field((string) ($record['visible_code'] ?? '')),
+            'other_code' => sanitize_text_field((string) ($record['other_code'] ?? '')),
+            'quality' => sanitize_text_field((string) ($record['quality'] ?? '')),
+            'notes' => sanitize_textarea_field((string) ($record['notes'] ?? '')),
+            'category_id' => sanitize_text_field((string) ($record['category_id'] ?? '')),
+            'category_title_path' => sanitize_text_field((string) ($record['category_title_path'] ?? '')),
+            'position' => sanitize_text_field((string) ($record['position'] ?? '')),
+            'shop_url' => esc_url_raw((string) ($record['shop_url'] ?? '')),
+            'show_url' => esc_url_raw((string) ($record['show_url'] ?? '')),
+            'photo' => $singlePhoto,
+            'part_photo_gallery' => $images,
+            'create_date' => sanitize_text_field((string) ($record['create_date'] ?? '')),
             'updated_at' => sanitize_text_field((string) ($record['updated_at'] ?? '')),
+            'external_id' => sanitize_text_field((string) ($record['external_id'] ?? '')),
+            'place' => sanitize_text_field((string) ($record['place'] ?? '')),
+            'allegro_channel' => sanitize_text_field((string) ($record['allegro_channel'] ?? $record['allegro'] ?? '')),
+            'allegro_id' => sanitize_text_field((string) ($record['allegro_id'] ?? '')),
+            'vehicle_data_status' => 'not_available',
+            'internal_notes_field_exists' => array_key_exists('internal_notes', $record),
+            'reserved_user_field_exists' => array_key_exists('reserved_user', $record),
+            'reserved_date_field_exists' => array_key_exists('reserved_date', $record),
         ];
 
-        foreach (['price', 'category', 'images', 'oe_numbers'] as $optional) {
-            if (array_key_exists($optional, $record)) {
-                $summary[$optional] = $record[$optional];
-            }
-        }
-        foreach (['car', 'vehicle', 'vehicle_data'] as $vehicleKey) {
-            if (array_key_exists($vehicleKey, $record)) {
-                $summary['vehicle_data'] = $record[$vehicleKey];
-                break;
-            }
-        }
-        if (isset($record['images']) && is_array($record['images'])) {
-            $summary['images_count'] = count($record['images']);
+        if ($vehicle !== []) {
+            $summary = array_merge($summary, $vehicle);
+            $summary['vehicle_data_status'] = 'embedded';
+        } elseif ($summary['car_id'] !== '') {
+            $summary['vehicle_data_status'] = 'car_id_only';
         }
 
         return $summary;
+    }
+
+    private function normalize_gallery(mixed $gallery): array
+    {
+        if (!is_array($gallery)) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($gallery as $item) {
+            if (is_string($item)) {
+                $result[] = esc_url_raw($item);
+                continue;
+            }
+            if (is_array($item) && isset($item['url'])) {
+                $result[] = esc_url_raw((string) $item['url']);
+            }
+        }
+        return array_values(array_filter($result));
+    }
+
+    private function first_non_empty_value(array $record, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (isset($record[$key]) && (string) $record[$key] !== '') {
+                return (string) $record[$key];
+            }
+        }
+        return '';
+    }
+
+    private function extract_vehicle_data(array $record): array
+    {
+        $container = [];
+        foreach (['car', 'vehicle', 'vehicle_data'] as $vehicleKey) {
+            if (isset($record[$vehicleKey]) && is_array($record[$vehicleKey])) {
+                $container = $record[$vehicleKey];
+                break;
+            }
+        }
+        if ($container === []) {
+            return [];
+        }
+
+        $vin = sanitize_text_field((string) ($container['vin'] ?? $container['vehicle_vin'] ?? ''));
+        $vinMasked = $vin === '' ? '' : substr($vin, 0, 3) . '***' . substr($vin, -3);
+
+        return [
+            'vehicle_id' => sanitize_text_field((string) ($container['id'] ?? $container['car_id'] ?? '')),
+            'vehicle_make' => sanitize_text_field((string) ($container['make'] ?? $container['manufacturer'] ?? '')),
+            'vehicle_model' => sanitize_text_field((string) ($container['model'] ?? '')),
+            'vehicle_generation' => sanitize_text_field((string) ($container['generation'] ?? $container['modification'] ?? '')),
+            'vehicle_year' => sanitize_text_field((string) ($container['year'] ?? '')),
+            'vehicle_fuel' => sanitize_text_field((string) ($container['fuel'] ?? '')),
+            'vehicle_engine_capacity' => sanitize_text_field((string) ($container['engine_capacity'] ?? '')),
+            'vehicle_engine_power_kw' => sanitize_text_field((string) ($container['engine_power_kw'] ?? '')),
+            'vehicle_engine_code' => sanitize_text_field((string) ($container['engine_code'] ?? '')),
+            'vehicle_gearbox_type' => sanitize_text_field((string) ($container['gearbox_type'] ?? '')),
+            'vehicle_body_type' => sanitize_text_field((string) ($container['body_type'] ?? '')),
+            'vehicle_drive_wheels' => sanitize_text_field((string) ($container['drive_wheels'] ?? '')),
+            'vehicle_steering_position' => sanitize_text_field((string) ($container['steering_position'] ?? '')),
+            'vehicle_color' => sanitize_text_field((string) ($container['color'] ?? '')),
+            'vehicle_color_code' => sanitize_text_field((string) ($container['color_code'] ?? '')),
+            'vehicle_period' => sanitize_text_field((string) ($container['period'] ?? '')),
+            'vehicle_vin_masked' => $vinMasked,
+        ];
     }
 
     public function normalize_rrr_part_payload(array $payload): array

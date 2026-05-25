@@ -515,6 +515,8 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'part_id' => $partId,
             'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
             'single_part_summary' => $normalized,
+            'woo_meta_mapping_preview' => $this->build_rrr_single_part_woo_meta_preview($normalized),
+            'same_vehicle_grouping_preview' => $this->build_same_vehicle_grouping_preview($normalized),
             'woo_match_preview' => $match,
             'raw_payload_summary' => [
                 'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
@@ -522,7 +524,64 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 'full_payload_omitted' => true,
             ],
             'no_write_to_woo' => true,
+            'readme_question' => (($normalized['vehicle_data_status'] ?? '') === 'car_id_only')
+                ? 'Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.'
+                : '',
             'checked_at' => gmdate('c'),
+        ];
+    }
+
+    private function build_rrr_single_part_woo_meta_preview(array $normalized): array
+    {
+        return [
+            'source' => 'ovoko_master',
+            'part_meta' => [
+                '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
+                '_ovoko_status' => (string) ($normalized['status'] ?? ''),
+                '_ovoko_updated_at' => (string) ($normalized['updated_at'] ?? ''),
+                '_ovoko_category' => (string) ($normalized['category_title_path'] ?? ''),
+                '_ovoko_category_id' => (string) ($normalized['category_id'] ?? ''),
+                '_ovoko_source_url' => (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')),
+                '_ovoko_images' => (array) ($normalized['part_photo_gallery'] ?? []),
+                '_ovoko_price' => (string) ($normalized['price'] ?? ''),
+                '_ovoko_currency' => (string) ($normalized['currency'] ?? ''),
+                '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_ovoko_visible_code' => (string) ($normalized['visible_code'] ?? ''),
+                '_ovoko_other_code' => (string) ($normalized['other_code'] ?? ''),
+                '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
+                '_ovoko_position' => (string) ($normalized['position'] ?? ''),
+                '_ovoko_place' => (string) ($normalized['place'] ?? ''),
+                '_ovoko_raw_payload' => 'preview_only_omitted',
+            ],
+            'vehicle_meta' => [
+                '_ovoko_car_id' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),
+                '_ovoko_vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
+                '_ovoko_vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
+                '_ovoko_vehicle_generation' => (string) ($normalized['vehicle_generation'] ?? ''),
+                '_ovoko_vehicle_year' => (string) ($normalized['vehicle_year'] ?? ''),
+                '_ovoko_vehicle_fuel' => (string) ($normalized['vehicle_fuel'] ?? ''),
+                '_ovoko_vehicle_engine_capacity' => (string) ($normalized['vehicle_engine_capacity'] ?? ''),
+                '_ovoko_vehicle_engine_power_kw' => (string) ($normalized['vehicle_engine_power_kw'] ?? ''),
+                '_ovoko_engine_code' => (string) ($normalized['vehicle_engine_code'] ?? ''),
+                '_ovoko_gearbox_type' => (string) ($normalized['vehicle_gearbox_type'] ?? ''),
+                '_ovoko_vehicle_body_type' => (string) ($normalized['vehicle_body_type'] ?? ''),
+                '_ovoko_vehicle_drive_wheels' => (string) ($normalized['vehicle_drive_wheels'] ?? ''),
+                '_ovoko_vehicle_steering_position' => (string) ($normalized['vehicle_steering_position'] ?? ''),
+                '_ovoko_vehicle_color' => (string) ($normalized['vehicle_color'] ?? ''),
+                '_ovoko_vehicle_color_code' => (string) ($normalized['vehicle_color_code'] ?? ''),
+                '_ovoko_vehicle_period' => (string) ($normalized['vehicle_period'] ?? ''),
+            ],
+        ];
+    }
+
+    private function build_same_vehicle_grouping_preview(array $normalized): array
+    {
+        $carId = (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? ''));
+        return [
+            'car_id' => $carId,
+            'car_id_available' => $carId !== '',
+            'future_query' => $carId !== '' ? 'products where _ovoko_car_id = ' . $carId : 'unavailable_without_car_id',
+            'message' => 'This will enable ‘Other parts from this vehicle’ links after import/mapping.',
         ];
     }
 
