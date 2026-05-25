@@ -695,12 +695,19 @@ No changes to:
 ## Ovoko CSV mapping for existing Allegro products
 
 - CSV export z Ovoko (np. `parts-stock-2026-05-25.csv`) może być zaimportowany w panelu **Ovoko CSV mapping file**.
-- Używane kolumny: `ID`, `Kod producenta`, `Nazwa części`, `Informacje o samochodzie`, `Typ paliwa`, `Typ skrzyni biegów`, `Napęd`, `Kolor`, `Rok produkcji`.
+- `Kod producenta` z CSV jest traktowany jako Woo `Numer części` i meta `_part_number` (główny klucz matchingu Allegro -> Ovoko).
+- Parser CSV obsługuje delimitery: `;`, `,`, `TAB` (auto-detekcja z fallbackiem na wariant z najbardziej sensownym nagłówkiem).
+- Parser normalizuje nagłówki: trim, usunięcie BOM UTF-8, lowercase, normalizacja polskich znaków, redukcja wielokrotnych spacji, sanitizacja znaków specjalnych.
+- Rozpoznawanie kolumn (case-insensitive / diakrytyki-insensitive):
+  - part code: `Kod producenta`, `kod_producenta`, `manufacturer_code`, `Part number`, `Numer części`, `nr czesci` i warianty,
+  - Ovoko part id: `ID`, `Part ID`, `part_id`, `Ovoko ID`, `ID części` i warianty.
 - Normalizacja `Kod producenta`: `trim` + `uppercase` + usunięcie spacji + traktowanie jako string + usunięcie końcówki `.0`.
+- Diagnostyka importu (`ovoko_csv_mapping_status`) zawiera: `detected_delimiter`, `raw_headers`, `normalized_headers`, `header_map`, `first_row_safe_sample`, `part_code_column_found`, `part_code_column_name`, `id_column_found`, `id_column_name`.
 - Matching:
   - 1 rekord po kodzie => `csv_exact_code` (high confidence),
   - >1 rekord po kodzie => `ambiguous_csv_duplicate_code` (review required, bez auto-zapisu),
   - brak => fallback do API search.
+- Statystyki: `unique_part_codes` oznacza liczbę unikalnych kodów po normalizacji, `duplicate_part_codes_count` liczbę kodów z wieloma rekordami, a `duplicate_rows_count` sumę wierszy należących do zduplikowanych kodów.
 - CSV **nie aktualizuje**: cen, stocków, zdjęć, galerii, listing image, tytułów, statusu publikacji.
 - Apply enrichment pozostaje ręczne dla jednego produktu (preview one product / apply one product).
 

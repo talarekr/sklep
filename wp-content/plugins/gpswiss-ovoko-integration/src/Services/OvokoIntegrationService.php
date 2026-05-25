@@ -1870,23 +1870,141 @@ class OvokoIntegrationService
     {
         $sourcePath = $uploadedTmpPath !== '' ? $uploadedTmpPath : $csvPath;
         if ($sourcePath === '' || !is_readable($sourcePath)) return ['ok' => false, 'action_name' => 'Import Ovoko CSV mapping', 'reason' => 'csv_not_readable'];
-        $h = fopen($sourcePath, 'rb'); if ($h === false) return ['ok' => false, 'action_name' => 'Import Ovoko CSV mapping', 'reason' => 'fopen_failed'];
-        $header = fgetcsv($h, 0, ';'); if (!is_array($header)) { fclose($h); return ['ok' => false, 'action_name' => 'Import Ovoko CSV mapping', 'reason' => 'invalid_header']; }
-        $header = array_map(static fn($v) => trim((string) $v), $header);
-        $rowsTotal=0; $rowsWithPartCode=0; $index=[]; $duplicateRows=0;
-        while (($row = fgetcsv($h, 0, ';')) !== false) {
-            $rowsTotal++; $assoc=[]; foreach ($header as $i=>$k) { $assoc[$k]=(string)($row[$i]??''); }
-            $code = $this->normalize_part_code((string)($assoc['Kod producenta']??'')); if ($code==='') continue;
+
+        $delimiters = [';' => 'semicolon', ',' => 'comma', "	" => 'tab'];
+        $probe = $this->detect_best_csv_delimiter_and_header($sourcePath, $delimiters);
+        if (empty($probe['ok'])) return ['ok' => false, 'action_name' => 'Import Ovoko CSV mapping', 'reason' => 'invalid_header'];
+
+        $detectedDelimiter = (string) ($probe['delimiter_label'] ?? 'unknown');
+        $delimiter = (string) ($probe['delimiter'] ?? ';');
+        $rawHeaders = (array) ($probe['raw_headers'] ?? []);
+        $normalizedHeaders = (array) ($probe['normalized_headers'] ?? []);
+
+        $partCodeAliases = [
+            'kod producenta', 'kod_producenta', 'manufacturer_code', 'manufacturer code', 'part number', 'part_number',
+            'numer czesci', 'nr czesci', 'numer części', 'nr części'
+        ];
+        $idAliases = ['id', 'part id', 'part_id', 'ovoko id', 'id czesci', 'id części'];
+
+        $partCodeColumn = $this->find_header_by_aliases($normalizedHeaders, $partCodeAliases);
+        $idColumn = $this->find_header_by_aliases($normalizedHeaders, $idAliases);
+
+        $headerMap = [];
+        foreach ($rawHeaders as $i => $rawHeader) {
+            $headerMap[] = ['index' => $i, 'raw' => (string) $rawHeader, 'normalized' => (string) ($normalizedHeaders[$i] ?? '')];
+        }
+
+        $h = fopen($sourcePath, 'rb');
+        if ($h === false) return ['ok' => false, 'action_name' => 'Import Ovoko CSV mapping', 'reason' => 'fopen_failed'];
+        fgetcsv($h, 0, $delimiter);
+
+        $rowsTotal = 0; $rowsWithPartCode = 0; $index = []; $duplicateRows = 0; $firstRowSafeSample = [];
+        while (($row = fgetcsv($h, 0, $delimiter)) !== false) {
+            $rowsTotal++;
+            $assoc = [];
+            foreach ($rawHeaders as $i => $k) { $assoc[(string) $k] = (string) ($row[$i] ?? ''); }
+            if ($rowsTotal === 1) {
+                $firstRowSafeSample = [
+                    'id' => sanitize_text_field((string)($idColumn !== null ? ($row[$idColumn] ?? '') : '')),
+                    'part_code' => sanitize_text_field((string)($partCodeColumn !== null ? ($row[$partCodeColumn] ?? '') : '')),
+                    'part_name' => sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['nazwa czesci']) ?? '')),
+                ];
+            }
+            if ($partCodeColumn === null) continue;
+            $code = $this->normalize_part_code((string) ($row[$partCodeColumn] ?? '')); if ($code === '') continue;
             $rowsWithPartCode++;
-            $entry=['id'=>sanitize_text_field((string)($assoc['ID']??'')),'manufacturer_code'=>$code,'part_name'=>sanitize_text_field((string)($assoc['Nazwa części']??'')),'vehicle_info'=>sanitize_text_field((string)($assoc['Informacje o samochodzie']??'')),'fuel_type'=>sanitize_text_field((string)($assoc['Typ paliwa']??'')),'gearbox_type'=>sanitize_text_field((string)($assoc['Typ skrzyni biegów']??'')),'drive'=>sanitize_text_field((string)($assoc['Napęd']??'')),'color'=>sanitize_text_field((string)($assoc['Kolor']??'')),'year'=>sanitize_text_field((string)($assoc['Rok produkcji']??''))];
+            $entry=[
+                'id'=>sanitize_text_field((string)($idColumn !== null ? ($row[$idColumn] ?? '') : '')),
+                'manufacturer_code'=>$code,
+                'part_name'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['nazwa czesci']) ?? '')),
+                'vehicle_info'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['informacje o samochodzie']) ?? '')),
+                'fuel_type'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['typ paliwa']) ?? '')),
+                'gearbox_type'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['typ skrzyni biegow','typ skrzyni biegów']) ?? '')),
+                'drive'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['naped','napęd']) ?? '')),
+                'color'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['kolor']) ?? '')),
+                'year'=>sanitize_text_field((string)($this->value_from_assoc_by_normalized_header($assoc, $normalizedHeaders, ['rok produkcji']) ?? ''))
+            ];
             $index[$code][]=$entry;
         }
-        fclose($h); $uniqueCodes=count($index); $duplicateCodes=0;
+        fclose($h);
+
+        $uniqueCodes=count($index); $duplicateCodes=0;
         foreach($index as $list){ if(count($list)>1){$duplicateCodes++; $duplicateRows+=count($list);} }
+
+        $status=[
+            'rows_total'=>$rowsTotal,
+            'rows_with_part_code'=>$rowsWithPartCode,
+            'unique_part_codes'=>$uniqueCodes,
+            'duplicate_part_codes_count'=>$duplicateCodes,
+            'duplicate_rows_count'=>$duplicateRows,
+            'imported_at'=>gmdate('c'),
+            'file_name'=>$uploadedName!==''?$uploadedName:basename($csvPath),
+            'file_hash'=>hash_file('sha256',$sourcePath),
+            'detected_delimiter'=>$detectedDelimiter,
+            'raw_headers'=>$rawHeaders,
+            'normalized_headers'=>$normalizedHeaders,
+            'header_map'=>$headerMap,
+            'first_row_safe_sample'=>$firstRowSafeSample,
+            'part_code_column_found'=>$partCodeColumn !== null,
+            'part_code_column_name'=>$partCodeColumn !== null ? (string) ($rawHeaders[$partCodeColumn] ?? '') : '',
+            'id_column_found'=>$idColumn !== null,
+            'id_column_name'=>$idColumn !== null ? (string) ($rawHeaders[$idColumn] ?? '') : '',
+        ];
+
         $settings=$this->get_settings();
-        $status=['rows_total'=>$rowsTotal,'rows_with_part_code'=>$rowsWithPartCode,'unique_part_codes'=>$uniqueCodes,'duplicate_part_codes_count'=>$duplicateCodes,'duplicate_rows_count'=>$duplicateRows,'imported_at'=>gmdate('c'),'file_name'=>$uploadedName!==''?$uploadedName:basename($csvPath),'file_hash'=>hash_file('sha256',$sourcePath)];
         $settings['ovoko_csv_mapping']=$index; $settings['ovoko_csv_mapping_status']=$status; update_option(self::OPTION_KEY,$settings,false);
         return ['ok'=>true,'action_name'=>'Import Ovoko CSV mapping','status'=>$status];
+    }
+
+    private function detect_best_csv_delimiter_and_header(string $sourcePath, array $delimiters): array
+    {
+        $best = ['score' => -1, 'ok' => false];
+        foreach ($delimiters as $delimiter => $label) {
+            $h = fopen($sourcePath, 'rb');
+            if ($h === false) continue;
+            $header = fgetcsv($h, 0, (string) $delimiter);
+            fclose($h);
+            if (!is_array($header) || count($header) === 0) continue;
+            $raw = array_map(static fn($v) => (string) $v, $header);
+            $normalized = array_map(fn($v) => $this->normalize_csv_header((string) $v), $raw);
+            $nonEmpty = count(array_filter($normalized, static fn($v) => $v !== ''));
+            $unique = count(array_unique($normalized));
+            $score = ($nonEmpty * 10) + $unique;
+            if ($score > (int) $best['score']) {
+                $best = ['ok' => true, 'delimiter' => (string) $delimiter, 'delimiter_label' => $label, 'raw_headers' => $raw, 'normalized_headers' => $normalized, 'score' => $score];
+            }
+        }
+        return $best;
+    }
+
+    private function normalize_csv_header(string $header): string
+    {
+        $h = preg_replace('/^\xEF\xBB\xBF/u', '', $header) ?? $header;
+        $h = trim($h);
+        $h = strtolower($h);
+        $h = strtr($h, ['ą'=>'a','ć'=>'c','ę'=>'e','ł'=>'l','ń'=>'n','ó'=>'o','ś'=>'s','ż'=>'z','ź'=>'z']);
+        $h = preg_replace('/["\'`]/u', '', $h) ?? $h;
+        $h = preg_replace('/[^a-z0-9_\s]/u', ' ', $h) ?? $h;
+        $h = preg_replace('/\s+/u', ' ', $h) ?? $h;
+        return trim($h);
+    }
+
+    private function find_header_by_aliases(array $normalizedHeaders, array $aliases): ?int
+    {
+        $normalizedAliases = array_map(fn($a) => $this->normalize_csv_header((string) $a), $aliases);
+        foreach ($normalizedHeaders as $i => $header) {
+            if (in_array((string) $header, $normalizedAliases, true)) return (int) $i;
+        }
+        return null;
+    }
+
+    private function value_from_assoc_by_normalized_header(array $assoc, array $normalizedHeaders, array $aliases): string
+    {
+        $index = $this->find_header_by_aliases($normalizedHeaders, $aliases);
+        if ($index === null) return '';
+        $keys = array_keys($assoc);
+        $key = (string) ($keys[$index] ?? '');
+        return (string) ($assoc[$key] ?? '');
     }
 
     private function short_make(string $make): string { $m=trim($make); return match($m){'Volkswagen'=>'VW','Mercedes-Benz'=>'Mercedes',default=>$m}; }
