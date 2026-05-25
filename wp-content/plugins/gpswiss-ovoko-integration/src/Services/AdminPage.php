@@ -17,6 +17,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_save_settings', [$this, 'handle_save_settings']);
         add_action('admin_post_gpswiss_ovoko_test_callback', [$this, 'handle_test_callback']);
         add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
+        add_action('admin_post_gpswiss_ovoko_check_rrr_api', [$this, 'handle_check_rrr_api']);
     }
 
     public function register_admin_page(): void
@@ -66,7 +67,22 @@ class AdminPage
         check_admin_referer('gpswiss_ovoko_check_supply_connector');
 
         $result = $this->service->check_supply_connector_configuration();
-        $type = (($result['status'] ?? '') === 'configured_for_next_step') ? 'success' : 'warning';
+        $type = (($result['status'] ?? '') !== 'waiting_for_ovoko_credentials_details') ? 'success' : 'warning';
+        set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_check_rrr_api(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_check_rrr_api');
+
+        $result = $this->service->check_rrr_api_configuration();
+        $type = (($result['status'] ?? '') === 'needs_configuration_or_endpoint_confirmation') ? 'warning' : 'success';
         set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
