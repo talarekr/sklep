@@ -7,7 +7,7 @@ use GPSwiss\Ovoko\DTO\NormalizedOvokoPart;
 class OvokoProductSyncService
 {
     private const PART_MATCH_META_KEYS = ['_ovoko_part_id', 'ovoko_part_id', 'part_id'];
-    private const EXTERNAL_META_KEYS = ['_allegro_source_id', 'source_part_id', 'external_part_id'];
+    private const EXTERNAL_META_KEYS = ['external_id', 'source_part_id', 'external_part_id', '_allegro_source_id', '_ovoko_source_id'];
 
     public function calculate_payload_hash(NormalizedOvokoPart $part): string
     {
@@ -64,6 +64,26 @@ class OvokoProductSyncService
     public function preview_update_existing_product(int $productId, NormalizedOvokoPart $part): array
     {
         return ['mode' => 'preview_only', 'product_id' => $productId, 'changes' => $this->detect_changes($productId, $part), 'no_write_performed' => true];
+    }
+
+    public function preview_match_rrr_record(array $record): array
+    {
+        $partId = sanitize_text_field((string) ($record['part_id'] ?? ''));
+        $externalId = sanitize_text_field((string) ($record['external_id'] ?? ''));
+
+        foreach (self::PART_MATCH_META_KEYS as $metaKey) {
+            $ids = $this->find_ids_by_meta($metaKey, $partId);
+            if (count($ids) === 1) return $this->match_result($ids[0], 'part_id_meta', $metaKey, 'high', false, 'Unique exact part_id meta match', []);
+            if (count($ids) > 1) return $this->match_result(null, 'part_id_meta', $metaKey, 'low', true, 'Multiple products with same part_id meta', $ids);
+        }
+
+        foreach (self::EXTERNAL_META_KEYS as $metaKey) {
+            $ids = $this->find_ids_by_meta($metaKey, $externalId);
+            if (count($ids) === 1) return $this->match_result($ids[0], 'external_meta', $metaKey, 'medium', false, 'Matched external ID source meta', []);
+            if (count($ids) > 1) return $this->match_result(null, 'external_meta', $metaKey, 'low', true, 'Multiple products with same external id meta', $ids);
+        }
+
+        return $this->match_result(null, 'none', '', 'low', true, 'No safe exact identifier match.', []);
     }
 
     public function preview_import_part(string $partId, OvokoSupplyConnectorClient $client): array

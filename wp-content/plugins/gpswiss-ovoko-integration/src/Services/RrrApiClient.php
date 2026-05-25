@@ -65,6 +65,13 @@ class RrrApiClient
         return $this->post_form('/crm/export/parts-v2', ['limit' => $limit]);
     }
 
+    public function preview_fetch_parts_sample(int $limit = 5, int $page = 1): array
+    {
+        $limit = max(1, min(10, $limit));
+        $page = max(1, $page);
+        return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
+    }
+
     public function normalize_rrr_part_payload(array $payload): array
     {
         return [
@@ -134,17 +141,22 @@ class RrrApiClient
         $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
         $ok = $httpCode === 200 && $statusCode === 'R200';
         $pagination = is_array($decoded['pagination'] ?? null) ? $decoded['pagination'] : [];
-        $firstRecord = [];
-        if (is_array($decoded['data'] ?? null) && !empty($decoded['data'][0]) && is_array($decoded['data'][0])) {
-            $row = $decoded['data'][0];
-            $firstRecord = [
-                'id' => sanitize_text_field((string) ($row['id'] ?? '')),
-                'external_id' => isset($row['external_id']) ? sanitize_text_field((string) $row['external_id']) : null,
-                'name' => sanitize_text_field((string) ($row['name'] ?? '')),
-                'status' => sanitize_text_field((string) ($row['status'] ?? '')),
-                'updated_at' => sanitize_text_field((string) ($row['updated_at'] ?? '')),
-            ];
+        $records = [];
+        if (is_array($decoded['data'] ?? null)) {
+            foreach ($decoded['data'] as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $records[] = [
+                    'id' => sanitize_text_field((string) ($row['id'] ?? '')),
+                    'external_id' => isset($row['external_id']) ? sanitize_text_field((string) $row['external_id']) : null,
+                    'name' => sanitize_text_field((string) ($row['name'] ?? '')),
+                    'status' => sanitize_text_field((string) ($row['status'] ?? '')),
+                    'updated_at' => sanitize_text_field((string) ($row['updated_at'] ?? '')),
+                ];
+            }
         }
+        $firstRecord = $records[0] ?? [];
 
         return [
             'ok' => $ok,
@@ -159,6 +171,8 @@ class RrrApiClient
                 'total_count' => isset($pagination['total_count']) ? (int) $pagination['total_count'] : null,
             ],
             'first_record' => $firstRecord,
+            'records' => $records,
+            'records_count' => count($records),
         ];
     }
 

@@ -153,3 +153,21 @@ Probe behavior in this plugin:
 - Does not write `_ovoko_part_id`.
 - Does not update stock.
 - Does not run batch/cron import.
+
+## Preview RRR parts sample (admin action)
+
+- Admin action: **Preview RRR parts sample**.
+- Request: `POST /v2/get/parts?limit={limit}&page={page}` with form-data auth fields:
+  `username`, `password`, `user_token`.
+- Defaults: `limit=5`, `page=1`; `limit` is capped at max `10`.
+- Read-only preview only:
+  - no product create/update,
+  - no Woo meta writes,
+  - no stock writes,
+  - no cron/batch/import execution.
+- Preview output includes:
+  - `status_code`, `msg`,
+  - `pagination.page`, `pagination.limit`, `pagination.total_count`,
+  - `records_count`,
+  - per-record safe summary: `id`, `external_id`, `name`, `status`, `updated_at`.
+- Current fields expected from `/v2/get/parts` list endpoint are treated as minimal list payload only (no assumptions about full photos/price/OE schema in this step).
