@@ -424,6 +424,51 @@ class OvokoIntegrationService
         return $result;
     }
 
+    public function preview_rrr_parts_sample(int $limit = 5, int $page = 1): array
+    {
+        $limit = max(1, min(10, $limit));
+        $page = max(1, $page);
+        $client = new RrrApiClient($this->get_settings());
+        $syncService = new OvokoProductSyncService();
+        $result = $client->preview_fetch_parts_sample($limit, $page);
+        $records = (array) ($result['records'] ?? []);
+        $normalized = [];
+        foreach ($records as $record) {
+            $previewRecord = [
+                'part_id' => sanitize_text_field((string) ($record['id'] ?? '')),
+                'title' => sanitize_text_field((string) ($record['name'] ?? '')),
+                'status' => sanitize_text_field((string) ($record['status'] ?? '')),
+                'updated_at' => sanitize_text_field((string) ($record['updated_at'] ?? '')),
+                'external_id' => isset($record['external_id']) ? sanitize_text_field((string) $record['external_id']) : null,
+                'raw_payload_summary' => [
+                    'keys' => ['id', 'external_id', 'name', 'status', 'updated_at'],
+                    'source' => '/v2/get/parts',
+                    'full_payload_omitted' => true,
+                ],
+            ];
+            $previewRecord['woo_match_preview'] = $syncService->preview_match_rrr_record($previewRecord);
+            $normalized[] = $previewRecord;
+        }
+
+        return [
+            'ok' => !empty($result['ok']),
+            'mode' => 'preview_only',
+            'notice' => 'Preview only — no Woo products were created or updated.',
+            'request' => [
+                'method' => 'POST',
+                'path' => '/v2/get/parts?limit=' . $limit . '&page=' . $page,
+                'form_data_fields' => ['username', 'password', 'user_token'],
+            ],
+            'status_code' => $result['status_code'] ?? '',
+            'msg' => $result['msg'] ?? '',
+            'pagination' => (array) ($result['pagination'] ?? []),
+            'records_count' => count($normalized),
+            'records' => $normalized,
+            'no_write_to_woo' => true,
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
     public function run_local_test_callback(string $partId, string $status): array
     {
         $settings = $this->get_settings();
