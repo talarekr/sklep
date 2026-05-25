@@ -126,3 +126,30 @@ What is still required before safe import execution:
 - Confirm canonical payload schema for parts export paging/filtering.
 - Define mapping contract from RRR payload to Woo product/meta fields.
 - Add guarded importer workflow (still disabled in this plugin currently).
+
+## RRR API read-only auth probe
+
+The plugin now includes a safe authentication probe that **does not import data**.
+
+- Endpoint: `POST https://api.rrr.lt/v2/get/parts?limit=1&page=1`
+- Auth transport: `application/x-www-form-urlencoded` form-data fields:
+  - `username`
+  - `password`
+  - `user_token`
+- Success rule: HTTP response code alone is not enough; success is only when JSON `status_code = "R200"`.
+- Stable IDs:
+  - `id` is the primary, stable part ID in RRR/Ovoko CRM.
+  - `external_id` is an optional external ID from your system.
+  - `id_bridge` is deprecated and should not be used.
+- Pagination:
+  - request: `page`, `limit` (1–100),
+  - response: `pagination.page`, `pagination.limit`, `pagination.total_count`,
+  - pages count formula: `ceil(total_count / limit)`.
+
+Probe behavior in this plugin:
+- Fetches exactly one record (`limit=1`) for connectivity/auth verification.
+- Shows only a safe first-record summary (`id`, `external_id`, `name`, `status`, `updated_at`).
+- Does not create/update Woo products.
+- Does not write `_ovoko_part_id`.
+- Does not update stock.
+- Does not run batch/cron import.

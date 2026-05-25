@@ -71,14 +71,37 @@
 
 
     <h2>RRR API readiness</h2>
+    <?php
+    $rrrCheck = (array) ($data['rrr_api_check'] ?? []);
+    $rrrPublicProbes = (array) ($rrrCheck['public_probes'] ?? []);
+    $docsReachable = false;
+    $swaggerReachable = false;
+    foreach ($rrrPublicProbes as $probe) {
+        if (($probe['path'] ?? '') === '/docs/' && !empty($probe['ok'])) {
+            $docsReachable = true;
+        }
+        if (($probe['path'] ?? '') === '/openapi/swagger.yaml' && !empty($probe['ok'])) {
+            $swaggerReachable = true;
+        }
+    }
+    $authProbe = (array) ($rrrCheck['auth_probe'] ?? []);
+    $pagination = (array) ($authProbe['pagination'] ?? []);
+    $firstRecord = (array) ($authProbe['first_record'] ?? []);
+    ?>
     <ul>
         <li>Base URL: <code><?php echo esc_html((string) $data['settings']['rrr_api_base_url']); ?></code></li>
-        <li>Credentials configured: <strong><?php echo !empty($data['rrr_api_check']['credentials_configured']) ? 'Yes' : 'No'; ?></strong></li>
-        <li>Enabled: <strong><?php echo !empty($data['settings']['rrr_api_enabled']) ? 'Yes' : 'No'; ?></strong></li>
-        <li>Dry-run: <strong><?php echo !empty($data['settings']['rrr_api_dry_run']) ? 'Yes' : 'No'; ?></strong></li>
-        <li>Last test result: <code><?php echo esc_html(wp_json_encode($data['rrr_api_check'] ?? [])); ?></code></li>
+        <li>Docs reachable: <strong><?php echo $docsReachable ? 'Yes' : 'No'; ?></strong></li>
+        <li>Swagger reachable: <strong><?php echo $swaggerReachable ? 'Yes' : 'No'; ?></strong></li>
+        <li>Credentials configured: <strong><?php echo !empty($rrrCheck['credentials_configured']) ? 'Yes' : 'No'; ?></strong></li>
+        <li>Auth read-only probe success: <strong><?php echo !empty($authProbe['success']) ? 'Yes' : 'No'; ?></strong></li>
+        <li>Status code: <code><?php echo esc_html((string) ($authProbe['status_code'] ?? '')); ?></code></li>
+        <li>Message: <code><?php echo esc_html((string) ($authProbe['msg'] ?? '')); ?></code></li>
+        <li>Pagination summary: <code><?php echo esc_html('page=' . (string) ($pagination['page'] ?? '-') . ', limit=' . (string) ($pagination['limit'] ?? '-') . ', total_count=' . (string) ($pagination['total_count'] ?? '-')); ?></code></li>
+        <li>First record summary: <code><?php echo esc_html('id=' . (string) ($firstRecord['id'] ?? '-') . ', name=' . (string) ($firstRecord['name'] ?? '-') . ', status=' . (string) ($firstRecord['status'] ?? '-') . ', updated_at=' . (string) ($firstRecord['updated_at'] ?? '-')); ?></code></li>
+        <li>Production import disabled: <strong>Yes</strong></li>
+        <li>Dry-run enabled: <strong><?php echo !empty($data['settings']['rrr_api_dry_run']) ? 'Yes' : 'No'; ?></strong></li>
     </ul>
-    <p><strong>Production import remains disabled.</strong> Preview/readiness only.</p>
+    <p><strong>Production import remains disabled.</strong> Read-only readiness only.</p>
     <p>RRR API uses POST form-data and business success must be checked via <code>status_code</code> in JSON body.</p>
 
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
