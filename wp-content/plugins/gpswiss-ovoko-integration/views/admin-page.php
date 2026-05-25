@@ -137,6 +137,25 @@
         <?php submit_button('Apply Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
     </form>
 
+    <h2>Bulk Allegro to Ovoko details enrichment</h2>
+    <p><strong>This action updates only Ovoko/RRR detail attributes/meta. It must not change prices, stock, images, titles, publication status, eBay, Allegro, batches or cron settings.</strong></p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment" />
+        <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry run (default)</label><br />
+        <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label><br />
+        <label><input type="checkbox" name="only_matched" value="1" /> only_matched</label>
+        <label><input type="checkbox" name="skip_already_enriched" value="1" checked="checked" /> skip_already_enriched</label>
+        <label><input type="checkbox" name="include_existing_ovoko" value="1" /> include_existing_ovoko</label><br />
+        <label>Batch size:</label><input type="number" min="1" max="200" name="batch_size" value="20" />
+        <label>Limit:</label><input type="number" min="1" max="200" name="limit" value="20" />
+        <label>Offset:</label><input type="number" min="0" name="offset" value="0" />
+        <label>Page:</label><input type="number" min="1" name="page" value="1" /><br />
+        <label for="bulk_product_ids_csv">Product IDs CSV (optional):</label>
+        <input id="bulk_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
+        <?php submit_button('Bulk Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Preview RRR car details</h2>
     <p><strong>Preview only.</strong> No Woo writes.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">

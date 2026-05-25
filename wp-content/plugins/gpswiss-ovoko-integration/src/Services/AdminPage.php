@@ -39,6 +39,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_probe_rrr_part_search_by_code', [$this, 'handle_probe_rrr_part_search_by_code']);
         add_action('admin_post_gpswiss_ovoko_preview_paginated_rrr_part_code_lookup', [$this, 'handle_preview_paginated_rrr_part_code_lookup']);
         add_action('admin_post_gpswiss_ovoko_import_csv_mapping', [$this, 'handle_import_csv_mapping']);
+        add_action('admin_post_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
     }
 
     public function register_admin_page(): void
@@ -395,6 +396,28 @@ class AdminPage
         $uploadedName = isset($_FILES['csv_mapping_file']['name']) ? sanitize_file_name((string) $_FILES['csv_mapping_file']['name']) : '';
         $result = $this->service->import_ovoko_csv_mapping($csvPath, $uploadedTmp, $uploadedName);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 60);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_bulk_allegro_to_ovoko_details_enrichment(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
+        $options = [
+            'dry_run' => !empty($_POST['dry_run']),
+            'replace_description' => !empty($_POST['replace_description']),
+            'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
+            'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
+            'page' => isset($_POST['page']) ? (int) $_POST['page'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 20,
+            'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
+            'only_matched' => !empty($_POST['only_matched']),
+            'skip_already_enriched' => !empty($_POST['skip_already_enriched']),
+            'include_existing_ovoko' => !empty($_POST['include_existing_ovoko']),
+        ];
+        $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 120);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
