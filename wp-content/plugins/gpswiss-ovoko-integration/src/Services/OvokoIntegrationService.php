@@ -651,6 +651,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_gpswiss_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
+                '_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
                 '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
                 '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
@@ -758,6 +759,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'mpn' => (string) ($normalized['manufacturer_code'] ?? ''),
             '_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
             '_gpswiss_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_part_number' => (string) ($normalized['manufacturer_code'] ?? ''),
             '_ovoko_title_source' => (string) ($titlePreview['_ovoko_title_source'] ?? ''),
             '_ovoko_title_review_required' => (string) ($titlePreview['_ovoko_title_review_required'] ?? ''),
             '_ovoko_title_missing_vehicle_fields' => (string) ($titlePreview['_ovoko_title_missing_vehicle_fields'] ?? ''),
@@ -957,11 +959,66 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         update_post_meta($productId, 'mpn', $manufacturerCode);
         update_post_meta($productId, '_manufacturer_code', $manufacturerCode);
         update_post_meta($productId, '_gpswiss_part_number', $manufacturerCode);
+        update_post_meta($productId, '_part_number', $manufacturerCode);
 
         $attrs = $this->build_ovoko_technical_attributes_from_normalized($normalized);
         $this->upsert_custom_product_attributes($productId, $attrs);
 
-        return ['ok' => true, 'action_name' => 'Apply Ovoko technical attributes to Woo product', 'product_id' => $productId, 'part_id' => $partId, 'saved_meta' => ['_ovoko_manufacturer_code','_mpn','mpn','_manufacturer_code','_gpswiss_part_number'], 'saved_attributes' => $attrs, 'price_unchanged' => true, 'stock_unchanged' => true, 'no_ebay_publish' => true, 'no_allegro_publish' => true];
+        return ['ok' => true, 'action_name' => 'Apply Ovoko technical attributes to Woo product', 'product_id' => $productId, 'part_id' => $partId, 'saved_meta' => ['_ovoko_manufacturer_code','_mpn','mpn','_manufacturer_code','_gpswiss_part_number','_part_number'], 'saved_attributes' => $attrs, 'price_unchanged' => true, 'stock_unchanged' => true, 'no_ebay_publish' => true, 'no_allegro_publish' => true];
+    }
+
+    public function preview_frontend_part_number_mapping(int $productId): array
+    {
+        $productId = max(1, $productId);
+        $expectedMetaKey = '_part_number';
+        if (get_post_type($productId) !== 'product') {
+            return ['ok' => false, 'action_name' => 'Frontend part number mapping', 'product_id' => $productId, 'reason' => 'invalid_product_id', 'expected_frontend_meta_key' => $expectedMetaKey];
+        }
+
+        $currentValue = sanitize_text_field((string) get_post_meta($productId, $expectedMetaKey, true));
+        $ovokoManufacturerCode = sanitize_text_field((string) get_post_meta($productId, '_ovoko_manufacturer_code', true));
+        $wouldWrite = $ovokoManufacturerCode;
+        $frontendShouldShow = $currentValue !== '' ? $currentValue : ($wouldWrite !== '' ? $wouldWrite : 'Brak');
+
+        return [
+            'ok' => true,
+            'action_name' => 'Frontend part number mapping',
+            'product_id' => $productId,
+            'expected_frontend_meta_key' => $expectedMetaKey,
+            'current_value' => $currentValue,
+            'ovoko_manufacturer_code' => $ovokoManufacturerCode,
+            'would_write_value' => $wouldWrite,
+            'frontend_should_show' => $frontendShouldShow,
+        ];
+    }
+
+    public function apply_frontend_part_number_mapping(int $productId): array
+    {
+        $productId = max(1, $productId);
+        $expectedMetaKey = '_part_number';
+        if (get_post_type($productId) !== 'product') {
+            return ['ok' => false, 'action_name' => 'Apply frontend part number mapping', 'reason' => 'invalid_product_id', 'product_id' => $productId];
+        }
+
+        $manufacturerCode = sanitize_text_field((string) get_post_meta($productId, '_ovoko_manufacturer_code', true));
+        if ($manufacturerCode === '') {
+            return ['ok' => false, 'action_name' => 'Apply frontend part number mapping', 'reason' => 'missing_ovoko_manufacturer_code', 'product_id' => $productId];
+        }
+
+        update_post_meta($productId, $expectedMetaKey, $manufacturerCode);
+        return [
+            'ok' => true,
+            'action_name' => 'Apply frontend part number mapping',
+            'product_id' => $productId,
+            'expected_frontend_meta_key' => $expectedMetaKey,
+            'written_value' => $manufacturerCode,
+            'price_unchanged' => true,
+            'stock_unchanged' => true,
+            'publication_unchanged' => true,
+            'images_unchanged' => true,
+            'no_ebay_publish' => true,
+            'no_allegro_publish' => true,
+        ];
     }
 
     public function preview_rrr_car_details(int $carId = 458): array

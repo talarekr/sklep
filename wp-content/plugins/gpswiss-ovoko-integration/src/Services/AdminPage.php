@@ -26,6 +26,8 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_preview_rrr_car_details', [$this, 'handle_preview_rrr_car_details']);
         add_action('admin_post_gpswiss_ovoko_preview_title_with_vehicle', [$this, 'handle_preview_title_with_vehicle']);
         add_action('admin_post_gpswiss_ovoko_run_gearbox_exclusion_count', [$this, 'handle_run_gearbox_exclusion_count']);
+        add_action('admin_post_gpswiss_ovoko_preview_frontend_part_number_mapping', [$this, 'handle_preview_frontend_part_number_mapping']);
+        add_action('admin_post_gpswiss_ovoko_apply_frontend_part_number_mapping', [$this, 'handle_apply_frontend_part_number_mapping']);
     }
 
     public function register_admin_page(): void
@@ -225,6 +227,28 @@ class AdminPage
         check_admin_referer('gpswiss_ovoko_preview_title_with_vehicle');
         $partId = isset($_POST['part_id']) ? (int) $_POST['part_id'] : 60271;
         $result = $this->service->preview_ovoko_title_with_vehicle_data($partId);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_preview_frontend_part_number_mapping(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_preview_frontend_part_number_mapping');
+        $productId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
+        $result = $this->service->preview_frontend_part_number_mapping($productId);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_apply_frontend_part_number_mapping(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_apply_frontend_part_number_mapping');
+        $productId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
+        $result = $this->service->apply_frontend_part_number_mapping($productId);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;

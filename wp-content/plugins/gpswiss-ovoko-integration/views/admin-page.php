@@ -18,6 +18,25 @@
         <?php submit_button('Apply Ovoko technical attributes to Woo product', 'secondary', 'submit', false); ?>
     </form>
 
+    <h2>Frontend part number mapping</h2>
+    <p><strong>Preview/debug.</strong> Checks the exact frontend meta key used by theme for “Numer części”.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_frontend_part_number_mapping'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_frontend_part_number_mapping" />
+        <label for="frontend_mapping_preview_product_id">Product ID:</label>
+        <input id="frontend_mapping_preview_product_id" type="number" min="1" name="product_id" value="60405" />
+        <?php submit_button('Frontend part number mapping', 'secondary', 'submit', false); ?>
+    </form>
+
+    <p><strong>Manual action.</strong> Writes Ovoko manufacturer_code to frontend-used part number field only.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_apply_frontend_part_number_mapping'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_apply_frontend_part_number_mapping" />
+        <label for="frontend_mapping_apply_product_id">Product ID:</label>
+        <input id="frontend_mapping_apply_product_id" type="number" min="1" name="product_id" value="60405" />
+        <?php submit_button('Apply frontend part number mapping', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Preview RRR car details</h2>
     <p><strong>Preview only.</strong> No Woo writes.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
