@@ -819,6 +819,11 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $thumbnailDimensions = $thumbnailId > 0 ? wp_get_attachment_metadata($thumbnailId) : [];
         $listingDimensions = $listingImageId > 0 ? wp_get_attachment_metadata($listingImageId) : [];
         $listingSameAsThumbnail = ($listingImageId > 0 && $thumbnailId > 0 && $listingImageId === $thumbnailId);
+        $selection = $this->select_best_listing_source_image($productId);
+        $selectedSourceId = (int) ($selection['selected_source_image_id'] ?? 0);
+        $selectedMetrics = $selectedSourceId > 0 ? $this->get_attachment_trim_metrics_for_listing_selection($selectedSourceId) : null;
+        $selectedScore = is_array($selectedMetrics) ? $this->calculate_listing_source_quality_score($selectedMetrics) : 0.0;
+        $selectedTier = is_array($selectedMetrics) ? $this->determine_listing_source_quality_tier($selectedMetrics) : 'unknown';
         $reason = 'missing_thumbnail';
         if ($listingImageId > 0 && !$listingSameAsThumbnail) {
             $reason = 'real_generated_listing_image_present';
@@ -847,13 +852,32 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'needs_real_generated_listing_image' => $listingImageId <= 0 || $listingSameAsThumbnail,
             'needs_listing_image_generation' => $listingImageId <= 0 || $listingSameAsThumbnail,
             'reason' => $reason,
+            'candidate_source_image_ids' => (array) ($selection['candidate_source_image_ids'] ?? []),
+            'selected_source_image_id' => $selectedSourceId,
+            'selected_source_aspect_ratio' => (float) ($selection['selected_source_aspect_ratio'] ?? 0.0),
+            'selected_source_square_fill_ratio' => (float) ($selection['selected_source_square_fill_ratio'] ?? 0.0),
+            'selected_source_selection_reason' => (string) ($selection['selected_source_selection_reason'] ?? 'no_valid_image_candidates'),
+            'listing_quality_tier' => $selectedTier,
+            'listing_quality_score' => round((float) $selectedScore, 6),
+            'standard_quality_tier_before_boost' => $selectedTier,
+            'standard_quality_score_before_boost' => round((float) $selectedScore, 6),
+            'target_fill_ratio' => (float) get_post_meta($listingImageId, '_awi_listing_target_fill_ratio', true),
+            'image_width' => (int) get_post_meta($listingImageId, '_awi_listing_source_width', true),
+            'image_height' => (int) get_post_meta($listingImageId, '_awi_listing_source_height', true),
+            'object_width' => (int) get_post_meta($listingImageId, '_awi_listing_object_width', true),
+            'object_height' => (int) get_post_meta($listingImageId, '_awi_listing_object_height', true),
+            'crop_width' => (int) get_post_meta($listingImageId, '_awi_listing_crop_width', true),
+            'crop_height' => (int) get_post_meta($listingImageId, '_awi_listing_crop_height', true),
+            'final_rendered_width' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_width', true),
+            'final_rendered_height' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_height', true),
         ];
     }
 
     public function generate_listing_image_for_ovoko_product(int $productId): array
     {
         $status = $this->preview_listing_image_status($productId);
-        $thumbnailId = (int) ($status['thumbnail_id'] ?? 0);
+        $selection = $this->select_best_listing_source_image($productId);
+        $selectedSourceId = (int) ($selection['selected_source_image_id'] ?? 0);
         $result = [
             'ok' => true,
             'product_id' => $productId,
@@ -861,17 +885,17 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'listing_image_generated' => false,
             'listing_image_id' => 0,
             'listing_image_source_id' => 0,
-            'listing_image_strategy' => 'ovoko_copied_allegro_generator',
+            'listing_image_strategy' => 'ovoko_copied_allegro_generator_exact',
             'listing_image_meta_written' => [],
             'errors' => [],
         ];
 
-        if ($thumbnailId <= 0) {
-            $result['errors'][] = 'missing_thumbnail';
+        if ($selectedSourceId <= 0) {
+            $result['errors'][] = 'missing_source_image';
             return $result;
         }
 
-        $createdListingId = $this->create_ovoko_listing_image_attachment_from_thumbnail($thumbnailId, $productId);
+        $createdListingId = $this->create_ovoko_listing_image_attachment_from_source($selectedSourceId, $productId);
         if (is_wp_error($createdListingId)) {
             $result['reason'] = 'real_generator_unavailable';
             $result['errors'][] = $createdListingId->get_error_code() . ': ' . $createdListingId->get_error_message();
@@ -879,18 +903,22 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         }
 
         update_post_meta($productId, '_awi_listing_image_id', (int) $createdListingId);
-        update_post_meta($productId, '_awi_listing_image_source_id', $thumbnailId);
+        update_post_meta($productId, '_awi_listing_image_source_id', $selectedSourceId);
         update_post_meta($productId, '_awi_listing_image_generated_at', gmdate('Y-m-d H:i:s'));
+        update_post_meta($productId, '_awi_listing_selected_source_image_id', $selectedSourceId);
+        update_post_meta($productId, '_awi_listing_selected_source_aspect_ratio', (float) ($selection['selected_source_aspect_ratio'] ?? 0.0));
+        update_post_meta($productId, '_awi_listing_source_selection_reason', (string) ($selection['selected_source_selection_reason'] ?? ''));
         $result['listing_image_id'] = (int) $createdListingId;
-        $result['listing_image_source_id'] = $thumbnailId;
-        $result['listing_image_generated'] = ((int) $createdListingId > 0 && (int) $createdListingId !== $thumbnailId);
-        $result['listing_image_strategy'] = 'ovoko_copied_allegro_generator';
-        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at', '_awi_listing_variant', '_awi_listing_source_id'];
+        $result['listing_image_source_id'] = $selectedSourceId;
+        $result['listing_image_generated'] = ((int) $createdListingId > 0 && (int) $createdListingId !== $selectedSourceId);
+        $result['listing_image_strategy'] = 'ovoko_copied_allegro_generator_exact';
+        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at', '_awi_listing_variant', '_awi_listing_source_id', '_awi_listing_selected_source_image_id', '_awi_listing_selected_source_aspect_ratio', '_awi_listing_source_selection_reason'];
+        $result = array_merge($result, $this->preview_listing_image_status($productId));
 
         return $result;
     }
 
-    private function create_ovoko_listing_image_attachment_from_thumbnail(int $sourceAttachmentId, int $productId)
+    private function create_ovoko_listing_image_attachment_from_source(int $sourceAttachmentId, int $productId)
     {
         if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
             return new \WP_Error('gd_missing', 'Brak biblioteki GD wymaganej do generowania obrazu listingowego.');
@@ -905,17 +933,30 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             return new \WP_Error('source_decode_failed', 'Nie udało się odczytać obrazu źródłowego.');
         }
         $sourceWidth = imagesx($sourceImage); $sourceHeight = imagesy($sourceImage);
-        $canvasSize = 900; $targetRatio = 0.96;
+        $canvasSize = 900;
+        $bbox = $this->detect_non_white_bbox($sourceImage, $sourceWidth, $sourceHeight);
+        $objectX = 0; $objectY = 0; $objectWidth = $sourceWidth; $objectHeight = $sourceHeight;
+        if (is_array($bbox)) { $objectX = (int) $bbox['x']; $objectY = (int) $bbox['y']; $objectWidth = (int) $bbox['width']; $objectHeight = (int) $bbox['height']; }
+        $objectAspectRatio = $objectWidth / max(1, $objectHeight);
+        $renderProfile = ($objectAspectRatio < 0.55 || $objectAspectRatio > 2.0) ? 'boost_generic' : 'standard';
+        $targetRatio = $renderProfile === 'standard' ? 0.96 : 0.995;
+        $cropPaddingRatio = $renderProfile === 'standard' ? 0.08 : 0.02;
+        $desiredSide = (int) round(max($objectWidth, $objectHeight) * (1 + $cropPaddingRatio));
+        $cropSide = max(1, min($desiredSide, min($sourceWidth, $sourceHeight)));
+        $objectCenterX = $objectX + ($objectWidth / 2); $objectCenterY = $objectY + ($objectHeight / 2);
+        $cropX = max(0, min((int) round($objectCenterX - ($cropSide / 2)), $sourceWidth - $cropSide));
+        $cropY = max(0, min((int) round($objectCenterY - ($cropSide / 2)), $sourceHeight - $cropSide));
+        $cropWidth = $cropSide; $cropHeight = $cropSide;
         $targetObjectSize = (int) round($canvasSize * $targetRatio);
-        $scale = $targetObjectSize / max(1, max($sourceWidth, $sourceHeight));
-        $targetWidth = max(1, (int) round($sourceWidth * $scale));
-        $targetHeight = max(1, (int) round($sourceHeight * $scale));
+        $scale = $targetObjectSize / max(1, max($cropWidth, $cropHeight));
+        $targetWidth = max(1, (int) round($cropWidth * $scale));
+        $targetHeight = max(1, (int) round($cropHeight * $scale));
         $dstX = (int) floor(($canvasSize - $targetWidth) / 2);
         $dstY = (int) floor(($canvasSize - $targetHeight) / 2);
         $canvas = imagecreatetruecolor($canvasSize, $canvasSize);
         $white = imagecolorallocate($canvas, 255, 255, 255);
         imagefill($canvas, 0, 0, $white);
-        imagecopyresampled($canvas, $sourceImage, $dstX, $dstY, 0, 0, $targetWidth, $targetHeight, $sourceWidth, $sourceHeight);
+        imagecopyresampled($canvas, $sourceImage, $dstX, $dstY, $cropX, $cropY, $targetWidth, $targetHeight, $cropWidth, $cropHeight);
         $uploadDir = wp_upload_dir();
         $targetFilename = wp_unique_filename((string) $uploadDir['path'], sanitize_file_name(pathinfo((string) basename($sourcePath), PATHINFO_FILENAME) . '-awi-listing.jpg'));
         $targetPath = trailingslashit((string) $uploadDir['path']) . $targetFilename;
@@ -930,11 +971,41 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         if (is_array($meta)) { wp_update_attachment_metadata((int) $attachmentId, $meta); }
         update_post_meta((int) $attachmentId, '_awi_listing_variant', 1);
         update_post_meta((int) $attachmentId, '_awi_listing_source_id', $sourceAttachmentId);
+        update_post_meta((int) $attachmentId, '_awi_listing_target_fill_ratio', $targetRatio);
+        update_post_meta((int) $attachmentId, '_awi_listing_source_width', $sourceWidth);
+        update_post_meta((int) $attachmentId, '_awi_listing_source_height', $sourceHeight);
+        update_post_meta((int) $attachmentId, '_awi_listing_object_width', $objectWidth);
+        update_post_meta((int) $attachmentId, '_awi_listing_object_height', $objectHeight);
+        update_post_meta((int) $attachmentId, '_awi_listing_crop_width', $cropWidth);
+        update_post_meta((int) $attachmentId, '_awi_listing_crop_height', $cropHeight);
         update_post_meta((int) $attachmentId, '_awi_listing_rendered_width', $targetWidth);
         update_post_meta((int) $attachmentId, '_awi_listing_rendered_height', $targetHeight);
-        update_post_meta((int) $attachmentId, '_awi_listing_render_profile', 'standard');
+        update_post_meta((int) $attachmentId, '_awi_listing_render_profile', $renderProfile);
         return (int) $attachmentId;
     }
+
+    private function select_best_listing_source_image(int $productId): array
+    {
+        $thumbnailId = (int) get_post_thumbnail_id($productId);
+        $galleryIds = array_values(array_filter(array_map('intval', array_map('trim', explode(',', (string) get_post_meta($productId, '_product_image_gallery', true))))));
+        $candidateIds = array_values(array_unique(array_filter(array_merge([$thumbnailId], $galleryIds))));
+        $best = null; $bestScore = null;
+        foreach ($candidateIds as $candidateId) {
+            $metrics = $this->get_attachment_trim_metrics_for_listing_selection((int) $candidateId);
+            if (!is_array($metrics)) { continue; }
+            $score = $this->calculate_listing_source_quality_score($metrics);
+            if ($best === null || $score > (float) $bestScore) { $best = $metrics; $bestScore = $score; }
+        }
+        if (!is_array($best)) { return ['candidate_source_image_ids' => $candidateIds, 'selected_source_image_id' => 0, 'selected_source_aspect_ratio' => 0.0, 'selected_source_square_fill_ratio' => 0.0, 'selected_source_selection_reason' => 'no_valid_image_candidates']; }
+        $tier = $this->determine_listing_source_quality_tier($best);
+        $reason = sprintf('listing_first_quality_score:score=%.6f;tier=%s;aspect_ratio=%.6f;aspect_distance=%.6f;object_area_ratio=%.6f;square_fill_ratio=%.6f', (float) $bestScore, $tier, (float) $best['aspect_ratio'], (float) $best['aspect_distance_from_square'], (float) $best['object_area_ratio'], (float) $best['square_fill_ratio']);
+        return ['candidate_source_image_ids' => $candidateIds, 'selected_source_image_id' => (int) $best['attachment_id'], 'selected_source_aspect_ratio' => round((float) $best['aspect_ratio'], 6), 'selected_source_square_fill_ratio' => round((float) $best['square_fill_ratio'], 6), 'selected_source_selection_reason' => $reason];
+    }
+
+    private function determine_listing_source_quality_tier(array $metrics): string { $s = (float) ($metrics['square_fill_ratio'] ?? 0.0); $a = (float) ($metrics['aspect_ratio'] ?? 0.0); if ($s >= 0.60 && $a >= 0.55 && $a <= 1.80) { return 'preferred'; } if ($s < 0.50 || $a < 0.55 || $a > 1.80) { return 'degraded'; } return 'acceptable'; }
+    private function calculate_listing_source_quality_score(array $metrics): float { $s = max(0.0, min(1.0, (float) ($metrics['square_fill_ratio'] ?? 0.0))); $a = max(0.000001, (float) ($metrics['aspect_ratio'] ?? 1.0)); $d = abs(1.0 - $a); $o = max(0.0, min(1.0, (float) ($metrics['object_area_ratio'] ?? 0.0))); $score = ($s * 1000.0) + ($o * 150.0) - ($d * 110.0); if ($s >= 0.60) { $score += 120.0; } elseif ($s < 0.50) { $score -= 260.0; } if ($s < 0.40) { $score -= 220.0; } if ($a < 0.55 || $a > 1.80) { $score -= 220.0; } if ($a < 0.40 || $a > 2.50) { $score -= 420.0; } return $score; }
+    private function get_attachment_trim_metrics_for_listing_selection(int $attachmentId): ?array { $path = get_attached_file($attachmentId); if (!is_string($path) || $path === '' || !file_exists($path)) { return null; } $blob = file_get_contents($path); $img = is_string($blob) ? @imagecreatefromstring($blob) : false; if (!$img) { return null; } $w = imagesx($img); $h = imagesy($img); if ($w <= 0 || $h <= 0) { imagedestroy($img); return null; } $bbox = $this->detect_non_white_bbox($img, $w, $h); imagedestroy($img); $ow = is_array($bbox) ? (int) $bbox['width'] : $w; $oh = is_array($bbox) ? (int) $bbox['height'] : $h; $ratio = $ow / max(1, $oh); $long = max($ow, $oh); $short = min($ow, $oh); return ['attachment_id' => $attachmentId, 'aspect_ratio' => $ratio, 'aspect_distance_from_square' => abs(1.0 - $ratio), 'square_fill_ratio' => $short / max(1, $long), 'object_area_ratio' => ($ow * $oh) / max(1, ($w * $h))]; }
+    private function detect_non_white_bbox($img, int $w, int $h): ?array { $minX = $w; $minY = $h; $maxX = -1; $maxY = -1; for ($y = 0; $y < $h; $y += 2) { for ($x = 0; $x < $w; $x += 2) { $rgb = imagecolorat($img, $x, $y); $r = ($rgb >> 16) & 0xFF; $g = ($rgb >> 8) & 0xFF; $b = $rgb & 0xFF; if ($r < 245 || $g < 245 || $b < 245) { $minX = min($minX, $x); $minY = min($minY, $y); $maxX = max($maxX, $x); $maxY = max($maxY, $y); } } } if ($maxX < 0 || $maxY < 0) { return null; } return ['x' => $minX, 'y' => $minY, 'width' => max(1, $maxX - $minX + 1), 'height' => max(1, $maxY - $minY + 1)]; }
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
     {
