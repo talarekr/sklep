@@ -72,6 +72,100 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
 
+    public function probe_part_search_by_code(string $partNumber): array
+    {
+        $partNumber = trim($partNumber);
+        if ($partNumber === '') {
+            return ['ok' => false, 'action_name' => 'Probe RRR part search by code', 'reason' => 'missing_part_number'];
+        }
+
+        $baseline = $this->post_form('/v2/get/parts?limit=10&page=1', [], true);
+        $baselineTotal = (int) ($baseline['pagination']['total_count'] ?? 0);
+        $baselineRecords = (int) ($baseline['records_count'] ?? 0);
+        $baselineStatus = (string) ($baseline['status_code'] ?? '');
+
+        $params = ['manufacturer_code', 'visible_code', 'other_code', 'code', 'search', 'q', 'external_id', 'part_code', 'part_number', 'query', 'name'];
+        $rows = [];
+        foreach ($params as $param) {
+            $path = '/v2/get/parts?limit=10&page=1&' . rawurlencode($param) . '=' . rawurlencode($partNumber);
+            $result = $this->post_form($path, [], true);
+            $payload = (array) ($result['payload'] ?? []);
+            $rawData = is_array($payload['data'] ?? null) ? $payload['data'] : [];
+            $sample = [];
+            $keys = [];
+            $exactMatches = [];
+            $exactFields = [];
+            foreach ($rawData as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+                if ($keys === []) {
+                    $keys = array_values(array_map('strval', array_keys($record)));
+                }
+                if (count($sample) < 3) {
+                    $sample[] = [
+                        'id' => sanitize_text_field((string) ($record['id'] ?? '')),
+                        'name' => sanitize_text_field((string) ($record['name'] ?? '')),
+                        'manufacturer_code' => sanitize_text_field((string) ($record['manufacturer_code'] ?? '')),
+                        'visible_code' => sanitize_text_field((string) ($record['visible_code'] ?? '')),
+                        'other_code' => sanitize_text_field((string) ($record['other_code'] ?? '')),
+                        'external_id' => sanitize_text_field((string) ($record['external_id'] ?? '')),
+                    ];
+                }
+                foreach (['manufacturer_code', 'visible_code', 'other_code', 'code', 'external_id', 'part_code', 'part_number'] as $field) {
+                    $value = isset($record[$field]) ? (string) $record[$field] : '';
+                    if ($value !== '' && strcasecmp($value, $partNumber) === 0) {
+                        $exactFields[$field] = true;
+                        $exactMatches[] = sanitize_text_field((string) ($record['id'] ?? ''));
+                    }
+                }
+            }
+
+            $total = (int) ($result['pagination']['total_count'] ?? 0);
+            $recordsCount = (int) ($result['records_count'] ?? 0);
+            $statusCode = (string) ($result['status_code'] ?? '');
+            $effective = false;
+            if ($statusCode === 'R200') {
+                if ($total !== $baselineTotal || $recordsCount !== $baselineRecords) {
+                    $effective = true;
+                }
+                if ($exactMatches !== []) {
+                    $effective = true;
+                }
+                if (stripos((string) ($result['msg'] ?? ''), $param) !== false && stripos((string) ($result['msg'] ?? ''), 'filter') !== false) {
+                    $effective = true;
+                }
+            }
+
+            $rows[] = [
+                'path' => $path,
+                'status_code' => $statusCode,
+                'msg' => (string) ($result['msg'] ?? ''),
+                'pagination' => (array) ($result['pagination'] ?? []),
+                'records_count' => $recordsCount,
+                'candidate_record_keys' => $keys,
+                'exact_code_matches' => array_values(array_unique(array_filter($exactMatches))),
+                'exact_match_fields' => array_values(array_keys($exactFields)),
+                'first_records_safe_summary' => $sample,
+                'filter_effective' => $effective,
+                'reason' => $effective ? 'Filter changed result set and/or returned exact match.' : 'No clear filtering effect compared with baseline sample.',
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'action_name' => 'Probe RRR part search by code',
+            'part_number' => $partNumber,
+            'baseline' => [
+                'path' => '/v2/get/parts?limit=10&page=1',
+                'status_code' => $baselineStatus,
+                'total_count' => $baselineTotal,
+                'records_count' => $baselineRecords,
+            ],
+            'candidates' => $rows,
+        ];
+    }
+
 
     public function preview_fetch_car_by_id(string $carId): array
     {
