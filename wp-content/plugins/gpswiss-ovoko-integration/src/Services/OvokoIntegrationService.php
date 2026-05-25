@@ -519,6 +519,7 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'woo_meta_mapping_preview' => $this->build_rrr_single_part_woo_meta_preview($normalized),
             'same_vehicle_grouping_preview' => $this->build_same_vehicle_grouping_preview($normalized),
             'woo_match_preview' => $match,
+            'preview_image_import_plan' => $imagePlanPreview,
             'raw_payload_summary' => [
                 'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
                 'record_keys' => array_values(array_map('strval', array_keys((array) $record))),
@@ -552,6 +553,8 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'part_id' => (string) ($normalized['part_id'] ?? ''),
             'external_id' => (string) ($normalized['external_id'] ?? ''),
         ]);
+        $imagePlanBuilder = new OvokoImageImportPlan();
+        $imagePlanPreview = $imagePlanBuilder->preview_image_import_plan($normalized, $partId);
 
         $hasExisting = !empty($match['matched_product_id']);
         $wouldAction = $hasExisting ? 'would_update_existing_product' : 'would_create_new_product';
