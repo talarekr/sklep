@@ -691,3 +691,23 @@ No changes to:
 - publication status
 - eBay/Allegro publishing
 - batch/cron automation
+
+## Ovoko CSV mapping for existing Allegro products
+
+- CSV export z Ovoko (np. `parts-stock-2026-05-25.csv`) może być zaimportowany w panelu **Ovoko CSV mapping file**.
+- Używane kolumny: `ID`, `Kod producenta`, `Nazwa części`, `Informacje o samochodzie`, `Typ paliwa`, `Typ skrzyni biegów`, `Napęd`, `Kolor`, `Rok produkcji`.
+- Normalizacja `Kod producenta`: `trim` + `uppercase` + usunięcie spacji + traktowanie jako string + usunięcie końcówki `.0`.
+- Matching:
+  - 1 rekord po kodzie => `csv_exact_code` (high confidence),
+  - >1 rekord po kodzie => `ambiguous_csv_duplicate_code` (review required, bez auto-zapisu),
+  - brak => fallback do API search.
+- CSV **nie aktualizuje**: cen, stocków, zdjęć, galerii, listing image, tytułów, statusu publikacji.
+- Apply enrichment pozostaje ręczne dla jednego produktu (preview one product / apply one product).
+
+### Plan batch (future)
+
+- dry-run mode,
+- limit,
+- offset,
+- skip ambiguous,
+- log zmian.
