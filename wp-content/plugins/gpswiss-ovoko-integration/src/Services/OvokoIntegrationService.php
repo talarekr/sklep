@@ -816,6 +816,17 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $listingSourceId = (int) get_post_meta($productId, '_awi_listing_image_source_id', true);
         $generatedAt = (string) get_post_meta($productId, '_awi_listing_image_generated_at', true);
         $frontendSource = $listingImageId > 0 ? 'awi_listing_image_id' : ($thumbnailId > 0 ? '_thumbnail_id' : 'none');
+        $thumbnailDimensions = $thumbnailId > 0 ? wp_get_attachment_metadata($thumbnailId) : [];
+        $listingDimensions = $listingImageId > 0 ? wp_get_attachment_metadata($listingImageId) : [];
+        $listingSameAsThumbnail = ($listingImageId > 0 && $thumbnailId > 0 && $listingImageId === $thumbnailId);
+        $reason = 'missing_thumbnail';
+        if ($listingImageId > 0 && !$listingSameAsThumbnail) {
+            $reason = 'real_generated_listing_image_present';
+        } elseif ($listingSameAsThumbnail) {
+            $reason = 'listing_image_equals_thumbnail_fallback';
+        } elseif ($thumbnailId > 0) {
+            $reason = 'missing_listing_image_meta';
+        }
 
         return [
             'ok' => true,
@@ -827,8 +838,15 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'listing_image_generated_at' => $generatedAt,
             'frontend_image_source' => $frontendSource,
             'frontend_expected_meta_key' => '_awi_listing_image_id',
-            'needs_listing_image_generation' => $listingImageId <= 0 && $thumbnailId > 0,
-            'reason' => $listingImageId > 0 ? 'listing_image_present' : ($thumbnailId > 0 ? 'missing_listing_image_meta' : 'missing_thumbnail'),
+            'thumbnail_url' => $thumbnailId > 0 ? (string) wp_get_attachment_url($thumbnailId) : '',
+            'listing_image_url' => $listingImageId > 0 ? (string) wp_get_attachment_url($listingImageId) : '',
+            'listing_image_is_same_as_thumbnail' => $listingSameAsThumbnail,
+            'thumbnail_dimensions' => ['width' => (int) ($thumbnailDimensions['width'] ?? 0), 'height' => (int) ($thumbnailDimensions['height'] ?? 0)],
+            'listing_image_dimensions' => ['width' => (int) ($listingDimensions['width'] ?? 0), 'height' => (int) ($listingDimensions['height'] ?? 0)],
+            'strategy' => $listingImageId > 0 && !$listingSameAsThumbnail ? 'ovoko_copied_allegro_generator' : 'real_generator_required',
+            'needs_real_generated_listing_image' => $listingImageId <= 0 || $listingSameAsThumbnail,
+            'needs_listing_image_generation' => $listingImageId <= 0 || $listingSameAsThumbnail,
+            'reason' => $reason,
         ];
     }
 
@@ -843,7 +861,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'listing_image_generated' => false,
             'listing_image_id' => 0,
             'listing_image_source_id' => 0,
-            'listing_image_strategy' => 'thumbnail_fallback',
+            'listing_image_strategy' => 'ovoko_copied_allegro_generator',
             'listing_image_meta_written' => [],
             'errors' => [],
         ];
@@ -853,29 +871,69 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             return $result;
         }
 
-        if (class_exists('\\AWI\\Plugin')) {
-            $preferred = (int) \AWI\Plugin::get_listing_image_id_for_product($productId);
-            if ($preferred > 0) {
-                $result['listing_image_id'] = $preferred;
-                $result['listing_image_source_id'] = (int) get_post_meta($productId, '_awi_listing_image_source_id', true);
-                $result['listing_image_generated'] = (int) get_post_meta($productId, '_awi_listing_image_id', true) > 0;
-                $result['listing_image_strategy'] = 'allegro_importer_adapter';
-                return $result;
-            }
-            $result['errors'][] = 'allegro_adapter_no_listing_returned';
-        } else {
-            $result['errors'][] = 'allegro_importer_unavailable';
+        $createdListingId = $this->create_ovoko_listing_image_attachment_from_thumbnail($thumbnailId, $productId);
+        if (is_wp_error($createdListingId)) {
+            $result['reason'] = 'real_generator_unavailable';
+            $result['errors'][] = $createdListingId->get_error_code() . ': ' . $createdListingId->get_error_message();
+            return $result;
         }
 
-        update_post_meta($productId, '_awi_listing_image_id', $thumbnailId);
+        update_post_meta($productId, '_awi_listing_image_id', (int) $createdListingId);
         update_post_meta($productId, '_awi_listing_image_source_id', $thumbnailId);
         update_post_meta($productId, '_awi_listing_image_generated_at', gmdate('Y-m-d H:i:s'));
-        $result['listing_image_id'] = $thumbnailId;
+        $result['listing_image_id'] = (int) $createdListingId;
         $result['listing_image_source_id'] = $thumbnailId;
-        $result['listing_image_strategy'] = 'thumbnail_fallback';
-        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at'];
+        $result['listing_image_generated'] = ((int) $createdListingId > 0 && (int) $createdListingId !== $thumbnailId);
+        $result['listing_image_strategy'] = 'ovoko_copied_allegro_generator';
+        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at', '_awi_listing_variant', '_awi_listing_source_id'];
 
         return $result;
+    }
+
+    private function create_ovoko_listing_image_attachment_from_thumbnail(int $sourceAttachmentId, int $productId)
+    {
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
+            return new \WP_Error('gd_missing', 'Brak biblioteki GD wymaganej do generowania obrazu listingowego.');
+        }
+        $sourcePath = get_attached_file($sourceAttachmentId);
+        if (!is_string($sourcePath) || $sourcePath === '' || !file_exists($sourcePath)) {
+            return new \WP_Error('missing_source_file', 'Brak pliku źródłowego dla zdjęcia listingowego.');
+        }
+        $sourceBlob = file_get_contents($sourcePath);
+        $sourceImage = is_string($sourceBlob) ? @imagecreatefromstring($sourceBlob) : false;
+        if (!$sourceImage) {
+            return new \WP_Error('source_decode_failed', 'Nie udało się odczytać obrazu źródłowego.');
+        }
+        $sourceWidth = imagesx($sourceImage); $sourceHeight = imagesy($sourceImage);
+        $canvasSize = 900; $targetRatio = 0.96;
+        $targetObjectSize = (int) round($canvasSize * $targetRatio);
+        $scale = $targetObjectSize / max(1, max($sourceWidth, $sourceHeight));
+        $targetWidth = max(1, (int) round($sourceWidth * $scale));
+        $targetHeight = max(1, (int) round($sourceHeight * $scale));
+        $dstX = (int) floor(($canvasSize - $targetWidth) / 2);
+        $dstY = (int) floor(($canvasSize - $targetHeight) / 2);
+        $canvas = imagecreatetruecolor($canvasSize, $canvasSize);
+        $white = imagecolorallocate($canvas, 255, 255, 255);
+        imagefill($canvas, 0, 0, $white);
+        imagecopyresampled($canvas, $sourceImage, $dstX, $dstY, 0, 0, $targetWidth, $targetHeight, $sourceWidth, $sourceHeight);
+        $uploadDir = wp_upload_dir();
+        $targetFilename = wp_unique_filename((string) $uploadDir['path'], sanitize_file_name(pathinfo((string) basename($sourcePath), PATHINFO_FILENAME) . '-awi-listing.jpg'));
+        $targetPath = trailingslashit((string) $uploadDir['path']) . $targetFilename;
+        $saved = imagejpeg($canvas, $targetPath, 90);
+        imagedestroy($sourceImage); imagedestroy($canvas);
+        if (!$saved) {
+            return new \WP_Error('listing_image_save_failed', 'Nie udało się zapisać obrazu listingowego.');
+        }
+        $attachmentId = wp_insert_attachment(['post_mime_type' => 'image/jpeg', 'post_title' => sanitize_text_field((string) get_the_title($sourceAttachmentId)) . ' listing', 'post_status' => 'inherit', 'post_parent' => $productId], $targetPath, $productId);
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $meta = wp_generate_attachment_metadata((int) $attachmentId, $targetPath);
+        if (is_array($meta)) { wp_update_attachment_metadata((int) $attachmentId, $meta); }
+        update_post_meta((int) $attachmentId, '_awi_listing_variant', 1);
+        update_post_meta((int) $attachmentId, '_awi_listing_source_id', $sourceAttachmentId);
+        update_post_meta((int) $attachmentId, '_awi_listing_rendered_width', $targetWidth);
+        update_post_meta((int) $attachmentId, '_awi_listing_rendered_height', $targetHeight);
+        update_post_meta((int) $attachmentId, '_awi_listing_render_profile', 'standard');
+        return (int) $attachmentId;
     }
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array

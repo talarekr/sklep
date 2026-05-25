@@ -4,11 +4,12 @@ Standalone plugin for Ovoko→Woo callback ingestion and Supply Connector readin
 
 ## Ovoko listing image display compatibility with Allegro importer
 
-- Frontend product card uses `\AWI\Plugin::get_listing_image_id_for_product($product_id)` when Allegro importer is active, and falls back to Woo featured image (`_thumbnail_id`) if unavailable.
+- Frontend product card uses `_awi_listing_image_id` / Allegro helper preference. `_awi_listing_image_id` must point to a **processed listing attachment**, not just `_thumbnail_id`.
 - Ovoko draft-create flow now runs a listing-image compatibility step after image import.
 - Strategy:
-  - `allegro_importer_adapter`: when `\AWI\Plugin` is available, ask Allegro importer helper for preferred listing image.
-  - `thumbnail_fallback`: when Allegro importer is disabled/unavailable or returns empty, write `_awi_listing_image_id`, `_awi_listing_image_source_id`, `_awi_listing_image_generated_at` using featured image as safe fallback.
+  - `ovoko_copied_allegro_generator`: Ovoko runs real Allegro-style processing (square canvas, white background, centered/fit object) and creates a **new** attachment.
+  - `_awi_listing_image_id` must be different from `_thumbnail_id` when generation succeeds.
+  - If real generation is unavailable, action returns `listing_image_generated=false`, `reason=real_generator_unavailable`, with explicit `errors[]` (no silent success fallback).
 - Added admin diagnostics and repair actions:
   - **Preview listing image status**
   - **Generate listing image for Ovoko product**
