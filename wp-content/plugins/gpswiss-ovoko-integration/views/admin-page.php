@@ -224,6 +224,7 @@
             <li>reason: <code><?php echo esc_html((string) ($previewWooCreate['reason'] ?? '')); ?></code></li>
             <li>excluded_from_ovoko_sync: <code><?php echo esc_html(!empty($previewWooCreate['excluded_from_ovoko_sync']) ? 'true' : 'false'); ?></code></li>
             <li>post_draft_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview'] ?? []))); ?></code></li>
+            <li>preview_image_import_plan: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['preview_image_import_plan'] ?? []))); ?></code></li>
             <li>woo_meta_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['woo_meta_preview'] ?? []))); ?></code></li>
             <li>same_vehicle_grouping: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview']['same_vehicle_grouping'] ?? []))); ?></code></li>
             <li>no_write_to_woo: <code><?php echo esc_html(!empty($previewWooCreate['no_write_to_woo']) ? 'true' : 'false'); ?></code></li>

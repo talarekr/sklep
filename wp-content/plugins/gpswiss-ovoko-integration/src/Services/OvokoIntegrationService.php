@@ -629,6 +629,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
                 'car_id' => (string) ($normalized['car_id'] ?? ''),
                 'same_vehicle_grouping' => $this->build_same_vehicle_grouping_preview($normalized),
             ],
+            'preview_image_import_plan' => $imagePlanPreview,
             'woo_meta_preview' => [
                 '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
                 '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
