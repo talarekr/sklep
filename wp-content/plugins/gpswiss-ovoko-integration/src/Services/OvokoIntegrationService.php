@@ -1778,12 +1778,15 @@ class OvokoIntegrationService
         if($carId!==''){ update_post_meta($productId,'_ovoko_car_id',$carId); $writtenMeta[]='_ovoko_car_id'; }
         if (!empty($normalized['part_id'])) { update_post_meta($productId,'_ovoko_part_id',(string)$normalized['part_id']); $writtenMeta[]='_ovoko_part_id'; }
         $pn=(string)($normalized['manufacturer_code']??''); if($pn!=='' && (string)get_post_meta($productId,'_part_number',true)===''){ update_post_meta($productId,'_part_number',$pn); $writtenMeta[]='_part_number';}
-        $attrs = $this->filter_customer_facing_technical_attributes($this->build_ovoko_technical_attributes_from_normalized($normalized));
+        $enriched = $this->build_enriched_normalized_for_apply($normalized);
+        $rawAttrs = $this->build_ovoko_technical_attributes_from_normalized($enriched);
+        $filterDebug = [];
+        $attrs = $this->filter_customer_facing_technical_attributes($rawAttrs, $filterDebug);
         $this->upsert_custom_product_attributes($productId,$attrs);
         $metaWrittenForTable = $this->write_ovoko_table_meta_from_attributes($productId, $attrs);
         $replaced=false; if($replaceDescription){ wp_update_post(['ID'=>$productId,'post_content'=>'']); $replaced=true; }
         $previewTable = $this->preview_product_details_table_render_status($productId);
-        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>[],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
+        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
     }
 
     public function preview_product_details_table_render_status(int $productId): array
@@ -2104,7 +2107,33 @@ class OvokoIntegrationService
         return $written;
     }
 
-    private function filter_customer_facing_technical_attributes(array $attrs): array
+    
+    private function build_enriched_normalized_for_apply(array $normalized): array
+    {
+        $enriched = $normalized;
+        $csvMap=(array)($this->get_settings()['ovoko_csv_mapping']??[]);
+        $code=$this->normalize_part_code((string)($normalized['manufacturer_code']??''));
+        $csvRow=[];
+        if($code!=='' && !empty($csvMap[$code][0]) && is_array($csvMap[$code][0])){
+            $csvRow=(array)$csvMap[$code][0];
+            $enriched=array_merge($this->build_normalized_from_csv_row($csvRow), $enriched);
+        }
+        $client = new RrrApiClient($this->get_settings());
+        $carId = (string)($enriched['car_id'] ?? '');
+        if($carId!==''){
+            $car = $client->preview_fetch_car_by_id($carId);
+            if(!empty($car['ok'])){
+                foreach((array)($car['normalized'] ?? []) as $k=>$v){
+                    if($v !== '' && $v !== null){
+                        $enriched[(string)$k] = $v;
+                    }
+                }
+            }
+        }
+        return $enriched;
+    }
+
+private function filter_customer_facing_technical_attributes(array $attrs, array &$skipped = []): array
     {
         $blocked=['id części ovoko','id pojazdu ovoko','źródło','kategoria ovoko','id allegro','sku','dostępność'];
         $blockedTokens=['debug','allegro','ebay','batch','cron','cache','import','technical','technicz'];
@@ -2113,11 +2142,12 @@ class OvokoIntegrationService
         foreach($attrs as $label=>$value){
             $name=mb_strtolower(trim((string)$label));
             $v=trim((string)$value);
-            if($v===''||$v==='-'||in_array(mb_strtolower($v),['null','brak','n/a'],true)){continue;}
-            if(in_array($name,$blocked,true)){continue;}
-            if(str_contains($name,'status') && in_array(mb_strtolower($v),$internalStatus,true)){continue;}
+            if($v===''||$v==='-'||in_array(mb_strtolower($v),['null','brak','n/a'],true)){ $skipped[$label]='empty_or_placeholder'; continue;}
+            if(in_array($name,$blocked,true)){ $skipped[$label]='blocked_label'; continue;}
+            if(($v==='0' || ctype_digit($v)) && (str_contains($name,'status') || str_contains($name,'pozycja'))){ $skipped[$label]='raw_numeric_code'; continue; }
+            if(str_contains($name,'status') && in_array(mb_strtolower($v),$internalStatus,true)){ $skipped[$label]='internal_status'; continue;}
             $skip=false; foreach($blockedTokens as $t){ if(str_contains($name,$t)){ $skip=true; break; } }
-            if($skip){continue;}
+            if($skip){ $skipped[$label]='blocked_token'; continue;}
             $result[$label]=$v;
         }
         return $result;
