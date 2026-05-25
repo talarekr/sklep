@@ -700,8 +700,8 @@ class RrrApiClient
             'vehicle_generation' => (string) ($mapped['vehicle_generation'] ?? ''),
             'vehicle_engine_marketing' => $engineMarketing,
             'vehicle_engine_marketing_source' => $engineSource,
-            'vehicle_year' => sanitize_text_field((string) ($record['car_years'] ?? $record['car_model_years'] ?? $record['year'] ?? '')),
-            'vehicle_period' => sanitize_text_field((string) ($record['period'] ?? (($record['car_years'] ?? '') !== '' ? ((string)$record['car_years']).'--' : ''))),
+            'vehicle_year' => (string) ($mapped['vehicle_year'] ?? sanitize_text_field((string) ($record['car_years'] ?? $record['car_model_years'] ?? $record['year'] ?? ''))),
+            'vehicle_period' => (string) ($mapped['vehicle_period'] ?? sanitize_text_field((string) ($record['period'] ?? (($record['car_years'] ?? '') !== '' ? ((string)$record['car_years']).'--' : '')))),
             'vehicle_fuel' => $fuel,
             'vehicle_engine_capacity_cc' => $capacityCc > 0 ? $capacityCc : null,
             'vehicle_engine_capacity_l' => $capacityL,
@@ -713,6 +713,7 @@ class RrrApiClient
             'vehicle_steering_position' => 'Lewa strona',
             'vehicle_color' => (string) ($mapped['vehicle_color'] ?? ''),
             'vehicle_color_code' => sanitize_text_field((string) ($record['car_color_code'] ?? $record['color_code'] ?? '')),
+            'mileage_km' => (string) ($mapped['mileage_km'] ?? sanitize_text_field((string) ($record['car_mileage'] ?? ''))),
             'vehicle_dictionary_resolution_status' => 'partial_local_confirmed',
             'vehicle_dictionary_resolution_source' => 'local_confirmed_from_ovoko_ui',
             'vehicle_data_status' => 'car_endpoint_confirmed',
@@ -766,6 +767,22 @@ class RrrApiClient
 
     private function local_confirmed_dictionary_for_car(array $record, string $carId): array
     {
+        if ($carId === '378') {
+            return [
+                'vehicle_make' => 'Mercedes-Benz',
+                'vehicle_make_short' => 'Mercedes',
+                'vehicle_model' => 'A-class',
+                'vehicle_generation' => 'A W177 AMG',
+                'vehicle_fuel' => 'Benzyna',
+                'vehicle_gearbox_type' => 'Automatyczny',
+                'vehicle_body_type' => 'Hatchback',
+                'vehicle_drive_wheels' => 'AWD',
+                'vehicle_color' => 'Czerwony',
+                'vehicle_period' => '2018--',
+                'vehicle_year' => '2022',
+                'mileage_km' => '9777',
+            ];
+        }
         if ($carId !== '458') { return []; }
         $mapped=[];
         if ((string)($record['car_model_category'] ?? '') === '25') { $mapped['vehicle_make']='Volkswagen'; $mapped['vehicle_make_short']='VW'; }
