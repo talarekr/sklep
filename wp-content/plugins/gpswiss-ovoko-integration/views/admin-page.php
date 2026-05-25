@@ -55,6 +55,28 @@
         <?php submit_button('Apply frontend part number mapping', 'secondary', 'submit', false); ?>
     </form>
 
+
+    <h2>Preview Allegro to Ovoko match</h2>
+    <p><strong>Preview only.</strong> No Woo writes, no price/stock/images/title/publication changes.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_allegro_to_ovoko_match'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_allegro_to_ovoko_match" />
+        <label for="allegro_match_preview_product_id">Product ID:</label>
+        <input id="allegro_match_preview_product_id" type="number" min="1" name="product_id" value="0" />
+        <?php submit_button('Preview Allegro to Ovoko match', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Apply Allegro to Ovoko details enrichment</h2>
+    <p><strong>Manual action.</strong> Writes only detail attributes/meta and can replace old Allegro description.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_apply_allegro_to_ovoko_details'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_apply_allegro_to_ovoko_details" />
+        <label for="allegro_match_apply_product_id">Product ID:</label>
+        <input id="allegro_match_apply_product_id" type="number" min="1" name="product_id" value="0" />
+        <label><input type="checkbox" name="replace_description" value="1" checked="checked" /> Replace old description</label>
+        <?php submit_button('Apply Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Preview RRR car details</h2>
     <p><strong>Preview only.</strong> No Woo writes.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
