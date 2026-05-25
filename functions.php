@@ -1953,11 +1953,11 @@ function gp_render_ovoko_description_and_details_tab(): void
     ?>
     <div class="gpswiss-product-details">
         <h3 class="gpswiss-product-details__heading"><?php esc_html_e('Informacje szczegółowe', 'gp-clone'); ?></h3>
-        <div class="gpswiss-product-details__table">
+        <div class="gpswiss-product-details__table" role="table" aria-label="<?php esc_attr_e('Informacje szczegółowe', 'gp-clone'); ?>">
             <?php foreach ($rows as $row) : ?>
-                <div class="gpswiss-product-details__row">
-                    <div class="gpswiss-product-details__label"><?php echo esc_html($row['label']); ?></div>
-                    <div class="gpswiss-product-details__value"><?php echo esc_html($row['value']); ?></div>
+                <div class="gpswiss-product-details__row" role="row">
+                    <div class="gpswiss-product-details__label" role="rowheader"><?php echo esc_html($row['label']); ?></div>
+                    <div class="gpswiss-product-details__value" role="cell"><?php echo esc_html($row['value']); ?></div>
                 </div>
             <?php endforeach; ?>
         </div>
