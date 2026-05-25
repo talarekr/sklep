@@ -158,8 +158,14 @@
     <ul>
         <li>ovoko_exclude_gearbox_products enabled: <strong><?php echo !empty($data['excluded_from_ovoko_sync']['enabled']) ? 'Yes' : 'No'; ?></strong></li>
         <li>Detected gearbox products: <strong><?php echo (int) ($data['excluded_from_ovoko_sync']['detected_products_count'] ?? 0); ?></strong></li>
+        <li>Last calculated at: <code><?php echo esc_html((string) (($data['excluded_from_ovoko_sync']['last_calculated_at'] ?? '') ?: 'not calculated automatically')); ?></code></li>
         <li><em><?php echo esc_html((string) ($data['excluded_from_ovoko_sync']['info'] ?? '')); ?></em></li>
     </ul>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_run_gearbox_exclusion_count'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_run_gearbox_exclusion_count" />
+        <?php submit_button('Run gearbox exclusion count', 'secondary', 'submit', false); ?>
+    </form>
 
 
 

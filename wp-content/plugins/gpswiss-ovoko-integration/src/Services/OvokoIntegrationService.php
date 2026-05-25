@@ -13,6 +13,7 @@ class OvokoIntegrationService
     public const EVENTS_OPTION_KEY = 'gpswiss_ovoko_recent_events';
     public const COUNTERS_OPTION_KEY = 'gpswiss_ovoko_event_counters';
     public const DEDUP_OPTION_KEY = 'gpswiss_ovoko_processed_event_ids';
+    public const GEARBOX_COUNT_OPTION_KEY = 'gpswiss_ovoko_gearbox_exclusion_count';
 
     private const PART_ID_META_KEYS = [
         '_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id',
@@ -314,8 +315,6 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
     {
         $settings = $this->get_settings();
         $storeUrl = home_url('/');
-        $restUrl = rest_url('wc/v3');
-        $restCheck = wp_remote_get($restUrl, ['timeout' => 8]);
         $wooActive = class_exists('WooCommerce');
 
         $metaKeyCounts = $this->count_products_for_mapping_meta_keys();
@@ -325,14 +324,12 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
 
         $connectorClient = new OvokoSupplyConnectorClient($settings);
         $syncService = new OvokoProductSyncService();
-        $connectorCheck = $connectorClient->check_configuration();
-        $rrrClient = new RrrApiClient($settings);
-        $rrrCheck = $rrrClient->check_configuration();
+        $connectorCheck = (array) get_transient('gpswiss_ovoko_last_supply_connector_check');
+        $rrrCheck = (array) get_transient('gpswiss_ovoko_last_rrr_api_check');
         $fixturePart = NormalizedOvokoPart::from_array($syncService->developer_sample_fixture());
         $fixtureWithHash = NormalizedOvokoPart::from_array($fixturePart->to_array() + ['payload_hash' => $syncService->calculate_payload_hash($fixturePart)]);
-$matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         $excludeEnabled = !empty($settings['ovoko_exclude_gearbox_products']);
-        $excludedCount = $excludeEnabled ? $syncService->count_excluded_gearbox_products() : 0;
+        $cachedExclusionCount = $this->get_cached_gearbox_exclusion_count();
 
         return [
             'callback_url' => rest_url('gpswiss-ovoko/v1/callback'),
@@ -342,7 +339,7 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             ]),
             'recent_events' => array_reverse((array) get_option(self::EVENTS_OPTION_KEY, [])),
             'woo_active' => $wooActive,
-            'woo_rest_reachable' => !is_wp_error($restCheck) && (int) wp_remote_retrieve_response_code($restCheck) < 500,
+            'woo_rest_reachable' => null,
             'store_url' => $storeUrl,
             'store_https' => str_starts_with($storeUrl, 'https://'),
             'rest_permalink_ready' => str_contains((string) get_option('permalink_structure', ''), '/'),
@@ -358,12 +355,22 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'rrr_api_check' => $rrrCheck,
             'sync_preview_fixture' => $fixtureWithHash->to_array(),
             'sync_preview_meta_mapping' => $syncService->map_to_woo_meta_preview($fixtureWithHash),
-            'sync_preview_match' => $matchPreview,
+            'sync_preview_match' => ['mode' => 'manual_only', 'note' => 'match preview moved to manual actions only to keep admin page lightweight'],
             'excluded_from_ovoko_sync' => [
                 'enabled' => $excludeEnabled,
-                'detected_products_count' => $excludedCount,
-                'info' => 'gearbox standalone products are excluded from Ovoko sync/import/matching',
+                'detected_products_count' => (int) ($cachedExclusionCount['count'] ?? 0),
+                'last_calculated_at' => (string) ($cachedExclusionCount['calculated_at'] ?? ''),
+                'info' => 'gearbox exclusion count is manual/cached only to avoid heavy product meta scans during page load',
             ],
+        ];
+    }
+
+    private function get_cached_gearbox_exclusion_count(): array
+    {
+        $value = get_option(self::GEARBOX_COUNT_OPTION_KEY, []);
+        return [
+            'count' => (int) ($value['count'] ?? 0),
+            'calculated_at' => sanitize_text_field((string) ($value['calculated_at'] ?? '')),
         ];
     }
 
@@ -422,6 +429,7 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         $client = new OvokoSupplyConnectorClient($this->get_settings());
         $result = $client->check_configuration();
         $result['checked_at'] = gmdate('c');
+        set_transient('gpswiss_ovoko_last_supply_connector_check', $result, DAY_IN_SECONDS);
         return $result;
     }
 
@@ -430,7 +438,20 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         $client = new RrrApiClient($this->get_settings());
         $result = $client->check_configuration();
         $result['checked_at'] = gmdate('c');
+        set_transient('gpswiss_ovoko_last_rrr_api_check', $result, DAY_IN_SECONDS);
         return $result;
+    }
+
+    public function run_gearbox_exclusion_count(): array
+    {
+        try {
+            $count = (new OvokoProductSyncService())->count_excluded_gearbox_products_sql_fast();
+            $payload = ['count' => $count, 'calculated_at' => gmdate('c')];
+            update_option(self::GEARBOX_COUNT_OPTION_KEY, $payload, false);
+            return ['ok' => true, 'mode' => 'manual_sql_count', 'count' => $count, 'calculated_at' => $payload['calculated_at'], 'no_woo_writes' => true];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'mode' => 'manual_sql_count', 'message' => $e->getMessage(), 'no_woo_writes' => true];
+        }
     }
 
     public function preview_rrr_parts_sample(int $limit = 50, int $page = 1): array
