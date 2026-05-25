@@ -226,10 +226,48 @@ Part fields now preview-normalized (read-only, no import):
 - `external_id`
 - `place`
 - `allegro_channel`, `allegro_id` (only if provided by payload)
+- `ovoko_price`, `ovoko_currency`
+- `ovoko_original_price`, `ovoko_original_currency`
+- `allegro_channel_price`, `allegro_channel_currency`
+- `woo_target_price`, `woo_target_currency`
+- `price_source`, `price_review_required`, `price_reason`
+- `allegro_price_available`, `allegro_price_location`
 
 Safety/visibility notes:
 - `internal_notes`, `reserved_user`, `reserved_date` are not shown as user data; only `*_field_exists` booleans are shown in preview.
 - No Woo product/meta writes are performed in preview mode.
+
+## Price source policy
+
+- Ovoko main price (`price`/`original_price`) is **not** automatically treated as WooCommerce selling price.
+- Woo target price must come from **Allegro channel price** from RRR/Ovoko payload.
+- Policy in preview normalization:
+  - `ovoko_price` = payload `price`
+  - `ovoko_original_price` = payload `original_price`
+  - `allegro_channel_price` = value found in channel/Allegro price fields (if present)
+  - `woo_target_price` = `allegro_channel_price`
+  - if `allegro_channel_price` is missing:
+    - `woo_target_price = null`
+    - `price_review_required = true`
+    - `price_reason = "Allegro channel price not found; do not import Ovoko price as Woo price."`
+- Woo `_price` / `_regular_price` preview mapping is shown as write-ready only when `price_source=allegro_channel_price`.
+- If Allegro price is missing, price write preview is blocked in diagnostics.
+
+Diagnostic key search in `/get/part/{id}` preview checks for channel-related fields including:
+- `allegro`
+- `channels`
+- `sales_channels`
+- `channel_prices`
+- `marketplace_prices`
+- `integrations`
+- `offers`
+- `allegro_price`
+- `price_allegro`
+- `sale_price`
+- `external_offers`
+
+Open integration question:
+- **Which endpoint or field returns channel-specific Allegro price for a part?**
 
 ## Ovoko car_id / same vehicle grouping
 

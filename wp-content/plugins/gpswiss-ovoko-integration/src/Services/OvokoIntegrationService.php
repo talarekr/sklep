@@ -521,20 +521,30 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
             'raw_payload_summary' => [
                 'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
                 'record_keys' => array_values(array_map('strval', array_keys((array) $record))),
+                'channel_related_keys_found' => (array) ($normalized['price_diagnostic_channel_keys'] ?? []),
+                'allegro_price_available' => !empty($normalized['allegro_price_available']),
+                'allegro_price_location' => (string) ($normalized['allegro_price_location'] ?? 'not_found_in_get_part_payload'),
                 'full_payload_omitted' => true,
             ],
             'no_write_to_woo' => true,
-            'readme_question' => (($normalized['vehicle_data_status'] ?? '') === 'car_id_only')
-                ? 'Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.'
-                : '',
+            'readme_question' => implode(' ', array_filter([
+                (($normalized['vehicle_data_status'] ?? '') === 'car_id_only')
+                    ? 'Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.'
+                    : '',
+                'Which endpoint or field returns channel-specific Allegro price for a part?',
+            ])),
             'checked_at' => gmdate('c'),
         ];
     }
 
     private function build_rrr_single_part_woo_meta_preview(array $normalized): array
     {
+        $isAllegroSource = (($normalized['price_source'] ?? '') === 'allegro_channel_price');
         return [
             'source' => 'ovoko_master',
+            'price_source' => (string) ($normalized['price_source'] ?? ''),
+            'price_review_required' => !empty($normalized['price_review_required']),
+            'price_reason' => (string) ($normalized['price_reason'] ?? ''),
             'part_meta' => [
                 '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
                 '_ovoko_status' => (string) ($normalized['status'] ?? ''),
@@ -544,6 +554,9 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 '_ovoko_source_url' => (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')),
                 '_ovoko_images' => (array) ($normalized['part_photo_gallery'] ?? []),
                 '_ovoko_price' => (string) ($normalized['price'] ?? ''),
+                '_ovoko_original_price' => (string) ($normalized['original_price'] ?? ''),
+                '_ovoko_allegro_price' => $isAllegroSource ? (string) ($normalized['allegro_channel_price'] ?? '') : null,
+                '_ovoko_woo_target_price' => $isAllegroSource ? (string) ($normalized['woo_target_price'] ?? '') : null,
                 '_ovoko_currency' => (string) ($normalized['currency'] ?? ''),
                 '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
                 '_ovoko_visible_code' => (string) ($normalized['visible_code'] ?? ''),
@@ -552,6 +565,15 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 '_ovoko_position' => (string) ($normalized['position'] ?? ''),
                 '_ovoko_place' => (string) ($normalized['place'] ?? ''),
                 '_ovoko_raw_payload' => 'preview_only_omitted',
+            ],
+            'woo_price_write_preview' => $isAllegroSource ? [
+                '_regular_price' => (string) ($normalized['woo_target_price'] ?? ''),
+                '_price' => (string) ($normalized['woo_target_price'] ?? ''),
+                '_currency' => (string) ($normalized['woo_target_currency'] ?? ''),
+                'write_ready' => true,
+            ] : [
+                'write_ready' => false,
+                'blocked_reason' => (string) ($normalized['price_reason'] ?? ''),
             ],
             'vehicle_meta' => [
                 '_ovoko_car_id' => (string) (($normalized['car_id'] ?? '') ?: ($normalized['vehicle_id'] ?? '')),

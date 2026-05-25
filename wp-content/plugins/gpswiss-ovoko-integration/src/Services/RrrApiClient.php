@@ -116,6 +116,18 @@ class RrrApiClient
         $record = $this->extract_single_part_record($payload);
         $carId = $this->first_non_empty_value($record, ['car_id', 'carId', 'vehicle_id', 'vehicleId']);
         $vehicle = $this->extract_vehicle_data($record);
+        $priceDiagnostics = $this->extract_allegro_price_diagnostics($record);
+        $ovokoPrice = $record['price'] ?? null;
+        $ovokoCurrency = sanitize_text_field((string) ($record['currency'] ?? ''));
+        $ovokoOriginalPrice = $record['original_price'] ?? null;
+        $ovokoOriginalCurrency = sanitize_text_field((string) ($record['original_currency'] ?? ''));
+        $allegroPrice = $priceDiagnostics['allegro_channel_price'];
+        $allegroCurrency = sanitize_text_field((string) $priceDiagnostics['allegro_channel_currency']);
+        $priceSource = $allegroPrice !== null ? 'allegro_channel_price' : 'missing_allegro_channel_price';
+        $priceReviewRequired = $allegroPrice === null;
+        $priceReason = $priceReviewRequired
+            ? 'Allegro channel price not found; do not import Ovoko price as Woo price.'
+            : 'Woo target price sourced from Allegro channel price.';
 
         $images = $this->normalize_gallery($record['part_photo_gallery'] ?? $record['images'] ?? []);
         $singlePhoto = sanitize_text_field((string) ($record['photo'] ?? ''));
@@ -125,10 +137,24 @@ class RrrApiClient
             'car_id' => sanitize_text_field((string) $carId),
             'title' => sanitize_text_field((string) ($record['name'] ?? '')),
             'status' => sanitize_text_field((string) ($record['status'] ?? '')),
-            'price' => $record['price'] ?? null,
-            'currency' => sanitize_text_field((string) ($record['currency'] ?? '')),
-            'original_price' => $record['original_price'] ?? null,
-            'original_currency' => sanitize_text_field((string) ($record['original_currency'] ?? '')),
+            'price' => $ovokoPrice,
+            'currency' => $ovokoCurrency,
+            'original_price' => $ovokoOriginalPrice,
+            'original_currency' => $ovokoOriginalCurrency,
+            'ovoko_price' => $ovokoPrice,
+            'ovoko_currency' => $ovokoCurrency,
+            'ovoko_original_price' => $ovokoOriginalPrice,
+            'ovoko_original_currency' => $ovokoOriginalCurrency,
+            'allegro_channel_price' => $allegroPrice,
+            'allegro_channel_currency' => $allegroCurrency,
+            'woo_target_price' => $allegroPrice,
+            'woo_target_currency' => $allegroPrice !== null ? ($allegroCurrency !== '' ? $allegroCurrency : $ovokoOriginalCurrency) : '',
+            'price_source' => $priceSource,
+            'price_review_required' => $priceReviewRequired,
+            'price_reason' => $priceReason,
+            'allegro_price_available' => !$priceReviewRequired,
+            'allegro_price_location' => (string) ($priceDiagnostics['allegro_price_location'] ?? 'not_found_in_get_part_payload'),
+            'price_diagnostic_channel_keys' => (array) ($priceDiagnostics['diagnostic_channel_keys'] ?? []),
             'manufacturer_code' => sanitize_text_field((string) ($record['manufacturer_code'] ?? '')),
             'visible_code' => sanitize_text_field((string) ($record['visible_code'] ?? '')),
             'other_code' => sanitize_text_field((string) ($record['other_code'] ?? '')),
@@ -161,6 +187,63 @@ class RrrApiClient
         }
 
         return $summary;
+    }
+
+    private function extract_allegro_price_diagnostics(array $record): array
+    {
+        $candidateKeys = [
+            'allegro', 'channels', 'sales_channels', 'channel_prices', 'marketplace_prices',
+            'integrations', 'offers', 'allegro_price', 'price_allegro', 'sale_price', 'external_offers',
+        ];
+        $flat = $this->flatten_payload_paths($record);
+        $matchingKeys = [];
+        $allegroPrice = null;
+        $allegroCurrency = '';
+        $allegroLocation = 'not_found_in_get_part_payload';
+
+        foreach ($flat as $path => $value) {
+            $lowerPath = strtolower($path);
+            foreach ($candidateKeys as $candidateKey) {
+                if (str_contains($lowerPath, strtolower($candidateKey))) {
+                    $matchingKeys[$path] = true;
+                }
+            }
+
+            if ($allegroPrice !== null) {
+                continue;
+            }
+
+            if (is_numeric($value) && str_contains($lowerPath, 'allegro') && str_contains($lowerPath, 'price')) {
+                $allegroPrice = $value + 0;
+                $allegroLocation = $path;
+                continue;
+            }
+
+            if (is_string($value) && str_contains($lowerPath, 'currency') && str_contains($lowerPath, 'allegro')) {
+                $allegroCurrency = sanitize_text_field($value);
+            }
+        }
+
+        return [
+            'allegro_channel_price' => $allegroPrice,
+            'allegro_channel_currency' => $allegroCurrency,
+            'allegro_price_location' => $allegroLocation,
+            'diagnostic_channel_keys' => array_values(array_keys($matchingKeys)),
+        ];
+    }
+
+    private function flatten_payload_paths(array $input, string $prefix = ''): array
+    {
+        $flattened = [];
+        foreach ($input as $key => $value) {
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . (string) $key;
+            if (is_array($value)) {
+                $flattened += $this->flatten_payload_paths($value, $path);
+                continue;
+            }
+            $flattened[$path] = $value;
+        }
+        return $flattened;
     }
 
     private function normalize_gallery(mixed $gallery): array
