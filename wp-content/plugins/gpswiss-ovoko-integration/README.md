@@ -600,3 +600,13 @@ No automatic eBay/Allegro publish was added and no batch/cron was introduced.
 - Local confirmed dictionary fallback is implemented only for `car_id=458` and only for confirmed values from Ovoko UI.
 - Next step: confirm full dictionary endpoints in RRR/Ovoko API and replace local partial fallback.
 - Title builder is confirmed for `part_id=10994` + `car_id=458` with full vehicle prefix.
+
+## Ovoko product frontend rendering
+
+- For Ovoko products (`source=ovoko_master` or existing `_ovoko_part_id`) product tabs are merged into one tab: **Opis oraz informacje szczegółowe** (description first, details table below).
+- Separate **Informacje dodatkowe** tab is hidden only for Ovoko products (meta/attributes remain stored for technical use).
+- Technical fields hidden from customer-facing details: Ovoko part ID, Ovoko car ID, part status, position, source, Ovoko category, period.
+- Customer-facing details table shows only curated vehicle/part fields (number, make/model, fuel, engine, gearbox, body, drive, steering, color, year) and skips empty/`-`/`Brak` values.
+- SKU and stock availability rendering is hidden on single-product frontend for Ovoko card presentation (data still remains in Woo/meta).
+- In the top product info card, short description is replaced (for Ovoko with `_ovoko_car_id`) by button **Pokaż więcej części z tego pojazdu** linking to product archive filtered by `ovoko_car_id`.
+- Product archive/shop/search/listing supports safe filtering by query param `ovoko_car_id`, mapped to `_ovoko_car_id` product meta.

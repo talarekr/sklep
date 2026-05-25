@@ -1872,6 +1872,134 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
+function gp_is_ovoko_product(?WC_Product $product = null): bool
+{
+    if (!$product instanceof WC_Product) {
+        $product = function_exists('wc_get_product') ? wc_get_product(get_the_ID()) : null;
+    }
+
+    if (!$product instanceof WC_Product) {
+        return false;
+    }
+
+    $productId = $product->get_id();
+    $source = strtolower(trim((string) get_post_meta($productId, 'source', true)));
+    $hasPartId = trim((string) get_post_meta($productId, '_ovoko_part_id', true)) !== '';
+
+    return $source === 'ovoko_master' || $hasPartId;
+}
+
+add_filter('woocommerce_product_tabs', function (array $tabs): array {
+    if (!function_exists('is_product') || !is_product()) {
+        return $tabs;
+    }
+
+    $product = function_exists('wc_get_product') ? wc_get_product(get_the_ID()) : null;
+    if (!gp_is_ovoko_product($product)) {
+        return $tabs;
+    }
+
+    if (isset($tabs['description'])) {
+        $tabs['description']['title'] = __('Opis oraz informacje szczegółowe', 'gp-clone');
+        $tabs['description']['priority'] = 10;
+        $tabs['description']['callback'] = 'gp_render_ovoko_description_and_details_tab';
+    }
+
+    unset($tabs['additional_information']);
+
+    return $tabs;
+}, 30);
+
+function gp_render_ovoko_description_and_details_tab(): void
+{
+    global $product;
+    if (!$product instanceof WC_Product) {
+        return;
+    }
+
+    the_content();
+
+    $labels = [
+        '_ovoko_part_number' => __('Numer części', 'gp-clone'),
+        '_ovoko_vehicle_make' => __('Producent', 'gp-clone'),
+        '_ovoko_vehicle_model' => __('Model', 'gp-clone'),
+        '_ovoko_vehicle_generation' => __('Modyfikacja', 'gp-clone'),
+        '_ovoko_vehicle_fuel' => __('Rodzaj paliwa', 'gp-clone'),
+        '_ovoko_vehicle_engine_capacity_l' => __('Pojemność silnika', 'gp-clone'),
+        '_ovoko_vehicle_engine_power_kw' => __('Moc silnika', 'gp-clone'),
+        '_ovoko_engine_code' => __('Kod silnika', 'gp-clone'),
+        '_ovoko_gearbox_type' => __('Typ skrzyni biegów', 'gp-clone'),
+        '_ovoko_vehicle_body_type' => __('Typ sylwetki', 'gp-clone'),
+        '_ovoko_vehicle_drive_wheels' => __('Koła napędowe', 'gp-clone'),
+        '_ovoko_vehicle_steering_position' => __('Pozycja kierownicy', 'gp-clone'),
+        '_ovoko_vehicle_color' => __('Kolor', 'gp-clone'),
+        '_ovoko_vehicle_color_code' => __('Kod koloru', 'gp-clone'),
+        '_ovoko_vehicle_year' => __('Rok produkcji samochodu', 'gp-clone'),
+    ];
+
+    $rows = [];
+    foreach ($labels as $metaKey => $label) {
+        $value = trim((string) get_post_meta($product->get_id(), $metaKey, true));
+        $lower = strtolower($value);
+        if ($value === '' || $value === '-' || $lower === 'brak' || $lower === 'null') {
+            continue;
+        }
+        $rows[] = ['label' => $label, 'value' => $value];
+    }
+
+    if (empty($rows)) {
+        return;
+    }
+    ?>
+    <div class="gpswiss-product-details">
+        <h3 class="gpswiss-product-details__heading"><?php esc_html_e('Informacje szczegółowe', 'gp-clone'); ?></h3>
+        <div class="gpswiss-product-details__table">
+            <?php foreach ($rows as $row) : ?>
+                <div class="gpswiss-product-details__row">
+                    <div class="gpswiss-product-details__label"><?php echo esc_html($row['label']); ?></div>
+                    <div class="gpswiss-product-details__value"><?php echo esc_html($row['value']); ?></div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php
+}
+
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (is_admin() || !$query->is_main_query()) {
+        return;
+    }
+
+    if (
+        !(
+            (function_exists('is_shop') && is_shop())
+            || (function_exists('is_post_type_archive') && is_post_type_archive('product'))
+            || (function_exists('is_product_taxonomy') && is_product_taxonomy())
+            || $query->is_search()
+        )
+    ) {
+        return;
+    }
+
+    if (!isset($_GET['ovoko_car_id'])) {
+        return;
+    }
+
+    $carId = sanitize_text_field(wp_unslash((string) $_GET['ovoko_car_id']));
+    $carId = preg_replace('/[^0-9A-Za-z_-]/', '', (string) $carId);
+    if ($carId === '') {
+        return;
+    }
+
+    $metaQuery = (array) $query->get('meta_query');
+    $metaQuery[] = [
+        'key' => '_ovoko_car_id',
+        'value' => $carId,
+        'compare' => '=',
+    ];
+    $query->set('meta_query', $metaQuery);
+}, 20);
+
 function gp_get_current_product_category_term(): ?WP_Term
 {
     if (!is_tax('product_cat')) {
