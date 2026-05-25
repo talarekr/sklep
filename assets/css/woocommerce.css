@@ -1533,6 +1533,61 @@
   margin: 0 0 6px;
 }
 
+.gpswiss-same-vehicle-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 14px;
+  padding: 10px 16px;
+  border: 1px solid #0f5fbf;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #0f5fbf;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+.gpswiss-same-vehicle-button:hover {
+  background: #0f5fbf;
+  color: #fff;
+}
+
+.gpswiss-product-details {
+  margin-top: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+.gpswiss-product-details__heading {
+  margin: 0;
+  padding: 14px 18px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+}
+.gpswiss-product-details__row {
+  display: grid;
+  grid-template-columns: minmax(180px, 36%) minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px 18px;
+}
+.gpswiss-product-details__row:nth-child(even) {
+  background: #f8fafc;
+}
+.gpswiss-product-details__label {
+  font-weight: 600;
+  color: #1e293b;
+}
+.gpswiss-product-details__value {
+  color: #334155;
+  word-break: break-word;
+}
+
 @media (max-width: 1199px) {
   .post-type-archive-product.woocommerce .products.columns-3,
   .post-type-archive-product.woocommerce ul.products,
@@ -1618,6 +1673,13 @@
   }
   .gp-product-info-card__meta strong {
     text-align: left;
+  }
+  .gpswiss-product-details__row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .gpswiss-same-vehicle-button {
+    width: 100%;
   }
   .gp-footer__cols { grid-template-columns: 1fr; }
   .gp-cat-filter__summary {

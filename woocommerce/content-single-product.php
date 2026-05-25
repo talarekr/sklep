@@ -16,13 +16,12 @@ if (!$product instanceof WC_Product) {
     return;
 }
 
-$availability = $product->get_availability();
-$availability_text = $availability['availability'] ?? __('Dostępny', 'gp-clone');
-$availability_class = !empty($availability['class']) ? sanitize_html_class($availability['class']) : 'in-stock';
 $part_number = function_exists('gp_get_product_part_number') ? gp_get_product_part_number($product) : 'Brak';
-$sku = $product->get_sku();
 $delivery_window = gp_get_delivery_text();
 $returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
+$is_ovoko_product = function_exists('gp_is_ovoko_product') ? gp_is_ovoko_product($product) : false;
+$ovoko_car_id = trim((string) get_post_meta($product->get_id(), '_ovoko_car_id', true));
+$same_vehicle_url = $ovoko_car_id !== '' ? add_query_arg('ovoko_car_id', rawurlencode($ovoko_car_id), get_post_type_archive_link('product')) : '';
 ?>
 <div id="product-<?php the_ID(); ?>" <?php wc_product_class('gp-product-page', $product); ?>>
     <section class="gp-product-page__hero">
@@ -38,22 +37,16 @@ $returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
                         <span><?php esc_html_e('Numer części:', 'gp-clone'); ?></span>
                         <strong><?php echo esc_html($part_number); ?></strong>
                     </li>
-                    <?php if ($sku !== '') : ?>
-                        <li>
-                            <span><?php esc_html_e('SKU:', 'gp-clone'); ?></span>
-                            <strong><?php echo esc_html($sku); ?></strong>
-                        </li>
-                    <?php endif; ?>
                     <li>
                         <span><?php esc_html_e('Stan:', 'gp-clone'); ?></span>
                         <strong><?php esc_html_e('Używany / sprawdzony', 'gp-clone'); ?></strong>
                     </li>
-                    <li>
-                        <span><?php esc_html_e('Dostępność:', 'gp-clone'); ?></span>
-                        <strong class="<?php echo esc_attr($availability_class); ?>"><?php echo wp_kses_post($availability_text); ?></strong>
-                    </li>
                 </ul>
-                <?php if ($product->get_short_description() !== '') : ?>
+                <?php if ($is_ovoko_product && $same_vehicle_url !== '') : ?>
+                    <a class="gpswiss-same-vehicle-button" href="<?php echo esc_url($same_vehicle_url); ?>">
+                        <?php esc_html_e('Pokaż więcej części z tego pojazdu', 'gp-clone'); ?>
+                    </a>
+                <?php elseif (!$is_ovoko_product && $product->get_short_description() !== '') : ?>
                     <div class="gp-product-info-card__short-description">
                         <?php echo wp_kses_post(wpautop($product->get_short_description())); ?>
                     </div>
