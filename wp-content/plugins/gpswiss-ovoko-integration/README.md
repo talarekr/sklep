@@ -204,3 +204,5 @@ Admin action: **Preview RRR single part**
 - Auth form fields: `username`, `password`, `user_token` (from plugin settings; never displayed)
 - Read-only mode only: no import, no product creation, no product update, no stock/meta writes.
 - Purpose: inspect which full fields are returned by `/get/part/{id}` before any future importer work.
+
+- RRR `/get/part/{id}` may return part data nested under `list[0][0]`, so parser normalizes nested list responses.
