@@ -472,6 +472,9 @@ The plugin now persists `manufacturer_code` to Woo fields commonly used by store
 - `mpn`
 - `_manufacturer_code`
 - `_gpswiss_part_number`
+- `_part_number` (**frontend-critical in this theme**)
+
+In this codebase, frontend product templates call `gp_get_product_part_number()` from theme `functions.php`, and that function reads only `_part_number` with fallback to `Brak`.
 
 It also writes per-product custom attributes (`_product_attributes`, no global taxonomy attributes):
 - `Numer części` (from `manufacturer_code`) — visible=true, variation=false
@@ -482,6 +485,15 @@ Manual admin action added:
 - **Apply Ovoko technical attributes to Woo product** (`product_id` input).
 - Scope: technical meta + attributes only.
 - Explicitly does not modify price, stock, publication status, eBay, Allegro, or batch flows.
+
+Frontend mapping diagnostics/actions added:
+- **Frontend part number mapping** (`product_id` input) preview/debug output:
+  - `expected_frontend_meta_key`
+  - `current_value`
+  - `ovoko_manufacturer_code`
+  - `would_write_value`
+  - `frontend_should_show`
+- **Apply frontend part number mapping** (`product_id` input) writes `_ovoko_manufacturer_code` -> `_part_number` only.
 
 ## car_id vehicle details endpoint status
 
