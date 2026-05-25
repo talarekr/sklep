@@ -237,6 +237,39 @@ Safety/visibility notes:
 - `internal_notes`, `reserved_user`, `reserved_date` are not shown as user data; only `*_field_exists` booleans are shown in preview.
 - No Woo product/meta writes are performed in preview mode.
 
+## Preview Woo product create from RRR part
+
+Admin action: **Preview Woo product create from RRR part**
+
+- Input: `part_id` (default for testing: `10994`).
+- Flow:
+  - fetches `POST /get/part/{part_id}`,
+  - normalizes part payload,
+  - checks Woo match candidate,
+  - returns either `would_update_existing_product` or `would_create_new_product`.
+- Preview-only behavior:
+  - no Woo product create,
+  - no Woo product update,
+  - no meta writes,
+  - no stock writes,
+  - no media downloads/imports.
+- Product draft preview:
+  - `post_status` is proposed as non-public (`draft`),
+  - `regular_price` is suggested **only** when `price_source=internal_notes_plain_price` and `price_review_required=false`,
+  - currency is `PLN`,
+  - Ovoko `price/original_price` are informational only.
+- Price safety:
+  - if valid internal-notes price is missing, preview sets:
+    - `create_blocked=true`
+    - `reason=missing_valid_woo_price`
+  - no fallback regular price is suggested from Ovoko `price/original_price`.
+- Gearbox exclusion safety:
+  - if matched product is in gearbox standalone catalog, preview marks:
+    - `excluded_from_ovoko_sync=true`
+    - blocked reason: `gearbox_standalone_catalog`.
+- UI always states:
+  - `Preview only — no Woo product was created or updated.`
+
 ## Woo price from Ovoko internal notes
 
 - Ovoko **internal notes** field is now the manual source of Woo price in preview policy.
