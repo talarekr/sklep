@@ -1872,6 +1872,31 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
+function gp_get_product_details_style_status(int $productId): array
+{
+    $source = strtolower(trim((string) get_post_meta($productId, 'source', true)));
+    $hasPartId = trim((string) get_post_meta($productId, '_ovoko_part_id', true)) !== '';
+    $hasCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true)) !== '';
+    $visibleDetails = gp_get_product_details_rows($productId);
+
+    $reason = 'none';
+    if ($source === 'ovoko_master') {
+        $reason = 'source=ovoko_master';
+    } elseif ($hasPartId) {
+        $reason = '_ovoko_part_id';
+    } elseif ($hasCarId) {
+        $reason = '_ovoko_car_id';
+    } elseif (!empty($visibleDetails)) {
+        $reason = 'customer_visible_details';
+    }
+
+    return [
+        'enabled' => $source === 'ovoko_master' || $hasPartId || $hasCarId || !empty($visibleDetails),
+        'reason' => $reason,
+        'rows' => $visibleDetails,
+    ];
+}
+
 function gp_is_ovoko_product(?WC_Product $product = null): bool
 {
     if (!$product instanceof WC_Product) {
@@ -1882,13 +1907,9 @@ function gp_is_ovoko_product(?WC_Product $product = null): bool
         return false;
     }
 
-    $productId = $product->get_id();
-    $source = strtolower(trim((string) get_post_meta($productId, 'source', true)));
-    $hasPartId = trim((string) get_post_meta($productId, '_ovoko_part_id', true)) !== '';
-    $hasCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true)) !== '';
-    $visibleDetails = gp_get_product_details_rows($productId);
+    $status = gp_get_product_details_style_status($product->get_id());
 
-    return $source === 'ovoko_master' || $hasPartId || $hasCarId || !empty($visibleDetails);
+    return !empty($status['enabled']);
 }
 
 function gp_get_product_details_rows(int $productId): array
@@ -1928,7 +1949,13 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
         return $tabs;
     }
 
-    if (isset($tabs['description'])) {
+    if (!isset($tabs['description'])) {
+        $tabs['description'] = [
+            'title' => __('Opis oraz informacje szczegółowe', 'gp-clone'),
+            'priority' => 10,
+            'callback' => 'gp_render_ovoko_description_and_details_tab',
+        ];
+    } else {
         $tabs['description']['title'] = __('Opis oraz informacje szczegółowe', 'gp-clone');
         $tabs['description']['priority'] = 10;
         $tabs['description']['callback'] = 'gp_render_ovoko_description_and_details_tab';
@@ -1946,9 +1973,18 @@ function gp_render_ovoko_description_and_details_tab(): void
         return;
     }
 
-    $rawRows = gp_get_product_details_rows($product->get_id());
+    $productId = $product->get_id();
+    $status = gp_get_product_details_style_status($productId);
+    $rawRows = is_array($status['rows'] ?? null) ? $status['rows'] : [];
     $rows = [];
     foreach ($rawRows as $label => $value) { $rows[] = ['label' => $label, 'value' => $value]; }
+
+    $showDebug = (function_exists('current_user_can') && current_user_can('manage_options')) || (function_exists('is_preview') && is_preview());
+    if ($showDebug) {
+        echo "
+<!-- details_tab_callback_active: true | details_tab_rows_count: " . (int) count($rows) . " | details_tab_detection_reason: " . esc_html((string) ($status['reason'] ?? 'none')) . " | details_tab_callback_name: gp_render_ovoko_description_and_details_tab -->
+";
+    }
 
     if (empty($rows)) {
         return;
