@@ -126,6 +126,7 @@
             <tr><th>RRR API username</th><td><input type="password" name="rrr_api_username" value="" class="regular-text" autocomplete="new-password" /><p>Configured: <strong><?php echo !empty($data['settings']['rrr_api_username']) ? 'Yes' : 'No'; ?></strong></p></td></tr>
             <tr><th>RRR API password</th><td><input type="password" name="rrr_api_password" value="" class="regular-text" autocomplete="new-password" /><p>Configured: <strong><?php echo !empty($data['settings']['rrr_api_password']) ? 'Yes' : 'No'; ?></strong></p></td></tr>
             <tr><th>RRR API user_token</th><td><input type="password" name="rrr_api_user_token" value="" class="regular-text" autocomplete="new-password" /><p>Configured: <strong><?php echo !empty($data['settings']['rrr_api_user_token']) ? 'Yes' : 'No'; ?></strong></p></td></tr>
+            <tr><th>Ovoko original image bearer token (optional)</th><td><input type="password" name="ovoko_original_image_bearer_token" value="" class="regular-text" autocomplete="new-password" /><p>original_image_token_configured: <strong><?php echo !empty($data['settings']['ovoko_original_image_bearer_token']) ? 'yes' : 'no'; ?></strong></p></td></tr>
         </table>
         <?php submit_button('Save settings'); ?>
     </form>
@@ -291,7 +292,7 @@
         <input type="hidden" name="action" value="gpswiss_ovoko_probe_ovoko_image_url_variants" />
         <label for="probe_ovoko_part_id">Part ID:</label>
         <input id="probe_ovoko_part_id" type="number" min="1" name="part_id" value="10994" />
-        <?php submit_button('Probe Ovoko image URL variants', 'secondary', 'submit', false); ?>
+        <?php submit_button('Probe Ovoko original image auth', 'secondary', 'submit', false); ?>
     </form>
 
     <h2>Preview Woo product create from RRR part</h2>

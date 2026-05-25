@@ -6,14 +6,16 @@ class OvokoImageImportPlan
 {
     public const MAX_IMAGES_PER_PRODUCT = 10;
 
-    public function preview_image_import_plan(array $normalizedPart, int $partId): array
+    public function preview_image_import_plan(array $normalizedPart, int $partId, array $authenticatedOriginalUrls = []): array
     {
-        $selection = $this->select_source_image_urls($normalizedPart);
+        $selection = !empty($authenticatedOriginalUrls)
+            ? ['selected_urls' => $this->normalize_unique_urls($authenticatedOriginalUrls), 'selected_source' => 'authenticated_original', 'ignored_thumbnail_photo' => true, 'ignored_thumbnail_photo_url' => trim((string) ($normalizedPart['photo'] ?? ''))]
+            : $this->select_source_image_urls($normalizedPart);
         $sourceUrls = array_values(array_slice($selection['selected_urls'], 0, self::MAX_IMAGES_PER_PRODUCT));
         $featured = $sourceUrls[0] ?? '';
         $gallery = array_values(array_slice($sourceUrls, 1));
         $allPublicOvoko = !empty($sourceUrls) && count(array_filter($sourceUrls, static fn($url) => is_string($url) && str_contains($url, 'images.ovoko.com'))) === count($sourceUrls);
-        $cleanSourceFound = !$allPublicOvoko && !empty($sourceUrls);
+        $cleanSourceFound = ($selection['selected_source'] === 'authenticated_original') || (!$allPublicOvoko && !empty($sourceUrls));
 
         return [
             'part_id' => $partId,
@@ -41,7 +43,8 @@ class OvokoImageImportPlan
                 'prefer_original_without_watermark' => true,
                 'fallback_public_ovoko_watermarked_allowed' => true,
                 'clean_source_found' => $cleanSourceFound,
-                'warning' => $cleanSourceFound ? '' : 'Only public Ovoko watermarked image URLs found.',
+                'selected_source' => $selection['selected_source'] === 'authenticated_original' ? 'authenticated_original' : 'public_watermarked_fallback',
+                'warning' => $cleanSourceFound ? '' : 'Only public Ovoko watermarked image URLs found or authenticated original image probe failed.',
             ],
             'image_import_blocked' => false,
             'reason' => 'ready_for_create_draft_media_import',

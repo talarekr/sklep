@@ -616,5 +616,14 @@ No automatic eBay/Allegro publish was added and no batch/cron was introduced.
 - Publiczne URL-e obrazów Ovoko (np. `images.ovoko.com`) mogą zawierać znak wodny Ovoko.
 - Integracja **nie usuwa watermarka** (bez crop/AI/retuszu).
 - Integracja najpierw diagnozuje źródła URL i preferuje oryginalne/czyste źródło, jeśli API je udostępnia.
-- Jeśli nie znaleziono czystego źródła, zwracany jest warning: `Only public Ovoko watermarked image URLs found.`
-- Dostępna jest akcja diagnostyczna `Probe Ovoko image URL variants` (read-only, limitowana), która testuje wybrane warianty URL bez zapisu danych.
+- Jeśli nie znaleziono czystego źródła, zwracany jest warning: `Only public Ovoko watermarked image URLs found or authenticated original image probe failed.`
+- Dostępna jest akcja diagnostyczna `Probe Ovoko original image auth` (read-only, limitowana), która testuje wybrane warianty URL bez zapisu danych.
+
+## Authenticated Ovoko original images
+
+- Publiczne URL-e `images.ovoko.com` są traktowane jako potencjalnie watermarked.
+- `original` images mogą wymagać nagłówka `Authorization: Bearer <token>`.
+- Dodano opcjonalne ustawienie: `ovoko_original_image_bearer_token` (oddzielne od `rrr_api_user_token`).
+- Token nie jest ujawniany w HTML; panel pokazuje wyłącznie `original_image_token_configured: yes/no`.
+- Probe testuje kandydaty `/original/` z `Authorization` + `User-Agent: GPSwissWooImporter/1.0`.
+- Import clean images nie jest przełączany globalnie „na sztywno”; najpierw probe musi potwierdzić działający authenticated-original URL.

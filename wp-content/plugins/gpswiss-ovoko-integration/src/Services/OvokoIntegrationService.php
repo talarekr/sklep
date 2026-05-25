@@ -62,6 +62,7 @@ class OvokoIntegrationService
             'rrr_api_username' => '',
             'rrr_api_password' => '',
             'rrr_api_user_token' => '',
+            'ovoko_original_image_bearer_token' => '',
             'ovoko_exclude_gearbox_products' => true,
         ];
     }
@@ -108,9 +109,13 @@ class OvokoIntegrationService
         if ($newRrrPassword !== '') {
             $clean['rrr_api_password'] = $newRrrPassword;
         }
-$newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token'] ?? ''));
+        $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token'] ?? ''));
         if ($newRrrUserToken !== '') {
             $clean['rrr_api_user_token'] = $newRrrUserToken;
+        }
+        $newOriginalImageToken = sanitize_text_field((string) ($settings['ovoko_original_image_bearer_token'] ?? ''));
+        if ($newOriginalImageToken !== '') {
+            $clean['ovoko_original_image_bearer_token'] = $newOriginalImageToken;
         }
         $clean['ovoko_exclude_gearbox_products'] = !isset($settings['ovoko_exclude_gearbox_products']) || !empty($settings['ovoko_exclude_gearbox_products']);
         update_option(self::OPTION_KEY, $clean, false);
@@ -516,7 +521,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $payload = (array) ($result['payload'] ?? []);
         $record = $client->extract_single_part_record($payload);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
-        $imagePlanPreview = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId);
+        $imagePlanPreview = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId, $this->get_cached_authenticated_original_urls($partId));
         $imageUrlFields = $this->scan_image_url_fields($payload);
         $imageFieldDiagnostics = $this->build_image_field_diagnostics($payload);
         $salesChannelsDiagnostic = $client->build_sales_channels_diagnostic($payload);
@@ -525,7 +530,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'part_id' => (string) ($normalized['part_id'] ?? ''),
             'external_id' => (string) ($normalized['external_id'] ?? ''),
         ]);
-        $imagePlan = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId);
+        $imagePlan = (new OvokoImageImportPlan())->preview_image_import_plan($normalized, $partId, $this->get_cached_authenticated_original_urls($partId));
         $imagePolicy = (array) ($imagePlan['image_source_policy'] ?? []);
         $imageCleanSourceFound = !empty($imagePolicy['clean_source_found']);
         $imageWarning = $imageCleanSourceFound ? '' : 'Only public Ovoko watermarked image URLs found.';
@@ -616,7 +621,7 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
             'external_id' => (string) ($normalized['external_id'] ?? ''),
         ]);
         $imagePlanBuilder = new OvokoImageImportPlan();
-        $imagePlanPreview = $imagePlanBuilder->preview_image_import_plan($normalized, $partId);
+        $imagePlanPreview = $imagePlanBuilder->preview_image_import_plan($normalized, $partId, $this->get_cached_authenticated_original_urls($partId));
         $imageUrlFields = $this->scan_image_url_fields($payload);
 
         $hasExisting = !empty($match['matched_product_id']);
@@ -1004,34 +1009,81 @@ $newRrrUserToken = sanitize_text_field((string) ($settings['rrr_api_user_token']
         $payload = (array) ($result['payload'] ?? []);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
         $sourceUrls = array_slice((array) ($normalized['part_photo_gallery'] ?? []), 0, 3);
-        $variants = ['', '/original/', '/raw/', '/source/', '/private/', '/nowm/', '/no_watermark/', '/crm/', '/uploaded/'];
+        $token = trim((string) (($this->get_settings())['ovoko_original_image_bearer_token'] ?? ''));
+        $authUsed = $token !== '';
         $probes = [];
+        $workingOriginalUrls = [];
         foreach ($sourceUrls as $sourceUrl) {
             $sourceUrl = trim((string) $sourceUrl);
             if ($sourceUrl === '') {
                 continue;
             }
             $perUrl = [];
-            foreach ($variants as $variant) {
-                $candidateUrl = $this->build_candidate_image_variant_url($sourceUrl, $variant);
+            foreach ($this->build_original_image_candidates($sourceUrl) as $candidateUrl) {
                 if ($candidateUrl === '') {
                     continue;
                 }
-                $head = wp_remote_head($candidateUrl, ['timeout' => 7, 'redirection' => 3]);
+                $requestArgs = [
+                    'timeout' => 7,
+                    'redirection' => 2,
+                    'headers' => [
+                        'User-Agent' => 'GPSwissWooImporter/1.0',
+                    ],
+                ];
+                if ($authUsed) {
+                    $requestArgs['headers']['Authorization'] = 'Bearer ' . $token;
+                }
+                $head = wp_remote_head($candidateUrl, $requestArgs);
+                if (is_wp_error($head) || (int) wp_remote_retrieve_response_code($head) >= 400) {
+                    $head = wp_remote_get($candidateUrl, $requestArgs);
+                }
                 $headers = !is_wp_error($head) ? (array) wp_remote_retrieve_headers($head) : [];
+                $httpCode = !is_wp_error($head) ? (int) wp_remote_retrieve_response_code($head) : 0;
+                $contentType = (string) ($headers['content-type'] ?? '');
+                $likelyClean = $httpCode >= 200 && $httpCode < 300 && str_starts_with(strtolower($contentType), 'image/');
+                if ($likelyClean) {
+                    $workingOriginalUrls[] = $candidateUrl;
+                }
                 $perUrl[] = [
+                    'source_url' => $sourceUrl,
                     'candidate_url' => $candidateUrl,
-                    'http_code' => !is_wp_error($head) ? (int) wp_remote_retrieve_response_code($head) : 0,
-                    'content_type' => (string) ($headers['content-type'] ?? ''),
+                    'auth_used' => $authUsed,
+                    'http_code' => $httpCode,
+                    'content_type' => $contentType,
                     'content_length' => (string) ($headers['content-length'] ?? ''),
                     'dimensions' => '',
-                    'likely_watermarked' => $this->is_likely_watermarked_url($candidateUrl),
+                    'likely_clean_source' => $likelyClean,
+                    'reason' => $likelyClean ? 'candidate_responded_with_image_content' : 'non_2xx_or_non_image_response',
+                    'error' => is_wp_error($head) ? $head->get_error_message() : '',
                 ];
             }
             $probes[] = ['source_url' => $sourceUrl, 'probes' => $perUrl];
         }
+        $workingOriginalUrls = array_values(array_unique($workingOriginalUrls));
+        set_transient('gpswiss_ovoko_original_probe_' . $partId, [
+            'part_id' => $partId,
+            'clean_source_found' => !empty($workingOriginalUrls),
+            'image_source_selected' => !empty($workingOriginalUrls) ? 'authenticated_original' : 'public_watermarked_fallback',
+            'image_watermark_warning' => !empty($workingOriginalUrls) ? '' : 'Only public Ovoko watermarked image URLs found or authenticated original image probe failed.',
+            'authenticated_original_urls' => $workingOriginalUrls,
+            'checked_at' => gmdate('c'),
+        ], 12 * HOUR_IN_SECONDS);
 
-        return ['ok' => !empty($result['ok']), 'mode' => 'diagnostic_probe', 'action_name' => 'Probe Ovoko image URL variants', 'part_id' => $partId, 'limits' => ['max_images' => 3, 'variant_count' => count($variants)], 'probes' => $probes, 'checked_at' => gmdate('c')];
+        return ['ok' => !empty($result['ok']), 'mode' => 'diagnostic_probe', 'action_name' => 'Probe Ovoko original image auth', 'part_id' => $partId, 'token_configured' => $authUsed, 'limits' => ['max_images' => 3, 'max_requests' => 15], 'probes' => $probes, 'clean_source_found' => !empty($workingOriginalUrls), 'image_source_selected' => !empty($workingOriginalUrls) ? 'authenticated_original' : 'public_watermarked_fallback', 'image_watermark_warning' => !empty($workingOriginalUrls) ? '' : 'Only public Ovoko watermarked image URLs found or authenticated original image probe failed.', 'checked_at' => gmdate('c')];
+    }
+
+    private function get_cached_authenticated_original_urls(int $partId): array
+    {
+        $cached = get_transient('gpswiss_ovoko_original_probe_' . $partId);
+        return is_array($cached) ? array_values(array_filter((array) ($cached['authenticated_original_urls'] ?? []), 'is_string')) : [];
+    }
+
+    private function build_original_image_candidates(string $sourceUrl): array
+    {
+        $candidates = [];
+        $candidates[] = preg_replace('~/((br|bl|tr|tl)/)?\\d{2,4}x\\d{2,4}/~', '/$1original/', $sourceUrl, 1);
+        $candidates[] = preg_replace('~/((br|bl|tr|tl)/)?\\d{2,4}x\\d{2,4}/~', '/original/', $sourceUrl, 1);
+        return array_values(array_unique(array_filter(array_map(static fn($u) => is_string($u) ? $u : '', $candidates))));
     }
 
     private function scan_image_url_fields(array $payload): array
