@@ -436,6 +436,7 @@
   padding: 0;
   border: 0;
   display: flex;
+  justify-content: center;
   gap: 8px;
   flex-wrap: wrap;
 }
