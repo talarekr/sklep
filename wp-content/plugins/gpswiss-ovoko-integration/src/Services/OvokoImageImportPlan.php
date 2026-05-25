@@ -12,6 +12,8 @@ class OvokoImageImportPlan
         $sourceUrls = array_values(array_slice($selection['selected_urls'], 0, self::MAX_IMAGES_PER_PRODUCT));
         $featured = $sourceUrls[0] ?? '';
         $gallery = array_values(array_slice($sourceUrls, 1));
+        $allPublicOvoko = !empty($sourceUrls) && count(array_filter($sourceUrls, static fn($url) => is_string($url) && str_contains($url, 'images.ovoko.com'))) === count($sourceUrls);
+        $cleanSourceFound = !$allPublicOvoko && !empty($sourceUrls);
 
         return [
             'part_id' => $partId,
@@ -35,6 +37,12 @@ class OvokoImageImportPlan
             ],
             'max_images_per_product' => self::MAX_IMAGES_PER_PRODUCT,
             'image_model' => 'allegro_compatible',
+            'image_source_policy' => [
+                'prefer_original_without_watermark' => true,
+                'fallback_public_ovoko_watermarked_allowed' => true,
+                'clean_source_found' => $cleanSourceFound,
+                'warning' => $cleanSourceFound ? '' : 'Only public Ovoko watermarked image URLs found.',
+            ],
             'image_import_blocked' => false,
             'reason' => 'ready_for_create_draft_media_import',
             'preview_mode_reason' => 'preview_only_no_media_write',

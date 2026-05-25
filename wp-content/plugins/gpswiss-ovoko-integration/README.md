@@ -610,3 +610,11 @@ No automatic eBay/Allegro publish was added and no batch/cron was introduced.
 - SKU and stock availability rendering is hidden on single-product frontend for Ovoko card presentation (data still remains in Woo/meta).
 - In the top product info card, short description is replaced (for Ovoko with `_ovoko_car_id`) by button **Pokaż więcej części z tego pojazdu** linking to product archive filtered by `ovoko_car_id`.
 - Product archive/shop/search/listing supports safe filtering by query param `ovoko_car_id`, mapped to `_ovoko_car_id` product meta.
+
+## Ovoko image source / watermark policy
+
+- Publiczne URL-e obrazów Ovoko (np. `images.ovoko.com`) mogą zawierać znak wodny Ovoko.
+- Integracja **nie usuwa watermarka** (bez crop/AI/retuszu).
+- Integracja najpierw diagnozuje źródła URL i preferuje oryginalne/czyste źródło, jeśli API je udostępnia.
+- Jeśli nie znaleziono czystego źródła, zwracany jest warning: `Only public Ovoko watermarked image URLs found.`
+- Dostępna jest akcja diagnostyczna `Probe Ovoko image URL variants` (read-only, limitowana), która testuje wybrane warianty URL bez zapisu danych.

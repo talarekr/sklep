@@ -282,8 +282,17 @@
             <li>single part summary: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['single_part_summary'] ?? []))); ?></code></li>
             <li>woo match preview: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['woo_match_preview'] ?? []))); ?></code></li>
             <li>raw_payload_summary: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['raw_payload_summary'] ?? []))); ?></code></li>
+            <li>image_url_fields_found: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['image_url_fields_found'] ?? []))); ?></code></li>
+            <li>image_field_diagnostics: <code><?php echo esc_html(wp_json_encode((array) ($singlePartPreview['image_field_diagnostics'] ?? []))); ?></code></li>
         </ul>
     <?php endif; ?>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_probe_ovoko_image_url_variants'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_probe_ovoko_image_url_variants" />
+        <label for="probe_ovoko_part_id">Part ID:</label>
+        <input id="probe_ovoko_part_id" type="number" min="1" name="part_id" value="10994" />
+        <?php submit_button('Probe Ovoko image URL variants', 'secondary', 'submit', false); ?>
+    </form>
 
     <h2>Preview Woo product create from RRR part</h2>
     <p><strong>Preview only — no Woo product was created or updated.</strong></p>
@@ -311,6 +320,7 @@
             <li>excluded_from_ovoko_sync: <code><?php echo esc_html(!empty($previewWooCreate['excluded_from_ovoko_sync']) ? 'true' : 'false'); ?></code></li>
             <li>post_draft_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview'] ?? []))); ?></code></li>
             <li>preview_image_import_plan: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['preview_image_import_plan'] ?? []))); ?></code></li>
+            <li>image_url_fields_found: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['image_url_fields_found'] ?? []))); ?></code></li>
             <li>woo_meta_preview: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['woo_meta_preview'] ?? []))); ?></code></li>
             <li>same_vehicle_grouping: <code><?php echo esc_html(wp_json_encode((array) ($previewWooCreate['post_draft_preview']['same_vehicle_grouping'] ?? []))); ?></code></li>
             <li>no_write_to_woo: <code><?php echo esc_html(!empty($previewWooCreate['no_write_to_woo']) ? 'true' : 'false'); ?></code></li>
@@ -350,6 +360,10 @@
             <li>no_allegro_publish: <code><?php echo esc_html(!empty($createWooDraft['no_allegro_publish']) ? 'true' : 'false'); ?></code></li>
             <li>no_batch: <code><?php echo esc_html(!empty($createWooDraft['no_batch']) ? 'true' : 'false'); ?></code></li>
             <li>validations: <code><?php echo esc_html(wp_json_encode((array) ($createWooDraft['validations'] ?? []))); ?></code></li>
+            <li>image_watermark_policy_checked: <code><?php echo esc_html(!empty($createWooDraft['image_watermark_policy_checked']) ? 'true' : 'false'); ?></code></li>
+            <li>image_clean_source_found: <code><?php echo esc_html(!empty($createWooDraft['image_clean_source_found']) ? 'true' : 'false'); ?></code></li>
+            <li>image_source_selected: <code><?php echo esc_html((string) ($createWooDraft['image_source_selected'] ?? '')); ?></code></li>
+            <li>image_watermark_warning: <code><?php echo esc_html((string) ($createWooDraft['image_watermark_warning'] ?? '')); ?></code></li>
         </ul>
     <?php endif; ?>
 
