@@ -35,6 +35,8 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_apply_frontend_part_number_mapping', [$this, 'handle_apply_frontend_part_number_mapping']);
         add_action('admin_post_gpswiss_ovoko_preview_allegro_to_ovoko_match', [$this, 'handle_preview_allegro_to_ovoko_match']);
         add_action('admin_post_gpswiss_ovoko_apply_allegro_to_ovoko_details', [$this, 'handle_apply_allegro_to_ovoko_details']);
+        add_action('admin_post_gpswiss_ovoko_probe_rrr_part_search_by_code', [$this, 'handle_probe_rrr_part_search_by_code']);
+        add_action('admin_post_gpswiss_ovoko_preview_paginated_rrr_part_code_lookup', [$this, 'handle_preview_paginated_rrr_part_code_lookup']);
     }
 
     public function register_admin_page(): void
@@ -341,6 +343,30 @@ class AdminPage
         $productId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
         $replaceDescription = !isset($_POST['replace_description']) || !empty($_POST['replace_description']);
         $result = $this->service->apply_allegro_to_ovoko_details($productId, $replaceDescription);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_probe_rrr_part_search_by_code(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_probe_rrr_part_search_by_code');
+        $partNumber = isset($_POST['part_number']) ? sanitize_text_field((string) $_POST['part_number']) : '';
+        $result = $this->service->probe_rrr_part_search_by_code($partNumber);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_preview_paginated_rrr_part_code_lookup(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_preview_paginated_rrr_part_code_lookup');
+        $partNumber = isset($_POST['part_number']) ? sanitize_text_field((string) $_POST['part_number']) : '';
+        $maxPages = isset($_POST['max_pages']) ? (int) $_POST['max_pages'] : 3;
+        $limit = isset($_POST['limit']) ? (int) $_POST['limit'] : 100;
+        $result = $this->service->preview_paginated_rrr_part_code_lookup($partNumber, $maxPages, $limit);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;

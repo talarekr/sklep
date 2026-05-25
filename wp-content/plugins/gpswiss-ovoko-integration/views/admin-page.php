@@ -66,6 +66,30 @@
         <?php submit_button('Preview Allegro to Ovoko match', 'secondary', 'submit', false); ?>
     </form>
 
+    <h2>Probe RRR part search by code</h2>
+    <p><strong>Diagnostic only.</strong> Read-only probes on <code>/v2/get/parts</code> with candidate search parameters.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_probe_rrr_part_search_by_code'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_probe_rrr_part_search_by_code" />
+        <label for="probe_part_number">Part number:</label>
+        <input id="probe_part_number" type="text" name="part_number" value="A1778106004" />
+        <?php submit_button('Probe RRR part search by code', 'secondary', 'submit', false); ?>
+    </form>
+
+    <h2>Preview paginated RRR part code lookup</h2>
+    <p><strong>Preview only.</strong> Dry-run paginated scan (limited pages) for exact part code match.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_preview_paginated_rrr_part_code_lookup'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_preview_paginated_rrr_part_code_lookup" />
+        <label for="paginated_part_number">Part number:</label>
+        <input id="paginated_part_number" type="text" name="part_number" value="A1778106004" />
+        <label for="paginated_limit">Limit:</label>
+        <input id="paginated_limit" type="number" min="1" max="100" name="limit" value="100" />
+        <label for="paginated_max_pages">Max pages:</label>
+        <input id="paginated_max_pages" type="number" min="1" max="10" name="max_pages" value="3" />
+        <?php submit_button('Preview paginated RRR part code lookup', 'secondary', 'submit', false); ?>
+    </form>
+
     <h2>Apply Allegro to Ovoko details enrichment</h2>
     <p><strong>Manual action.</strong> Writes only detail attributes/meta and can replace old Allegro description.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">

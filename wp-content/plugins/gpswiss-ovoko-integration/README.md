@@ -642,8 +642,31 @@ Product is treated as Allegro when at least one of these is present:
 ### Matching strategy to Ovoko/RRR
 1. If `_ovoko_part_id` already exists: validate via read-only `/get/part/{id}`.
 2. Otherwise try part number keys: `_part_number`, `_mpn`, `mpn`, `_manufacturer_code`, `_gpswiss_part_number`.
-3. Current implementation uses read-only `/v2/get/parts` preview sampling and exact code compare (`manufacturer_code`/`visible_code`/`other_code`).
-4. If ambiguous or none -> no write; manual review required.
+3. Plugin now first runs diagnostic read-only search probe for `/v2/get/parts` candidate query params (`manufacturer_code`, `visible_code`, `other_code`, `code`, `search`, `q`, `external_id`, `part_code`, `part_number`, `query`, `name`).
+4. If a filter is effective and returns exact code match, preview reports search-endpoint method.
+5. If no confirmed search filter is found, preview uses page-1 sample coverage only and returns:
+   - `match_confidence=unknown_low_coverage`
+   - `coverage=sample_only`
+   - `review_required=true`
+   - reason: `Only first page sampled; cannot conclude no match.`
+6. Apply remains blocked unless confidence is high.
+
+## RRR part code search / Allegro enrichment matching coverage
+
+- Why page=1 sample is not enough:
+  - `/v2/get/parts?limit=100&page=1` can represent only a small slice of catalog.
+  - Missing code on page 1 is **not evidence** that part code does not exist globally.
+- New diagnostic action: **Probe RRR part search by code** (read-only).
+  - Input: `part_number`
+  - Reports per-candidate path: `status_code`, `msg`, `pagination.total_count`, `records_count`, `candidate_record_keys`, exact matches, match fields, safe summary, and `filter_effective`.
+- `filter_effective=true` only when result set differs from baseline sample, or exact match appears, or API message clearly confirms filtering.
+- If no endpoint supports code filtering:
+  - Use **Preview paginated RRR part code lookup** (read-only dry-run only).
+  - Inputs: `part_number`, `limit` (default 100), `max_pages` (default 3).
+  - Reports: `pages_scanned`, `records_scanned`, `total_count`, `exact_matches`, `stopped_reason`.
+- Safety rule remains unchanged:
+  - apply enrichment requires high-confidence exact single match.
+  - no price/stock/images/title/publication/eBay/Allegro/batch changes in this flow.
 
 ### What apply may write
 Only:

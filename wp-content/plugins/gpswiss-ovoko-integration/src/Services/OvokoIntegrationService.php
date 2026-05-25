@@ -1666,6 +1666,48 @@ class OvokoIntegrationService
         return ['ok'=>true,'mode'=>'preview_only','action_name'=>'Probe RRR vehicle endpoints','vehicle_probe'=>$vehicleProbe,'dictionary_probe'=>$dictProbe];
     }
 
+    public function probe_rrr_part_search_by_code(string $partNumber): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        return $client->probe_part_search_by_code($partNumber);
+    }
+
+    public function preview_paginated_rrr_part_code_lookup(string $partNumber, int $maxPages = 3, int $limit = 100): array
+    {
+        $partNumber = trim($partNumber);
+        if ($partNumber === '') {
+            return ['ok' => false, 'action_name' => 'Preview paginated RRR part code lookup', 'reason' => 'missing_part_number'];
+        }
+        $maxPages = max(1, min(10, $maxPages));
+        $limit = max(1, min(100, $limit));
+        $client = new RrrApiClient($this->get_settings());
+        $pagesScanned = 0;
+        $recordsScanned = 0;
+        $totalCount = null;
+        $matches = [];
+        for ($page = 1; $page <= $maxPages; $page++) {
+            $sample = $client->preview_fetch_parts_sample($limit, $page);
+            $pagesScanned++;
+            $rows = (array) ($sample['records'] ?? []);
+            $recordsScanned += count($rows);
+            if ($totalCount === null && isset($sample['pagination']['total_count'])) {
+                $totalCount = (int) $sample['pagination']['total_count'];
+            }
+            foreach ($rows as $row) {
+                $raw = (array) ($row ?? []);
+                foreach (['manufacturer_code', 'visible_code', 'other_code', 'external_id'] as $field) {
+                    if (strcasecmp((string) ($raw[$field] ?? ''), $partNumber) === 0) {
+                        $matches[] = ['id' => (string) ($raw['id'] ?? ''), 'field' => $field, 'value' => (string) $raw[$field]];
+                    }
+                }
+            }
+            if (count($rows) < $limit) {
+                break;
+            }
+        }
+        return ['ok' => true, 'mode' => 'preview_only', 'action_name' => 'Preview paginated RRR part code lookup', 'part_number' => $partNumber, 'limit' => $limit, 'max_pages' => $maxPages, 'pages_scanned' => $pagesScanned, 'records_scanned' => $recordsScanned, 'total_count' => $totalCount, 'exact_matches' => $matches, 'stopped_reason' => $pagesScanned >= $maxPages ? 'max_pages_reached' : 'last_page_or_short_page'];
+    }
+
     public function preview_ovoko_title_with_vehicle_data(int $partId = 60271): array
     {
         $partId = max(1, $partId);
@@ -1726,7 +1768,7 @@ class OvokoIntegrationService
         $preview = $this->preview_allegro_to_ovoko_match($productId);
         if (empty($preview['is_allegro_product'])) return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'not_allegro_product','product_id'=>$productId];
         $match = (array) ($preview['match'] ?? []);
-        if (($match['match_confidence'] ?? '') === 'ambiguous' || ($match['match_confidence'] ?? '') === 'none') return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'match_not_high','product_id'=>$productId,'match_confidence'=>$match['match_confidence'] ?? 'none'];
+        if (($match['match_confidence'] ?? '') !== 'high' && ($match['match_confidence'] ?? '') !== 'high_existing_ovoko_part_id') return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'match_not_high','product_id'=>$productId,'match_confidence'=>$match['match_confidence'] ?? 'unknown_low_coverage'];
         $normalized = (array) ($match['part_normalized'] ?? []);
         $carId = (string) ($normalized['car_id'] ?? '');
         if ($carId === '') return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'missing_car_id','product_id'=>$productId];
@@ -1755,9 +1797,21 @@ class OvokoIntegrationService
         $partId = (int) ($audit['current_ovoko_part_id'] ?? 0);
         if ($partId > 0) { $single=$client->preview_fetch_single_part($partId); $norm=$client->normalize_rrr_single_part_payload((array)($single['payload']??[])); return ['match_confidence'=>!empty($single['ok'])?'high_existing_ovoko_part_id':'none','review_required'=>empty($single['ok']),'part_normalized'=>$norm,'identifiers_used'=>['_ovoko_part_id'],'rrr_endpoint'=>'/get/part/{id}']; }
         $candidate=''; foreach(['_part_number','_mpn','mpn','_manufacturer_code','_gpswiss_part_number'] as $k){$v=sanitize_text_field((string)get_post_meta($productId,$k,true)); if($v!==''){ $candidate=$v; break; }}
-        $sample=$client->preview_fetch_parts_sample(100,1); $rows=(array)($sample['records']??[]); $hits=[]; foreach($rows as $r){$n=$client->normalize_rrr_single_part_payload(['response'=>[$r]]); foreach(['manufacturer_code','visible_code','other_code'] as $f){ if(strcasecmp((string)($n[$f]??''),$candidate)===0){$hits[]=$n; break;}} }
-        $confidence=count($hits)===1?'high':(count($hits)>1?'ambiguous':'none');
-        return ['match_confidence'=>$confidence,'review_required'=>$confidence!=='high','identifiers_used'=>['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'],'part_number_candidate'=>$candidate,'matches_found'=>count($hits),'part_normalized'=>$hits[0]??[],'rrr_endpoint'=>'/v2/get/parts?limit=100&page=1','diagnostics_readme_question'=>$confidence==='none'?'Need confirmed search endpoint by part code to avoid low-coverage sampling.':''];
+        $probe = $candidate !== '' ? $client->probe_part_search_by_code($candidate) : [];
+        $effective = [];
+        foreach ((array) ($probe['candidates'] ?? []) as $candidateProbe) {
+            if (!empty($candidateProbe['filter_effective'])) {
+                $effective[] = $candidateProbe;
+            }
+        }
+        if ($effective !== []) {
+            $first = (array) $effective[0];
+            $exactMatches = (array) ($first['exact_code_matches'] ?? []);
+            $confidence = count($exactMatches) === 1 ? 'high' : (count($exactMatches) > 1 ? 'ambiguous' : 'unknown_low_coverage');
+            return ['match_confidence' => $confidence, 'review_required' => $confidence !== 'high', 'identifiers_used' => ['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'], 'part_number_candidate' => $candidate, 'matches_found' => count($exactMatches), 'part_normalized' => [], 'search_method' => 'rrr_search_filter:' . (string) ($first['path'] ?? ''), 'coverage' => 'search_endpoint', 'searched_pages' => [1], 'searched_total_records' => (int) ($first['records_count'] ?? 0), 'total_count' => $first['pagination']['total_count'] ?? null, 'reason' => $confidence === 'high' ? 'Exact single match via search filter.' : 'Search endpoint returned non-single exact results.', 'rrr_endpoint' => (string) ($first['path'] ?? '')];
+        }
+        $sample=$client->preview_fetch_parts_sample(100,1); $rows=(array)($sample['records']??[]);
+        return ['match_confidence'=>'unknown_low_coverage','review_required'=>true,'identifiers_used'=>['_part_number/_mpn/mpn/_manufacturer_code/_gpswiss_part_number'],'part_number_candidate'=>$candidate,'matches_found'=>'0_sample_only','part_normalized'=>[],'search_method'=>'sample_page_1_only','coverage'=>'sample_only','searched_pages'=>[1],'searched_total_records'=>count($rows),'total_count'=>$sample['pagination']['total_count'] ?? null,'reason'=>'Only first page sampled; cannot conclude no match.','rrr_endpoint'=>'/v2/get/parts?limit=100&page=1','diagnostics_readme_question'=>'Need confirmed search endpoint by part code to avoid low-coverage sampling.','next_recommended_action'=>'Run Probe RRR part search by code; if still unavailable run Preview paginated RRR part code lookup.'];
     }
 
     private function short_make(string $make): string { $m=trim($make); return match($m){'Volkswagen'=>'VW','Mercedes-Benz'=>'Mercedes',default=>$m}; }
