@@ -268,6 +268,7 @@ Diagnostic key search in `/get/part/{id}` preview checks for channel-related fie
 
 Open integration question:
 - **Which endpoint or field returns channel-specific Allegro price for a part?**
+- **Which endpoint returns sales channels / Allegro offer ID / Allegro channel price for a part?**
 
 ## Ovoko car_id / same vehicle grouping
 

@@ -495,6 +495,7 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         $payload = (array) ($result['payload'] ?? []);
         $record = $client->extract_single_part_record($payload);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $salesChannelsDiagnostic = $client->build_sales_channels_diagnostic($payload);
         $syncService = new OvokoProductSyncService();
         $match = $syncService->preview_match_rrr_record([
             'part_id' => (string) ($normalized['part_id'] ?? ''),
@@ -526,12 +527,14 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
                 'allegro_price_location' => (string) ($normalized['allegro_price_location'] ?? 'not_found_in_get_part_payload'),
                 'full_payload_omitted' => true,
             ],
+            'sales_channels_diagnostic' => $salesChannelsDiagnostic,
             'no_write_to_woo' => true,
             'readme_question' => implode(' ', array_filter([
                 (($normalized['vehicle_data_status'] ?? '') === 'car_id_only')
                     ? 'Which endpoint returns full car details for car_id? Possibly /get/car/{id} or Cars v2 — confirm with RRR/Ovoko.'
                     : '',
                 'Which endpoint or field returns channel-specific Allegro price for a part?',
+                'Which endpoint returns sales channels / Allegro offer ID / Allegro channel price for a part?',
             ])),
             'checked_at' => gmdate('c'),
         ];
