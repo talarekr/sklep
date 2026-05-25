@@ -635,6 +635,129 @@ $matchPreview = $syncService->preview_match_existing_product($fixtureWithHash);
         ];
     }
 
+
+    public function create_woo_draft_product_from_rrr_part(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($result['payload'] ?? []);
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $syncService = new OvokoProductSyncService();
+        $match = $syncService->preview_match_rrr_record([
+            'part_id' => (string) ($normalized['part_id'] ?? ''),
+            'external_id' => (string) ($normalized['external_id'] ?? ''),
+        ]);
+
+        $existingProductId = (int) ($match['matched_product_id'] ?? 0);
+        if ($existingProductId > 0) {
+            return [
+                'ok' => false,
+                'action_name' => 'Create Woo draft product from RRR part',
+                'existing_product_found' => true,
+                'part_id' => $partId,
+                'created' => false,
+                'existing_product_id' => $existingProductId,
+                'edit_link' => get_edit_post_link($existingProductId, 'raw'),
+                'no_ebay_publish' => true,
+                'no_allegro_publish' => true,
+                'no_batch' => true,
+            ];
+        }
+
+        $validations = $this->build_rrr_manual_create_validations($result, $normalized, $match);
+        $blocking = array_filter($validations, static fn($v) => empty($v['passed']) && !empty($v['blocking']));
+        if (!empty($blocking)) {
+            return [
+                'ok' => false,
+                'action_name' => 'Create Woo draft product from RRR part',
+                'part_id' => $partId,
+                'created' => false,
+                'existing_product_found' => false,
+                'create_blocked' => true,
+                'blocking_validations' => array_values($blocking),
+                'validations' => $validations,
+                'no_ebay_publish' => true,
+                'no_allegro_publish' => true,
+                'no_batch' => true,
+            ];
+        }
+
+        $productId = wp_insert_post([
+            'post_type' => 'product',
+            'post_status' => 'draft',
+            'post_title' => (string) ($normalized['title'] ?? ''),
+            'post_content' => (string) ($normalized['notes'] ?? ''),
+            'post_excerpt' => (string) ($normalized['notes'] ?? ''),
+        ], true);
+        if (is_wp_error($productId)) {
+            return ['ok' => false, 'action_name' => 'Create Woo draft product from RRR part', 'created' => false, 'error' => $productId->get_error_message()];
+        }
+        $productId = (int) $productId;
+
+        update_post_meta($productId, '_sku', 'GPSW-OVK-' . $partId);
+        update_post_meta($productId, '_regular_price', (string) ($normalized['woo_target_price'] ?? ''));
+        update_post_meta($productId, '_price', (string) ($normalized['woo_target_price'] ?? ''));
+        if (defined('WC_VERSION')) {
+            update_post_meta($productId, '_product_version', WC_VERSION);
+        }
+
+        $meta = [
+            '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
+            '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
+            '_ovoko_status' => (string) ($normalized['status'] ?? ''),
+            '_ovoko_updated_at' => (string) ($normalized['updated_at'] ?? ''),
+            '_ovoko_category' => (string) ($normalized['category_title_path'] ?? ''),
+            '_ovoko_category_id' => (string) ($normalized['category_id'] ?? ''),
+            '_ovoko_source_url' => (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')),
+            '_ovoko_images' => (array) ($normalized['part_photo_gallery'] ?? []),
+            '_ovoko_price' => (string) ($normalized['price'] ?? ''),
+            '_ovoko_original_price' => (string) ($normalized['original_price'] ?? ''),
+            '_ovoko_internal_notes_price_source' => (string) ($normalized['price_source'] ?? ''),
+            '_ovoko_woo_target_price' => (string) ($normalized['woo_target_price'] ?? ''),
+            '_ovoko_woo_target_currency' => 'PLN',
+            '_ovoko_manufacturer_code' => (string) ($normalized['manufacturer_code'] ?? ''),
+            '_ovoko_quality' => (string) ($normalized['quality'] ?? ''),
+            '_ovoko_position' => (string) ($normalized['position'] ?? ''),
+            'source' => 'ovoko_master',
+        ];
+        foreach ($meta as $k=>$v) update_post_meta($productId,$k,$v);
+        wp_set_object_terms($productId, 'simple', 'product_type');
+
+        return [
+            'ok' => true,
+            'action_name' => 'Create Woo draft product from RRR part',
+            'created' => true,
+            'created_product_id' => $productId,
+            'edit_link' => get_edit_post_link($productId, 'raw'),
+            'status' => 'draft',
+            'sku' => 'GPSW-OVK-' . $partId,
+            'price' => (string) ($normalized['woo_target_price'] ?? ''),
+            'images_warning' => empty($normalized['part_photo_gallery']) ? 'No images in source payload; product created without media import.' : '',
+            'validations' => $validations,
+            'no_ebay_publish' => true,
+            'no_allegro_publish' => true,
+            'no_batch' => true,
+        ];
+    }
+
+    private function build_rrr_manual_create_validations(array $result, array $normalized, array $match): array
+    {
+        $priceSource = (string) ($normalized['price_source'] ?? '');
+        $priceReviewRequired = !empty($normalized['price_review_required']);
+        $wooTargetPrice = (float) ($normalized['woo_target_price'] ?? 0);
+        return [
+            ['name' => 'rrr_status_code_r200', 'passed' => ((string) ($result['status_code'] ?? '')) === 'R200', 'blocking' => true],
+            ['name' => 'no_existing_match', 'passed' => empty($match['matched_product_id']), 'blocking' => true],
+            ['name' => 'create_blocked_false', 'passed' => ($priceSource === 'internal_notes_plain_price' && !$priceReviewRequired), 'blocking' => true],
+            ['name' => 'gearbox_exclusion_false', 'passed' => empty($match['excluded_from_ovoko_sync']), 'blocking' => true],
+            ['name' => 'price_source_internal_notes_plain_price', 'passed' => $priceSource === 'internal_notes_plain_price', 'blocking' => true],
+            ['name' => 'price_review_required_false', 'passed' => !$priceReviewRequired, 'blocking' => true],
+            ['name' => 'woo_target_price_gt_zero', 'passed' => $wooTargetPrice > 0, 'blocking' => true],
+            ['name' => 'images_present_warning_only', 'passed' => !empty((array) ($normalized['part_photo_gallery'] ?? [])), 'blocking' => false],
+        ];
+    }
+
     private function build_rrr_single_part_woo_meta_preview(array $normalized): array
     {
         $priceSource = (string) ($normalized['price_source'] ?? '');
