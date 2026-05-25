@@ -72,6 +72,22 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
 
+
+    public function preview_fetch_car_by_id(string $carId): array
+    {
+        $carId = trim($carId);
+        if ($carId === '') {
+            return ['ok' => false, 'message' => 'Missing car id for preview'];
+        }
+
+        return [
+            'ok' => false,
+            'endpoint_confirmed' => false,
+            'car_id' => $carId,
+            'message' => 'Read-only car details endpoint by car_id is not confirmed in accessible RRR docs.',
+            'diagnostics_question' => 'Please confirm official read-only endpoint for car details by car_id (e.g. /get/car/{id} or /v2/get/cars).',
+        ];
+    }
     public function preview_fetch_single_part(int $partId): array
     {
         $partId = max(1, $partId);
