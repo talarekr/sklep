@@ -120,6 +120,20 @@ class OvokoProductSyncService
         return $count;
     }
 
+    public function count_excluded_gearbox_products_sql_fast(): int
+    {
+        global $wpdb;
+        if (!$wpdb || !post_type_exists('product')) {
+            return 0;
+        }
+
+        $metaKeys = array_merge(self::GEARBOX_HARD_META_KEYS, ['source', '_source', '_gpswiss_source']);
+        $placeholders = implode(', ', array_fill(0, count($metaKeys), '%s'));
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- placeholders are prepared via $wpdb->prepare
+        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID WHERE p.post_type = 'product' AND p.post_status IN ('publish','draft','pending','private') AND pm.meta_key IN ($placeholders) AND ((pm.meta_key IN ('source', '_source', '_gpswiss_source') AND LOWER(pm.meta_value) IN ('gearboxes', 'allegro_gearboxes')) OR (pm.meta_key IN ('_allegro_gearbox_id', '_gearbox_id', '_gpswiss_allegro_gearboxes') AND pm.meta_value <> ''))";
+        return (int) $wpdb->get_var($wpdb->prepare($sql, $metaKeys));
+    }
+
     private function apply_exclusion_to_match(array $match): array
     {
         $productId = (int) ($match['matched_product_id'] ?? 0);
