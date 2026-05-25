@@ -429,3 +429,13 @@ Na tym etapie wdrożony jest wyłącznie preview/scaffold planu importu zdjęć 
 - bez ustawiania `_product_image_gallery`.
 
 Realny import zdjęć będzie osobnym krokiem po zatwierdzeniu modelu kompatybilności.
+
+## Woo image source policy (preview/import plan)
+
+For Woo featured/gallery image ordering, the plugin now prefers full-size images from `part_photo_gallery`.
+
+- If `part_photo_gallery` contains at least one URL, only those URLs are used for Woo image order.
+- `photo` is treated as a thumbnail field and is ignored in that case.
+- `photo` is used only as a fallback when `part_photo_gallery` is empty.
+
+This policy is preview-only in current scope: no image download, no attachment creation, no `_thumbnail_id`, and no `_product_image_gallery` write.
