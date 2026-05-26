@@ -474,6 +474,7 @@ class AdminPage
             'parsed_minimal_response' => $parsedMinimalResponse,
             'raw_disable_debug_heavy_logs_input' => $rawDisableDebugHeavyLogsInput,
             'parsed_disable_debug_heavy_logs' => $parsedDisableDebugHeavyLogs,
+            'form_source' => isset($_POST['form_source']) ? sanitize_text_field((string) $_POST['form_source']) : 'batch_update_form',
         ];
         try {
             $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
@@ -499,6 +500,7 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_single_enrichment_dry_run');
+        $formSource = isset($_POST['form_source']) ? sanitize_text_field((string) $_POST['form_source']) : 'single_update_form';
         $result = $this->service->single_enrichment_dry_run_memory_safe([
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'part_id' => isset($_POST['part_id']) ? (int) $_POST['part_id'] : 0,
@@ -507,6 +509,8 @@ class AdminPage
             'minimal_response' => true,
             'disable_debug_heavy_logs' => true,
             'debug_full' => !empty($_POST['debug_full']),
+            'form_source' => $formSource,
+            'handler_used' => 'single_enrichment_dry_run_memory_safe',
         ]);
         wp_send_json($result, !empty($result['ok']) ? 200 : 500);
     }

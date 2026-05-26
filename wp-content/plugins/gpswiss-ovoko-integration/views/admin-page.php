@@ -100,7 +100,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Create Woo draft product from RRR part</h3>
         <p>Creates Woo draft product. Does not publish to Allegro/eBay/batches.</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:8px;">
             <?php wp_nonce_field('gpswiss_ovoko_create_rrr_woo_draft'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_create_rrr_woo_draft" />
             <label for="create_draft_part_id">part_id:</label>
@@ -113,18 +113,27 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <h3>Update single existing product from CSV mapping</h3>
         <p>Updates only Ovoko/RRR detail attributes and meta. Does not change price, stock, images, title or publication status.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-            <?php wp_nonce_field('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment" />
-            <input type="hidden" name="batch_size" value="1" />
-            <input type="hidden" name="limit" value="1" />
+            <?php wp_nonce_field('gpswiss_ovoko_single_enrichment_dry_run'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_single_enrichment_dry_run" />
             <input type="hidden" name="details_only" value="1" />
             <input type="hidden" name="minimal_response" value="1" />
             <input type="hidden" name="disable_debug_heavy_logs" value="1" />
+            <input type="hidden" name="form_source" value="single_update_form" />
             <label for="single_product_id">product_id:</label>
-            <input id="single_product_id" type="number" min="1" name="product_ids_csv" value="2081" />
+            <input id="single_product_id" type="number" min="1" name="product_id" value="2081" />
             <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
             <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run</button>
-            <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label> <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply update</button>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_apply_allegro_to_ovoko_details'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_apply_allegro_to_ovoko_details" />
+            <input type="hidden" name="details_only" value="1" />
+            <input type="hidden" name="form_source" value="single_update_form" />
+            <label for="single_product_id_apply">product_id:</label>
+            <input id="single_product_id_apply" type="number" min="1" name="product_id" value="2081" />
+            <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
+            <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label>
+            <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply update</button>
         </form>
     </div>
 
@@ -138,6 +147,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input type="hidden" name="details_only" value="1" />
             <input type="hidden" name="minimal_response" value="1" />
             <input type="hidden" name="disable_debug_heavy_logs" value="1" />
+            <input type="hidden" name="form_source" value="batch_update_form" />
             <label for="bulk_product_ids_csv">product_ids_csv (optional):</label>
             <input id="bulk_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
             <label for="bulk_after_product_id">after_product_id:</label>
