@@ -171,13 +171,62 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label for="bulk_limit">limit:</label>
             <input id="bulk_limit" type="number" min="1" max="50" name="limit" value="3" />
             <label for="bulk_batch_size">batch_size:</label>
-            <input id="bulk_batch_size" type="number" min="1" max="3" name="batch_size" value="1" />
+            <input id="bulk_batch_size" type="number" min="1" max="5" name="batch_size" value="3" />
+            <label for="bulk_sleep_ms">sleep_ms:</label>
+            <input id="bulk_sleep_ms" type="number" min="250" max="10000" step="250" value="1200" />
+            <label for="bulk_limit_total">limit_total:</label>
+            <input id="bulk_limit_total" type="number" min="0" step="1" value="0" />
+            <label><input type="checkbox" id="bulk_stop_on_error" checked="checked" /> Stop on error</label>
+            <label><input type="checkbox" id="bulk_skip_already_enriched" checked="checked" /> Skip already enriched</label>
             <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
+            <label><input type="checkbox" id="bulk_apply_confirm" /> I understand this will update product details/meta for matching products.</label>
             <br><br>
-            <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run batch</button>
+            <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run selected batch</button>
             <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label> <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply batch</button>
+            <button class="button" type="button" id="gpswiss_autorun_start">Start auto-run</button>
+            <button class="button" type="button" id="gpswiss_autorun_pause">Pause</button>
+            <button class="button" type="button" id="gpswiss_autorun_resume">Resume</button>
+            <button class="button" type="button" id="gpswiss_autorun_stop">Stop</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_jsonl">Download log JSONL</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_csv">Download log CSV</button>
         </form>
+        <div id="gpswiss_autorun_status" style="margin-top:10px;padding:10px;background:#f6f7f7;">
+            <strong>Status:</strong> <span data-k="status">idle</span> |
+            <strong>last_after_product_id:</strong> <span data-k="last_after_product_id">0</span> |
+            <strong>next_after_product_id:</strong> <span data-k="next_after_product_id">0</span> |
+            <strong>total_processed:</strong> <span data-k="total_processed">0</span> |
+            <strong>total_updated:</strong> <span data-k="total_updated">0</span> |
+            <strong>total_skipped:</strong> <span data-k="total_skipped">0</span> |
+            <strong>total_errors:</strong> <span data-k="total_errors">0</span> |
+            <strong>batch_duration:</strong> <span data-k="batch_duration">0</span>s |
+            <strong>memory_peak_mb:</strong> <span data-k="memory_peak_mb">0</span>
+        </div>
+        <pre id="gpswiss_autorun_logs" style="max-height:260px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
+    <script>
+    (function(){
+      const form=document.querySelector('form[action*="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment"]'); if(!form)return;
+      const $=id=>document.getElementById(id), statusEl=$('gpswiss_autorun_status'), logsEl=$('gpswiss_autorun_logs');
+      const stateKey='gpswiss_ovoko_autorun_state_v1';
+      let st={running:false,paused:false,stopped:false,mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,logs:[]};
+      try{ const s=localStorage.getItem(stateKey); if(s){ st=Object.assign(st, JSON.parse(s)); }}catch(e){}
+      const save=()=>{ try{localStorage.setItem(stateKey, JSON.stringify(st));}catch(e){} };
+      const setK=(k,v)=>{ const n=statusEl.querySelector(`[data-k="${k}"]`); if(n)n.textContent=String(v); };
+      const render=()=>{ ['status','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(k=>setK(k, st[k]??0)); logsEl.textContent=(st.logs||[]).slice(-20).map(x=>JSON.stringify(x)).join("\n"); };
+      const pushLog=(obj)=>{ st.logs.push(Object.assign({ts:new Date().toISOString()},obj)); st.logs=st.logs.slice(-500); save(); render(); };
+      const buildBody=(mode)=>{ const fd=new URLSearchParams(); fd.set('action','gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); fd.set('_ajax_nonce', form.querySelector('input[name="_wpnonce"]').value); fd.set('form_source','batch_update_form'); fd.set('details_only','1'); fd.set('minimal_response','1'); fd.set('disable_debug_heavy_logs','1'); fd.set('batch_size', $('bulk_batch_size').value||'3'); fd.set('limit', form.querySelector('[name="limit"]').value||'3'); fd.set('after_product_id', String(st.next_after_product_id||parseInt(form.querySelector('[name="after_product_id"]').value||'0',10))); fd.set('product_ids_csv', form.querySelector('[name="product_ids_csv"]').value||''); if($('bulk_skip_already_enriched').checked) fd.set('skip_already_enriched','1'); if(form.querySelector('[name="replace_description"]').checked) fd.set('replace_description','1'); fd.set(mode,'1'); return fd; };
+      const doneByPayload=(res)=> !!res.done || !res.processed || !res.next_after_product_id;
+      const tick=async()=>{ if(!st.running || st.paused || st.stopped) return; const started=Date.now(); const body=buildBody(st.mode); const res=await fetch(ajaxurl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(r=>r.json()); st.batch_duration=((Date.now()-started)/1000).toFixed(2); st.last_after_product_id=parseInt(body.get('after_product_id')||'0',10); st.next_after_product_id=parseInt(res.next_after_product_id||0,10); st.total_processed+=parseInt(res.processed||0,10); st.total_updated+=parseInt(res.updated||0,10); st.total_skipped+=parseInt(res.skipped||0,10); st.total_errors+=parseInt(res.errors||0,10); st.memory_peak_mb=res.memory_peak_mb||0; const batchLogs=(res.sample_results||[]).map(x=>({product_id:x.product_id,action:x.action,error:x.error||'',matched_ovoko_part_id:x.matched_ovoko_part_id,matched_ovoko_car_id:x.matched_ovoko_car_id,would_write_attributes_count:x.would_write_attributes_count||0})); batchLogs.forEach(pushLog); const stopOnError=$('bulk_stop_on_error').checked; const hasSafety=(res.sample_results||[]).some(x=>x.error==='safety_violation'); const limitTotal=parseInt($('bulk_limit_total').value||'0',10); const hitLimit=limitTotal>0 && st.total_processed>=limitTotal; if((stopOnError && (parseInt(res.errors||0,10)>0 || hasSafety)) || hitLimit){ st.running=false; st.status='stopped'; save(); render(); return; } if(doneByPayload(res)){ st.running=false; st.status='done'; save(); render(); return; } st.status='running'; save(); render(); setTimeout(()=>{ tick().catch(e=>{ st.running=false; st.status='stopped'; pushLog({error:String(e)}); }); }, Math.max(250, parseInt($('bulk_sleep_ms').value||'1200',10))); };
+      $('gpswiss_autorun_start').addEventListener('click', ()=>{ st.mode=confirm('OK = apply, Cancel = dry-run')?'apply':'dry_run'; if(st.mode==='apply' && !$('bulk_apply_confirm').checked){ alert('Confirm apply checkbox first.'); return; } st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); save(); render(); tick().catch(e=>pushLog({error:String(e)})); });
+      $('gpswiss_autorun_pause').addEventListener('click', ()=>{ st.paused=true; st.status='paused'; save(); render(); });
+      $('gpswiss_autorun_resume').addEventListener('click', ()=>{ if(!st.running){ st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick().catch(e=>pushLog({error:String(e)})); });
+      $('gpswiss_autorun_stop').addEventListener('click', ()=>{ st.running=false; st.stopped=true; st.status='stopped'; save(); render(); });
+      const download=(name,blob)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); };
+      $('gpswiss_autorun_download_jsonl').addEventListener('click', ()=> download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(x=>JSON.stringify(x)+"\n"),{type:'application/jsonl'})));
+      $('gpswiss_autorun_download_csv').addEventListener('click', ()=>{ const rows=st.logs||[]; const keys=['ts','product_id','action','error','matched_ovoko_part_id','matched_ovoko_car_id','would_write_attributes_count']; const csv=[keys.join(',')].concat(rows.map(r=>keys.map(k=>`"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))).join('\n'); download('ovoko-autorun-log.csv', new Blob([csv],{type:'text/csv'})); });
+      st.status = st.running ? (st.paused?'paused':'running') : (st.status||'idle'); render();
+    })();
+    </script>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>CSV mapping</h3>
