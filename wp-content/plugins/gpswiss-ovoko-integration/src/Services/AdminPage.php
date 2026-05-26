@@ -406,16 +406,14 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
-        $rawMatchOnlyInput = $_POST['match_only'] ?? ($_POST['match_only_no_api_enrichment'] ?? ($_POST['preview_only'] ?? null));
-        $parsedMatchOnly = !empty($_POST['match_only']) || !empty($_POST['match_only_no_api_enrichment']) || !empty($_POST['preview_only']);
         $rawMinimalResponseInput = $_POST['minimal_response'] ?? null;
-        $parsedMinimalResponse = !empty($_POST['minimal_response']);
+        $parsedMinimalResponse = !isset($_POST['minimal_response']) || !empty($_POST['minimal_response']);
         $rawDisableDebugHeavyLogsInput = $_POST['disable_debug_heavy_logs'] ?? null;
-        $parsedDisableDebugHeavyLogs = !empty($_POST['disable_debug_heavy_logs']);
+        $parsedDisableDebugHeavyLogs = !isset($_POST['disable_debug_heavy_logs']) || !empty($_POST['disable_debug_heavy_logs']);
         $memoryLimitRaw = (string) ini_get('memory_limit');
         $memoryLimitMb = (int) preg_replace('/[^0-9]/', '', $memoryLimitRaw);
         $blockFullBulk = $memoryLimitMb > 0 && $memoryLimitMb <= 128;
-        if ($blockFullBulk && !$parsedMatchOnly) {
+        if ($blockFullBulk && empty($_POST['dry_run'])) {
             wp_send_json([
                 'ok' => false,
                 'error' => 'full_enrichment_blocked_low_memory_limit',
@@ -428,7 +426,8 @@ class AdminPage
         }
         $options = [
             'dry_run' => !empty($_POST['dry_run']),
-            'match_only' => $parsedMatchOnly,
+            'apply' => !empty($_POST['apply']),
+            'details_only' => !isset($_POST['details_only']) || !empty($_POST['details_only']),
             'replace_description' => !empty($_POST['replace_description']),
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
             'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
@@ -443,8 +442,6 @@ class AdminPage
             'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 5,
             'minimal_response' => $parsedMinimalResponse,
             'disable_debug_heavy_logs' => $parsedDisableDebugHeavyLogs,
-            'raw_match_only_input' => $rawMatchOnlyInput,
-            'parsed_match_only' => $parsedMatchOnly,
             'raw_minimal_response_input' => $rawMinimalResponseInput,
             'parsed_minimal_response' => $parsedMinimalResponse,
             'raw_disable_debug_heavy_logs_input' => $rawDisableDebugHeavyLogsInput,
@@ -463,7 +460,7 @@ class AdminPage
             wp_send_json([
                 'ok' => false,
                 'partial' => false,
-                'action_name' => 'Bulk Allegro to Ovoko details enrichment',
+                'action_name' => 'Update product cards from Ovoko CSV mapping',
                 'error' => 'bulk_request_failed',
                 'message' => $e->getMessage(),
             ], 500);
