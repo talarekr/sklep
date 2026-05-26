@@ -417,6 +417,9 @@ class AdminPage
             'only_matched' => !empty($_POST['only_matched']),
             'skip_already_enriched' => !empty($_POST['skip_already_enriched']),
             'include_existing_ovoko' => !empty($_POST['include_existing_ovoko']),
+            'fast_scan' => !isset($_POST['fast_scan']) || !empty($_POST['fast_scan']),
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 5,
         ];
         try {
             $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
@@ -442,7 +445,9 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_bulk_diagnostics_ping');
-        $result = $this->service->bulk_diagnostics_ping();
+        $result = $this->service->bulk_diagnostics_ping([
+            'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
+        ]);
         wp_send_json($result, !empty($result['ok']) ? 200 : 500);
     }
 

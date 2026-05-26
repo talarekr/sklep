@@ -148,11 +148,14 @@
         <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label><br />
         <label><input type="checkbox" name="only_matched" value="1" /> only_matched</label>
         <label><input type="checkbox" name="skip_already_enriched" value="1" checked="checked" /> skip_already_enriched</label>
-        <label><input type="checkbox" name="include_existing_ovoko" value="1" /> include_existing_ovoko</label><br />
+        <label><input type="checkbox" name="include_existing_ovoko" value="1" /> include_existing_ovoko</label>
+        <label><input type="checkbox" name="fast_scan" value="1" checked="checked" /> Fast scan / keyset by product ID</label><br />
         <label>Batch size:</label><input type="number" min="1" max="5" name="batch_size" value="1" />
         <label>Limit:</label><input type="number" min="1" max="200" name="limit" value="20" />
         <label>Offset:</label><input type="number" min="0" name="offset" value="0" />
-        <label>Page:</label><input type="number" min="1" name="page" value="1" /><br />
+        <label>Page:</label><input type="number" min="1" name="page" value="1" />
+        <label>After product ID:</label><input type="number" min="0" name="after_product_id" value="0" />
+        <label>Scan limit:</label><input type="number" min="1" max="20" name="scan_limit" value="5" /><br />
         <label for="bulk_product_ids_csv">Product IDs CSV (optional):</label>
         <input id="bulk_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
         <?php submit_button('Bulk Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
@@ -160,6 +163,8 @@
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;">
         <?php wp_nonce_field('gpswiss_ovoko_bulk_diagnostics_ping'); ?>
         <input type="hidden" name="action" value="gpswiss_ovoko_bulk_diagnostics_ping" />
+        <label for="ping_product_ids_csv">Product IDs CSV (optional):</label>
+        <input id="ping_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
         <?php submit_button('Bulk diagnostics / ping', 'secondary', 'submit', false); ?>
     </form>
 
