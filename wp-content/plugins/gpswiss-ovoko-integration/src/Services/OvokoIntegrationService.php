@@ -2074,7 +2074,7 @@ class OvokoIntegrationService
             $isMatched = in_array($confidence, ['high','high_existing_ovoko_part_id'], true);
             if ($isMatched) { $matched++; }
             $row = ['product_id'=>$productId,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($match['part_normalized']['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($match['part_normalized']['car_id'] ?? ''),'match_confidence'=>$confidence,'action'=>'skipped','would_write_attributes_count'=>0,'would_write_attributes_labels'=>[],'skipped_fields_count'=>0,'vehicle_label'=>'','vehicle_slug'=>'','vehicle_parts_url'=>'','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true];
-            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['review_required']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']; } else { $counts['no_match']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'no_csv_match']; } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit, $match, $row); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } if ($onlyMatched) { continue; } continue; }
+            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['review_required']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']); } else { $counts['no_match']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'no_csv_match']); } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit, $match, $row); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } if ($onlyMatched) { continue; } continue; }
             $partId = (int) ($row['matched_ovoko_part_id'] ?? 0);
             $detailsError = '';
             $detailsNormalized = (array) ($match['part_normalized'] ?? []);
@@ -2097,7 +2097,7 @@ class OvokoIntegrationService
                 $skipped++;
                 $errors++;
                 $counts['error']++;
-                $results[] = $row + ['action' => 'skipped', 'skip_reason' => 'api_error', 'error' => $detailsError, 'elapsed_ms' => (int) round((microtime(true)-$productStarted)*1000)];
+                $results[] = array_merge($row, ['action' => 'skipped', 'skip_reason' => 'api_error', 'error' => $detailsError, 'elapsed_ms' => (int) round((microtime(true)-$productStarted)*1000)]);
                 unset($audit, $match, $detailsNormalized, $row);
                 if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
                 continue;
@@ -2113,7 +2113,7 @@ class OvokoIntegrationService
                 $stages[] = ['stage' => 'after_build_attributes', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'attributes_count' => count($attrsDry)];
                 $vehicleLabel = $this->build_vehicle_label_from_attributes($attrsDry);
                 $vehicleSlug = $this->build_unique_vehicle_slug($productId, (string) ($detailsNormalized['car_id'] ?? ''), $vehicleLabel, (string) ($attrsDry['Rok produkcji samochodu'] ?? ''));
-                $results[] = $row + ['action'=>'dry_run', 'elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000), 'would_write_attributes_count'=>count($attrsDry), 'would_write_attributes_labels'=>array_values(array_map('strval', array_keys($attrsDry))), 'skipped_fields_count'=>count($filterDebugDry), 'vehicle_label' => $vehicleLabel, 'vehicle_slug' => $vehicleSlug, 'vehicle_parts_url' => $vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : '', 'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'apply_allowed'=>(bool) ($row['apply_allowed'] ?? true), 'apply_blocked_reason'=>(string) ($row['apply_blocked_reason'] ?? ''), 'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576, 2)];
+                $results[] = array_merge($row, ['action'=>'dry_run', 'elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000), 'would_write_attributes_count'=>count($attrsDry), 'would_write_attributes_labels'=>array_values(array_map('strval', array_keys($attrsDry))), 'skipped_fields_count'=>count($filterDebugDry), 'vehicle_label' => $vehicleLabel, 'vehicle_slug' => $vehicleSlug, 'vehicle_parts_url' => $vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : '', 'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'apply_allowed'=>(bool) ($row['apply_allowed'] ?? true), 'apply_blocked_reason'=>(string) ($row['apply_blocked_reason'] ?? ''), 'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576, 2)]);
                 $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'matched_dry_run','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
                 unset($audit, $match, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $vehicleLabel, $vehicleSlug, $row);
                 if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
@@ -2121,13 +2121,13 @@ class OvokoIntegrationService
             }
             $before = $this->capture_product_safety_snapshot($productId);
             $apply = $this->apply_allegro_to_ovoko_details($productId, $replaceDescription);
-            if (empty($apply['ok'])) { $errors++; $counts['error']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_apply_failed','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = $row + ['action'=>'error']; continue; }
+            if (empty($apply['ok'])) { $errors++; $counts['error']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_apply_failed','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = array_merge($row, ['action'=>'error']); continue; }
             $after = $this->capture_product_safety_snapshot($productId);
             $safety = $this->compare_product_safety_snapshot($before, $after);
-            if (in_array(false, $safety, true)) { $errors++; $counts['safety_violation']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_safety_violation','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = $row + ['action'=>'error','error'=>'safety_violation'] + $safety; continue; }
+            if (in_array(false, $safety, true)) { $errors++; $counts['safety_violation']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_safety_violation','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = array_merge($row, ['action'=>'error','error'=>'safety_violation'], $safety); continue; }
             $enriched++; $counts['enriched']++;
             $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
-            $results[] = $row + ['action'=>'updated','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true] + $safety;
+            $results[] = array_merge($row, ['action'=>'updated','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true], $safety);
             unset($audit, $match, $normalized, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $before, $apply, $after, $safety, $row);
             if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
         }
@@ -2273,10 +2273,33 @@ class OvokoIntegrationService
 
     private function check_memory_guard_before_enrichment(int $guardMb): array
     {
-        $usageMb = (int) round(memory_get_usage(true) / 1048576);
-        $limit = (string) ini_get('memory_limit');
-        if ($usageMb <= $guardMb) { return []; }
-        return ['ok' => false, 'error' => 'memory_guard_before_enrichment', 'memory_usage_mb' => $usageMb, 'memory_limit' => $limit, 'suggestion' => 'run via CLI or increase memory limit'];
+        $usageMb = round(memory_get_usage(true) / 1048576, 2);
+        $limitRaw = (string) ini_get('memory_limit');
+        $limitMb = $this->memory_limit_mb();
+        $thresholdMb = (float) $guardMb;
+
+        if ($limitMb > 0 && $limitMb <= 128) {
+            $thresholdMb = 115.0;
+        } elseif ($limitMb >= 256) {
+            $thresholdMb = max(200.0, round($limitMb * 0.8, 2));
+        } elseif ($limitMb > 0) {
+            $thresholdMb = round($limitMb * 0.8, 2);
+        }
+
+        $ratio = $limitMb > 0 ? round($usageMb / $limitMb, 4) : 0.0;
+        if ($usageMb <= $thresholdMb) { return []; }
+
+        return [
+            'ok' => false,
+            'error' => 'memory_guard_before_enrichment',
+            'memory_usage_mb' => $usageMb,
+            'memory_limit' => $limitRaw,
+            'memory_limit_mb' => $limitMb,
+            'memory_usage_ratio' => $ratio,
+            'guard_threshold_mb' => $thresholdMb,
+            'guard_context' => 'before_enrichment',
+            'suggestion' => 'run via CLI or increase memory limit',
+        ];
     }
 
     private function resolve_bulk_product_ids(array $options, int $offset, int $limit, int $batchSize, int $page, bool $includeExistingOvoko): array

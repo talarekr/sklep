@@ -80,7 +80,13 @@ document.addEventListener('DOMContentLoaded', function () {
     st.status='running'; save(); render(); setTimeout(tick, Math.max(250, parseInt($('bulk_sleep_ms').value || '1200', 10)));
   };
 
-  const startAutorun = function (mode) { if (mode === 'apply' && !$('bulk_apply_confirm').checked) { alert('Confirm apply checkbox first.'); return; } st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...'}); save(); render(); tick(); };
+  const startAutorun = function (mode) {
+    if (st.running && !st.stopped && !st.paused) {
+      pushLog({warning:'autorun_already_running', mode:st.mode});
+      return;
+    }
+    if (mode === 'apply' && !$('bulk_apply_confirm').checked) { alert('Confirm apply checkbox first.'); return; }
+    st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...'}); save(); render(); tick(); };
   const pauseAutorun = function () { st.paused=true; st.status='paused'; save(); render(); };
   const resumeAutorun = function () { if (!st.running) { st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick(); };
   const stopAutorun = function () { st.running=false; st.stopped=true; st.status='stopped'; save(); render(); };
