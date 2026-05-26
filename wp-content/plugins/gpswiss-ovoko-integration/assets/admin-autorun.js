@@ -1,155 +1,211 @@
 document.documentElement.setAttribute('data-ovoko-autorun-js', 'loaded');
-console.log('script top-level executing');
-console.log('Ovoko auto-run JS loaded');
 
 document.addEventListener('DOMContentLoaded', function () {
-  console.log('DOMContentLoaded');
-
   const config = window.gpswissOvokoAutorunConfig || {};
   const $ = function (id) { return document.getElementById(id); };
   const jsLoadedEl = $('gpswiss_autorun_js_loaded');
+  if (jsLoadedEl) { jsLoadedEl.textContent = 'yes'; }
 
-  if (jsLoadedEl) {
-    jsLoadedEl.textContent = 'yes';
-    console.log('js loaded marker set');
-  }
-
-  const form = document.getElementById('gpswiss_ovoko_batch_update_form');
-  console.log('form found', !!form);
-
-  if (!form) {
-    console.error('batch form not found');
-    return;
-  }
+  const form = $('gpswiss_ovoko_batch_update_form');
+  if (!form) { return; }
 
   const statusEl = $('gpswiss_autorun_status');
   const logsEl = $('gpswiss_autorun_logs');
-  const stateKey = 'gpswiss_ovoko_autorun_state_v1';
+  const stateKey = 'gpswiss_ovoko_autorun_state_v2';
+  const MAX_LOCAL_LOGS = 200;
+  const MAX_RENDER_LOGS = 30;
+  let fullLog = [];
 
-  let st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
-  try { const raw = localStorage.getItem(stateKey); if (raw) { st = Object.assign(st, JSON.parse(raw)); } } catch (e) {}
+  const defaultState = {
+    running: false, paused: false, stopped: false, status: 'idle', mode: 'dry_run', run_id: '',
+    started_at: '', finished_at: '', duration_seconds: 0,
+    start_after_product_id: 0, last_after_product_id: 0, next_after_product_id: 0,
+    total_scanned: 0, total_processed: 0, total_updated: 0, total_skipped: 0, total_errors: 0,
+    total_safety_violations: 0, total_no_csv_match: 0, total_ambiguous_csv_match: 0,
+    total_already_enriched_skipped: 0, total_not_allegro_product: 0, total_api_error: 0,
+    total_memory_guard: 0, total_other_error: 0, total_csv_matched: 0,
+    batch_duration: 0, memory_peak_mb: 0, logs: [], localstorage_warning: ''
+  };
+  let st = Object.assign({}, defaultState);
 
-  const save = function () { try { localStorage.setItem(stateKey, JSON.stringify(st)); } catch (e) {} };
-  let requestInFlight = false;
-  let pendingTimer = null;
-  let runId = '';
-  const setK = function (k, v) { const n = statusEl.querySelector('[data-k="' + k + '"]'); if (n) { n.textContent = String(v); } };
-  const render = function () { ['status','mode','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(function (k) { setK(k, st[k] || 0); }); logsEl.textContent = (st.logs || []).slice(-30).map(function (x) { return JSON.stringify(x); }).join("\n"); };
-  const pushLog = function (o) { st.logs.push(Object.assign({ts:new Date().toISOString()}, o)); st.logs = st.logs.slice(-1000); save(); render(); };
+  try {
+    const raw = localStorage.getItem(stateKey);
+    if (raw) { st = Object.assign({}, defaultState, JSON.parse(raw)); }
+  } catch (e) { st.localstorage_warning = 'Failed to load localStorage state'; }
 
-  const jsTestBtn = $('gpswiss_autorun_js_test');
-  if (jsTestBtn) {
-    jsTestBtn.addEventListener('click', function () {
-      pushLog({info:'JS click test works'});
-    });
-  }
-
-  const getBatchSize = function () {
-    const raw = parseInt(($('bulk_batch_size').value || '2'), 10);
-    const clamped = Math.max(1, Math.min(3, isNaN(raw) ? 2 : raw));
-    if (String(clamped) !== String(raw)) { $('bulk_batch_size').value = String(clamped); pushLog({warning:'batch_size_clamped',requested:raw,used:clamped}); }
-    return clamped;
+  const safeSave = function () {
+    st.logs = (fullLog.slice(-MAX_LOCAL_LOGS));
+    try {
+      localStorage.setItem(stateKey, JSON.stringify(st));
+      st.localstorage_warning = '';
+      return true;
+    } catch (e) {
+      st.localstorage_warning = 'localStorage limit reached; keeping full log in-memory only for this session.';
+      return false;
+    }
   };
 
-  const failUi = function (msg, details) { st.running=false; st.paused=false; st.stopped=true; st.status='error'; pushLog({error:msg,details:details||''}); console.error(msg, details||''); };
+  const setK = function (k, v) { const n = statusEl ? statusEl.querySelector('[data-k="' + k + '"]') : null; if (n) { n.textContent = String(v); } };
+  const render = function () {
+    const keys = ['status','mode','started_at','finished_at','duration_seconds','start_after_product_id','last_after_product_id','next_after_product_id','total_scanned','total_processed','total_updated','total_skipped','total_errors','total_csv_matched','total_no_csv_match','total_ambiguous_csv_match','total_already_enriched_skipped','total_not_allegro_product','total_safety_violations','total_api_error','total_memory_guard','total_other_error','batch_duration','memory_peak_mb'];
+    keys.forEach(function (k) { setK(k, st[k] || 0); });
+    setK('localstorage_warning', st.localstorage_warning || '');
+    if (logsEl) { logsEl.textContent = fullLog.slice(-MAX_RENDER_LOGS).map(function (x) { return JSON.stringify(x); }).join('\n'); }
+  };
+
+  const nowIso = function () { return new Date().toISOString(); };
+  const updateDuration = function () {
+    if (!st.started_at) { st.duration_seconds = 0; return; }
+    const end = st.finished_at ? Date.parse(st.finished_at) : Date.now();
+    const start = Date.parse(st.started_at);
+    st.duration_seconds = Math.max(0, Math.round((end - start) / 1000));
+  };
+
+  const pushLog = function (o) {
+    fullLog.push(o);
+    safeSave();
+    render();
+  };
+
+  const logProduct = function (row, reqAfter, resNext) {
+    pushLog({
+      product_id: row.product_id || 0,
+      action: row.action || '',
+      skip_reason: row.skip_reason || '',
+      error: row.error || '',
+      matched_ovoko_part_id: row.matched_ovoko_part_id || '',
+      matched_ovoko_car_id: row.matched_ovoko_car_id || '',
+      vehicle_label: row.vehicle_label || '',
+      vehicle_slug: row.vehicle_slug || '',
+      vehicle_parts_url: row.vehicle_parts_url || '',
+      attributes_count: row.attributes_count || row.would_write_attributes_count || 0,
+      no_price_change: !!row.no_price_change,
+      no_stock_change: !!row.no_stock_change,
+      no_images_change: !!row.no_images_change,
+      no_title_change: !!row.no_title_change,
+      no_status_change: !!row.no_status_change,
+      no_ebay_publish: !!row.no_ebay_publish,
+      no_allegro_publish: !!row.no_allegro_publish,
+      no_batch: !!row.no_batch,
+      timestamp: nowIso(),
+      run_id: st.run_id,
+      request_after_product_id: reqAfter,
+      response_next_after_product_id: resNext,
+      current_part_number: row.current_part_number || '',
+      product_title: row.product_title || ''
+    });
+  };
+
+  const reasonToAction = function (reason, err) {
+    if (reason === 'no_csv_match') return 'check part number / add CSV mapping';
+    if (reason === 'ambiguous_csv_match') return 'review duplicate CSV codes / choose correct Ovoko ID';
+    if (reason === 'api_error') return 'retry / check Ovoko API';
+    if (err === 'safety_violation') return 'manual review before retry';
+    if (reason === 'already_enriched_skipped') return 'no action';
+    if (reason === 'not_allegro_product') return 'ignore unless should be matched';
+    if ((reason === 'memory_guard') || (err === 'memory_guard')) return 'retry smaller batch / check memory';
+    return 'manual review';
+  };
+
+  const getBatchSize = function () { return Math.max(1, Math.min(3, parseInt(($('bulk_batch_size').value || '2'), 10) || 2)); };
   const buildBody = function (mode) {
-    const nonce = config.nonce || '';
-    const action = config.action || '';
-    const ajaxUrl = config.ajaxUrl || '';
-    if (!ajaxUrl || !nonce || !action) { failUi('Missing ajaxUrl/nonce/action', {ajaxUrl:ajaxUrl,nonce_present:!!nonce,action:action}); return null; }
     const fd = new URLSearchParams();
-    fd.set('action', action);
-    fd.set('_ajax_nonce', nonce);
-    fd.set('form_source', 'batch_update_form');
-    fd.set('details_only', '1');
-    fd.set('minimal_response', '1');
-    fd.set('disable_debug_heavy_logs', '1');
-    fd.set('batch_size', String(getBatchSize()));
-    fd.set('limit', form.querySelector('[name="limit"]').value || '3');
+    fd.set('action', config.action || ''); fd.set('_ajax_nonce', config.nonce || '');
+    fd.set('form_source', 'batch_update_form'); fd.set('details_only', '1'); fd.set('minimal_response', '1'); fd.set('disable_debug_heavy_logs', '1');
+    fd.set('batch_size', String(getBatchSize())); fd.set('limit', form.querySelector('[name="limit"]').value || '3');
     fd.set('after_product_id', String(st.next_after_product_id || parseInt(form.querySelector('[name="after_product_id"]').value || '0', 10)));
     fd.set('product_ids_csv', form.querySelector('[name="product_ids_csv"]').value || '');
     if ($('bulk_skip_already_enriched').checked) { fd.set('skip_already_enriched', '1'); }
     if (form.querySelector('[name="replace_description"]').checked) { fd.set('replace_description', '1'); }
-    if (mode === 'apply') { fd.set('dry_run', '0'); fd.set('apply', '1'); } else { fd.set('dry_run', '1'); fd.set('apply', '0'); }
+    fd.set('dry_run', mode === 'apply' ? '0' : '1'); fd.set('apply', mode === 'apply' ? '1' : '0');
     return fd;
   };
 
-  const shouldStop = function (res) { const stopOnError = $('bulk_stop_on_error').checked; const hasSafety = (res.sample_results||[]).some(function (x) { return x.error === 'safety_violation'; }); if (stopOnError && ((parseInt(res.errors||0,10)>0) || hasSafety)) return 'stopped_on_error'; if (res.done) return 'done'; if (parseInt(res.processed||0,10)===0) return 'processed_zero'; if (!res.next_after_product_id) return 'missing_next_after_product_id'; return ''; };
-  const scheduleNextTick = function () {
-    if (!st.running || st.paused || st.stopped) { return; }
-    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
-    pendingTimer = setTimeout(function () { pendingTimer = null; tick(); }, Math.max(250, parseInt($('bulk_sleep_ms').value || '1200', 10)));
-  };
+  let requestInFlight = false; let pendingTimer = null;
+  const scheduleNextTick = function () { if (!st.running || st.paused || st.stopped) return; pendingTimer = setTimeout(tick, Math.max(250, parseInt($('bulk_sleep_ms').value || '1200', 10))); };
+
   const tick = async function () {
-    if (!st.running || st.paused || st.stopped || requestInFlight) { return; }
-    const thisRunId = runId;
+    if (!st.running || st.paused || st.stopped || requestInFlight) return;
     requestInFlight = true;
-    const started = Date.now();
+    const startedMs = Date.now();
     const body = buildBody(st.mode);
-    if (!body) { requestInFlight = false; return; }
-    body.set('autorun_run_id', thisRunId);
+    body.set('autorun_run_id', st.run_id);
     let res;
     try {
-      const httpRes = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
-      const text = await httpRes.text();
-      try { res = JSON.parse(text); } catch (e) { failUi('AJAX returned non-JSON response', text); return; }
-      if (!httpRes.ok || !res.ok) { failUi('AJAX request failed', res); return; }
-    } catch (e) { failUi('AJAX transport error', String(e)); return; }
-    finally { requestInFlight = false; }
-    if (thisRunId !== runId) { pushLog({warning:'ignored_stale_response',response_run_id:thisRunId,current_run_id:runId}); return; }
-    st.batch_duration=((Date.now()-started)/1000).toFixed(2); st.last_after_product_id=parseInt(body.get('after_product_id')||'0',10); st.next_after_product_id=parseInt(res.next_after_product_id||0,10); st.total_processed+=parseInt(res.processed||0,10); st.total_updated+=parseInt(res.updated||0,10); st.total_skipped+=parseInt(res.skipped||0,10); st.total_errors+=parseInt(res.errors||0,10); st.memory_peak_mb=res.memory_peak_mb||0;
-    (res.sample_results||[]).forEach(function (x) { pushLog({product_id:x.product_id,action:x.action,error:x.error||'',skip_reason:x.skip_reason||'',matched_ovoko_part_id:x.matched_ovoko_part_id||'',matched_ovoko_car_id:x.matched_ovoko_car_id||'',vehicle_label:x.vehicle_label||'',vehicle_slug:x.vehicle_slug||'',vehicle_parts_url:x.vehicle_parts_url||'',attributes_count:x.attributes_count||x.would_write_attributes_count||0,would_write_attributes_count:x.would_write_attributes_count||0,no_price_change:!!x.no_price_change,no_stock_change:!!x.no_stock_change,no_images_change:!!x.no_images_change,no_title_change:!!x.no_title_change,no_status_change:!!x.no_status_change,no_ebay_publish:!!x.no_ebay_publish,no_allegro_publish:!!x.no_allegro_publish,no_batch:!!x.no_batch}); });
-    const limitTotal = parseInt($('bulk_limit_total').value || '0', 10); if (limitTotal > 0 && st.total_processed >= limitTotal) { st.running=false; st.status='stopped'; save(); render(); return; }
-    const reason = shouldStop(res); if (reason==='done') { st.running=false; st.status='done'; save(); render(); return; } if (reason) { st.running=false; st.status='stopped'; pushLog({warning:reason,payload:res}); save(); render(); return; }
-    st.status='running'; save(); render(); scheduleNextTick();
-  };
-  const startAutorun = function (mode) {
-    if (st.running && !st.stopped && !st.paused) {
-      pushLog({warning:'autorun_already_running', mode:st.mode});
-      return;
+      const r = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
+      res = JSON.parse(await r.text());
+      if (!r.ok || !res.ok) throw new Error('ajax_failed');
+    } catch (e) {
+      st.running = false; st.status = 'error'; st.finished_at = nowIso(); updateDuration(); pushLog({timestamp: nowIso(), run_id: st.run_id, action: 'error', error: 'ajax_error'});
+      requestInFlight = false; return;
     }
-    if (mode === 'apply' && !$('bulk_apply_confirm').checked) { alert('Confirm apply checkbox first.'); return; }
-    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
     requestInFlight = false;
-    runId = 'run_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...', run_id:runId}); save(); render(); tick(); };
-  const pauseAutorun = function () { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } st.paused=true; st.status='paused'; save(); render(); };
-  const resumeAutorun = function () { if (!st.running) { st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick(); };
-  const stopAutorun = function () { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } st.running=false; st.paused=false; st.stopped=true; st.status='stopped'; runId=''; save(); render(); };
-  const resetAutorunState = function () {
-    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
-    requestInFlight = false;
-    runId = '';
-    st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
-    try { localStorage.removeItem(stateKey); } catch (e) {}
-    save();
-    render();
+    st.batch_duration = ((Date.now() - startedMs) / 1000).toFixed(2);
+    const reqAfter = parseInt(body.get('after_product_id') || '0', 10);
+    st.last_after_product_id = reqAfter;
+    st.next_after_product_id = parseInt(res.next_after_product_id || 0, 10);
+    st.total_scanned += parseInt(res.total_scanned || 0, 10);
+    st.total_processed += parseInt(res.processed || 0, 10);
+    st.total_updated += parseInt(res.updated || 0, 10);
+    st.total_skipped += parseInt(res.skipped || 0, 10);
+    st.total_errors += parseInt(res.errors || 0, 10);
+    st.memory_peak_mb = res.memory_peak_mb || 0;
+
+    const c = res.counts_by_reason || {};
+    st.total_no_csv_match += parseInt(c.no_csv_match || 0, 10);
+    st.total_ambiguous_csv_match += parseInt(c.ambiguous_csv_match || 0, 10);
+    st.total_already_enriched_skipped += parseInt(c.already_enriched_skipped || 0, 10);
+    st.total_not_allegro_product += parseInt(c.not_allegro_product || 0, 10);
+    st.total_safety_violations += parseInt(c.safety_violation || 0, 10);
+    st.total_api_error += parseInt(c.api_error || 0, 10);
+    st.total_memory_guard += parseInt(c.memory_guard || 0, 10);
+    st.total_other_error += parseInt(c.error || 0, 10);
+    st.total_csv_matched += parseInt(c.updated || 0, 10) + parseInt(c.dry_run || 0, 10) + parseInt(c.api_error || 0, 10) + parseInt(c.safety_violation || 0, 10) + parseInt(c.error || 0, 10);
+
+    (res.sample_results || []).forEach(function (x) { logProduct(x, reqAfter, st.next_after_product_id); });
+
+    const stopOnError = $('bulk_stop_on_error').checked;
+    const shouldStop = (stopOnError && parseInt(res.errors || 0, 10) > 0) || res.done || parseInt(res.processed || 0, 10) === 0 || !res.next_after_product_id;
+    if (shouldStop) { st.running = false; st.status = res.done ? 'done' : 'stopped'; st.finished_at = nowIso(); }
+    updateDuration(); safeSave(); render();
+    if (!shouldStop) scheduleNextTick();
   };
 
-  window.gpswissOvokoStartAutorun = startAutorun;
-  window.gpswissOvokoPauseAutorun = pauseAutorun;
-  window.gpswissOvokoResumeAutorun = resumeAutorun;
-  window.gpswissOvokoStopAutorun = stopAutorun;
+  const resetRunCounters = function () {
+    Object.assign(st, defaultState, {mode: st.mode, next_after_product_id: st.next_after_product_id});
+  };
 
-  const startDryBtn = $('gpswiss_autorun_start_dry_run');
-  const startApplyBtn = $('gpswiss_autorun_start_apply');
-  const pauseBtn = $('gpswiss_autorun_pause');
-  const resumeBtn = $('gpswiss_autorun_resume');
-  const stopBtn = $('gpswiss_autorun_stop');
-  const resetStateBtn = $('gpswiss_autorun_reset_state');
-  const downloadJsonlBtn = $('gpswiss_autorun_download_jsonl');
-  const downloadCsvBtn = $('gpswiss_autorun_download_csv');
-  if (startDryBtn) { startDryBtn.addEventListener('click', function (e) { e.preventDefault(); startAutorun('dry_run'); }); }
-  if (startApplyBtn) { startApplyBtn.addEventListener('click', function (e) { e.preventDefault(); startAutorun('apply'); }); }
-  if (pauseBtn) { pauseBtn.addEventListener('click', pauseAutorun); }
-  if (resumeBtn) { resumeBtn.addEventListener('click', resumeAutorun); }
-  if (stopBtn) { stopBtn.addEventListener('click', stopAutorun); }
-  if (resetStateBtn) { resetStateBtn.addEventListener('click', resetAutorunState); }
+  const startAutorun = function (mode) {
+    if (mode === 'apply' && !$('bulk_apply_confirm').checked) { alert('Confirm apply checkbox first.'); return; }
+    fullLog = [];
+    resetRunCounters();
+    st.mode = mode; st.running = true; st.status = 'running'; st.run_id = 'run_' + Date.now(); st.started_at = nowIso(); st.start_after_product_id = parseInt(form.querySelector('[name="after_product_id"]').value || '0', 10); st.next_after_product_id = st.start_after_product_id;
+    safeSave(); render(); tick();
+  };
 
+  const pauseAutorun = function () { if (pendingTimer) clearTimeout(pendingTimer); st.paused = true; st.status = 'paused'; updateDuration(); safeSave(); render(); };
+  const resumeAutorun = function () { st.paused = false; st.running = true; st.status = 'running'; safeSave(); render(); tick(); };
+  const stopAutorun = function () { if (pendingTimer) clearTimeout(pendingTimer); st.running = false; st.stopped = true; st.status = 'stopped'; st.finished_at = nowIso(); updateDuration(); safeSave(); render(); };
+  const resetAutorunState = function () { if (pendingTimer) clearTimeout(pendingTimer); st = Object.assign({}, defaultState); fullLog = []; try { localStorage.removeItem(stateKey); } catch (e) {} safeSave(); render(); };
+
+  const toCsv = function (rows, keys) { return [keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join('\n'); };
   const download = function (name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
-  if (downloadJsonlBtn) { downloadJsonlBtn.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(function (x) { return JSON.stringify(x) + "\n"; }), {type:'application/jsonl'})); }); }
-  if (downloadCsvBtn) { downloadCsvBtn.addEventListener('click', function () { const rows=st.logs||[]; const keys=['ts','product_id','action','skip_reason','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_label','vehicle_slug','vehicle_parts_url','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','no_status_change','no_ebay_publish','no_allegro_publish','no_batch','error']; const csv=[keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join("\n"); download('ovoko-autorun-log.csv', new Blob([csv], {type:'text/csv'})); }); }
 
-  st.status = st.running ? (st.paused ? 'paused' : 'running') : (st.status || 'idle');
+  $('gpswiss_autorun_start_dry_run')?.addEventListener('click', function (e) { e.preventDefault(); startAutorun('dry_run'); });
+  $('gpswiss_autorun_start_apply')?.addEventListener('click', function (e) { e.preventDefault(); startAutorun('apply'); });
+  $('gpswiss_autorun_pause')?.addEventListener('click', pauseAutorun);
+  $('gpswiss_autorun_resume')?.addEventListener('click', resumeAutorun);
+  $('gpswiss_autorun_stop')?.addEventListener('click', stopAutorun);
+  $('gpswiss_autorun_reset_state')?.addEventListener('click', resetAutorunState);
+
+  $('gpswiss_autorun_download_jsonl')?.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob(fullLog.map(function (x) { return JSON.stringify(x) + '\n'; }), {type:'application/jsonl'})); });
+  $('gpswiss_autorun_download_csv')?.addEventListener('click', function () { const keys=['timestamp','run_id','product_id','action','skip_reason','error','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_label','vehicle_slug','vehicle_parts_url','attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','no_status_change','no_ebay_publish','no_allegro_publish','no_batch','request_after_product_id','response_next_after_product_id']; download('ovoko-autorun-log.csv', new Blob([toCsv(fullLog, keys)], {type:'text/csv'})); });
+  $('gpswiss_autorun_download_skipped_errors_csv')?.addEventListener('click', function () {
+    const rows = fullLog.filter(function (r) { return (r.action === 'skipped' || r.action === 'error' || r.error); }).map(function (r) { return {product_id:r.product_id,skip_reason:r.skip_reason,error:r.error,matched_ovoko_part_id:r.matched_ovoko_part_id,matched_ovoko_car_id:r.matched_ovoko_car_id,current_part_number:r.current_part_number || '',product_title:r.product_title || '',suggested_action:reasonToAction(r.skip_reason,r.error)}; });
+    const keys=['product_id','skip_reason','error','matched_ovoko_part_id','matched_ovoko_car_id','current_part_number','product_title','suggested_action'];
+    download('ovoko-autorun-skipped-errors.csv', new Blob([toCsv(rows, keys)], {type:'text/csv'}));
+  });
+  $('gpswiss_autorun_download_and_clear')?.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob(fullLog.map(function (x) { return JSON.stringify(x) + '\n'; }), {type:'application/jsonl'})); resetAutorunState(); });
+
   render();
 });

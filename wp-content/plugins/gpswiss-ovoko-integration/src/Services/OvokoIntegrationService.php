@@ -2049,7 +2049,7 @@ class OvokoIntegrationService
         }
         $stages[] = ['stage' => 'product_ids_parsed', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'ids_count' => count($candidateIds), 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
         $stages[] = ['stage' => 'product_loop_started', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
-        $results = []; $counts = ['no_match'=>0,'review_required'=>0,'already_enriched_skipped'=>0,'not_allegro_product'=>0,'safety_violation'=>0,'enriched'=>0,'dry_run'=>0,'error'=>0];
+        $results = []; $counts = ['updated'=>0,'dry_run'=>0,'no_csv_match'=>0,'ambiguous_csv_match'=>0,'api_error'=>0,'safety_violation'=>0,'memory_guard'=>0,'already_enriched_skipped'=>0,'not_allegro_product'=>0,'error'=>0];
         $matched = 0; $enriched = 0; $skipped = 0; $reviewRequired = 0; $errors = 0; $processed = 0;
         $partial = false; $stoppedReason = '';
         $ids = array_slice($candidateIds, 0, $batchSize);
@@ -2076,7 +2076,7 @@ class OvokoIntegrationService
             $isMatched = in_array($confidence, ['high','high_existing_ovoko_part_id'], true);
             if ($isMatched) { $matched++; }
             $row = ['product_id'=>$productId,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($match['part_normalized']['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($match['part_normalized']['car_id'] ?? ''),'match_confidence'=>$confidence,'action'=>'skipped','would_write_attributes_count'=>0,'would_write_attributes_labels'=>[],'skipped_fields_count'=>0,'vehicle_label'=>'','vehicle_slug'=>'','vehicle_parts_url'=>'','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true];
-            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['review_required']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']); } else { $counts['no_match']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'no_csv_match']); } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit, $match, $row); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } if ($onlyMatched) { continue; } continue; }
+            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['ambiguous_csv_match']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']); } else { $counts['no_csv_match']++; $results[] = array_merge($row, ['action'=>'skipped', 'skip_reason'=>'no_csv_match']); } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit, $match, $row); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } if ($onlyMatched) { continue; } continue; }
             $partId = (int) ($row['matched_ovoko_part_id'] ?? 0);
             $detailsError = '';
             $detailsNormalized = (array) ($match['part_normalized'] ?? []);
@@ -2098,7 +2098,7 @@ class OvokoIntegrationService
             if ($detailsError !== '') {
                 $skipped++;
                 $errors++;
-                $counts['error']++;
+                $counts['api_error']++;
                 $results[] = array_merge($row, ['action' => 'skipped', 'skip_reason' => 'api_error', 'error' => $detailsError, 'elapsed_ms' => (int) round((microtime(true)-$productStarted)*1000)]);
                 unset($audit, $match, $detailsNormalized, $row);
                 if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
@@ -2141,7 +2141,7 @@ class OvokoIntegrationService
                 }
                 continue;
             }
-            $enriched++; $counts['enriched']++;
+            $enriched++; $counts['updated']++;
             $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
             $results[] = array_merge($row, ['action'=>'updated','vehicle_label'=>(string)($apply['vehicle_label'] ?? ''),'vehicle_slug'=>(string)($apply['vehicle_slug'] ?? ''),'vehicle_parts_url'=>(string)($apply['vehicle_parts_url'] ?? ''),'attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true], $safety, $safetyDebug);
             unset($audit, $match, $normalized, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $before, $apply, $after, $safety, $row);
