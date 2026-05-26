@@ -193,6 +193,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <button class="button" type="button" id="gpswiss_autorun_download_csv">Download log CSV</button>
         </form>
         <div id="gpswiss_autorun_status" style="margin-top:10px;padding:10px;background:#f6f7f7;">
+            <!-- current_admin_hook_suffix: <?php echo esc_html((string) ($currentAdminHookSuffix ?? '')); ?> -->
             <strong>Status:</strong> <span data-k="status">idle</span> |
             <strong>mode:</strong> <span data-k="mode">dry_run</span> |
             <strong>last_after_product_id:</strong> <span data-k="last_after_product_id">0</span> |
@@ -205,6 +206,15 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <strong>memory_peak_mb:</strong> <span data-k="memory_peak_mb">0</span>
             <br>
             <strong>Auto-run JS loaded:</strong> <span id="gpswiss_autorun_js_loaded">no</span>
+            <br>
+            <strong>Auto-run JS expected asset URL:</strong> <code><?php echo esc_html((string) ($autoRunExpectedAssetUrl ?? '')); ?></code><br>
+            <strong>Admin page slug:</strong> <code><?php echo esc_html((string) ($adminPageSlug ?? '')); ?></code><br>
+            <strong>Hook suffix:</strong> <code><?php echo esc_html((string) ($currentAdminHookSuffix ?? '')); ?></code><br>
+            <strong>Auto-run enqueue condition met:</strong> <code><?php echo !empty($autoRunScriptEnqueued) ? 'yes' : 'no'; ?></code><br>
+            <strong>Auto-run JS file exists:</strong> <code><?php echo !empty($autoRunFileExists) ? 'true' : 'false'; ?></code>
+            <?php if (empty($autoRunFileExists)) : ?>
+                <div class="notice notice-error inline"><p>Auto-run JS missing: <?php echo esc_html((string) ($autoRunAssetPath ?? '')); ?></p></div>
+            <?php endif; ?>
         </div>
         <p style="margin-top:8px;">
             <button class="button" type="button" id="gpswiss_autorun_js_test">Test auto-run JS</button>
