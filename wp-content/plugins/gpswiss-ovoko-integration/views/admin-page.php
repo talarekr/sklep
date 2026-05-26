@@ -144,7 +144,7 @@
     ?>
     <h2>Bulk Allegro to Ovoko details enrichment</h2>
     <?php if ($blockFullBulk): ?>
-    <p><strong>Full enrichment requires higher memory limit or CLI mode</strong></p>
+    <p><strong>Full enrichment/apply is blocked at 128M because /get/part fetch peaks near memory limit. Increase PHP memory_limit to 256M or use CLI/lightweight worker.</strong></p>
     <?php endif; ?>
     <p><strong>This action updates only Ovoko/RRR detail attributes/meta. It must not change prices, stock, images, titles, publication status, eBay, Allegro, batches or cron settings.</strong></p>
     <p><strong>Warning:</strong> run this manually in small batches (3-5 items per request). Do not run long mass updates in one request.</p>
@@ -171,6 +171,7 @@
         <?php submit_button('Bulk Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
     </form>
     <h3>Single enrichment dry-run (memory-safe)</h3>
+    <p><strong>Dry-run can run at 128M, but apply may be blocked by memory guard (see apply_allowed/apply_blocked_reason in JSON).</strong></p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('gpswiss_ovoko_single_enrichment_dry_run'); ?>
         <input type="hidden" name="action" value="gpswiss_ovoko_single_enrichment_dry_run" />
