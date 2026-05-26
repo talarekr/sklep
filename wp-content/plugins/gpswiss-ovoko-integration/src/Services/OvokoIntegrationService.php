@@ -1789,13 +1789,9 @@ class OvokoIntegrationService
         $preview = $this->preview_allegro_to_ovoko_match($productId, ['details_only' => $detailsOnly, 'minimal_response' => true, 'disable_debug_heavy_logs' => true]);
         if (empty($preview['is_allegro_product'])) return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'not_allegro_product','product_id'=>$productId];
         $match = (array) ($preview['match'] ?? []);
-        $usageMbBeforeWrite = round(memory_get_usage(true) / 1048576, 2);
-        $limitMb = $this->memory_limit_mb();
-        if ($limitMb > 0 && $limitMb <= 128 && $usageMbBeforeWrite > 115) {
-            return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'memory_limit_too_low','product_id'=>$productId,'memory_usage_mb'=>$usageMbBeforeWrite,'memory_limit'=>(string) ini_get('memory_limit'),'apply_allowed'=>false,'apply_blocked_reason'=>'memory_limit_too_low','recommended_memory_limit'=>256];
-        }
-        if ($usageMbBeforeWrite > 115) {
-            return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'memory_guard_before_write','product_id'=>$productId,'memory_usage_mb'=>$usageMbBeforeWrite,'memory_limit'=>(string) ini_get('memory_limit'),'apply_allowed'=>false,'apply_blocked_reason'=>'memory_guard_before_write','recommended_memory_limit'=>256];
+        $guardStatus = $this->build_apply_guard_status();
+        if (empty($guardStatus['apply_allowed'])) {
+            return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>(string) ($guardStatus['apply_blocked_reason'] ?: 'memory_guard_before_write'),'product_id'=>$productId,'memory_usage_mb'=>(float) ($guardStatus['before_write_mb'] ?? 0),'memory_limit'=>(string) ($guardStatus['memory_limit'] ?? ini_get('memory_limit')),'memory_limit_mb'=>(int) ($guardStatus['memory_limit_mb'] ?? $this->memory_limit_mb()),'memory_usage_ratio_before_write'=>(float) ($guardStatus['memory_usage_ratio_before_write'] ?? 0),'apply_allowed'=>false,'apply_blocked_reason'=>(string) ($guardStatus['apply_blocked_reason'] ?? 'memory_guard_before_write'),'recommended_memory_limit'=>$guardStatus['recommended_memory_limit'] ?? null];
         }
         if (($match['match_confidence'] ?? '') !== 'high' && ($match['match_confidence'] ?? '') !== 'high_existing_ovoko_part_id') return ['ok'=>false,'action_name'=>'Apply Allegro to Ovoko details enrichment','reason'=>'match_not_high','product_id'=>$productId,'match_confidence'=>$match['match_confidence'] ?? 'unknown_low_coverage'];
         $normalized = (array) ($match['part_normalized'] ?? []);
@@ -1812,7 +1808,7 @@ class OvokoIntegrationService
         $metaWrittenForTable = $this->write_ovoko_table_meta_from_attributes($productId, $attrs);
         $replaced=false; if($replaceDescription){ wp_update_post(['ID'=>$productId,'post_content'=>'']); $replaced=true; }
         $previewTable = $this->preview_product_details_table_render_status($productId);
-        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'details_only'=>$detailsOnly,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs,'source_used'=>['Producent'=>(string)(($enriched['_vehicle_field_sources']['vehicle_make'] ?? 'unknown')),'Model'=>(string)(($enriched['_vehicle_field_sources']['vehicle_model'] ?? 'unknown')),'Modyfikacja'=>(string)(($enriched['_vehicle_field_sources']['vehicle_generation'] ?? 'unknown')),'Okres'=>(string)(($enriched['_vehicle_field_sources']['vehicle_period'] ?? 'unknown')),'Przebieg'=>(string)(($enriched['_vehicle_field_sources']['mileage_km'] ?? 'unknown')),'Typ sylwetki'=>(string)(($enriched['_vehicle_field_sources']['vehicle_body_type'] ?? 'unknown'))],'car_raw_selected_fields'=>(array)($enriched['_car_raw_selected_fields'] ?? []),'dictionary_local_mapping'=>['status'=>(string)($enriched['vehicle_dictionary_resolution_status'] ?? ''),'source'=>(string)($enriched['vehicle_dictionary_resolution_source'] ?? ''),'hits'=>array_intersect_key($enriched,array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_color','vehicle_period','vehicle_year','mileage_km']))]],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true,'apply_allowed'=>true,'apply_blocked_reason'=>'','recommended_memory_limit'=>256];
+        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'details_only'=>$detailsOnly,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs,'source_used'=>['Producent'=>(string)(($enriched['_vehicle_field_sources']['vehicle_make'] ?? 'unknown')),'Model'=>(string)(($enriched['_vehicle_field_sources']['vehicle_model'] ?? 'unknown')),'Modyfikacja'=>(string)(($enriched['_vehicle_field_sources']['vehicle_generation'] ?? 'unknown')),'Okres'=>(string)(($enriched['_vehicle_field_sources']['vehicle_period'] ?? 'unknown')),'Przebieg'=>(string)(($enriched['_vehicle_field_sources']['mileage_km'] ?? 'unknown')),'Typ sylwetki'=>(string)(($enriched['_vehicle_field_sources']['vehicle_body_type'] ?? 'unknown'))],'car_raw_selected_fields'=>(array)($enriched['_car_raw_selected_fields'] ?? []),'dictionary_local_mapping'=>['status'=>(string)($enriched['vehicle_dictionary_resolution_status'] ?? ''),'source'=>(string)($enriched['vehicle_dictionary_resolution_source'] ?? ''),'hits'=>array_intersect_key($enriched,array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_color','vehicle_period','vehicle_year','mileage_km']))]],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true] + $guardStatus;
     }
 
     public function preview_product_details_table_render_status(int $productId): array
@@ -2098,9 +2094,8 @@ class OvokoIntegrationService
             $stoppedReason = 'max_items_per_request';
         }
         $stages[] = ['stage' => 'before_response', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'processed' => $processed, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
-        $limitMb = $this->memory_limit_mb();
-        $applyAllowed = !($limitMb > 0 && $limitMb <= 128);
-        $response = ['ok'=>true,'partial'=>$partial,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($candidateIds),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>!empty($candidateIds) ? (int) max($candidateIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'duration'=>$duration,'memory_limit'=>ini_get('memory_limit'),'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2),'apply_allowed'=>$applyAllowed,'apply_blocked_reason'=>$applyAllowed ? '' : 'memory_limit_too_low','recommended_memory_limit'=>256];
+        $guardStatus = $this->build_apply_guard_status();
+        $response = ['ok'=>true,'partial'=>$partial,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($candidateIds),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>!empty($candidateIds) ? (int) max($candidateIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'duration'=>$duration,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2)] + $guardStatus;
         unset($response['scanned_candidate_ids'], $response['selected_product_ids']);
         return $response;
     }
@@ -2146,10 +2141,12 @@ class OvokoIntegrationService
         return (int) round($value);
     }
 
-    private function build_apply_guard_status(array $memoryStages): array
+    private function build_apply_guard_status(array $memoryStages = []): array
     {
+        $limitRaw = (string) ini_get('memory_limit');
         $limitMb = $this->memory_limit_mb();
         $beforeWriteMb = round(memory_get_usage(true) / 1048576, 2);
+        $ratioBeforeWrite = ($limitMb > 0) ? round($beforeWriteMb / $limitMb, 4) : 0.0;
         $afterPartFetchMb = 0.0;
         foreach ($memoryStages as $stage) {
             if ((string) ($stage['stage'] ?? '') === 'after_api_part_fetch') {
@@ -2158,12 +2155,16 @@ class OvokoIntegrationService
             }
         }
         if ($limitMb > 0 && $limitMb <= 128 && ($afterPartFetchMb > 115 || $beforeWriteMb > 115)) {
-            return ['apply_allowed' => false, 'apply_blocked_reason' => 'memory_limit_too_low', 'recommended_memory_limit' => 256, 'before_write_mb' => $beforeWriteMb];
+            return ['apply_allowed' => false, 'apply_blocked_reason' => 'memory_limit_too_low', 'recommended_memory_limit' => 256, 'memory_limit' => $limitRaw, 'memory_limit_mb' => $limitMb, 'memory_usage_ratio_before_write' => $ratioBeforeWrite, 'before_write_mb' => $beforeWriteMb];
         }
-        if ($beforeWriteMb > 115) {
-            return ['apply_allowed' => false, 'apply_blocked_reason' => 'memory_guard_before_write', 'recommended_memory_limit' => 256, 'before_write_mb' => $beforeWriteMb];
+        if ($limitMb >= 256 && $beforeWriteMb < 200) {
+            return ['apply_allowed' => true, 'apply_blocked_reason' => '', 'recommended_memory_limit' => null, 'memory_limit' => $limitRaw, 'memory_limit_mb' => $limitMb, 'memory_usage_ratio_before_write' => $ratioBeforeWrite, 'before_write_mb' => $beforeWriteMb];
         }
-        return ['apply_allowed' => true, 'apply_blocked_reason' => '', 'recommended_memory_limit' => 256, 'before_write_mb' => $beforeWriteMb];
+        if ($limitMb > 0 && $beforeWriteMb > round($limitMb * 0.8, 2)) {
+            return ['apply_allowed' => false, 'apply_blocked_reason' => 'memory_guard_before_write', 'recommended_memory_limit' => 256, 'memory_limit' => $limitRaw, 'memory_limit_mb' => $limitMb, 'memory_usage_ratio_before_write' => $ratioBeforeWrite, 'before_write_mb' => $beforeWriteMb];
+        }
+        $recommended = ($limitMb > 0 && $limitMb < 256) ? 256 : null;
+        return ['apply_allowed' => true, 'apply_blocked_reason' => '', 'recommended_memory_limit' => $recommended, 'memory_limit' => $limitRaw, 'memory_limit_mb' => $limitMb, 'memory_usage_ratio_before_write' => $ratioBeforeWrite, 'before_write_mb' => $beforeWriteMb];
     }
 
     private function check_memory_guard_before_enrichment(int $guardMb): array
