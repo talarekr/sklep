@@ -475,6 +475,7 @@ class AdminPage
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'part_id' => isset($_POST['part_id']) ? (int) $_POST['part_id'] : 0,
             'dry_run' => true,
+            'details_only' => true,
             'minimal_response' => true,
             'disable_debug_heavy_logs' => true,
             'debug_full' => !empty($_POST['debug_full']),
