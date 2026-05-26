@@ -50,6 +50,98 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=1&page=1', []);
     }
 
+
+    public function diagnose_connection(array $preferredPaths = []): array
+    {
+        $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
+        $auth = $this->get_auth_form_fields();
+        $hasToken = trim((string) ($auth['user_token'] ?? '')) !== '';
+        $hasCredentials = $this->has_credentials();
+
+        if ($baseUrl === '') {
+            return [
+                'ok' => false,
+                'status_label' => 'ERROR — missing base URL',
+                'reason' => 'missing_base_url',
+                'base_url' => '',
+                'base_url_valid' => false,
+                'token_present' => $hasToken,
+                'credentials_present' => $hasCredentials,
+                'tested_endpoint' => null,
+                'http_status' => null,
+                'response_body' => '',
+                'error' => 'RRR base URL is empty.',
+            ];
+        }
+
+        $paths = $preferredPaths !== [] ? $preferredPaths : ['/get/part/10994', '/get/car/458'];
+        $results = [];
+        foreach ($paths as $path) {
+            $url = $baseUrl . $path;
+            $response = wp_remote_post($url, [
+                'timeout' => 12,
+                'body' => $auth,
+                'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
+            ]);
+
+            if (is_wp_error($response)) {
+                $results[] = [
+                    'ok' => false,
+                    'tested_endpoint' => $path,
+                    'url' => $url,
+                    'http_status' => null,
+                    'response_body' => '',
+                    'error' => $response->get_error_code() . ': ' . $response->get_error_message(),
+                    'reason' => str_contains((string) $response->get_error_code(), 'timeout') ? 'timeout' : 'wp_error',
+                ];
+                continue;
+            }
+
+            $code = (int) wp_remote_retrieve_response_code($response);
+            $bodyRaw = (string) wp_remote_retrieve_body($response);
+            $body = mb_substr($bodyRaw, 0, 1200);
+            $decoded = json_decode($bodyRaw, true);
+            $statusCode = is_array($decoded) ? (string) ($decoded['status_code'] ?? '') : '';
+            $ok = $code === 200 && ($statusCode === '' || $statusCode === 'R200');
+            $reason = $ok ? 'ok' : ($code === 401 ? 'unauthorized' : ($code === 404 ? 'invalid_endpoint' : 'http_error'));
+            $results[] = [
+                'ok' => $ok,
+                'tested_endpoint' => $path,
+                'url' => $url,
+                'http_status' => $code,
+                'response_body' => $body,
+                'error' => $ok ? '' : ('HTTP ' . $code),
+                'reason' => $reason,
+            ];
+            if ($ok) {
+                break;
+            }
+        }
+
+        $best = $results[0] ?? [];
+        foreach ($results as $row) {
+            if (!empty($row['ok'])) {
+                $best = $row;
+                break;
+            }
+        }
+
+        return [
+            'ok' => !empty($best['ok']),
+            'status_label' => !empty($best['ok']) ? 'OK' : ('ERROR — ' . ((string) ($best['error'] ?? $best['reason'] ?? 'unknown'))),
+            'reason' => (string) ($best['reason'] ?? 'unknown'),
+            'base_url' => $baseUrl,
+            'base_url_valid' => (bool) preg_match('#^https?://#i', $baseUrl),
+            'token_present' => $hasToken,
+            'credentials_present' => $hasCredentials,
+            'tested_endpoint' => (string) ($best['tested_endpoint'] ?? ''),
+            'http_status' => $best['http_status'] ?? null,
+            'response_body' => (string) ($best['response_body'] ?? ''),
+            'error' => (string) ($best['error'] ?? ''),
+            'attempts' => $results,
+        ];
+    }
+
     public function preview_fetch_part_by_id(string $partId): array
     {
         if ($partId === '') {

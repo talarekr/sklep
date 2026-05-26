@@ -8,7 +8,9 @@ $memoryLimitMb = (int) preg_replace('/[^0-9]/', '', $memoryLimitRaw);
 $blockFullBulk = $memoryLimitMb > 0 && $memoryLimitMb <= 128;
 $showAdvancedTools = defined('GPSWISS_OVOKO_SHOW_ADVANCED_TOOLS') ? (bool) GPSWISS_OVOKO_SHOW_ADVANCED_TOOLS : true;
 
-$apiOk = !empty($data['rrr_api_check']['ok']) || !empty($data['supply_connector_check']['ok']);
+$apiConnection = (array) ($data['api_connection_test'] ?? []);
+$apiOk = !empty($apiConnection['ok']);
+$apiStatusText = $apiOk ? 'OK' : ('ERROR — ' . (string) ($apiConnection['error'] ?? $apiConnection['reason'] ?? 'not tested'));
 $csvLoaded = !empty($csvStatus['rows_total']);
 $lastSyncStatus = (string) ($data['settings']['ovoko_sync_mode'] ?? 'unknown');
 
@@ -24,7 +26,7 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
     <h1>Ovoko / RRR Integration</h1>
 
     <div class="notice notice-info"><p>
-        <strong>API connection:</strong> <?php echo $apiOk ? 'OK' : 'error'; ?> |
+        <strong>API connection:</strong> <?php echo esc_html($apiStatusText); ?> |
         <strong>CSV mapping:</strong> <?php echo $csvLoaded ? 'loaded' : 'not loaded'; ?> |
         <strong>CSV rows:</strong> <?php echo esc_html((string) ($csvStatus['rows_total'] ?? 0)); ?> |
         <strong>Unique codes:</strong> <?php echo esc_html((string) ($csvStatus['unique_part_codes'] ?? 0)); ?> |
@@ -32,6 +34,18 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
         <strong>PHP memory_limit:</strong> <?php echo esc_html($memoryLimitRaw); ?> |
         <strong>Last sync status:</strong> <?php echo esc_html($lastSyncStatus); ?>
     </p></div>
+
+
+    <div style="margin:8px 0 14px;">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+            <?php wp_nonce_field('gpswiss_ovoko_test_api_connection'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_test_api_connection" />
+            <?php submit_button('Test API connection', 'secondary', 'submit', false); ?>
+        </form>
+        <?php if (!empty($apiConnection)): ?>
+            <details style="display:inline-block; vertical-align:middle;"><summary>Show API test details</summary><pre><?php echo esc_html(wp_json_encode($apiConnection, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+        <?php endif; ?>
+    </div>
 
     <?php if (!empty($notice)): ?>
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>">
@@ -82,7 +96,7 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
             <input id="single_product_id" type="number" min="1" name="product_ids_csv" value="2081" />
             <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
             <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run</button>
-            <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply update</button>
+            <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label> <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply update</button>
         </form>
     </div>
 
@@ -107,7 +121,7 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
             <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
             <br><br>
             <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run batch</button>
-            <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply batch</button>
+            <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label> <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply batch</button>
         </form>
     </div>
 
