@@ -267,13 +267,14 @@ class RrrApiClient
         return [];
     }
 
-    public function normalize_rrr_single_part_payload(array $payload): array
+    public function normalize_rrr_single_part_payload(array $payload, array $options = []): array
     {
+        $detailsOnly = !empty($options['details_only']);
         $record = $this->extract_single_part_record($payload);
         $carId = $this->first_non_empty_value($record, ['car_id', 'carId', 'vehicle_id', 'vehicleId']);
         $vehicle = $this->extract_vehicle_data($record);
-        $priceDiagnostics = $this->extract_allegro_price_diagnostics($record);
-        $internalNotesPrice = $this->parse_internal_notes_price($record);
+        $priceDiagnostics = $detailsOnly ? ['allegro_channel_price' => null, 'allegro_channel_currency' => '', 'allegro_price_location' => 'skipped_details_only', 'diagnostic_channel_keys' => []] : $this->extract_allegro_price_diagnostics($record);
+        $internalNotesPrice = $detailsOnly ? ['field_exists' => false, 'price_found' => false, 'price_value' => null, 'price_format_valid' => false, 'price_error' => 'skipped_details_only'] : $this->parse_internal_notes_price($record);
         $ovokoPrice = $record['price'] ?? null;
         $ovokoCurrency = sanitize_text_field((string) ($record['currency'] ?? ''));
         $ovokoOriginalPrice = $record['original_price'] ?? null;
@@ -304,8 +305,8 @@ class RrrApiClient
             $wooTargetCurrency = $allegroCurrency !== '' ? $allegroCurrency : $ovokoOriginalCurrency;
         }
 
-        $images = $this->normalize_gallery($record['part_photo_gallery'] ?? $record['images'] ?? []);
-        $singlePhoto = sanitize_text_field((string) ($record['photo'] ?? ''));
+        $images = $detailsOnly ? [] : $this->normalize_gallery($record['part_photo_gallery'] ?? $record['images'] ?? []);
+        $singlePhoto = $detailsOnly ? '' : sanitize_text_field((string) ($record['photo'] ?? ''));
 
         $summary = [
             'part_id' => sanitize_text_field((string) ($record['id'] ?? '')),
@@ -358,6 +359,34 @@ class RrrApiClient
             'reserved_user_field_exists' => array_key_exists('reserved_user', $record),
             'reserved_date_field_exists' => array_key_exists('reserved_date', $record),
         ];
+        if ($detailsOnly) {
+            unset(
+                $summary['title'],
+                $summary['price'],
+                $summary['currency'],
+                $summary['original_price'],
+                $summary['original_currency'],
+                $summary['ovoko_price'],
+                $summary['ovoko_currency'],
+                $summary['ovoko_original_price'],
+                $summary['ovoko_original_currency'],
+                $summary['allegro_channel_price'],
+                $summary['allegro_channel_currency'],
+                $summary['woo_target_price'],
+                $summary['woo_target_currency'],
+                $summary['price_source'],
+                $summary['price_review_required'],
+                $summary['price_reason'],
+                $summary['allegro_price_available'],
+                $summary['allegro_price_location'],
+                $summary['price_diagnostic_channel_keys'],
+                $summary['notes'],
+                $summary['shop_url'],
+                $summary['show_url'],
+                $summary['photo'],
+                $summary['part_photo_gallery']
+            );
+        }
 
         if ($vehicle !== []) {
             $summary = array_merge($summary, $vehicle);
