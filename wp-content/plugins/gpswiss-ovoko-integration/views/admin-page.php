@@ -21,6 +21,19 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
         $noticePayload = $decoded;
     }
 }
+
+$noticeActionName = (string) ($noticePayload['action_name'] ?? '');
+$productActionNames = [
+    'Create Woo draft product from RRR part',
+    'Update product cards from Ovoko CSV mapping',
+    'Single enrichment dry-run',
+    'Apply Allegro to Ovoko details enrichment',
+];
+$hasApiMarkers = isset($noticePayload['status_label']) || isset($noticePayload['tested_endpoint']) || isset($noticePayload['http_status']);
+$hasProductId = !empty($noticePayload['product_id']) || !empty($noticePayload['sample_results'][0]['product_id']);
+$isApiTestResult = is_array($noticePayload) && $hasApiMarkers && !$hasProductId;
+$isKnownProductAction = in_array($noticeActionName, $productActionNames, true);
+$showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnownProductAction || $hasProductId);
 ?>
 <div class="wrap" style="max-width:1180px;">
     <h1>Ovoko / RRR Integration</h1>
@@ -51,17 +64,32 @@ if (!empty($notice['text']) && is_string($notice['text'])) {
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>">
             <p><?php echo esc_html((string) ($notice['text'] ?? '')); ?></p>
             <?php if (is_array($noticePayload)): ?>
-                <ul style="margin-left:18px;">
-                    <li><strong>product_id:</strong> <code><?php echo esc_html((string) ($noticePayload['product_id'] ?? ($noticePayload['sample_results'][0]['product_id'] ?? ''))); ?></code></li>
-                    <li><strong>matched_ovoko_part_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_part_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_part_id'] ?? ''))); ?></code></li>
-                    <li><strong>matched_ovoko_car_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_car_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_car_id'] ?? ''))); ?></code></li>
-                    <li><strong>attributes_count:</strong> <code><?php echo esc_html((string) ($noticePayload['attributes_count'] ?? ($noticePayload['sample_results'][0]['attributes_count'] ?? $noticePayload['sample_results'][0]['would_write_attributes_count'] ?? ''))); ?></code></li>
-                    <li><strong>no_price_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_price_change'] ?? ($noticePayload['sample_results'][0]['no_price_change'] ?? ''))); ?></code></li>
-                    <li><strong>no_stock_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_stock_change'] ?? ($noticePayload['sample_results'][0]['no_stock_change'] ?? ''))); ?></code></li>
-                    <li><strong>no_images_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_images_change'] ?? ($noticePayload['sample_results'][0]['no_images_change'] ?? ''))); ?></code></li>
-                    <li><strong>no_title_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_title_change'] ?? ($noticePayload['sample_results'][0]['no_title_change'] ?? ''))); ?></code></li>
-                    <li><strong>memory_peak_mb:</strong> <code><?php echo esc_html((string) ($noticePayload['memory_peak_mb'] ?? ($noticePayload['sample_results'][0]['memory_peak_mb'] ?? ''))); ?></code></li>
-                </ul>
+                <?php if ($isApiTestResult): ?>
+                    <div class="postbox" style="padding:12px; margin:10px 0 0; max-width:760px;">
+                        <h3 style="margin-top:0;">API connection: <?php echo esc_html((string) ($noticePayload['status_label'] ?? ($noticePayload['ok'] ? 'OK' : 'ERROR'))); ?></h3>
+                        <ul style="margin:0 0 0 18px;">
+                            <li><strong>Endpoint:</strong> <code><?php echo esc_html((string) ($noticePayload['tested_endpoint'] ?? '')); ?></code></li>
+                            <li><strong>HTTP status:</strong> <code><?php echo esc_html((string) ($noticePayload['http_status'] ?? '')); ?></code></li>
+                            <li><strong>Base URL:</strong> <code><?php echo esc_html((string) ($noticePayload['base_url'] ?? '')); ?></code></li>
+                            <li><strong>Token present:</strong> <code><?php echo !empty($noticePayload['token_present']) ? 'yes' : 'no'; ?></code></li>
+                            <li><strong>Credentials present:</strong> <code><?php echo !empty($noticePayload['credentials_present']) ? 'yes' : 'no'; ?></code></li>
+                            <li><strong>Reason:</strong> <code><?php echo esc_html((string) ($noticePayload['reason'] ?? '')); ?></code></li>
+                            <li><strong>Checked at:</strong> <code><?php echo esc_html((string) ($noticePayload['checked_at'] ?? $noticePayload['tested_at'] ?? $noticePayload['timestamp'] ?? '')); ?></code></li>
+                        </ul>
+                    </div>
+                <?php elseif ($showProductSummary): ?>
+                    <ul style="margin-left:18px;">
+                        <li><strong>product_id:</strong> <code><?php echo esc_html((string) ($noticePayload['product_id'] ?? ($noticePayload['sample_results'][0]['product_id'] ?? ''))); ?></code></li>
+                        <li><strong>matched_ovoko_part_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_part_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_part_id'] ?? ''))); ?></code></li>
+                        <li><strong>matched_ovoko_car_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_car_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_car_id'] ?? ''))); ?></code></li>
+                        <li><strong>attributes_count:</strong> <code><?php echo esc_html((string) ($noticePayload['attributes_count'] ?? ($noticePayload['sample_results'][0]['attributes_count'] ?? $noticePayload['sample_results'][0]['would_write_attributes_count'] ?? ''))); ?></code></li>
+                        <li><strong>no_price_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_price_change'] ?? ($noticePayload['sample_results'][0]['no_price_change'] ?? ''))); ?></code></li>
+                        <li><strong>no_stock_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_stock_change'] ?? ($noticePayload['sample_results'][0]['no_stock_change'] ?? ''))); ?></code></li>
+                        <li><strong>no_images_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_images_change'] ?? ($noticePayload['sample_results'][0]['no_images_change'] ?? ''))); ?></code></li>
+                        <li><strong>no_title_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_title_change'] ?? ($noticePayload['sample_results'][0]['no_title_change'] ?? ''))); ?></code></li>
+                        <li><strong>memory_peak_mb:</strong> <code><?php echo esc_html((string) ($noticePayload['memory_peak_mb'] ?? ($noticePayload['sample_results'][0]['memory_peak_mb'] ?? ''))); ?></code></li>
+                    </ul>
+                <?php endif; ?>
                 <details><summary>Show technical JSON</summary><pre><?php echo esc_html(wp_json_encode($noticePayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
             <?php endif; ?>
         </div>
