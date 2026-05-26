@@ -41,6 +41,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_import_csv_mapping', [$this, 'handle_import_csv_mapping']);
         add_action('admin_post_gpswiss_ovoko_bulk_diagnostics_ping', [$this, 'handle_bulk_diagnostics_ping']);
         add_action('admin_post_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
+        add_action('admin_post_gpswiss_ovoko_single_enrichment_dry_run', [$this, 'handle_single_enrichment_dry_run']);
     }
 
     public function register_admin_page(): void
@@ -411,6 +412,17 @@ class AdminPage
         $parsedMinimalResponse = !empty($_POST['minimal_response']);
         $rawDisableDebugHeavyLogsInput = $_POST['disable_debug_heavy_logs'] ?? null;
         $parsedDisableDebugHeavyLogs = !empty($_POST['disable_debug_heavy_logs']);
+        $memoryLimitRaw = (string) ini_get('memory_limit');
+        $memoryLimitMb = (int) preg_replace('/[^0-9]/', '', $memoryLimitRaw);
+        $blockFullBulk = $memoryLimitMb > 0 && $memoryLimitMb <= 128;
+        if ($blockFullBulk && !$parsedMatchOnly) {
+            wp_send_json([
+                'ok' => false,
+                'error' => 'full_enrichment_blocked_low_memory_limit',
+                'memory_limit' => $memoryLimitRaw,
+                'message' => 'Full enrichment requires higher memory limit or CLI mode',
+            ], 500);
+        }
         $options = [
             'dry_run' => !empty($_POST['dry_run']),
             'match_only' => $parsedMatchOnly,
@@ -453,6 +465,21 @@ class AdminPage
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function handle_single_enrichment_dry_run(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_single_enrichment_dry_run');
+        $result = $this->service->single_enrichment_dry_run_memory_safe([
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'part_id' => isset($_POST['part_id']) ? (int) $_POST['part_id'] : 0,
+            'dry_run' => true,
+            'minimal_response' => true,
+            'disable_debug_heavy_logs' => true,
+            'debug_full' => !empty($_POST['debug_full']),
+        ]);
+        wp_send_json($result, !empty($result['ok']) ? 200 : 500);
     }
 
     public function handle_bulk_diagnostics_ping(): void

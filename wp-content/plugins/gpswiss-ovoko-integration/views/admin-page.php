@@ -137,17 +137,25 @@
         <?php submit_button('Apply Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
     </form>
 
+    <?php
+    $memoryLimitRaw = (string) ini_get('memory_limit');
+    $memoryLimitMb = (int) preg_replace('/[^0-9]/', '', $memoryLimitRaw);
+    $blockFullBulk = $memoryLimitMb > 0 && $memoryLimitMb <= 128;
+    ?>
     <h2>Bulk Allegro to Ovoko details enrichment</h2>
+    <?php if ($blockFullBulk): ?>
+    <p><strong>Full enrichment requires higher memory limit or CLI mode</strong></p>
+    <?php endif; ?>
     <p><strong>This action updates only Ovoko/RRR detail attributes/meta. It must not change prices, stock, images, titles, publication status, eBay, Allegro, batches or cron settings.</strong></p>
     <p><strong>Warning:</strong> run this manually in small batches (3-5 items per request). Do not run long mass updates in one request.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); ?>
         <input type="hidden" name="action" value="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment" />
         <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry run (default)</label><br />
-        <label><input type="checkbox" name="match_only" value="1" /> Match only / no API enrichment</label><br />
+        <label><input type="checkbox" name="match_only" value="1" <?php checked($blockFullBulk); ?> /> Match only / no API enrichment</label><br />
         <label><input type="checkbox" name="minimal_response" value="1" checked="checked" /> minimal_response</label>
         <label><input type="checkbox" name="disable_debug_heavy_logs" value="1" checked="checked" /> disable_debug_heavy_logs</label><br />
-        <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label><br />
+        <label><input type="checkbox" name="replace_description" value="1" <?php disabled($blockFullBulk); ?> /> Replace old Allegro description</label><br />
         <label><input type="checkbox" name="only_matched" value="1" /> only_matched</label>
         <label><input type="checkbox" name="skip_already_enriched" value="1" checked="checked" /> skip_already_enriched</label>
         <label><input type="checkbox" name="include_existing_ovoko" value="1" /> include_existing_ovoko</label>
@@ -161,6 +169,17 @@
         <label for="bulk_product_ids_csv">Product IDs CSV (optional):</label>
         <input id="bulk_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
         <?php submit_button('Bulk Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
+    </form>
+    <h3>Single enrichment dry-run (memory-safe)</h3>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('gpswiss_ovoko_single_enrichment_dry_run'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_single_enrichment_dry_run" />
+        <label for="single_dry_product_id">Product ID:</label>
+        <input id="single_dry_product_id" type="number" min="1" name="product_id" value="2081" />
+        <label for="single_dry_part_id">Part ID (optional):</label>
+        <input id="single_dry_part_id" type="number" min="0" name="part_id" value="0" />
+        <label><input type="checkbox" name="debug_full" value="1" /> debug_full=1</label>
+        <?php submit_button('Single enrichment dry-run (JSON)', 'secondary', 'submit', false); ?>
     </form>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;">
         <?php wp_nonce_field('gpswiss_ovoko_bulk_diagnostics_ping'); ?>
