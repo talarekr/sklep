@@ -157,7 +157,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <h3>Update product cards from CSV mapping</h3>
         <p>CSV maps part number to Ovoko part ID.</p>
         <?php if ($blockFullBulk): ?><div class="notice notice-warning"><p>Apply is blocked for low memory_limit. Use dry-run or increase to 256M.</p></div><?php endif; ?>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form id="gpswiss_ovoko_batch_update_form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment" />
             <input type="hidden" name="details_only" value="1" />

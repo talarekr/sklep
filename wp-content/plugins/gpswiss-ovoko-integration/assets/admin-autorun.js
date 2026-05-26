@@ -1,17 +1,29 @@
 document.documentElement.setAttribute('data-ovoko-autorun-js', 'loaded');
+console.log('script top-level executing');
 console.log('Ovoko auto-run JS loaded');
 
 document.addEventListener('DOMContentLoaded', function () {
+  console.log('DOMContentLoaded');
+
   const config = window.gpswissOvokoAutorunConfig || {};
-  const form = document.querySelector('form[action*="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment"]');
+  const $ = function (id) { return document.getElementById(id); };
+  const jsLoadedEl = $('gpswiss_autorun_js_loaded');
+
+  if (jsLoadedEl) {
+    jsLoadedEl.textContent = 'yes';
+    console.log('js loaded marker set');
+  }
+
+  const form = document.getElementById('gpswiss_ovoko_batch_update_form');
+  console.log('form found', !!form);
+
   if (!form) {
+    console.error('batch form not found');
     return;
   }
 
-  const $ = function (id) { return document.getElementById(id); };
   const statusEl = $('gpswiss_autorun_status');
   const logsEl = $('gpswiss_autorun_logs');
-  const jsLoadedEl = $('gpswiss_autorun_js_loaded');
   const stateKey = 'gpswiss_ovoko_autorun_state_v1';
 
   let st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
@@ -21,10 +33,6 @@ document.addEventListener('DOMContentLoaded', function () {
   const setK = function (k, v) { const n = statusEl.querySelector('[data-k="' + k + '"]'); if (n) { n.textContent = String(v); } };
   const render = function () { ['status','mode','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(function (k) { setK(k, st[k] || 0); }); logsEl.textContent = (st.logs || []).slice(-30).map(function (x) { return JSON.stringify(x); }).join("\n"); };
   const pushLog = function (o) { st.logs.push(Object.assign({ts:new Date().toISOString()}, o)); st.logs = st.logs.slice(-1000); save(); render(); };
-
-  if (jsLoadedEl) {
-    jsLoadedEl.textContent = 'yes';
-  }
 
   const jsTestBtn = $('gpswiss_autorun_js_test');
   if (jsTestBtn) {
@@ -87,6 +95,8 @@ document.addEventListener('DOMContentLoaded', function () {
   const pauseBtn = $('gpswiss_autorun_pause');
   const resumeBtn = $('gpswiss_autorun_resume');
   const stopBtn = $('gpswiss_autorun_stop');
+  const downloadJsonlBtn = $('gpswiss_autorun_download_jsonl');
+  const downloadCsvBtn = $('gpswiss_autorun_download_csv');
   if (startDryBtn) { startDryBtn.addEventListener('click', function (e) { e.preventDefault(); startAutorun('dry_run'); }); }
   if (startApplyBtn) { startApplyBtn.addEventListener('click', function (e) { e.preventDefault(); startAutorun('apply'); }); }
   if (pauseBtn) { pauseBtn.addEventListener('click', pauseAutorun); }
@@ -94,8 +104,8 @@ document.addEventListener('DOMContentLoaded', function () {
   if (stopBtn) { stopBtn.addEventListener('click', stopAutorun); }
 
   const download = function (name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
-  $('gpswiss_autorun_download_jsonl').addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(function (x) { return JSON.stringify(x) + "\n"; }), {type:'application/jsonl'})); });
-  $('gpswiss_autorun_download_csv').addEventListener('click', function () { const rows=st.logs||[]; const keys=['ts','product_id','action','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_slug','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','error']; const csv=[keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join("\n"); download('ovoko-autorun-log.csv', new Blob([csv], {type:'text/csv'})); });
+  if (downloadJsonlBtn) { downloadJsonlBtn.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(function (x) { return JSON.stringify(x) + "\n"; }), {type:'application/jsonl'})); }); }
+  if (downloadCsvBtn) { downloadCsvBtn.addEventListener('click', function () { const rows=st.logs||[]; const keys=['ts','product_id','action','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_slug','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','error']; const csv=[keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join("\n"); download('ovoko-autorun-log.csv', new Blob([csv], {type:'text/csv'})); }); }
 
   st.status = st.running ? (st.paused ? 'paused' : 'running') : (st.status || 'idle');
   render();
