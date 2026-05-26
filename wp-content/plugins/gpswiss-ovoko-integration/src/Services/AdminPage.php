@@ -5,6 +5,12 @@ namespace GPSwiss\Ovoko\Services;
 class AdminPage
 {
     private OvokoIntegrationService $service;
+    private string $lastHookSuffix = '';
+    private string $lastPageSlug = '';
+    private string $autorunScriptUrl = '';
+    private string $autorunScriptPath = '';
+    private bool $autorunScriptExists = false;
+    private bool $autorunScriptEnqueued = false;
 
     public function __construct(OvokoIntegrationService $service)
     {
@@ -51,15 +57,24 @@ class AdminPage
 
     public function enqueue_admin_assets(string $hook): void
     {
-        if ($hook !== 'tools_page_gpswiss-ovoko-integration') {
+        $handle = 'gpswiss-ovoko-admin-autorun';
+        $this->lastHookSuffix = $hook;
+        $this->lastPageSlug = isset($_GET['page']) ? sanitize_key((string) $_GET['page']) : '';
+        $this->autorunScriptPath = dirname(__DIR__, 2) . '/assets/admin-autorun.js';
+        $this->autorunScriptUrl = plugins_url('assets/admin-autorun.js', dirname(__DIR__, 2) . '/gpswiss-ovoko-integration.php');
+        $this->autorunScriptExists = file_exists($this->autorunScriptPath);
+
+        $isPluginSlugPage = ($this->lastPageSlug === 'gpswiss-ovoko-integration');
+        $isHookMatch = (strpos($hook, 'gpswiss') !== false || strpos($hook, 'ovoko') !== false);
+        $isPluginToolsPage = (isset($_GET['page']) && $this->lastPageSlug !== '' && preg_match('/gpswiss|ovoko/i', $this->lastPageSlug) === 1);
+        $shouldEnqueue = $isPluginSlugPage || $isHookMatch || $isPluginToolsPage;
+
+        if (!$shouldEnqueue) {
             return;
         }
 
-        $handle = 'gpswiss-ovoko-admin-autorun';
-        $scriptPath = dirname(__DIR__, 2) . '/assets/admin-autorun.js';
-        $scriptUrl = plugins_url('assets/admin-autorun.js', dirname(__DIR__, 2) . '/gpswiss-ovoko-integration.php');
-
-        wp_enqueue_script($handle, $scriptUrl, [], file_exists($scriptPath) ? (string) filemtime($scriptPath) : '1.0.0', true);
+        wp_enqueue_script($handle, $this->autorunScriptUrl, [], $this->autorunScriptExists ? (string) filemtime($this->autorunScriptPath) : '1.0.0', true);
+        $this->autorunScriptEnqueued = true;
         wp_localize_script($handle, 'gpswissOvokoAutorunConfig', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'),
@@ -95,6 +110,13 @@ class AdminPage
         }
         $notice = get_transient('gpswiss_ovoko_notice');
         delete_transient('gpswiss_ovoko_notice');
+
+        $currentAdminHookSuffix = $this->lastHookSuffix;
+        $adminPageSlug = isset($_GET['page']) ? sanitize_key((string) $_GET['page']) : '';
+        $autoRunExpectedAssetUrl = $this->autorunScriptUrl;
+        $autoRunAssetPath = $this->autorunScriptPath;
+        $autoRunFileExists = $this->autorunScriptExists;
+        $autoRunScriptEnqueued = $this->autorunScriptEnqueued;
 
         include dirname(__DIR__, 2) . '/views/admin-page.php';
     }
