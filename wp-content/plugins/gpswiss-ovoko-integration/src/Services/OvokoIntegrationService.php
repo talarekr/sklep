@@ -2027,6 +2027,8 @@ class OvokoIntegrationService
         $page = max(1, (int) ($options['page'] ?? 1));
         $limit = max(1, min((int) ($options['limit'] ?? $batchSize), $maxItemsPerRequest));
         $onlyMatched = !empty($options['only_matched']);
+        $imageSafetyStrict = !array_key_exists('image_safety_strict', $options) || !empty($options['image_safety_strict']);
+        $stopOnError = !empty($options['stop_on_error']);
         $skipAlreadyEnriched = !empty($options['skip_already_enriched']);
         $includeExistingOvoko = !empty($options['include_existing_ovoko']);
         $csvIndexType = 'full';
@@ -2124,10 +2126,24 @@ class OvokoIntegrationService
             if (empty($apply['ok'])) { $errors++; $counts['error']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_apply_failed','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = array_merge($row, ['action'=>'error']); continue; }
             $after = $this->capture_product_safety_snapshot($productId);
             $safety = $this->compare_product_safety_snapshot($before, $after);
-            if (in_array(false, $safety, true)) { $errors++; $counts['safety_violation']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_safety_violation','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = array_merge($row, ['action'=>'error','error'=>'safety_violation'], $safety); continue; }
+            $imageChangedKeys = $this->diff_snapshot_keys($before, $after, $this->image_safety_keys());
+            $safetyDebug = ['image_snapshot_before' => array_intersect_key($before, array_flip($this->image_safety_keys())), 'image_snapshot_after' => array_intersect_key($after, array_flip($this->image_safety_keys())), 'image_changed_keys' => $imageChangedKeys];
+            $safetyViolation = in_array(false, $safety, true) || ($imageSafetyStrict && !empty($imageChangedKeys));
+            if ($safetyViolation) {
+                $errors++;
+                $counts['safety_violation']++;
+                $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_safety_violation','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000),'image_changed_keys'=>$imageChangedKeys,'image_safety_strict'=>$imageSafetyStrict ? 1 : 0]);
+                $results[] = array_merge($row, ['action'=>'error','error'=>'safety_violation'], $safety, $safetyDebug);
+                if ($stopOnError) {
+                    $partial = true;
+                    $stoppedReason = 'stop_on_error_safety_violation';
+                    break;
+                }
+                continue;
+            }
             $enriched++; $counts['enriched']++;
             $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
-            $results[] = array_merge($row, ['action'=>'updated','vehicle_label'=>(string)($apply['vehicle_label'] ?? ''),'vehicle_slug'=>(string)($apply['vehicle_slug'] ?? ''),'vehicle_parts_url'=>(string)($apply['vehicle_parts_url'] ?? ''),'attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true], $safety);
+            $results[] = array_merge($row, ['action'=>'updated','vehicle_label'=>(string)($apply['vehicle_label'] ?? ''),'vehicle_slug'=>(string)($apply['vehicle_slug'] ?? ''),'vehicle_parts_url'=>(string)($apply['vehicle_parts_url'] ?? ''),'attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true], $safety, $safetyDebug);
             unset($audit, $match, $normalized, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $before, $apply, $after, $safety, $row);
             if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
         }
@@ -2140,7 +2156,7 @@ class OvokoIntegrationService
         $guardStatus = $this->build_apply_guard_status();
         $lastProcessedId = !empty($selectedProductIds) ? (int) end($selectedProductIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0));
         $isDone = $processed === 0 || $lastProcessedId <= 0 || (!$partial && $processed < $batchSize);
-        $response = ['ok'=>true,'partial'=>$partial,'done'=>$isDone,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($ids),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>$lastProcessedId,'duration'=>$duration,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2)] + $guardStatus;
+        $response = ['ok'=>true,'partial'=>$partial,'done'=>$isDone,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($ids),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'image_safety_strict'=>$imageSafetyStrict,'stop_on_error'=>$stopOnError,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>$lastProcessedId,'duration'=>$duration,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2)] + $guardStatus;
         unset($response['scanned_candidate_ids'], $response['selected_product_ids']);
         return $response;
     }
@@ -2427,12 +2443,29 @@ class OvokoIntegrationService
 
     private function capture_product_safety_snapshot(int $productId): array
     {
-        return ['price'=>(string)get_post_meta($productId,'_price',true),'regular_price'=>(string)get_post_meta($productId,'_regular_price',true),'sale_price'=>(string)get_post_meta($productId,'_sale_price',true),'stock_quantity'=>(string)get_post_meta($productId,'_stock',true),'stock_status'=>(string)get_post_meta($productId,'_stock_status',true),'manage_stock'=>(string)get_post_meta($productId,'_manage_stock',true),'thumbnail_id'=>(string)get_post_thumbnail_id($productId),'gallery'=>(string)get_post_meta($productId,'_product_image_gallery',true),'listing_image'=>(string)get_post_meta($productId,'_listing_image',true),'post_title'=>(string)get_the_title($productId),'post_status'=>(string)get_post_status($productId)];
+        return ['price'=>(string)get_post_meta($productId,'_price',true),'regular_price'=>(string)get_post_meta($productId,'_regular_price',true),'sale_price'=>(string)get_post_meta($productId,'_sale_price',true),'stock_quantity'=>(string)get_post_meta($productId,'_stock',true),'stock_status'=>(string)get_post_meta($productId,'_stock_status',true),'manage_stock'=>(string)get_post_meta($productId,'_manage_stock',true),'thumbnail_id'=>(string)get_post_thumbnail_id($productId),'thumbnail_meta'=>(string)get_post_meta($productId,'_thumbnail_id',true),'gallery'=>(string)get_post_meta($productId,'_product_image_gallery',true),'listing_image'=>(string)get_post_meta($productId,'_listing_image',true),'awi_listing_image_id'=>(string)get_post_meta($productId,'_awi_listing_image_id',true),'awi_listing_image_source_id'=>(string)get_post_meta($productId,'_awi_listing_image_source_id',true),'post_title'=>(string)get_the_title($productId),'post_status'=>(string)get_post_status($productId)];
     }
 
     private function compare_product_safety_snapshot(array $before, array $after): array
     {
-        return ['no_price_change'=>($before['price']??'')===($after['price']??'') && ($before['regular_price']??'')===($after['regular_price']??'') && ($before['sale_price']??'')===($after['sale_price']??''),'no_stock_change'=>($before['stock_quantity']??'')===($after['stock_quantity']??'') && ($before['stock_status']??'')===($after['stock_status']??'') && ($before['manage_stock']??'')===($after['manage_stock']??''),'no_images_change'=>($before['thumbnail_id']??'')===($after['thumbnail_id']??'') && ($before['gallery']??'')===($after['gallery']??'') && ($before['listing_image']??'')===($after['listing_image']??''),'no_title_change'=>($before['post_title']??'')===($after['post_title']??''),'no_status_change'=>($before['post_status']??'')===($after['post_status']??'')];
+        $imageChangedKeys = $this->diff_snapshot_keys($before, $after, $this->image_safety_keys());
+        return ['no_price_change'=>($before['price']??'')===($after['price']??'') && ($before['regular_price']??'')===($after['regular_price']??'') && ($before['sale_price']??'')===($after['sale_price']??''),'no_stock_change'=>($before['stock_quantity']??'')===($after['stock_quantity']??'') && ($before['stock_status']??'')===($after['stock_status']??'') && ($before['manage_stock']??'')===($after['manage_stock']??''),'no_images_change'=>empty($imageChangedKeys),'no_title_change'=>($before['post_title']??'')===($after['post_title']??''),'no_status_change'=>($before['post_status']??'')===($after['post_status']??'')];
+    }
+
+    private function image_safety_keys(): array
+    {
+        return ['thumbnail_id', 'thumbnail_meta', 'gallery', 'listing_image', 'awi_listing_image_id', 'awi_listing_image_source_id'];
+    }
+
+    private function diff_snapshot_keys(array $before, array $after, array $keys): array
+    {
+        $changed = [];
+        foreach ($keys as $key) {
+            if ((string) ($before[$key] ?? '') !== (string) ($after[$key] ?? '')) {
+                $changed[] = (string) $key;
+            }
+        }
+        return $changed;
     }
 
     private function detect_best_csv_delimiter_and_header(string $sourcePath, array $delimiters): array
