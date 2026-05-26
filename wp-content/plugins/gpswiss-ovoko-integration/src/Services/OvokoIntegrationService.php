@@ -366,6 +366,7 @@ class OvokoIntegrationService
             'supply_connector_check' => $connectorCheck,
             'supply_connector_resources' => $connectorClient->list_supported_resources_from_static_analysis(),
             'rrr_api_check' => $rrrCheck,
+            'api_connection_test' => (array) get_transient('gpswiss_ovoko_last_api_connection_test'),
             'sync_preview_fixture' => $fixtureWithHash->to_array(),
             'sync_preview_meta_mapping' => $syncService->map_to_woo_meta_preview($fixtureWithHash),
             'sync_preview_match' => ['mode' => 'manual_only', 'note' => 'match preview moved to manual actions only to keep admin page lightweight'],
@@ -453,6 +454,16 @@ class OvokoIntegrationService
         $result = $client->check_configuration();
         $result['checked_at'] = gmdate('c');
         set_transient('gpswiss_ovoko_last_rrr_api_check', $result, DAY_IN_SECONDS);
+        return $result;
+    }
+
+
+    public function test_api_connection(): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->diagnose_connection(['/get/part/10994', '/get/car/458']);
+        $result['checked_at'] = gmdate('c');
+        set_transient('gpswiss_ovoko_last_api_connection_test', $result, DAY_IN_SECONDS);
         return $result;
     }
 

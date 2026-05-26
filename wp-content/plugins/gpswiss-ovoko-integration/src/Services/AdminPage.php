@@ -18,6 +18,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_test_callback', [$this, 'handle_test_callback']);
         add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
         add_action('admin_post_gpswiss_ovoko_check_rrr_api', [$this, 'handle_check_rrr_api']);
+        add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_parts_sample', [$this, 'handle_preview_rrr_parts_sample']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_single_part', [$this, 'handle_preview_rrr_single_part']);
         add_action('admin_post_gpswiss_ovoko_probe_ovoko_image_url_variants', [$this, 'handle_probe_ovoko_image_url_variants']);
@@ -115,6 +116,20 @@ class AdminPage
         $result = $this->service->check_rrr_api_configuration();
         $type = (($result['status'] ?? '') === 'needs_configuration_or_endpoint_confirmation') ? 'warning' : 'success';
         set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_test_api_connection(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_test_api_connection');
+
+        $result = $this->service->test_api_connection();
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'error', 'text' => wp_json_encode($result)], 60);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
@@ -413,6 +428,19 @@ class AdminPage
         $memoryLimitRaw = (string) ini_get('memory_limit');
         $memoryLimitMb = (int) preg_replace('/[^0-9]/', '', $memoryLimitRaw);
         $blockFullBulk = $memoryLimitMb > 0 && $memoryLimitMb <= 128;
+        $apiCheck = (array) get_transient('gpswiss_ovoko_last_api_connection_test');
+        $apiOk = !empty($apiCheck['ok']);
+        $forceOverride = !empty($_POST['force_api_override']);
+        if (empty($_POST['dry_run']) && !empty($_POST['apply']) && !$apiOk && !$forceOverride) {
+            wp_send_json([
+                'ok' => false,
+                'error' => 'api_connection_error_blocked_apply',
+                'message' => 'Apply blocked because API connection test is in ERROR state. Run Test API connection or use force_api_override=1.',
+                'apply_allowed' => false,
+                'apply_blocked_reason' => 'api_connection_error',
+                'api_connection' => $apiCheck,
+            ], 500);
+        }
         if ($blockFullBulk && empty($_POST['dry_run'])) {
             wp_send_json([
                 'ok' => false,
