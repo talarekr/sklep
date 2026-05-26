@@ -183,12 +183,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <br><br>
             <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run selected batch</button>
             <label><input type="checkbox" name="force_api_override" value="1" /> Force apply even when API test fails</label> <button class="button button-primary" type="submit" name="apply" value="1" <?php disabled($blockFullBulk); ?>>Apply batch</button>
-            <button class="button button-secondary" type="button" id="gpswiss_autorun_start_dry_run" onclick="window.gpswissOvokoStartAutorun && window.gpswissOvokoStartAutorun('dry_run')">Start auto dry-run</button>
-            <button class="button button-primary" type="button" id="gpswiss_autorun_start_apply" onclick="window.gpswissOvokoStartAutorun && window.gpswissOvokoStartAutorun('apply')" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Start auto apply</button>
+            <button class="button button-secondary" type="button" id="gpswiss_autorun_start_dry_run">Start auto dry-run</button>
+            <button class="button button-primary" type="button" id="gpswiss_autorun_start_apply" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Start auto apply</button>
             <span style="display:inline-block;margin-left:8px;color:#b32d2e;font-weight:600;">Warning: apply mode writes product details/meta changes.</span>
             <button class="button" type="button" id="gpswiss_autorun_pause">Pause</button>
             <button class="button" type="button" id="gpswiss_autorun_resume">Resume</button>
             <button class="button" type="button" id="gpswiss_autorun_stop">Stop</button>
+            <button class="button" type="button" id="gpswiss_autorun_reset_state">Reset auto-run state</button>
             <button class="button" type="button" id="gpswiss_autorun_download_jsonl">Download log JSONL</button>
             <button class="button" type="button" id="gpswiss_autorun_download_csv">Download log CSV</button>
         </form>
