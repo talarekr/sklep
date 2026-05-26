@@ -42,6 +42,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_import_csv_mapping', [$this, 'handle_import_csv_mapping']);
         add_action('admin_post_gpswiss_ovoko_bulk_diagnostics_ping', [$this, 'handle_bulk_diagnostics_ping']);
         add_action('admin_post_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
+        add_action('wp_ajax_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
         add_action('admin_post_gpswiss_ovoko_single_enrichment_dry_run', [$this, 'handle_single_enrichment_dry_run']);
     }
 
@@ -423,7 +424,11 @@ class AdminPage
     public function handle_bulk_allegro_to_ovoko_details_enrichment(): void
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
-        check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
+        if (wp_doing_ajax()) {
+            check_ajax_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
+        } else {
+            check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
+        }
         $rawMinimalResponseInput = $_POST['minimal_response'] ?? null;
         $parsedMinimalResponse = !isset($_POST['minimal_response']) || !empty($_POST['minimal_response']);
         $rawDisableDebugHeavyLogsInput = $_POST['disable_debug_heavy_logs'] ?? null;
@@ -463,14 +468,14 @@ class AdminPage
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
             'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
             'page' => isset($_POST['page']) ? (int) $_POST['page'] : 1,
-            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 5,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 3,
             'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
             'only_matched' => !empty($_POST['only_matched']),
             'skip_already_enriched' => !empty($_POST['skip_already_enriched']),
             'include_existing_ovoko' => !empty($_POST['include_existing_ovoko']),
             'fast_scan' => !isset($_POST['fast_scan']) || !empty($_POST['fast_scan']),
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
-            'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 5,
+            'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 3,
             'minimal_response' => $parsedMinimalResponse,
             'disable_debug_heavy_logs' => $parsedDisableDebugHeavyLogs,
             'raw_minimal_response_input' => $rawMinimalResponseInput,

@@ -2019,7 +2019,8 @@ class OvokoIntegrationService
             return $guard;
         }
         $replaceDescription = !empty($options['replace_description']);
-        $maxItemsPerRequest = 5;
+        $limitMb = $this->memory_limit_mb();
+        $maxItemsPerRequest = $limitMb >= 256 ? 5 : 3;
         $maxRuntimeSeconds = 18;
         $batchSize = max(1, min((int) ($options['batch_size'] ?? 1), $maxItemsPerRequest));
         $offset = max(0, (int) ($options['offset'] ?? 0));
@@ -2039,7 +2040,8 @@ class OvokoIntegrationService
         if (!$hasProductIdsCsv) {
             $stages[] = ['stage' => 'query_started', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
         }
-        $candidateIds = array_slice($this->resolve_bulk_product_ids($options, $offset, $limit, $batchSize, $page, $includeExistingOvoko), 0, max($maxItemsPerRequest, (int) ($options['scan_limit'] ?? $maxItemsPerRequest)));
+        $scanLimit = max(1, min((int) ($options['scan_limit'] ?? $batchSize), $maxItemsPerRequest));
+        $candidateIds = array_slice($this->resolve_bulk_product_ids($options, $offset, $limit, $batchSize, $page, $includeExistingOvoko), 0, $scanLimit);
         if (!$hasProductIdsCsv) {
             $stages[] = ['stage' => 'query_finished', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'ids_count' => count($candidateIds)];
         }
@@ -2048,7 +2050,7 @@ class OvokoIntegrationService
         $results = []; $counts = ['no_match'=>0,'review_required'=>0,'already_enriched_skipped'=>0,'not_allegro_product'=>0,'safety_violation'=>0,'enriched'=>0,'dry_run'=>0,'error'=>0];
         $matched = 0; $enriched = 0; $skipped = 0; $reviewRequired = 0; $errors = 0; $processed = 0;
         $partial = false; $stoppedReason = '';
-        $ids = array_slice($candidateIds, 0, $maxItemsPerRequest);
+        $ids = array_slice($candidateIds, 0, $batchSize);
         $scannedCandidateIds = $hasProductIdsCsv ? [] : array_map('intval', $candidateIds);
         $selectedProductIds = [];
         $skippedNonAllegroLike = 0;
@@ -2064,24 +2066,57 @@ class OvokoIntegrationService
             $stages[] = ['stage' => 'before_product_meta_read', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
             $audit = $this->collect_allegro_product_context($productId, false);
             $stages[] = ['stage' => 'after_product_meta_read', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
-            if (!$includeExistingOvoko && empty($audit['is_allegro_product'])) { $skipped++; $skippedNonAllegroLike++; $counts['not_allegro_product']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_not_allegro_product','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); continue; }
-            if ($skipAlreadyEnriched && (string)($audit['current_ovoko_part_id'] ?? '') !== '') { $skipped++; $counts['already_enriched_skipped']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_already_enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); continue; }
+            if (!$includeExistingOvoko && empty($audit['is_allegro_product'])) { $skipped++; $skippedNonAllegroLike++; $counts['not_allegro_product']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_not_allegro_product','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } continue; }
+            if ($skipAlreadyEnriched && (string)($audit['current_ovoko_part_id'] ?? '') !== '') { $skipped++; $counts['already_enriched_skipped']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_already_enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } continue; }
             $match = $this->resolve_ovoko_match_for_allegro_product_csv_only($productId, (array) $csvIndexMeta['index']);
-            $stages[] = ['stage' => 'after_match', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
+            $stages[] = ['stage' => 'after_csv_match', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
             $confidence = (string) ($match['match_confidence'] ?? 'none');
             $isMatched = in_array($confidence, ['high','high_existing_ovoko_part_id'], true);
             if ($isMatched) { $matched++; }
             $row = ['product_id'=>$productId,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($match['part_normalized']['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($match['part_normalized']['car_id'] ?? ''),'match_confidence'=>$confidence,'action'=>'skipped','would_write_attributes_count'=>0,'would_write_attributes_labels'=>[],'skipped_fields_count'=>0];
-            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['review_required']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']; } else { $counts['no_match']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'no_csv_match']; } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); if ($onlyMatched) { continue; } continue; }
+            if (!$isMatched) { $skipped++; if ((string)($confidence) === 'ambiguous') { $reviewRequired++; $counts['review_required']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'ambiguous_csv_match']; } else { $counts['no_match']++; $results[] = $row + ['action'=>'skipped', 'skip_reason'=>'no_csv_match']; } $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_no_match','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); unset($audit, $match, $row); if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); } if ($onlyMatched) { continue; } continue; }
+            $partId = (int) ($row['matched_ovoko_part_id'] ?? 0);
+            $detailsError = '';
+            $detailsNormalized = (array) ($match['part_normalized'] ?? []);
+            if ($partId <= 0) {
+                $detailsError = 'no_part_id_after_csv_match';
+            } else {
+                $stages[] = ['stage' => 'before_api_part_fetch', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'part_id' => $partId];
+                $client = new RrrApiClient($this->get_settings());
+                $single = $client->preview_fetch_single_part($partId);
+                $stages[] = ['stage' => 'after_api_part_fetch', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'part_id' => $partId, 'api_ok' => !empty($single['ok'])];
+                if (empty($single['ok'])) {
+                    $detailsError = 'api_error_part_fetch';
+                } else {
+                    $detailsNormalized = $client->normalize_rrr_single_part_payload((array) ($single['payload'] ?? []), ['details_only' => true]);
+                    $stages[] = ['stage' => 'before_api_car_fetch', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'car_id' => (string) ($detailsNormalized['car_id'] ?? '')];
+                    $stages[] = ['stage' => 'after_api_car_fetch', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'car_id' => (string) ($detailsNormalized['car_id'] ?? '')];
+                }
+            }
+            if ($detailsError !== '') {
+                $skipped++;
+                $errors++;
+                $counts['error']++;
+                $results[] = $row + ['action' => 'skipped', 'skip_reason' => 'api_error', 'error' => $detailsError, 'elapsed_ms' => (int) round((microtime(true)-$productStarted)*1000)];
+                unset($audit, $match, $detailsNormalized, $row);
+                if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
+                continue;
+            }
+            $row['matched_ovoko_car_id'] = (string) ($detailsNormalized['car_id'] ?? '');
+            $row += ['apply_allowed' => true, 'apply_blocked_reason' => '', 'memory_peak_mb' => round(memory_get_peak_usage(true)/1048576, 2)];
             if ($dryRun || empty($options['apply'])) {
                 $counts['dry_run']++;
-                $normalized = (array) ($match['part_normalized'] ?? []);
-                $enrichedDry = $this->build_enriched_normalized_for_apply($normalized);
+                $enrichedDry = $this->build_enriched_normalized_for_apply($detailsNormalized);
                 $rawAttrsDry = $this->build_ovoko_technical_attributes_from_normalized($enrichedDry);
                 $filterDebugDry = [];
                 $attrsDry = $this->filter_customer_facing_technical_attributes($rawAttrsDry, $filterDebugDry);
-                $results[] = $row + ['action'=>'dry_run', 'elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000), 'would_write_attributes_count'=>count($attrsDry), 'would_write_attributes_labels'=>array_keys($attrsDry), 'skipped_fields_count'=>count($filterDebugDry)];
+                $stages[] = ['stage' => 'after_build_attributes', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'product_id' => (int) $productId, 'attributes_count' => count($attrsDry)];
+                $vehicleLabel = $this->build_vehicle_label_from_attributes($attrsDry);
+                $vehicleSlug = $this->build_unique_vehicle_slug($productId, (string) ($detailsNormalized['car_id'] ?? ''), $vehicleLabel, (string) ($attrsDry['Rok produkcji samochodu'] ?? ''));
+                $results[] = $row + ['action'=>'dry_run', 'elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000), 'would_write_attributes_count'=>count($attrsDry), 'would_write_attributes_labels'=>array_keys($attrsDry), 'skipped_fields_count'=>count($filterDebugDry), 'vehicle_label' => $vehicleLabel, 'vehicle_slug' => $vehicleSlug, 'vehicle_parts_url' => $vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : '', 'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true];
                 $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'matched_dry_run','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
+                unset($audit, $match, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $vehicleLabel, $vehicleSlug, $row);
+                if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
                 continue;
             }
             $before = $this->capture_product_safety_snapshot($productId);
@@ -2092,18 +2127,20 @@ class OvokoIntegrationService
             if (in_array(false, $safety, true)) { $errors++; $counts['safety_violation']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'error_safety_violation','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); $results[] = $row + ['action'=>'error','error'=>'safety_violation'] + $safety; continue; }
             $enriched++; $counts['enriched']++;
             $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]);
-            $results[] = $row + ['action'=>'enriched','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? [])] + $safety;
-            unset($audit, $match, $normalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $before, $apply, $after, $safety, $row);
+            $results[] = $row + ['action'=>'updated','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? []),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true] + $safety;
+            unset($audit, $match, $normalized, $detailsNormalized, $enrichedDry, $rawAttrsDry, $filterDebugDry, $attrsDry, $before, $apply, $after, $safety, $row);
             if (function_exists('gc_collect_cycles')) { gc_collect_cycles(); }
         }
         $duration = round(microtime(true) - $started, 3);
-        if ($stoppedReason === '' && count($candidateIds) >= $maxItemsPerRequest) {
+        if ($stoppedReason === '' && count($candidateIds) >= $batchSize) {
             $partial = true;
-            $stoppedReason = 'max_items_per_request';
+            $stoppedReason = 'batch_size_limit';
         }
         $stages[] = ['stage' => 'before_response', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'processed' => $processed, 'memory_usage' => memory_get_usage(true), 'memory_peak' => memory_get_peak_usage(true)];
         $guardStatus = $this->build_apply_guard_status();
-        $response = ['ok'=>true,'partial'=>$partial,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($candidateIds),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>!empty($candidateIds) ? (int) max($candidateIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'duration'=>$duration,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2)] + $guardStatus;
+        $lastProcessedId = !empty($selectedProductIds) ? (int) end($selectedProductIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0));
+        $isDone = $processed === 0 || $lastProcessedId <= 0 || (!$partial && $processed < $batchSize);
+        $response = ['ok'=>true,'partial'=>$partial,'done'=>$isDone,'selection_source'=>$selectionSource,'csv_index_type'=>$csvIndexType,'stopped_reason'=>$stoppedReason,'action_name'=>'Update product cards from Ovoko CSV mapping','handler_used'=>'bulk_update_cards','form_source'=>(string) ($options['form_source'] ?? 'batch_update_form'),'stages'=>$stages,'total_scanned'=>count($ids),'processed'=>$processed,'updated'=>$enriched,'skipped'=>$skipped,'errors'=>$errors,'dry_run'=>$dryRun,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,10),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>$lastProcessedId,'duration'=>$duration,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576,2)] + $guardStatus;
         unset($response['scanned_candidate_ids'], $response['selected_product_ids']);
         return $response;
     }
