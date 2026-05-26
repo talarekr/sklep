@@ -420,7 +420,10 @@ class AdminPage
                 'ok' => false,
                 'error' => 'full_enrichment_blocked_low_memory_limit',
                 'memory_limit' => $memoryLimitRaw,
-                'message' => 'Full enrichment requires higher memory limit or CLI mode',
+                'message' => 'Full enrichment/apply is blocked at 128M because /get/part fetch peaks near memory limit. Increase PHP memory_limit to 256M or use CLI/lightweight worker.',
+                'apply_allowed' => false,
+                'apply_blocked_reason' => 'memory_limit_too_low',
+                'recommended_memory_limit' => 256,
             ], 500);
         }
         $options = [
