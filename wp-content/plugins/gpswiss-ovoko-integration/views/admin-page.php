@@ -145,6 +145,8 @@
         <input type="hidden" name="action" value="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment" />
         <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry run (default)</label><br />
         <label><input type="checkbox" name="match_only" value="1" /> Match only / no API enrichment</label><br />
+        <label><input type="checkbox" name="minimal_response" value="1" checked="checked" /> minimal_response</label>
+        <label><input type="checkbox" name="disable_debug_heavy_logs" value="1" checked="checked" /> disable_debug_heavy_logs</label><br />
         <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label><br />
         <label><input type="checkbox" name="only_matched" value="1" /> only_matched</label>
         <label><input type="checkbox" name="skip_already_enriched" value="1" checked="checked" /> skip_already_enriched</label>

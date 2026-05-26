@@ -405,9 +405,15 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment');
+        $rawMatchOnlyInput = $_POST['match_only'] ?? ($_POST['match_only_no_api_enrichment'] ?? ($_POST['preview_only'] ?? null));
+        $parsedMatchOnly = !empty($_POST['match_only']) || !empty($_POST['match_only_no_api_enrichment']) || !empty($_POST['preview_only']);
+        $rawMinimalResponseInput = $_POST['minimal_response'] ?? null;
+        $parsedMinimalResponse = !empty($_POST['minimal_response']);
+        $rawDisableDebugHeavyLogsInput = $_POST['disable_debug_heavy_logs'] ?? null;
+        $parsedDisableDebugHeavyLogs = !empty($_POST['disable_debug_heavy_logs']);
         $options = [
             'dry_run' => !empty($_POST['dry_run']),
-            'match_only' => !empty($_POST['match_only']) || !empty($_POST['preview_only']),
+            'match_only' => $parsedMatchOnly,
             'replace_description' => !empty($_POST['replace_description']),
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
             'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
@@ -420,8 +426,14 @@ class AdminPage
             'fast_scan' => !isset($_POST['fast_scan']) || !empty($_POST['fast_scan']),
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
             'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 5,
-            'minimal_response' => !empty($_POST['minimal_response']),
-            'disable_debug_heavy_logs' => !empty($_POST['disable_debug_heavy_logs']),
+            'minimal_response' => $parsedMinimalResponse,
+            'disable_debug_heavy_logs' => $parsedDisableDebugHeavyLogs,
+            'raw_match_only_input' => $rawMatchOnlyInput,
+            'parsed_match_only' => $parsedMatchOnly,
+            'raw_minimal_response_input' => $rawMinimalResponseInput,
+            'parsed_minimal_response' => $parsedMinimalResponse,
+            'raw_disable_debug_heavy_logs_input' => $rawDisableDebugHeavyLogsInput,
+            'parsed_disable_debug_heavy_logs' => $parsedDisableDebugHeavyLogs,
         ];
         try {
             $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
