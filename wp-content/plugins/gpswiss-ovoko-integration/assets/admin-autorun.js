@@ -30,6 +30,9 @@ document.addEventListener('DOMContentLoaded', function () {
   try { const raw = localStorage.getItem(stateKey); if (raw) { st = Object.assign(st, JSON.parse(raw)); } } catch (e) {}
 
   const save = function () { try { localStorage.setItem(stateKey, JSON.stringify(st)); } catch (e) {} };
+  let requestInFlight = false;
+  let pendingTimer = null;
+  let runId = '';
   const setK = function (k, v) { const n = statusEl.querySelector('[data-k="' + k + '"]'); if (n) { n.textContent = String(v); } };
   const render = function () { ['status','mode','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(function (k) { setK(k, st[k] || 0); }); logsEl.textContent = (st.logs || []).slice(-30).map(function (x) { return JSON.stringify(x); }).join("\n"); };
   const pushLog = function (o) { st.logs.push(Object.assign({ts:new Date().toISOString()}, o)); st.logs = st.logs.slice(-1000); save(); render(); };
@@ -72,25 +75,51 @@ document.addEventListener('DOMContentLoaded', function () {
   };
 
   const shouldStop = function (res) { const stopOnError = $('bulk_stop_on_error').checked; const hasSafety = (res.sample_results||[]).some(function (x) { return x.error === 'safety_violation'; }); if (stopOnError && ((parseInt(res.errors||0,10)>0) || hasSafety)) return 'stopped_on_error'; if (res.done) return 'done'; if (parseInt(res.processed||0,10)===0) return 'processed_zero'; if (!res.next_after_product_id) return 'missing_next_after_product_id'; return ''; };
-  const tick = async function () { if (!st.running || st.paused || st.stopped) { return; } const started = Date.now(); const body = buildBody(st.mode); if (!body) { return; } let res; try { const httpRes = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}); const text = await httpRes.text(); try { res = JSON.parse(text); } catch (e) { failUi('AJAX returned non-JSON response', text); return; } if (!httpRes.ok || !res.ok) { failUi('AJAX request failed', res); return; } } catch (e) { failUi('AJAX transport error', String(e)); return; }
+  const scheduleNextTick = function () {
+    if (!st.running || st.paused || st.stopped) { return; }
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+    pendingTimer = setTimeout(function () { pendingTimer = null; tick(); }, Math.max(250, parseInt($('bulk_sleep_ms').value || '1200', 10)));
+  };
+  const tick = async function () {
+    if (!st.running || st.paused || st.stopped || requestInFlight) { return; }
+    const thisRunId = runId;
+    requestInFlight = true;
+    const started = Date.now();
+    const body = buildBody(st.mode);
+    if (!body) { requestInFlight = false; return; }
+    body.set('autorun_run_id', thisRunId);
+    let res;
+    try {
+      const httpRes = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
+      const text = await httpRes.text();
+      try { res = JSON.parse(text); } catch (e) { failUi('AJAX returned non-JSON response', text); return; }
+      if (!httpRes.ok || !res.ok) { failUi('AJAX request failed', res); return; }
+    } catch (e) { failUi('AJAX transport error', String(e)); return; }
+    finally { requestInFlight = false; }
+    if (thisRunId !== runId) { pushLog({warning:'ignored_stale_response',response_run_id:thisRunId,current_run_id:runId}); return; }
     st.batch_duration=((Date.now()-started)/1000).toFixed(2); st.last_after_product_id=parseInt(body.get('after_product_id')||'0',10); st.next_after_product_id=parseInt(res.next_after_product_id||0,10); st.total_processed+=parseInt(res.processed||0,10); st.total_updated+=parseInt(res.updated||0,10); st.total_skipped+=parseInt(res.skipped||0,10); st.total_errors+=parseInt(res.errors||0,10); st.memory_peak_mb=res.memory_peak_mb||0;
-    (res.sample_results||[]).forEach(function (x) { pushLog({product_id:x.product_id,action:x.action,error:x.error||'',matched_ovoko_part_id:x.matched_ovoko_part_id||'',matched_ovoko_car_id:x.matched_ovoko_car_id||'',vehicle_slug:x.vehicle_slug||'',attributes_count:x.attributes_count||x.would_write_attributes_count||0,would_write_attributes_count:x.would_write_attributes_count||0,no_price_change:!!x.no_price_change,no_stock_change:!!x.no_stock_change,no_images_change:!!x.no_images_change,no_title_change:!!x.no_title_change}); });
+    (res.sample_results||[]).forEach(function (x) { pushLog({product_id:x.product_id,action:x.action,error:x.error||'',skip_reason:x.skip_reason||'',matched_ovoko_part_id:x.matched_ovoko_part_id||'',matched_ovoko_car_id:x.matched_ovoko_car_id||'',vehicle_label:x.vehicle_label||'',vehicle_slug:x.vehicle_slug||'',vehicle_parts_url:x.vehicle_parts_url||'',attributes_count:x.attributes_count||x.would_write_attributes_count||0,would_write_attributes_count:x.would_write_attributes_count||0,no_price_change:!!x.no_price_change,no_stock_change:!!x.no_stock_change,no_images_change:!!x.no_images_change,no_title_change:!!x.no_title_change,no_status_change:!!x.no_status_change,no_ebay_publish:!!x.no_ebay_publish,no_allegro_publish:!!x.no_allegro_publish,no_batch:!!x.no_batch}); });
     const limitTotal = parseInt($('bulk_limit_total').value || '0', 10); if (limitTotal > 0 && st.total_processed >= limitTotal) { st.running=false; st.status='stopped'; save(); render(); return; }
     const reason = shouldStop(res); if (reason==='done') { st.running=false; st.status='done'; save(); render(); return; } if (reason) { st.running=false; st.status='stopped'; pushLog({warning:reason,payload:res}); save(); render(); return; }
-    st.status='running'; save(); render(); setTimeout(tick, Math.max(250, parseInt($('bulk_sleep_ms').value || '1200', 10)));
+    st.status='running'; save(); render(); scheduleNextTick();
   };
-
   const startAutorun = function (mode) {
     if (st.running && !st.stopped && !st.paused) {
       pushLog({warning:'autorun_already_running', mode:st.mode});
       return;
     }
     if (mode === 'apply' && !$('bulk_apply_confirm').checked) { alert('Confirm apply checkbox first.'); return; }
-    st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...'}); save(); render(); tick(); };
-  const pauseAutorun = function () { st.paused=true; st.status='paused'; save(); render(); };
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+    requestInFlight = false;
+    runId = 'run_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...', run_id:runId}); save(); render(); tick(); };
+  const pauseAutorun = function () { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } st.paused=true; st.status='paused'; save(); render(); };
   const resumeAutorun = function () { if (!st.running) { st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick(); };
-  const stopAutorun = function () { st.running=false; st.paused=false; st.stopped=true; st.status='stopped'; save(); render(); };
+  const stopAutorun = function () { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } st.running=false; st.paused=false; st.stopped=true; st.status='stopped'; runId=''; save(); render(); };
   const resetAutorunState = function () {
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+    requestInFlight = false;
+    runId = '';
     st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
     try { localStorage.removeItem(stateKey); } catch (e) {}
     save();
@@ -119,7 +148,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const download = function (name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
   if (downloadJsonlBtn) { downloadJsonlBtn.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(function (x) { return JSON.stringify(x) + "\n"; }), {type:'application/jsonl'})); }); }
-  if (downloadCsvBtn) { downloadCsvBtn.addEventListener('click', function () { const rows=st.logs||[]; const keys=['ts','product_id','action','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_slug','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','error']; const csv=[keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join("\n"); download('ovoko-autorun-log.csv', new Blob([csv], {type:'text/csv'})); }); }
+  if (downloadCsvBtn) { downloadCsvBtn.addEventListener('click', function () { const rows=st.logs||[]; const keys=['ts','product_id','action','skip_reason','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_label','vehicle_slug','vehicle_parts_url','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','no_status_change','no_ebay_publish','no_allegro_publish','no_batch','error']; const csv=[keys.join(',')].concat(rows.map(function (r) { return keys.map(function (k) { return '"' + String(r[k] || '').replace(/"/g, '""') + '"'; }).join(','); })).join("\n"); download('ovoko-autorun-log.csv', new Blob([csv], {type:'text/csv'})); }); }
 
   st.status = st.running ? (st.paused ? 'paused' : 'running') : (st.status || 'idle');
   render();
