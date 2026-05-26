@@ -89,7 +89,13 @@ document.addEventListener('DOMContentLoaded', function () {
     st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...'}); save(); render(); tick(); };
   const pauseAutorun = function () { st.paused=true; st.status='paused'; save(); render(); };
   const resumeAutorun = function () { if (!st.running) { st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick(); };
-  const stopAutorun = function () { st.running=false; st.stopped=true; st.status='stopped'; save(); render(); };
+  const stopAutorun = function () { st.running=false; st.paused=false; st.stopped=true; st.status='stopped'; save(); render(); };
+  const resetAutorunState = function () {
+    st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
+    try { localStorage.removeItem(stateKey); } catch (e) {}
+    save();
+    render();
+  };
 
   window.gpswissOvokoStartAutorun = startAutorun;
   window.gpswissOvokoPauseAutorun = pauseAutorun;
@@ -101,6 +107,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const pauseBtn = $('gpswiss_autorun_pause');
   const resumeBtn = $('gpswiss_autorun_resume');
   const stopBtn = $('gpswiss_autorun_stop');
+  const resetStateBtn = $('gpswiss_autorun_reset_state');
   const downloadJsonlBtn = $('gpswiss_autorun_download_jsonl');
   const downloadCsvBtn = $('gpswiss_autorun_download_csv');
   if (startDryBtn) { startDryBtn.addEventListener('click', function (e) { e.preventDefault(); startAutorun('dry_run'); }); }
@@ -108,6 +115,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (pauseBtn) { pauseBtn.addEventListener('click', pauseAutorun); }
   if (resumeBtn) { resumeBtn.addEventListener('click', resumeAutorun); }
   if (stopBtn) { stopBtn.addEventListener('click', stopAutorun); }
+  if (resetStateBtn) { resetStateBtn.addEventListener('click', resetAutorunState); }
 
   const download = function (name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
   if (downloadJsonlBtn) { downloadJsonlBtn.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(function (x) { return JSON.stringify(x) + "\n"; }), {type:'application/jsonl'})); }); }
