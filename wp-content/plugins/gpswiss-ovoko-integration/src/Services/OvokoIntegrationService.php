@@ -1999,12 +1999,16 @@ class OvokoIntegrationService
             return ['ok' => false, 'action_name' => 'Bulk Allegro to Ovoko details enrichment', 'reason' => 'csv_mapping_not_loaded'];
         }
         $stages[] = ['stage' => 'query_started', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
-        $ids = array_slice($this->resolve_bulk_product_ids($options, $offset, $limit, $batchSize, $page, $includeExistingOvoko), 0, $maxItemsPerRequest);
-        $stages[] = ['stage' => 'query_finished', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'ids_count' => count($ids)];
+        $candidateIds = array_slice($this->resolve_bulk_product_ids($options, $offset, $limit, $batchSize, $page, $includeExistingOvoko), 0, max($maxItemsPerRequest, (int) ($options['scan_limit'] ?? $maxItemsPerRequest)));
+        $stages[] = ['stage' => 'query_finished', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000), 'ids_count' => count($candidateIds)];
         $stages[] = ['stage' => 'product_loop_started', 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
         $results = []; $counts = ['no_match'=>0,'review_required'=>0,'already_enriched_skipped'=>0,'not_allegro_product'=>0,'safety_violation'=>0,'enriched'=>0,'dry_run'=>0,'error'=>0];
         $matched = 0; $enriched = 0; $skipped = 0; $reviewRequired = 0; $errors = 0; $processed = 0;
         $partial = false; $stoppedReason = '';
+        $ids = array_slice($candidateIds, 0, $maxItemsPerRequest);
+        $scannedCandidateIds = array_map('intval', $candidateIds);
+        $selectedProductIds = [];
+        $skippedNonAllegroLike = 0;
         foreach ($ids as $productId) {
             if (($processed >= $maxItemsPerRequest) || ((microtime(true) - $started) >= $maxRuntimeSeconds)) {
                 $partial = true;
@@ -2013,9 +2017,10 @@ class OvokoIntegrationService
             }
             $productStarted = microtime(true);
             $processed++;
+            $selectedProductIds[] = (int) $productId;
             $title = (string) get_the_title($productId);
             $audit = $this->collect_allegro_product_context($productId);
-            if (!$includeExistingOvoko && empty($audit['is_allegro_product'])) { $skipped++; $counts['not_allegro_product']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_not_allegro_product','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); continue; }
+            if (!$includeExistingOvoko && empty($audit['is_allegro_product'])) { $skipped++; $skippedNonAllegroLike++; $counts['not_allegro_product']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_not_allegro_product','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); continue; }
             if ($skipAlreadyEnriched && (string)($audit['current_ovoko_part_id'] ?? '') !== '') { $skipped++; $counts['already_enriched_skipped']++; $this->log_event('bulk_allegro_to_ovoko_product', ['product_id'=>$productId,'status'=>'skipped_already_enriched','elapsed_ms'=>(int) round((microtime(true)-$productStarted)*1000)]); continue; }
             $match = $matchOnly
                 ? $this->resolve_ovoko_match_for_allegro_product_csv_only($productId, (array) $csvIndexMeta['index'])
@@ -2037,22 +2042,49 @@ class OvokoIntegrationService
             $results[] = $row + ['action'=>'enriched','attributes_count'=>count((array)($apply['attributes_written'] ?? [])),'attributes_written'=>(array)($apply['attributes_written'] ?? []),'skipped_fields'=>(array)($apply['skipped_fields'] ?? [])] + $safety;
         }
         $duration = round(microtime(true) - $started, 3);
-        if ($stoppedReason === '' && count($ids) >= $maxItemsPerRequest) {
+        if ($stoppedReason === '' && count($candidateIds) >= $maxItemsPerRequest) {
             $partial = true;
             $stoppedReason = 'max_items_per_request';
         }
-        return ['ok'=>true,'partial'=>$partial,'stopped_reason'=>$stoppedReason,'action_name'=>'Bulk Allegro to Ovoko details enrichment','stages'=>$stages,'total_scanned'=>count($ids),'processed'=>$processed,'matched'=>$matched,'enriched'=>$enriched,'skipped'=>$skipped,'review_required'=>$reviewRequired,'errors'=>$errors,'dry_run'=>$dryRun,'match_only'=>$matchOnly,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,50),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'duration'=>$duration];
+        return ['ok'=>true,'partial'=>$partial,'stopped_reason'=>$stoppedReason,'action_name'=>'Bulk Allegro to Ovoko details enrichment','stages'=>$stages,'total_scanned'=>count($candidateIds),'processed'=>$processed,'matched'=>$matched,'enriched'=>$enriched,'skipped'=>$skipped,'review_required'=>$reviewRequired,'errors'=>$errors,'dry_run'=>$dryRun,'match_only'=>$matchOnly,'replace_description'=>$replaceDescription,'max_runtime_seconds'=>$maxRuntimeSeconds,'max_items_per_request'=>$maxItemsPerRequest,'counts_by_reason'=>$counts,'sample_results'=>array_slice($results,0,50),'next_offset'=>$offset + $processed,'next_page'=>$page + 1,'after_product_id'=>max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'next_after_product_id'=>!empty($candidateIds) ? (int) max($candidateIds) : max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0)),'scanned_candidate_ids'=>$scannedCandidateIds,'selected_product_ids'=>$selectedProductIds,'skipped_non_allegro_like'=>$skippedNonAllegroLike,'duration'=>$duration];
     }
 
     private function resolve_bulk_product_ids(array $options, int $offset, int $limit, int $batchSize, int $page, bool $includeExistingOvoko): array
     {
         $csv = trim((string) ($options['product_ids_csv'] ?? ''));
         if ($csv !== '') { return array_values(array_filter(array_map('intval', array_map('trim', explode(',', $csv))))); }
+
+        $fastScan = !array_key_exists('fast_scan', $options) || !empty($options['fast_scan']);
+        $afterProductId = max(0, (int) ($options['after_product_id'] ?? $options['last_seen_product_id'] ?? 0));
+        $scanLimit = max(1, min((int) ($options['scan_limit'] ?? $limit ?? $batchSize), 20));
+
+        if ($fastScan) {
+            return $this->scan_candidate_product_ids_keyset($afterProductId, $scanLimit, $includeExistingOvoko);
+        }
+
         $perPage = min($batchSize, $limit, 5);
         $queryOffset = $offset > 0 ? $offset : (($page - 1) * $perPage);
-        $metaQuery = ['relation'=>'OR',['key'=>'_allegro_offer_id','compare'=>'EXISTS'],['key'=>'_part_number','compare'=>'EXISTS'],['key'=>'_mpn','compare'=>'EXISTS'],['key'=>'_manufacturer_code','compare'=>'EXISTS']];
-        if (!$includeExistingOvoko) { $metaQuery[] = ['key'=>'source','value'=>'ovoko_master','compare'=>'!=']; }
-        return get_posts(['post_type'=>'product','post_status'=>'any','fields'=>'ids','posts_per_page'=>$perPage,'offset'=>$queryOffset,'meta_query'=>$metaQuery,'no_found_rows'=>true,'orderby'=>'ID','order'=>'ASC']);
+        return get_posts(['post_type'=>'product','post_status'=>'any','fields'=>'ids','posts_per_page'=>$perPage,'offset'=>$queryOffset,'no_found_rows'=>true,'orderby'=>'ID','order'=>'ASC']);
+    }
+
+    private function scan_candidate_product_ids_keyset(int $afterProductId, int $scanLimit, bool $includeExistingOvoko): array
+    {
+        global $wpdb;
+        $postStatuses = ['publish', 'private', 'draft', 'pending', 'future'];
+        $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
+        $sql = "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_status IN ({$statusPlaceholders}) AND ID > %d ORDER BY ID ASC LIMIT %d";
+        $params = array_merge(['product'], $postStatuses, [$afterProductId, $scanLimit]);
+        $candidateIds = array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, $params)));
+        if ($candidateIds === []) { return []; }
+
+        if ($includeExistingOvoko) { return $candidateIds; }
+
+        $selected = [];
+        foreach ($candidateIds as $productId) {
+            if ((string) get_post_meta($productId, 'source', true) === 'ovoko_master') { continue; }
+            $selected[] = $productId;
+        }
+        return $selected;
     }
 
     private function get_cached_csv_mapping_index(): array
@@ -2092,9 +2124,24 @@ class OvokoIntegrationService
         $stages = [['stage'=>'handler_started','elapsed_ms'=>0], ['stage'=>'plugin_loaded','elapsed_ms'=>(int) round((microtime(true)-$started)*1000)]];
         $csv = $this->get_cached_csv_mapping_index();
         $stages[] = ['stage'=>'csv_mapping_loaded','elapsed_ms'=>(int) round((microtime(true)-$started)*1000)];
-        $ids = $this->resolve_bulk_product_ids(['batch_size'=>1,'limit'=>1,'offset'=>0,'page'=>1,'include_existing_ovoko'=>true] + $options, 0, 1, 1, 1, true);
+
+        $q1 = microtime(true);
+        $simpleIds = get_posts(['post_type'=>'product','post_status'=>'any','fields'=>'ids','posts_per_page'=>1,'no_found_rows'=>true,'orderby'=>'ID','order'=>'ASC']);
+        $querySimpleMs = (int) round((microtime(true)-$q1)*1000);
+
+        $q2 = microtime(true);
+        $candidateIds = $this->resolve_bulk_product_ids(['batch_size'=>1,'limit'=>1,'offset'=>0,'page'=>1,'include_existing_ovoko'=>true,'fast_scan'=>true,'scan_limit'=>1] + $options, 0, 1, 1, 1, true);
+        $queryCandidateMs = (int) round((microtime(true)-$q2)*1000);
+
+        $queryByProductIdsMs = null;
+        if (trim((string) ($options['product_ids_csv'] ?? '')) !== '') {
+            $q3 = microtime(true);
+            $idsFromCsv = $this->resolve_bulk_product_ids($options, 0, 1, 1, 1, true);
+            $queryByProductIdsMs = (int) round((microtime(true)-$q3)*1000);
+        }
+
         $stages[] = ['stage'=>'query_finished','elapsed_ms'=>(int) round((microtime(true)-$started)*1000)];
-        return ['ok'=>true,'action_name'=>'Bulk diagnostics / ping','stages'=>$stages,'csv_mapping_status'=>['csv_mapping_rows'=>(int)($csv['csv_mapping_rows']??0),'unique_codes'=>(int)($csv['unique_codes']??0),'duplicate_codes'=>(int)($csv['duplicate_codes']??0)],'product_query_test'=>['ids'=>array_values(array_slice(array_map('intval',$ids),0,1))]];
+        return ['ok'=>true,'action_name'=>'Bulk diagnostics / ping','stages'=>$stages,'query_simple_no_meta_ms'=>$querySimpleMs,'query_current_candidate_ms'=>$queryCandidateMs,'query_by_product_ids_ms'=>$queryByProductIdsMs,'csv_mapping_status'=>['csv_mapping_rows'=>(int)($csv['csv_mapping_rows']??0),'unique_codes'=>(int)($csv['unique_codes']??0),'duplicate_codes'=>(int)($csv['duplicate_codes']??0)],'product_query_test'=>['ids'=>array_values(array_slice(array_map('intval',$simpleIds),0,1)),'candidate_ids'=>array_values(array_slice(array_map('intval',$candidateIds),0,5))]];
     }
 
     private function capture_product_safety_snapshot(int $productId): array
