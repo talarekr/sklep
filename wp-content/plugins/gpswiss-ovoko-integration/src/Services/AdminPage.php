@@ -44,6 +44,27 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
         add_action('wp_ajax_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
         add_action('admin_post_gpswiss_ovoko_single_enrichment_dry_run', [$this, 'handle_single_enrichment_dry_run']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
+    }
+
+
+
+    public function enqueue_admin_assets(string $hook): void
+    {
+        if ($hook !== 'tools_page_gpswiss-ovoko-integration') {
+            return;
+        }
+
+        $handle = 'gpswiss-ovoko-admin-autorun';
+        $scriptPath = dirname(__DIR__, 2) . '/assets/admin-autorun.js';
+        $scriptUrl = plugins_url('assets/admin-autorun.js', dirname(__DIR__, 2) . '/gpswiss-ovoko-integration.php');
+
+        wp_enqueue_script($handle, $scriptUrl, [], file_exists($scriptPath) ? (string) filemtime($scriptPath) : '1.0.0', true);
+        wp_localize_script($handle, 'gpswissOvokoAutorunConfig', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'),
+            'action' => 'gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment',
+        ]);
     }
 
     public function register_admin_page(): void
