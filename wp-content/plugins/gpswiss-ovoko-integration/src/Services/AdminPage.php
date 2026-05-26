@@ -420,6 +420,8 @@ class AdminPage
             'fast_scan' => !isset($_POST['fast_scan']) || !empty($_POST['fast_scan']),
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
             'scan_limit' => isset($_POST['scan_limit']) ? (int) $_POST['scan_limit'] : 5,
+            'minimal_response' => !empty($_POST['minimal_response']),
+            'disable_debug_heavy_logs' => !empty($_POST['disable_debug_heavy_logs']),
         ];
         try {
             $result = $this->service->bulk_allegro_to_ovoko_details_enrichment($options);
@@ -447,6 +449,8 @@ class AdminPage
         check_admin_referer('gpswiss_ovoko_bulk_diagnostics_ping');
         $result = $this->service->bulk_diagnostics_ping([
             'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
+            'minimal_response' => !empty($_POST['minimal_response']),
+            'disable_debug_heavy_logs' => !empty($_POST['disable_debug_heavy_logs']),
         ]);
         wp_send_json($result, !empty($result['ok']) ? 200 : 500);
     }
