@@ -468,7 +468,7 @@ class AdminPage
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 20,
             'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
             'page' => isset($_POST['page']) ? (int) $_POST['page'] : 1,
-            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 3,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 2,
             'product_ids_csv' => isset($_POST['product_ids_csv']) ? sanitize_text_field((string) $_POST['product_ids_csv']) : '',
             'only_matched' => !empty($_POST['only_matched']),
             'skip_already_enriched' => !empty($_POST['skip_already_enriched']),

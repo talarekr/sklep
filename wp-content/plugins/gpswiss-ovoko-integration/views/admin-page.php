@@ -171,7 +171,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label for="bulk_limit">limit:</label>
             <input id="bulk_limit" type="number" min="1" max="50" name="limit" value="3" />
             <label for="bulk_batch_size">batch_size:</label>
-            <input id="bulk_batch_size" type="number" min="1" max="5" name="batch_size" value="3" />
+            <input id="bulk_batch_size" type="number" min="1" max="3" name="batch_size" value="2" />
             <label for="bulk_sleep_ms">sleep_ms:</label>
             <input id="bulk_sleep_ms" type="number" min="250" max="10000" step="250" value="1200" />
             <label for="bulk_limit_total">limit_total:</label>
@@ -207,31 +207,44 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <pre id="gpswiss_autorun_logs" style="max-height:260px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
     <script>
-    (function(){
-      const form=document.querySelector('form[action*="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment"]'); if(!form)return;
-      const $=id=>document.getElementById(id), statusEl=$('gpswiss_autorun_status'), logsEl=$('gpswiss_autorun_logs');
-      const stateKey='gpswiss_ovoko_autorun_state_v1';
-      let st={running:false,paused:false,stopped:false,mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,logs:[]};
-      try{ const s=localStorage.getItem(stateKey); if(s){ st=Object.assign(st, JSON.parse(s)); }}catch(e){}
-      const save=()=>{ try{localStorage.setItem(stateKey, JSON.stringify(st));}catch(e){} };
-      const setK=(k,v)=>{ const n=statusEl.querySelector(`[data-k="${k}"]`); if(n)n.textContent=String(v); };
-      const render=()=>{ ['status','mode','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(k=>setK(k, st[k]??0)); logsEl.textContent=(st.logs||[]).slice(-20).map(x=>JSON.stringify(x)).join("\n"); };
-      const pushLog=(obj)=>{ st.logs.push(Object.assign({ts:new Date().toISOString()},obj)); st.logs=st.logs.slice(-500); save(); render(); };
-      const buildBody=(mode)=>{ const fd=new URLSearchParams(); fd.set('action','gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'); fd.set('_ajax_nonce', form.querySelector('input[name="_wpnonce"]').value); fd.set('form_source','batch_update_form'); fd.set('details_only','1'); fd.set('minimal_response','1'); fd.set('disable_debug_heavy_logs','1'); fd.set('batch_size', $('bulk_batch_size').value||'3'); fd.set('limit', form.querySelector('[name="limit"]').value||'3'); fd.set('after_product_id', String(st.next_after_product_id||parseInt(form.querySelector('[name="after_product_id"]').value||'0',10))); fd.set('product_ids_csv', form.querySelector('[name="product_ids_csv"]').value||''); if($('bulk_skip_already_enriched').checked) fd.set('skip_already_enriched','1'); if(form.querySelector('[name="replace_description"]').checked) fd.set('replace_description','1'); if(mode==='apply'){ fd.set('dry_run','0'); fd.set('apply','1'); } else { fd.set('dry_run','1'); fd.set('apply','0'); } return fd; };
-      const doneByPayload=(res)=> !!res.done || !res.processed || !res.next_after_product_id;
-      const tick=async()=>{ if(!st.running || st.paused || st.stopped) return; const started=Date.now(); const body=buildBody(st.mode); const res=await fetch(ajaxurl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(r=>r.json()); st.batch_duration=((Date.now()-started)/1000).toFixed(2); st.last_after_product_id=parseInt(body.get('after_product_id')||'0',10); st.next_after_product_id=parseInt(res.next_after_product_id||0,10); st.total_processed+=parseInt(res.processed||0,10); st.total_updated+=parseInt(res.updated||0,10); st.total_skipped+=parseInt(res.skipped||0,10); st.total_errors+=parseInt(res.errors||0,10); st.memory_peak_mb=res.memory_peak_mb||0; const batchLogs=(res.sample_results||[]).map(x=>({product_id:x.product_id,action:x.action,error:x.error||'',matched_ovoko_part_id:x.matched_ovoko_part_id,matched_ovoko_car_id:x.matched_ovoko_car_id,would_write_attributes_count:x.would_write_attributes_count||0})); batchLogs.forEach(pushLog); const stopOnError=$('bulk_stop_on_error').checked; const hasSafety=(res.sample_results||[]).some(x=>x.error==='safety_violation'); const limitTotal=parseInt($('bulk_limit_total').value||'0',10); const hitLimit=limitTotal>0 && st.total_processed>=limitTotal; if((stopOnError && (parseInt(res.errors||0,10)>0 || hasSafety)) || hitLimit){ st.running=false; st.status='stopped'; save(); render(); return; } if(doneByPayload(res)){ st.running=false; st.status='done'; save(); render(); return; } st.status='running'; save(); render(); setTimeout(()=>{ tick().catch(e=>{ st.running=false; st.status='stopped'; pushLog({error:String(e)}); }); }, Math.max(250, parseInt($('bulk_sleep_ms').value||'1200',10))); };
-      const startAutorun=(mode)=>{ if(mode==='apply' && !$('bulk_apply_confirm').checked){ alert('Confirm apply checkbox first.'); return; } st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); save(); render(); tick().catch(e=>pushLog({error:String(e)})); };
-      $('gpswiss_autorun_start_dry_run').addEventListener('click', ()=>startAutorun('dry_run'));
-      $('gpswiss_autorun_start_apply').addEventListener('click', ()=>startAutorun('apply'));
-      $('gpswiss_autorun_pause').addEventListener('click', ()=>{ st.paused=true; st.status='paused'; save(); render(); });
-      $('gpswiss_autorun_resume').addEventListener('click', ()=>{ if(!st.running){ st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick().catch(e=>pushLog({error:String(e)})); });
-      $('gpswiss_autorun_stop').addEventListener('click', ()=>{ st.running=false; st.stopped=true; st.status='stopped'; save(); render(); });
-      const download=(name,blob)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); };
-      $('gpswiss_autorun_download_jsonl').addEventListener('click', ()=> download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(x=>JSON.stringify(x)+"\n"),{type:'application/jsonl'})));
-      $('gpswiss_autorun_download_csv').addEventListener('click', ()=>{ const rows=st.logs||[]; const keys=['ts','product_id','action','error','matched_ovoko_part_id','matched_ovoko_car_id','would_write_attributes_count']; const csv=[keys.join(',')].concat(rows.map(r=>keys.map(k=>`"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))).join('\n'); download('ovoko-autorun-log.csv', new Blob([csv],{type:'text/csv'})); });
-      st.status = st.running ? (st.paused?'paused':'running') : (st.status||'idle'); render();
-    })();
-    </script>
+document.addEventListener('DOMContentLoaded', function () {
+  console.log('Ovoko auto-run JS loaded');
+  const form = document.querySelector('form[action*="gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment"]');
+  if (!form) { return; }
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('gpswiss_autorun_status');
+  const logsEl = $('gpswiss_autorun_logs');
+  const stateKey = 'gpswiss_ovoko_autorun_state_v1';
+  let st = {running:false,paused:false,stopped:false,status:'idle',mode:'dry_run',last_after_product_id:0,next_after_product_id:0,total_processed:0,total_updated:0,total_skipped:0,total_errors:0,batch_duration:0,memory_peak_mb:0,logs:[]};
+  try { const raw = localStorage.getItem(stateKey); if (raw) { st = Object.assign(st, JSON.parse(raw)); } } catch (e) {}
+  const save = ()=>{ try { localStorage.setItem(stateKey, JSON.stringify(st)); } catch (e) {} };
+  const setK = (k,v)=>{ const n=statusEl.querySelector(`[data-k="${k}"]`); if(n){ n.textContent=String(v); } };
+  const render = ()=>{ ['status','mode','last_after_product_id','next_after_product_id','total_processed','total_updated','total_skipped','total_errors','batch_duration','memory_peak_mb'].forEach(k=>setK(k, st[k] ?? 0)); logsEl.textContent=(st.logs||[]).slice(-30).map(x=>JSON.stringify(x)).join("\n"); };
+  const pushLog=(o)=>{ st.logs.push(Object.assign({ts:new Date().toISOString()},o)); st.logs=st.logs.slice(-1000); save(); render(); };
+  const failUi=(msg,details)=>{ st.running=false; st.paused=false; st.stopped=true; st.status='error'; pushLog({error:msg,details:details||''}); console.error(msg, details||''); };
+  const getBatchSize=()=>{ const raw=parseInt(($('bulk_batch_size').value||'2'),10); const clamped=Math.max(1, Math.min(3, isNaN(raw)?2:raw)); if(String(clamped)!==String(raw)){ $('bulk_batch_size').value=String(clamped); pushLog({warning:'batch_size_clamped',requested:raw,used:clamped}); } return clamped; };
+  const buildBody=(mode)=>{ const nonce=(form.querySelector('input[name="_wpnonce"]')||{}).value||''; const action='gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'; if(!window.ajaxurl || !nonce || !action){ failUi('Missing ajaxurl/nonce/action',{ajaxurl:window.ajaxurl||'',nonce_present:!!nonce,action}); return null; } const fd=new URLSearchParams(); fd.set('action',action); fd.set('_ajax_nonce',nonce); fd.set('form_source','batch_update_form'); fd.set('details_only','1'); fd.set('minimal_response','1'); fd.set('disable_debug_heavy_logs','1'); fd.set('batch_size', String(getBatchSize())); fd.set('limit', form.querySelector('[name="limit"]').value||'3'); fd.set('after_product_id', String(st.next_after_product_id||parseInt(form.querySelector('[name="after_product_id"]').value||'0',10))); fd.set('product_ids_csv', form.querySelector('[name="product_ids_csv"]').value||''); if($('bulk_skip_already_enriched').checked) fd.set('skip_already_enriched','1'); if(form.querySelector('[name="replace_description"]').checked) fd.set('replace_description','1'); if(mode==='apply'){ fd.set('dry_run','0'); fd.set('apply','1'); } else { fd.set('dry_run','1'); fd.set('apply','0'); } return fd; };
+  const shouldStop=(res)=>{ const stopOnError=$('bulk_stop_on_error').checked; const hasSafety=(res.sample_results||[]).some(x=>x.error==='safety_violation'); if(stopOnError && ((parseInt(res.errors||0,10)>0)||hasSafety)) return 'stopped_on_error'; if(res.done) return 'done'; if(parseInt(res.processed||0,10)===0) return 'processed_zero'; if(!res.next_after_product_id) return 'missing_next_after_product_id'; return ''; };
+  const tick=async()=>{ if(!st.running || st.paused || st.stopped){ return; } const started=Date.now(); const body=buildBody(st.mode); if(!body){ return; } let res; try { const httpRes=await fetch(window.ajaxurl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}); const text=await httpRes.text(); try { res=JSON.parse(text); } catch (e) { failUi('AJAX returned non-JSON response', text); return; } if(!httpRes.ok || !res.ok){ failUi('AJAX request failed', res); return; } } catch (e) { failUi('AJAX transport error', String(e)); return; }
+  st.batch_duration=((Date.now()-started)/1000).toFixed(2); st.last_after_product_id=parseInt(body.get('after_product_id')||'0',10); st.next_after_product_id=parseInt(res.next_after_product_id||0,10); st.total_processed+=parseInt(res.processed||0,10); st.total_updated+=parseInt(res.updated||0,10); st.total_skipped+=parseInt(res.skipped||0,10); st.total_errors+=parseInt(res.errors||0,10); st.memory_peak_mb=res.memory_peak_mb||0;
+  (res.sample_results||[]).forEach((x)=>pushLog({product_id:x.product_id,action:x.action,error:x.error||'',matched_ovoko_part_id:x.matched_ovoko_part_id||'',matched_ovoko_car_id:x.matched_ovoko_car_id||'',vehicle_slug:x.vehicle_slug||'',attributes_count:x.attributes_count||x.would_write_attributes_count||0,would_write_attributes_count:x.would_write_attributes_count||0,no_price_change:!!x.no_price_change,no_stock_change:!!x.no_stock_change,no_images_change:!!x.no_images_change,no_title_change:!!x.no_title_change}));
+  const limitTotal=parseInt($('bulk_limit_total').value||'0',10); if(limitTotal>0 && st.total_processed>=limitTotal){ st.running=false; st.status='stopped'; save(); render(); return; }
+  const reason=shouldStop(res); if(reason==='done'){ st.running=false; st.status='done'; save(); render(); return; }
+  if(reason){ st.running=false; st.status='stopped'; pushLog({warning:reason,payload:res}); save(); render(); return; }
+  st.status='running'; save(); render(); setTimeout(tick, Math.max(250, parseInt($('bulk_sleep_ms').value||'1200',10)));
+ };
+  const startAutorun=(mode)=>{ if(mode==='apply' && !$('bulk_apply_confirm').checked){ alert('Confirm apply checkbox first.'); return; } st.mode=mode; st.running=true; st.paused=false; st.stopped=false; st.status='running'; st.logs=[]; st.total_processed=0; st.total_updated=0; st.total_skipped=0; st.total_errors=0; st.last_after_product_id=0; st.next_after_product_id=parseInt(form.querySelector('[name="after_product_id"]').value||'0',10); pushLog({info: mode==='apply' ? 'starting auto apply...' : 'starting auto dry-run...'}); save(); render(); tick(); };
+  $('gpswiss_autorun_start_dry_run').addEventListener('click', (e)=>{ e.preventDefault(); startAutorun('dry_run'); });
+  $('gpswiss_autorun_start_apply').addEventListener('click', (e)=>{ e.preventDefault(); startAutorun('apply'); });
+  $('gpswiss_autorun_pause').addEventListener('click', ()=>{ st.paused=true; st.status='paused'; save(); render(); });
+  $('gpswiss_autorun_resume').addEventListener('click', ()=>{ if(!st.running){ st.running=true; } st.paused=false; st.stopped=false; st.status='running'; save(); render(); tick(); });
+  $('gpswiss_autorun_stop').addEventListener('click', ()=>{ st.running=false; st.stopped=true; st.status='stopped'; save(); render(); });
+  const download=(name,blob)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); };
+  $('gpswiss_autorun_download_jsonl').addEventListener('click', ()=> download('ovoko-autorun-log.jsonl', new Blob((st.logs||[]).map(x=>JSON.stringify(x)+"\n"),{type:'application/jsonl'})));
+  $('gpswiss_autorun_download_csv').addEventListener('click', ()=>{ const rows=st.logs||[]; const keys=['ts','product_id','action','matched_ovoko_part_id','matched_ovoko_car_id','vehicle_slug','attributes_count','would_write_attributes_count','no_price_change','no_stock_change','no_images_change','no_title_change','error']; const csv=[keys.join(',')].concat(rows.map(r=>keys.map(k=>`"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))).join('\n'); download('ovoko-autorun-log.csv', new Blob([csv],{type:'text/csv'})); });
+  st.status = st.running ? (st.paused ? 'paused' : 'running') : (st.status || 'idle'); render();
+});
+</script>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>CSV mapping</h3>
