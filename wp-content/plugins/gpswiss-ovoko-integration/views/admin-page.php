@@ -82,7 +82,23 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                         <li><strong>product_id:</strong> <code><?php echo esc_html((string) ($noticePayload['product_id'] ?? ($noticePayload['sample_results'][0]['product_id'] ?? ''))); ?></code></li>
                         <li><strong>matched_ovoko_part_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_part_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_part_id'] ?? ''))); ?></code></li>
                         <li><strong>matched_ovoko_car_id:</strong> <code><?php echo esc_html((string) ($noticePayload['matched_ovoko_car_id'] ?? ($noticePayload['sample_results'][0]['matched_ovoko_car_id'] ?? ''))); ?></code></li>
-                        <li><strong>attributes_count:</strong> <code><?php echo esc_html((string) ($noticePayload['attributes_count'] ?? ($noticePayload['sample_results'][0]['attributes_count'] ?? $noticePayload['sample_results'][0]['would_write_attributes_count'] ?? ''))); ?></code></li>
+                        <?php
+                        $summaryAttributesCount = $noticePayload['attributes_count'] ?? null;
+                        if ($summaryAttributesCount === null && isset($noticePayload['attributes_written']) && is_array($noticePayload['attributes_written'])) {
+                            $summaryAttributesCount = count($noticePayload['attributes_written']);
+                        }
+                        if ($summaryAttributesCount === null) {
+                            $sample = (array) ($noticePayload['sample_results'][0] ?? []);
+                            $summaryAttributesCount = $sample['attributes_count'] ?? null;
+                            if ($summaryAttributesCount === null && isset($sample['attributes_written']) && is_array($sample['attributes_written'])) {
+                                $summaryAttributesCount = count($sample['attributes_written']);
+                            }
+                            if ($summaryAttributesCount === null) {
+                                $summaryAttributesCount = $sample['would_write_attributes_count'] ?? ($noticePayload['would_write_attributes_count'] ?? '');
+                            }
+                        }
+                        ?>
+                        <li><strong>attributes_count:</strong> <code><?php echo esc_html((string) $summaryAttributesCount); ?></code></li>
                         <li><strong>no_price_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_price_change'] ?? ($noticePayload['sample_results'][0]['no_price_change'] ?? ''))); ?></code></li>
                         <li><strong>no_stock_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_stock_change'] ?? ($noticePayload['sample_results'][0]['no_stock_change'] ?? ''))); ?></code></li>
                         <li><strong>no_images_change:</strong> <code><?php echo esc_html((string) ($noticePayload['no_images_change'] ?? ($noticePayload['sample_results'][0]['no_images_change'] ?? ''))); ?></code></li>
