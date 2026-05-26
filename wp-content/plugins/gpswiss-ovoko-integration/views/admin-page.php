@@ -190,21 +190,39 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <button class="button" type="button" id="gpswiss_autorun_resume">Resume</button>
             <button class="button" type="button" id="gpswiss_autorun_stop">Stop</button>
             <button class="button" type="button" id="gpswiss_autorun_reset_state">Reset auto-run state</button>
-            <button class="button" type="button" id="gpswiss_autorun_download_jsonl">Download log JSONL</button>
-            <button class="button" type="button" id="gpswiss_autorun_download_csv">Download log CSV</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_jsonl">Download full log JSONL</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_csv">Download full log CSV</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_skipped_errors_csv">Download skipped/errors CSV</button>
+            <button class="button" type="button" id="gpswiss_autorun_download_and_clear">Download and clear log</button>
         </form>
         <div id="gpswiss_autorun_status" style="margin-top:10px;padding:10px;background:#f6f7f7;">
             <!-- current_admin_hook_suffix: <?php echo esc_html((string) ($currentAdminHookSuffix ?? '')); ?> -->
             <strong>Status:</strong> <span data-k="status">idle</span> |
-            <strong>mode:</strong> <span data-k="mode">dry_run</span> |
-            <strong>last_after_product_id:</strong> <span data-k="last_after_product_id">0</span> |
-            <strong>next_after_product_id:</strong> <span data-k="next_after_product_id">0</span> |
-            <strong>total_processed:</strong> <span data-k="total_processed">0</span> |
-            <strong>total_updated:</strong> <span data-k="total_updated">0</span> |
-            <strong>total_skipped:</strong> <span data-k="total_skipped">0</span> |
-            <strong>total_errors:</strong> <span data-k="total_errors">0</span> |
-            <strong>batch_duration:</strong> <span data-k="batch_duration">0</span>s |
-            <strong>memory_peak_mb:</strong> <span data-k="memory_peak_mb">0</span>
+            <strong>Run summary:</strong><br>
+            Started at: <span data-k="started_at">-</span> |
+            Finished at: <span data-k="finished_at">-</span> |
+            Duration: <span data-k="duration_seconds">0</span>s |
+            Mode: <span data-k="mode">dry_run</span><br>
+            Start after_product_id: <span data-k="start_after_product_id">0</span> |
+            Last after_product_id: <span data-k="last_after_product_id">0</span> |
+            Next after_product_id: <span data-k="next_after_product_id">0</span><br>
+            Total scanned: <span data-k="total_scanned">0</span> |
+            Total processed: <span data-k="total_processed">0</span> |
+            Total updated: <span data-k="total_updated">0</span> |
+            Total skipped: <span data-k="total_skipped">0</span> |
+            Total errors: <span data-k="total_errors">0</span><br>
+            CSV matched: <span data-k="total_csv_matched">0</span> |
+            No CSV match: <span data-k="total_no_csv_match">0</span> |
+            Ambiguous CSV match: <span data-k="total_ambiguous_csv_match">0</span> |
+            Already enriched skipped: <span data-k="total_already_enriched_skipped">0</span> |
+            Not Allegro product: <span data-k="total_not_allegro_product">0</span><br>
+            Safety violations: <span data-k="total_safety_violations">0</span> |
+            API errors: <span data-k="total_api_error">0</span> |
+            Memory guard stops: <span data-k="total_memory_guard">0</span> |
+            Other errors: <span data-k="total_other_error">0</span> |
+            Batch duration: <span data-k="batch_duration">0</span>s |
+            Memory peak MB: <span data-k="memory_peak_mb">0</span><br>
+            <span style="color:#b32d2e;" data-k="localstorage_warning"></span>
             <br>
             <strong>Auto-run JS loaded:</strong> <span id="gpswiss_autorun_js_loaded">no</span>
             <br>
