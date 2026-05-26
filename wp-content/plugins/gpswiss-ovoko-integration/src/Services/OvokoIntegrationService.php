@@ -288,6 +288,11 @@ class OvokoIntegrationService
         error_log('[GPSWISS_OVOKO] ' . $code . ' ' . wp_json_encode($context));
     }
 
+    public function log_event(string $code, array $context = []): void
+    {
+        $this->log($code, $context);
+    }
+
     private function increment_counter(string $key): void
     {
         $counters = wp_parse_args(get_option(self::COUNTERS_OPTION_KEY, []), [
