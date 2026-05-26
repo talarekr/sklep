@@ -2070,6 +2070,102 @@ add_action('pre_get_posts', function (WP_Query $query): void {
     $query->set('meta_query', $metaQuery);
 }, 20);
 
+function gp_build_vehicle_parts_url_by_slug(string $vehicleSlug): string
+{
+    $vehicleSlug = sanitize_title($vehicleSlug);
+    if ($vehicleSlug === '') {
+        return '';
+    }
+
+    return home_url('/czesci-z-pojazdu/' . rawurlencode($vehicleSlug) . '/');
+}
+
+function gp_get_vehicle_parts_url_for_product(int $productId): string
+{
+    $slug = sanitize_title((string) get_post_meta($productId, '_gpswiss_vehicle_slug', true));
+    if ($slug !== '') {
+        return gp_build_vehicle_parts_url_by_slug($slug);
+    }
+
+    return '';
+}
+
+add_action('init', function (): void {
+    add_rewrite_tag('%gpswiss_vehicle_slug%', '([^&]+)');
+    add_rewrite_rule('^czesci-z-pojazdu/([^/]+)/?$', 'index.php?post_type=product&gpswiss_vehicle_slug=$matches[1]', 'top');
+});
+
+add_filter('query_vars', function (array $vars): array {
+    $vars[] = 'gpswiss_vehicle_slug';
+    return $vars;
+});
+
+add_action('pre_get_posts', function (WP_Query $query): void {
+    if (is_admin() || !$query->is_main_query()) {
+        return;
+    }
+    $vehicleSlug = sanitize_title((string) $query->get('gpswiss_vehicle_slug'));
+    if ($vehicleSlug === '') {
+        return;
+    }
+
+    $lookup = get_posts([
+        'post_type' => 'product',
+        'post_status' => ['publish', 'private'],
+        'posts_per_page' => 1,
+        'fields' => 'ids',
+        'meta_query' => [
+            [
+                'key' => '_gpswiss_vehicle_slug',
+                'value' => $vehicleSlug,
+                'compare' => '=',
+            ],
+        ],
+    ]);
+    $productId = !empty($lookup[0]) ? (int) $lookup[0] : 0;
+    $carId = $productId > 0 ? trim((string) get_post_meta($productId, '_ovoko_car_id', true)) : '';
+    if ($carId === '') {
+        return;
+    }
+
+    $metaQuery = (array) $query->get('meta_query');
+    $metaQuery[] = ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='];
+    $query->set('meta_query', $metaQuery);
+    $query->set('post_type', 'product');
+}, 19);
+
+add_action('template_redirect', function (): void {
+    if (is_admin() || !isset($_GET['ovoko_car_id'])) {
+        return;
+    }
+    if (!((function_exists('is_shop') && is_shop()) || (function_exists('is_post_type_archive') && is_post_type_archive('product')))) {
+        return;
+    }
+    $carId = sanitize_text_field(wp_unslash((string) $_GET['ovoko_car_id']));
+    if ($carId === '') {
+        return;
+    }
+    $lookup = get_posts([
+        'post_type' => 'product',
+        'post_status' => ['publish', 'private'],
+        'posts_per_page' => 1,
+        'fields' => 'ids',
+        'meta_query' => [
+            ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='],
+            ['key' => '_gpswiss_vehicle_slug', 'value' => '', 'compare' => '!='],
+        ],
+    ]);
+    if (empty($lookup[0])) {
+        return;
+    }
+    $slug = sanitize_title((string) get_post_meta((int) $lookup[0], '_gpswiss_vehicle_slug', true));
+    if ($slug === '') {
+        return;
+    }
+    wp_safe_redirect(gp_build_vehicle_parts_url_by_slug($slug), 301);
+    exit;
+});
+
 function gp_get_current_product_category_term(): ?WP_Term
 {
     if (!is_tax('product_cat')) {

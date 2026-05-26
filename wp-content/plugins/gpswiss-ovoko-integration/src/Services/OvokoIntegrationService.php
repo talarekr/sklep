@@ -1783,7 +1783,7 @@ class OvokoIntegrationService
         ];
     }
 
-    public function apply_allegro_to_ovoko_details(int $productId, bool $replaceDescription = true, array $options = []): array
+    public function apply_allegro_to_ovoko_details(int $productId, bool $replaceDescription = false, array $options = []): array
     {
         $detailsOnly = !empty($options['details_only']);
         $preview = $this->preview_allegro_to_ovoko_match($productId, ['details_only' => $detailsOnly, 'minimal_response' => true, 'disable_debug_heavy_logs' => true]);
@@ -1804,11 +1804,19 @@ class OvokoIntegrationService
         $rawAttrs = $this->build_ovoko_technical_attributes_from_normalized($enriched);
         $filterDebug = [];
         $attrs = $this->filter_customer_facing_technical_attributes($rawAttrs, $filterDebug);
+        $vehicleLabel = $this->build_vehicle_label_from_attributes($attrs);
+        $vehicleSlug = $this->build_unique_vehicle_slug($productId, $carId, $vehicleLabel, (string) ($attrs['Rok produkcji samochodu'] ?? ''));
+        if ($vehicleLabel !== '') { update_post_meta($productId, '_gpswiss_vehicle_label', $vehicleLabel); $writtenMeta[] = '_gpswiss_vehicle_label'; }
+        if ($vehicleSlug !== '') { update_post_meta($productId, '_gpswiss_vehicle_slug', $vehicleSlug); $writtenMeta[] = '_gpswiss_vehicle_slug'; }
         $this->upsert_custom_product_attributes($productId,$attrs);
         $metaWrittenForTable = $this->write_ovoko_table_meta_from_attributes($productId, $attrs);
-        $replaced=false; if($replaceDescription){ wp_update_post(['ID'=>$productId,'post_content'=>'']); $replaced=true; }
+        $replaced=false;
+        if($replaceDescription){
+            wp_update_post(['ID'=>$productId,'post_content'=>'']);
+            $replaced=true;
+        }
         $previewTable = $this->preview_product_details_table_render_status($productId);
-        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'details_only'=>$detailsOnly,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs,'source_used'=>['Producent'=>(string)(($enriched['_vehicle_field_sources']['vehicle_make'] ?? 'unknown')),'Model'=>(string)(($enriched['_vehicle_field_sources']['vehicle_model'] ?? 'unknown')),'Modyfikacja'=>(string)(($enriched['_vehicle_field_sources']['vehicle_generation'] ?? 'unknown')),'Okres'=>(string)(($enriched['_vehicle_field_sources']['vehicle_period'] ?? 'unknown')),'Przebieg'=>(string)(($enriched['_vehicle_field_sources']['mileage_km'] ?? 'unknown')),'Typ sylwetki'=>(string)(($enriched['_vehicle_field_sources']['vehicle_body_type'] ?? 'unknown'))],'car_raw_selected_fields'=>(array)($enriched['_car_raw_selected_fields'] ?? []),'dictionary_local_mapping'=>['status'=>(string)($enriched['vehicle_dictionary_resolution_status'] ?? ''),'source'=>(string)($enriched['vehicle_dictionary_resolution_source'] ?? ''),'hits'=>array_intersect_key($enriched,array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_color','vehicle_period','vehicle_year','mileage_km']))]],'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true] + $guardStatus;
+        return ['ok'=>true,'action_name'=>'Apply Allegro to Ovoko details enrichment','product_id'=>$productId,'details_only'=>$detailsOnly,'matched_ovoko_part_id'=>(string)($normalized['part_id']??''),'matched_ovoko_car_id'=>$carId,'car_id_confirmed'=>$carId!=='','vehicle_label'=>$vehicleLabel,'vehicle_slug'=>$vehicleSlug,'vehicle_parts_url'=>$vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . rawurlencode($vehicleSlug) . '/') : '','old_parts_url'=>$carId!=='' ? add_query_arg('ovoko_car_id', rawurlencode($carId), get_post_type_archive_link('product')) : '','vehicle_meta_written'=>$writtenMeta,'attributes_written'=>array_keys($attrs),'meta_written_for_table'=>$metaWrittenForTable,'details_style_enabled_after_apply'=>!empty($previewTable['product_details_style_enabled']),'table_rows_after_apply'=>$previewTable['table_rows_that_would_render'] ?? [],'skipped_fields'=>$filterDebug,'debug'=>['normalized_input'=>$normalized,'normalized_enriched'=>$enriched,'raw_attributes'=>$rawAttrs,'source_used'=>['Producent'=>(string)(($enriched['_vehicle_field_sources']['vehicle_make'] ?? 'unknown')),'Model'=>(string)(($enriched['_vehicle_field_sources']['vehicle_model'] ?? 'unknown')),'Modyfikacja'=>(string)(($enriched['_vehicle_field_sources']['vehicle_generation'] ?? 'unknown')),'Okres'=>(string)(($enriched['_vehicle_field_sources']['vehicle_period'] ?? 'unknown')),'Przebieg'=>(string)(($enriched['_vehicle_field_sources']['mileage_km'] ?? 'unknown')),'Typ sylwetki'=>(string)(($enriched['_vehicle_field_sources']['vehicle_body_type'] ?? 'unknown'))],'car_raw_selected_fields'=>(array)($enriched['_car_raw_selected_fields'] ?? []),'dictionary_local_mapping'=>['status'=>(string)($enriched['vehicle_dictionary_resolution_status'] ?? ''),'source'=>(string)($enriched['vehicle_dictionary_resolution_source'] ?? ''),'hits'=>array_intersect_key($enriched,array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_color','vehicle_period','vehicle_year','mileage_km']))]],'raw_replace_description_input'=>$options['raw_replace_description_input'] ?? null,'parsed_replace_description'=>$replaceDescription,'old_description_replaced'=>$replaced,'description_policy'=>$replaced?'clear_post_content_for_ovoko_style_tabs':'keep_existing_post_content','no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_ebay_publish'=>true,'no_allegro_publish'=>true,'no_batch'=>true] + $guardStatus;
     }
 
     public function preview_product_details_table_render_status(int $productId): array
@@ -2128,7 +2136,32 @@ class OvokoIntegrationService
         $attrs = $this->filter_customer_facing_technical_attributes($rawAttrs, $filterDebug);
         $memoryStages[] = ['stage' => 'after_build_attributes', 'memory_usage_mb' => round(memory_get_usage(true)/1048576, 2)];
         $memoryStages[] = ['stage' => 'before_response', 'memory_usage_mb' => round(memory_get_usage(true)/1048576, 2)];
-        return ['ok'=>true,'action_name'=>'Single enrichment dry-run','handler_used'=>(string) ($options['handler_used'] ?? 'single_enrichment_dry_run_memory_safe'),'form_source'=>(string) ($options['form_source'] ?? 'single_update_form'),'product_id'=>$productId,'dry_run'=>true,'details_only'=>$detailsOnly,'minimal_response'=>true,'disable_debug_heavy_logs'=>true,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($normalized['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($normalized['car_id'] ?? ''),'match_confidence'=>(string)($match['match_confidence'] ?? 'none'),'would_write_attributes_count'=>count($attrs),'would_write_attributes_labels'=>array_keys($attrs),'skipped_fields_count'=>count($filterDebug),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576, 2),'memory_stages'=>$memoryStages] + $this->build_apply_guard_status($memoryStages);
+        $vehicleLabel = $this->build_vehicle_label_from_attributes($attrs);
+        $vehicleSlug = $this->build_unique_vehicle_slug($productId, (string) ($normalized['car_id'] ?? ''), $vehicleLabel, (string) ($attrs['Rok produkcji samochodu'] ?? ''));
+        return ['ok'=>true,'action_name'=>'Single enrichment dry-run','handler_used'=>(string) ($options['handler_used'] ?? 'single_enrichment_dry_run_memory_safe'),'form_source'=>(string) ($options['form_source'] ?? 'single_update_form'),'product_id'=>$productId,'dry_run'=>true,'details_only'=>$detailsOnly,'minimal_response'=>true,'disable_debug_heavy_logs'=>true,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($normalized['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($normalized['car_id'] ?? ''),'match_confidence'=>(string)($match['match_confidence'] ?? 'none'),'vehicle_label'=>$vehicleLabel,'vehicle_slug'=>$vehicleSlug,'vehicle_parts_url'=>$vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . rawurlencode($vehicleSlug) . '/') : '','old_parts_url'=>!empty($normalized['car_id']) ? add_query_arg('ovoko_car_id', rawurlencode((string) $normalized['car_id']), get_post_type_archive_link('product')) : '','would_write_attributes_count'=>count($attrs),'would_write_attributes_labels'=>array_keys($attrs),'skipped_fields_count'=>count($filterDebug),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576, 2),'memory_stages'=>$memoryStages] + $this->build_apply_guard_status($memoryStages);
+    }
+
+    private function build_vehicle_label_from_attributes(array $attrs): string
+    {
+        $parts = [];
+        foreach (['Producent', 'Model'] as $k) { if (!empty($attrs[$k])) { $parts[] = trim((string) $attrs[$k]); } }
+        foreach (['Pojemność silnika', 'Rodzaj paliwa'] as $k) { if (!empty($attrs[$k])) { $parts[] = trim((string) $attrs[$k]); } }
+        return trim(preg_replace('/\s+/', ' ', implode(' ', array_filter($parts))) ?? '');
+    }
+
+    private function build_unique_vehicle_slug(int $productId, string $carId, string $label, string $year): string
+    {
+        $base = sanitize_title($label);
+        if ($base === '') { $base = 'pojazd'; }
+        $candidates = [$base];
+        $yearClean = preg_replace('/[^0-9]/', '', $year) ?? '';
+        if ($yearClean !== '') { $candidates[] = $base . '-' . $yearClean; }
+        if ($carId !== '') { $candidates[] = $base . '-' . sanitize_title($carId); }
+        foreach ($candidates as $candidate) {
+            $existing = get_posts(['post_type'=>'product','post_status'=>['publish','private'],'posts_per_page'=>1,'fields'=>'ids','post__not_in'=>[$productId],'meta_query'=>[['key'=>'_gpswiss_vehicle_slug','value'=>$candidate,'compare'=>'=']]]);
+            if (empty($existing)) { return $candidate; }
+        }
+        return $base . '-' . wp_generate_password(4, false, false);
     }
 
     private function memory_limit_mb(): int

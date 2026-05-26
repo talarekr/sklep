@@ -361,8 +361,11 @@ class AdminPage
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_apply_allegro_to_ovoko_details');
         $productId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
-        $replaceDescription = !isset($_POST['replace_description']) || !empty($_POST['replace_description']);
-        $result = $this->service->apply_allegro_to_ovoko_details($productId, $replaceDescription);
+        $replaceDescription = !empty($_POST['replace_description']);
+        $result = $this->service->apply_allegro_to_ovoko_details($productId, $replaceDescription, [
+            'raw_replace_description_input' => $_POST['replace_description'] ?? null,
+            'form_source' => 'single_update_form',
+        ]);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
