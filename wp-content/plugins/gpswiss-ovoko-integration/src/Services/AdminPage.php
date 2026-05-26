@@ -39,6 +39,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_probe_rrr_part_search_by_code', [$this, 'handle_probe_rrr_part_search_by_code']);
         add_action('admin_post_gpswiss_ovoko_preview_paginated_rrr_part_code_lookup', [$this, 'handle_preview_paginated_rrr_part_code_lookup']);
         add_action('admin_post_gpswiss_ovoko_import_csv_mapping', [$this, 'handle_import_csv_mapping']);
+        add_action('admin_post_gpswiss_ovoko_bulk_diagnostics_ping', [$this, 'handle_bulk_diagnostics_ping']);
         add_action('admin_post_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
     }
 
@@ -435,6 +436,14 @@ class AdminPage
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function handle_bulk_diagnostics_ping(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_bulk_diagnostics_ping');
+        $result = $this->service->bulk_diagnostics_ping();
+        wp_send_json($result, !empty($result['ok']) ? 200 : 500);
     }
 
 }

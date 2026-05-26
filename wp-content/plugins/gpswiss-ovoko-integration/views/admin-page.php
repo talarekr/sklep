@@ -149,13 +149,18 @@
         <label><input type="checkbox" name="only_matched" value="1" /> only_matched</label>
         <label><input type="checkbox" name="skip_already_enriched" value="1" checked="checked" /> skip_already_enriched</label>
         <label><input type="checkbox" name="include_existing_ovoko" value="1" /> include_existing_ovoko</label><br />
-        <label>Batch size:</label><input type="number" min="1" max="20" name="batch_size" value="5" />
+        <label>Batch size:</label><input type="number" min="1" max="5" name="batch_size" value="1" />
         <label>Limit:</label><input type="number" min="1" max="200" name="limit" value="20" />
         <label>Offset:</label><input type="number" min="0" name="offset" value="0" />
         <label>Page:</label><input type="number" min="1" name="page" value="1" /><br />
         <label for="bulk_product_ids_csv">Product IDs CSV (optional):</label>
         <input id="bulk_product_ids_csv" type="text" class="regular-text" name="product_ids_csv" value="" />
         <?php submit_button('Bulk Allegro to Ovoko details enrichment', 'secondary', 'submit', false); ?>
+    </form>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px;">
+        <?php wp_nonce_field('gpswiss_ovoko_bulk_diagnostics_ping'); ?>
+        <input type="hidden" name="action" value="gpswiss_ovoko_bulk_diagnostics_ping" />
+        <?php submit_button('Bulk diagnostics / ping', 'secondary', 'submit', false); ?>
     </form>
 
     <h2>Preview RRR car details</h2>
