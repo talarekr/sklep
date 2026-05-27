@@ -55,6 +55,11 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input type="hidden" name="action" value="gpswiss_ovoko_test_api_connection" />
             <?php submit_button('Test API connection', 'secondary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+            <?php wp_nonce_field('gpswiss_ovoko_test_updatepart_place_for_product_43302'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_test_updatepart_place_for_product_43302" />
+            <?php submit_button('Test updatePart place for product 43302', 'secondary', 'submit', false); ?>
+        </form>
         <?php if (!empty($apiConnection)): ?>
             <details style="display:inline-block; vertical-align:middle;"><summary>Show API test details</summary><pre><?php echo esc_html(wp_json_encode($apiConnection, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
         <?php endif; ?>

@@ -467,6 +467,61 @@ class OvokoIntegrationService
         return $result;
     }
 
+
+    public function test_update_part_place_for_product_43302(): array
+    {
+        $productId = 43302;
+        $partId = '10854';
+        $place = 'HGF10854';
+        $client = new RrrApiClient($this->get_settings());
+        $result = $client->test_update_part_place_once($partId, $place);
+
+        $maskedParams = [
+            'username' => '[REDACTED]',
+            'password' => '[REDACTED]',
+            'user_token' => '[REDACTED]',
+            'part_id' => $partId,
+            'place' => $place,
+        ];
+
+        $apiMessage = (string) ($result['message'] ?? '');
+        $statusCode = (string) ($result['status_code'] ?? '');
+
+        return [
+            'ok' => $statusCode === 'R200',
+            'action_name' => 'Test Ovoko place update',
+            'scope' => 'single_request_only',
+            'test_product_id' => $productId,
+            'request_endpoint' => (string) ($result['endpoint'] ?? ''),
+            'request_params' => $maskedParams,
+            'http_status' => $result['http_status'] ?? null,
+            'raw_response_body' => (string) ($result['raw_response_body'] ?? ''),
+            'parsed_json' => $result['parsed_json'] ?? null,
+            'status_code' => $statusCode,
+            'api_message_or_error' => $apiMessage,
+            'success_by_json_status_code' => $statusCode === 'R200',
+            'checked_at' => gmdate('c'),
+            'safety' => [
+                'single_request_sent' => true,
+                'no_batch' => true,
+                'no_product_iteration' => true,
+                'no_woo_product_write' => true,
+                'no_price_change' => true,
+                'no_stock_change' => true,
+                'no_images_change' => true,
+                'no_gallery_change' => true,
+                'no_listing_image_change' => true,
+                'no_title_change' => true,
+                'no_description_change' => true,
+                'no_publication_status_change' => true,
+                'no_allegro_changes' => true,
+                'no_ebay_changes' => true,
+                'no_cron_changes' => true,
+                'no_other_batch_changes' => true,
+            ],
+        ];
+    }
+
     public function run_gearbox_exclusion_count(): array
     {
         try {
