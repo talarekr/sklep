@@ -2502,13 +2502,40 @@ class OvokoIntegrationService
 
     private function update_single_woo_description_from_ovoko_listing_text(int $productId, string $overrideOvokoId, bool $dryRun, bool $replaceExisting, bool $saveToMetaOnly, bool $prepend, bool $updateOnlyEmpty, string $metaKey, array &$counts): array
     {
+        $sourceMethod = __METHOD__;
         $product = wc_get_product($productId);
         if (!$product) { $counts['errors']++; return ['ok'=>false,'reason'=>'product_not_found','product_id'=>$productId]; }
         $ovokoId = $overrideOvokoId !== '' ? $overrideOvokoId : trim((string) get_post_meta($productId, '_ovoko_part_id', true));
         if ($ovokoId === '') { $counts['missing_ovoko_id']++; return ['ok'=>false,'reason'=>'missing_ovoko_id','product_id'=>$productId]; }
         $counts['with_ovoko_id']++;
-        $single = $this->rrr->preview_fetch_single_part((int) $ovokoId);
-        if (empty($single['ok'])) { $counts['errors']++; return ['ok'=>false,'reason'=>'ovoko_fetch_failed','product_id'=>$productId,'ovoko_id'=>$ovokoId,'fetch'=>$single]; }
+
+        $client = $this->build_rrr_api_client();
+        if ($client === null) {
+            $counts['errors']++;
+            return [
+                'ok' => false,
+                'product_id' => $productId,
+                'ovoko_id' => $ovokoId,
+                'error' => 'RRR API client unavailable',
+                'api_error' => 'rrr_api_client_not_initialized',
+                'source_method' => $sourceMethod,
+            ];
+        }
+
+        $single = $client->preview_fetch_single_part((int) $ovokoId);
+        if (empty($single['ok'])) {
+            $counts['errors']++;
+            return [
+                'ok' => false,
+                'reason' => 'ovoko_fetch_failed',
+                'product_id' => $productId,
+                'ovoko_id' => $ovokoId,
+                'error' => 'Failed to fetch part details from Ovoko API',
+                'api_error' => (string) ($single['msg'] ?? ($single['error'] ?? 'unknown_api_error')),
+                'source_method' => $sourceMethod,
+                'fetch' => $single,
+            ];
+        }
         $payload = (array) ($single['payload'] ?? []);
         $detected = $this->extract_ovoko_listing_text($payload);
         $listingText = $detected['text'];
@@ -2532,6 +2559,16 @@ class OvokoIntegrationService
         }
         $result['counts'] = $counts;
         return $result;
+    }
+
+
+    private function build_rrr_api_client(): ?RrrApiClient
+    {
+        try {
+            return new RrrApiClient($this->get_settings());
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function extract_ovoko_listing_text(array $payload): array
