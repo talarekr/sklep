@@ -1897,6 +1897,115 @@ class OvokoIntegrationService
         return ['is_allegro_product'=>$isAllegro,'allegro_offer_id'=>$offer,'detected_allegro_meta_keys'=>$det,'current_part_number'=>sanitize_text_field((string)get_post_meta($productId,'_part_number',true)),'current_ovoko_part_id'=>sanitize_text_field((string)get_post_meta($productId,'_ovoko_part_id',true)),'current_ovoko_car_id'=>sanitize_text_field((string)get_post_meta($productId,'_ovoko_car_id',true)),'post_content_preview'=>$minimal ? '' : mb_substr(wp_strip_all_tags((string)get_post_field('post_content',$productId)),0,220)];
     }
 
+    public function export_missing_ovoko_id_report_csv(): void
+    {
+        $report = $this->build_missing_ovoko_id_report();
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=woo_products_missing_ovoko_id.csv');
+        $out = fopen('php://output', 'wb');
+        if ($out === false) {
+            wp_die('Cannot open CSV output stream.');
+        }
+
+        fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason']);
+        foreach ((array) ($report['rows'] ?? []) as $row) {
+            fputcsv($out, [
+                (string) ($row['product_id'] ?? ''),
+                (string) ($row['sku'] ?? ''),
+                (string) ($row['title'] ?? ''),
+                (string) ($row['status'] ?? ''),
+                (string) ($row['allegro_id'] ?? ''),
+                (string) ($row['ovoko_id'] ?? ''),
+                (string) ($row['_ovoko_part_id'] ?? ''),
+                (string) ($row['reason'] ?? ''),
+                (string) ($row['last_sync_action'] ?? ''),
+                (string) ($row['last_sync_error'] ?? ''),
+                (string) ($row['last_sync_skip_reason'] ?? ''),
+            ]);
+        }
+        fputcsv($out, []);
+        foreach ((array) ($report['summary'] ?? []) as $key => $value) {
+            fputcsv($out, [(string) $key, (string) $value]);
+        }
+        fclose($out);
+    }
+
+    private function build_missing_ovoko_id_report(): array
+    {
+        $ids = get_posts(['post_type' => 'product', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids']);
+        $settings = $this->get_settings();
+        $csvMap = (array) ($settings['ovoko_csv_mapping'] ?? []);
+        $rows = [];
+        $summary = ['total_products_checked' => 0, 'products_with_ovoko_id' => 0, 'products_missing_ovoko_id' => 0, 'missing_allegro_id_count' => 0, 'no_csv_match_count' => 0, 'not_allegro_product_count' => 0, 'ovoko_id_conflict_count' => 0, 'api_error_count' => 0, 'unknown_count' => 0];
+
+        foreach ((array) $ids as $id) {
+            $productId = (int) $id;
+            $summary['total_products_checked']++;
+            $ovokoId = sanitize_text_field((string) get_post_meta($productId, 'ovoko_id', true));
+            $ovokoPartId = sanitize_text_field((string) get_post_meta($productId, '_ovoko_part_id', true));
+            if ($ovokoId !== '' || $ovokoPartId !== '') {
+                $summary['products_with_ovoko_id']++;
+                continue;
+            }
+            $summary['products_missing_ovoko_id']++;
+
+            $audit = $this->collect_allegro_product_context($productId, true);
+            $allegroId = sanitize_text_field((string) ($audit['allegro_offer_id'] ?? ''));
+            if ($allegroId === '' && !empty($audit['detected_allegro_meta_keys'])) {
+                $allegroId = sanitize_text_field((string) reset($audit['detected_allegro_meta_keys']));
+            }
+
+            $lastAction = $this->read_first_meta_value($productId, ['last_sync_action', '_last_sync_action']);
+            $lastError = $this->read_first_meta_value($productId, ['last_sync_error', '_last_sync_error', 'error']);
+            $lastSkip = $this->read_first_meta_value($productId, ['last_sync_skip_reason', '_last_sync_skip_reason', 'skip_reason']);
+
+            $reason = 'unknown';
+            if ($allegroId === '') {
+                $reason = 'missing_allegro_id';
+            } elseif (str_contains($lastSkip, 'not_allegro_product')) {
+                $reason = 'not_allegro_product';
+            } elseif (str_contains($lastSkip, 'ovoko_id_conflict')) {
+                $reason = 'ovoko_id_conflict';
+            } elseif (str_contains($lastSkip, 'api_error') || $lastError !== '') {
+                $reason = 'api_error';
+            } else {
+                $csvEntries = (array) ($csvMap[strtolower($allegroId)] ?? []);
+                if (empty($csvEntries)) {
+                    $reason = 'no_csv_match';
+                }
+            }
+
+            $summary[$reason . '_count'] = (int) ($summary[$reason . '_count'] ?? 0) + 1;
+            $post = get_post($productId);
+            $rows[] = [
+                'product_id' => $productId,
+                'sku' => sanitize_text_field((string) get_post_meta($productId, '_sku', true)),
+                'title' => $post ? (string) $post->post_title : '',
+                'status' => $post ? (string) $post->post_status : '',
+                'allegro_id' => $allegroId,
+                'ovoko_id' => $ovokoId,
+                '_ovoko_part_id' => $ovokoPartId,
+                'reason' => $reason,
+                'last_sync_action' => $lastAction,
+                'last_sync_error' => $lastError,
+                'last_sync_skip_reason' => $lastSkip,
+            ];
+        }
+        return ['rows' => $rows, 'summary' => $summary];
+    }
+
+    private function read_first_meta_value(int $productId, array $keys): string
+    {
+        foreach ($keys as $key) {
+            $value = sanitize_text_field((string) get_post_meta($productId, $key, true));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
+    }
+
     private function resolve_ovoko_match_for_allegro_product(int $productId, array $audit, array $options = []): array
     {
         $detailsOnly = !empty($options['details_only']);
