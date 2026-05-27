@@ -2480,7 +2480,7 @@ class OvokoIntegrationService
         $stopOnError = !empty($options['stop_on_error']);
         $showFullPayloadDebug = !empty($options['show_full_ovoko_part_payload_for_description_debug']);
         $metaKey = sanitize_key((string) ($options['listing_text_meta_key'] ?? '_ovoko_listing_text'));
-        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
+        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'already_contains_listing_text'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
 
         $productIds = [];
         if ($productId > 0) {
@@ -2547,12 +2547,25 @@ class OvokoIntegrationService
         $currentShort = (string) $product->get_short_description();
         $isContentEmpty = trim(wp_strip_all_tags($currentContent)) === '';
         if ($isContentEmpty) $counts['woo_description_empty']++;
+        $normalizedListingText = $this->normalize_description_text_for_compare($listingText);
+        $normalizedCurrentContent = $this->normalize_description_text_for_compare($currentContent);
+        $alreadyContainsListingText = $normalizedListingText !== '' && $normalizedCurrentContent !== '' && strpos($normalizedCurrentContent, $normalizedListingText) !== false;
         $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prepend;
+        $shouldSkipBecauseAlreadyContains = !$saveToMetaOnly && !$isContentEmpty && $prepend && $alreadyContainsListingText;
         $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : 'update_post_content');
-        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload,'description_updated_verified'=>false,'wp_update_post_result'=>null,'wp_update_post_error'=>null,'post_content_source_field'=>'post_content','post_content_before_length'=>mb_strlen($currentContent),'post_content_after_length'=>mb_strlen($currentContent),'post_content_before_preview'=>mb_substr($currentContent, 0, 240),'post_content_after_preview'=>mb_substr($currentContent, 0, 240),'attempted_post_content_length'=>0,'post_content_after_contains_listing_text'=>false,'write_target_product_id'=>$productId,'write_target_ovoko_id'=>$ovokoId];
+        if ($shouldSkipBecauseAlreadyContains) {
+            $plannedAction = 'already_contains_listing_text';
+        }
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload,'description_updated_verified'=>false,'wp_update_post_result'=>null,'wp_update_post_error'=>null,'post_content_source_field'=>'post_content','post_content_before_length'=>mb_strlen($currentContent),'post_content_after_length'=>mb_strlen($currentContent),'post_content_before_preview'=>mb_substr($currentContent, 0, 240),'post_content_after_preview'=>mb_substr($currentContent, 0, 240),'attempted_post_content_length'=>0,'post_content_after_contains_listing_text'=>$alreadyContainsListingText,'write_target_product_id'=>$productId,'write_target_ovoko_id'=>$ovokoId];
         if ($dryRun || $listingText === '') return $result;
         if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
         elseif ($shouldSkipExisting) { $counts['skipped_existing_description']++; }
+        elseif ($shouldSkipBecauseAlreadyContains) {
+            $counts['already_contains_listing_text']++;
+            $result['description_updated_verified'] = true;
+            $result['post_content_after_contains_listing_text'] = true;
+            $result['skipped_verified'] = true;
+        }
         else {
             $newContent = $prepend && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
             $result['attempted_post_content_length'] = mb_strlen($newContent);
@@ -2595,6 +2608,22 @@ class OvokoIntegrationService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    private function normalize_description_text_for_compare(string $text): string
+    {
+        if ($text === '') {
+            return '';
+        }
+
+        $normalized = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $normalized = preg_replace('/<\s*br\s*\/?\s*>/iu', "\n", $normalized) ?? $normalized;
+        $normalized = preg_replace('/<\s*\/\s*p\s*>/iu', "\n", $normalized) ?? $normalized;
+        $normalized = wp_strip_all_tags($normalized);
+        $normalized = strtolower($normalized);
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+
+        return trim($normalized);
     }
 
     private function extract_ovoko_listing_text(array $payload): array

@@ -2007,6 +2007,19 @@ function gp_render_ovoko_description_and_details_tab(): void
     $productId = $product->get_id();
     $status = gp_get_product_details_style_status($productId);
     $rawRows = is_array($status['rows'] ?? null) ? $status['rows'] : [];
+    $postContent = (string) get_post_field('post_content', $productId);
+    $postContentNormalized = trim(wp_strip_all_tags($postContent));
+    $ovokoListingText = trim((string) get_post_meta($productId, '_ovoko_listing_text', true));
+    $ovokoListingTextNormalized = trim(wp_strip_all_tags($ovokoListingText));
+    $descriptionHtml = '';
+    $descriptionSource = 'none';
+    if ($postContentNormalized !== '') {
+        $descriptionHtml = apply_filters('the_content', $postContent);
+        $descriptionSource = 'post_content';
+    } elseif ($ovokoListingTextNormalized !== '') {
+        $descriptionHtml = apply_filters('the_content', $ovokoListingText);
+        $descriptionSource = '_ovoko_listing_text_fallback';
+    }
     $rows = [];
     foreach ($rawRows as $label => $value) { $rows[] = ['label' => $label, 'value' => $value]; }
 
@@ -2015,13 +2028,22 @@ function gp_render_ovoko_description_and_details_tab(): void
         echo "
 <!-- details_tab_callback_active: true | details_tab_rows_count: " . (int) count($rows) . " | details_tab_detection_reason: " . esc_html((string) ($status['reason'] ?? 'none')) . " | details_tab_callback_name: gp_render_ovoko_description_and_details_tab -->
 ";
+        echo "
+<!-- details_tab_description_source: " . esc_html($descriptionSource) . " | details_tab_product_id: " . (int) $productId . " -->
+";
     }
 
-    if (empty($rows)) {
+    if ($descriptionHtml === '' && empty($rows)) {
         return;
     }
     ?>
     <div class="gpswiss-product-details">
+        <?php if ($descriptionHtml !== '') : ?>
+            <div class="gpswiss-product-details__description">
+                <?php echo $descriptionHtml; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+            </div>
+        <?php endif; ?>
+        <?php if (!empty($rows)) : ?>
         <h3 class="gpswiss-product-details__heading"><?php esc_html_e('Informacje szczegółowe', 'gp-clone'); ?></h3>
         <div class="gpswiss-product-details__table" role="table" aria-label="<?php esc_attr_e('Informacje szczegółowe', 'gp-clone'); ?>">
             <?php foreach ($rows as $row) : ?>
@@ -2031,6 +2053,7 @@ function gp_render_ovoko_description_and_details_tab(): void
                 </div>
             <?php endforeach; ?>
         </div>
+        <?php endif; ?>
     </div>
     <?php
 }
