@@ -300,6 +300,14 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             Total ovoko_listing_text_missing: <span data-k="total_listing_missing">0</span> |
             Total errors: <span data-k="total_errors">0</span><br>
             Last safe next_after_product_id: <span data-k="last_safe_next_after_product_id">0</span>
+            <br>desc_after_product_id_element_found: <span data-k="desc_after_product_id_element_found">false</span> |
+            desc_after_product_id_raw_value: <span data-k="desc_after_product_id_raw_value">""</span> |
+            parsed_start_after_product_id: <span data-k="parsed_start_after_product_id">0</span><br>
+            admin_autorun_js_url: <span data-k="admin_autorun_js_url"><?php echo esc_html((string) ($autoRunExpectedAssetUrl ?? '')); ?></span> |
+            admin_autorun_js_version: <span data-k="admin_autorun_js_version"><?php echo esc_html((string) ($autoRunAssetVersion ?? 'n/a')); ?></span> |
+            descriptionAction: <span data-k="descriptionAction">gpswiss_ovoko_update_description_from_listing_text</span> |
+            descriptionNonce present: <span data-k="descriptionNonce_present">false</span> |
+            js_asset_version: <span data-k="js_asset_version"><?php echo esc_html((string) ($autoRunAssetVersion ?? 'n/a')); ?></span>
         </div>
         <pre id="gpswiss_desc_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>

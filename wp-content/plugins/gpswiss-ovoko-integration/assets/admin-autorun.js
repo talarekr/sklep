@@ -214,13 +214,13 @@ document.addEventListener('DOMContentLoaded', function () {
   const descLogsEl = $('gpswiss_desc_autorun_logs');
   if (!descForm || !descStatusEl || !descLogsEl) { return; }
 
-  const descState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_next_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, total_with_ovoko_id: 0, total_updated: 0, total_old_allegro_removed: 0, total_missing_ovoko_id: 0, total_listing_missing: 0, total_errors: 0 };
+  const descState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_next_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, total_with_ovoko_id: 0, total_updated: 0, total_old_allegro_removed: 0, total_missing_ovoko_id: 0, total_listing_missing: 0, total_errors: 0, desc_after_product_id_element_found: false, desc_after_product_id_raw_value: '""', parsed_start_after_product_id: 0, admin_autorun_js_url: '', admin_autorun_js_version: '', descriptionAction: '', descriptionNonce_present: false, js_asset_version: '' };
   let descTimer = null;
   let descInFlight = false;
   const descLogRows = [];
 
   const descRender = function () {
-    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_next_after_product_id','last_safe_next_after_product_id','total_scanned','total_with_ovoko_id','total_updated','total_old_allegro_removed','total_missing_ovoko_id','total_listing_missing','total_errors']
+    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_next_after_product_id','last_safe_next_after_product_id','total_scanned','total_with_ovoko_id','total_updated','total_old_allegro_removed','total_missing_ovoko_id','total_listing_missing','total_errors','desc_after_product_id_element_found','desc_after_product_id_raw_value','parsed_start_after_product_id','admin_autorun_js_url','admin_autorun_js_version','descriptionAction','descriptionNonce_present','js_asset_version']
       .forEach(function (k) {
         const n = descStatusEl.querySelector('[data-k="' + k + '"]');
         if (n) { n.textContent = String(descState[k] || 0); }
@@ -234,6 +234,13 @@ document.addEventListener('DOMContentLoaded', function () {
   const getFieldNumber = function (name, fallback) {
     const el = descForm.querySelector('#desc_' + name) || descForm.querySelector('[name="' + name + '"]');
     return Math.max(0, parseInt((el && el.value) || String(fallback || 0), 10) || 0);
+  };
+  const getDescAfterProductIdDebug = function () {
+    const el = document.getElementById('desc_after_product_id');
+    const found = !!el;
+    const rawValue = found ? String(el.value || '') : '';
+    const parsedValue = Math.max(0, parseInt(rawValue || '0', 10) || 0);
+    return { el: el, found: found, rawValue: rawValue, parsedValue: parsedValue };
   };
   const getStopOnError = function () { return !!descForm.querySelector('[name="stop_on_error"]')?.checked; };
   const getSleepMs = function () { return Math.max(100, getFieldNumber('sleep_ms', 1200)); };
@@ -313,7 +320,24 @@ document.addEventListener('DOMContentLoaded', function () {
     descState.status = 'running';
     descState.started_at = nowIso();
     descState.duration_seconds = 0;
-    const formAfterProductId = getFieldNumber('after_product_id', 0);
+    const descAfterIdDebug = getDescAfterProductIdDebug();
+    descState.desc_after_product_id_element_found = descAfterIdDebug.found;
+    descState.desc_after_product_id_raw_value = '"' + descAfterIdDebug.rawValue + '"';
+    descState.parsed_start_after_product_id = descAfterIdDebug.parsedValue;
+    descState.admin_autorun_js_url = String(config.adminAutorunJsUrl || '');
+    descState.admin_autorun_js_version = String(config.adminAutorunJsVersion || '');
+    descState.js_asset_version = String(config.adminAutorunJsVersion || '');
+    descState.descriptionAction = String(config.descriptionAction || '');
+    descState.descriptionNonce_present = !!(config.descriptionNonce && String(config.descriptionNonce).length > 0);
+    if (!descAfterIdDebug.found) {
+      descLogRows.length = 0;
+      descLogRows.push({ timestamp: nowIso(), type: 'startup_error', message: 'desc_after_product_id input not found. Aborting auto-run.' });
+      descState.running = false;
+      descState.status = 'error';
+      descRender();
+      return;
+    }
+    const formAfterProductId = descAfterIdDebug.parsedValue;
     descState.start_after_product_id = formAfterProductId;
     descState.request_after_product_id = formAfterProductId;
     descState.response_next_after_product_id = formAfterProductId;
