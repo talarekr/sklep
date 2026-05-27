@@ -2467,23 +2467,48 @@ class OvokoIntegrationService
 
     public function update_woo_description_from_ovoko_listing_text(array $options = []): array
     {
-        $productId = isset($options['product_id']) ? (int) $options['product_id'] : 0;
+        $productId = max(0, (int) ($options['product_id'] ?? 0));
+        $afterProductId = max(0, (int) ($options['after_product_id'] ?? 0));
+        $limit = max(1, min(100, (int) ($options['limit'] ?? 1)));
+        $batchSize = max(1, min(100, (int) ($options['batch_size'] ?? 1)));
         $overrideOvokoId = isset($options['ovoko_id']) ? trim((string) $options['ovoko_id']) : '';
         $dryRun = !array_key_exists('dry_run', $options) || !empty($options['dry_run']);
         $replaceExisting = !empty($options['replace_existing_description']);
-        $saveToMetaOnly = !empty($options['save_to_meta_only']);
+        $saveToMetaOnly = !array_key_exists('save_to_meta_only', $options) || !empty($options['save_to_meta_only']);
         $prepend = !empty($options['prepend_to_existing_description']);
+        $updateOnlyEmpty = !array_key_exists('update_only_empty_description', $options) || !empty($options['update_only_empty_description']);
+        $stopOnError = !empty($options['stop_on_error']);
         $metaKey = sanitize_key((string) ($options['listing_text_meta_key'] ?? '_ovoko_listing_text'));
         $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
-        if ($productId <= 0) return ['ok'=>false,'reason'=>'missing_product_id','counts'=>$counts];
-        $counts['total_scanned'] = 1;
+
+        $productIds = [];
+        if ($productId > 0) {
+            $productIds[] = $productId;
+        } else {
+            $query = new \WP_Query(['post_type' => 'product', 'post_status' => ['publish','draft','private'], 'fields' => 'ids', 'posts_per_page' => $limit, 'orderby' => 'ID', 'order' => 'ASC', 'no_found_rows' => true, 'post__not_in' => $afterProductId > 0 ? range(1, $afterProductId) : []]);
+            $productIds = array_map('intval', (array) $query->posts);
+        }
+        if (empty($productIds)) return ['ok' => true, 'dry_run' => $dryRun, 'counts' => $counts, 'results' => [], 'after_product_id' => $afterProductId, 'next_after_product_id' => $afterProductId, 'batch_size' => $batchSize, 'limit' => $limit, 'action_name' => 'Update Woo descriptions from Ovoko listing text'];
+
+        $results = [];
+        foreach ($productIds as $pid) {
+            $counts['total_scanned']++;
+            $singleResult = $this->update_single_woo_description_from_ovoko_listing_text($pid, $overrideOvokoId, $dryRun, $replaceExisting, $saveToMetaOnly, $prepend, $updateOnlyEmpty, $metaKey, $counts);
+            $results[] = $singleResult;
+            if (empty($singleResult['ok']) && $stopOnError) break;
+        }
+        return ['ok' => $counts['errors'] === 0, 'action_name' => 'Update Woo descriptions from Ovoko listing text', 'dry_run' => $dryRun, 'save_to_meta_only' => $saveToMetaOnly, 'update_only_empty_description' => $updateOnlyEmpty, 'replace_existing_description' => $replaceExisting, 'prepend_to_existing_description' => $prepend, 'limit' => $limit, 'batch_size' => $batchSize, 'after_product_id' => $afterProductId, 'next_after_product_id' => max($afterProductId, (int) end($productIds)), 'results' => $results, 'product_id' => (int) ($results[0]['product_id'] ?? 0), 'ovoko_id' => (string) ($results[0]['ovoko_id'] ?? ''), 'ovoko_listing_text_found' => (bool) ($results[0]['ovoko_listing_text_found'] ?? false), 'ovoko_listing_text_source_key' => (string) ($results[0]['ovoko_listing_text_source_key'] ?? ''), 'ovoko_listing_text' => (string) ($results[0]['ovoko_listing_text'] ?? ''), 'woo_post_content_length' => (int) ($results[0]['woo_post_content_length'] ?? 0), 'woo_short_description_length' => (int) ($results[0]['woo_short_description_length'] ?? 0), 'planned_action' => (string) ($results[0]['planned_action'] ?? ''), 'counts' => $counts];
+    }
+
+    private function update_single_woo_description_from_ovoko_listing_text(int $productId, string $overrideOvokoId, bool $dryRun, bool $replaceExisting, bool $saveToMetaOnly, bool $prepend, bool $updateOnlyEmpty, string $metaKey, array &$counts): array
+    {
         $product = wc_get_product($productId);
-        if (!$product) return ['ok'=>false,'reason'=>'product_not_found','product_id'=>$productId,'counts'=>$counts];
+        if (!$product) { $counts['errors']++; return ['ok'=>false,'reason'=>'product_not_found','product_id'=>$productId]; }
         $ovokoId = $overrideOvokoId !== '' ? $overrideOvokoId : trim((string) get_post_meta($productId, '_ovoko_part_id', true));
-        if ($ovokoId === '') { $counts['missing_ovoko_id']++; return ['ok'=>false,'reason'=>'missing_ovoko_id','product_id'=>$productId,'counts'=>$counts]; }
+        if ($ovokoId === '') { $counts['missing_ovoko_id']++; return ['ok'=>false,'reason'=>'missing_ovoko_id','product_id'=>$productId]; }
         $counts['with_ovoko_id']++;
         $single = $this->rrr->preview_fetch_single_part((int) $ovokoId);
-        if (empty($single['ok'])) { $counts['errors']++; return ['ok'=>false,'reason'=>'ovoko_fetch_failed','product_id'=>$productId,'ovoko_id'=>$ovokoId,'fetch'=>$single,'counts'=>$counts]; }
+        if (empty($single['ok'])) { $counts['errors']++; return ['ok'=>false,'reason'=>'ovoko_fetch_failed','product_id'=>$productId,'ovoko_id'=>$ovokoId,'fetch'=>$single]; }
         $payload = (array) ($single['payload'] ?? []);
         $detected = $this->extract_ovoko_listing_text($payload);
         $listingText = $detected['text'];
@@ -2493,12 +2518,12 @@ class OvokoIntegrationService
         $currentShort = (string) $product->get_short_description();
         $isContentEmpty = trim(wp_strip_all_tags($currentContent)) === '';
         if ($isContentEmpty) $counts['woo_description_empty']++;
-        $wouldOverwrite = (!$isContentEmpty && !$saveToMetaOnly && ($replaceExisting || $prepend));
-        $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($isContentEmpty || $replaceExisting || $prepend ? 'update_post_content' : 'skip_existing_description');
-        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'current_woo_post_content_length'=>mb_strlen($currentContent),'current_woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'woo_description_would_be_overwritten'=>$wouldOverwrite,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'listing_text_meta_key'=>$metaKey,'counts'=>$counts];
+        $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prepend;
+        $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : 'update_post_content');
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey];
         if ($dryRun || $listingText === '') return $result;
         if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
-        elseif (!$isContentEmpty && !$replaceExisting && !$prepend) { $counts['skipped_existing_description']++; }
+        elseif ($shouldSkipExisting) { $counts['skipped_existing_description']++; }
         else {
             $newContent = $prepend && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
             $update = wp_update_post(['ID'=>$productId,'post_content'=>$newContent], true);
