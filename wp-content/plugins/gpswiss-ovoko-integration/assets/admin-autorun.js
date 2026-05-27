@@ -208,4 +208,116 @@ document.addEventListener('DOMContentLoaded', function () {
   $('gpswiss_autorun_download_and_clear')?.addEventListener('click', function () { download('ovoko-autorun-log.jsonl', new Blob(fullLog.map(function (x) { return JSON.stringify(x) + '\n'; }), {type:'application/jsonl'})); resetAutorunState(); });
 
   render();
+
+  const descForm = $('gpswiss_ovoko_description_update_form');
+  const descStatusEl = $('gpswiss_desc_autorun_status');
+  const descLogsEl = $('gpswiss_desc_autorun_logs');
+  if (!descForm || !descStatusEl || !descLogsEl) { return; }
+
+  const descState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, current_after_product_id: 0, last_next_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, total_with_ovoko_id: 0, total_updated: 0, total_old_allegro_removed: 0, total_missing_ovoko_id: 0, total_listing_missing: 0, total_errors: 0 };
+  let descTimer = null;
+  let descInFlight = false;
+  const descLogRows = [];
+
+  const descRender = function () {
+    ['status','started_at','duration_seconds','current_after_product_id','last_next_after_product_id','last_safe_next_after_product_id','total_scanned','total_with_ovoko_id','total_updated','total_old_allegro_removed','total_missing_ovoko_id','total_listing_missing','total_errors']
+      .forEach(function (k) {
+        const n = descStatusEl.querySelector('[data-k="' + k + '"]');
+        if (n) { n.textContent = String(descState[k] || 0); }
+      });
+    descLogsEl.textContent = descLogRows.slice(-30).map(function (x) { return JSON.stringify(x); }).join('\n');
+  };
+  const descUpdateDuration = function () {
+    if (!descState.started_at) { descState.duration_seconds = 0; return; }
+    descState.duration_seconds = Math.max(0, Math.round((Date.now() - Date.parse(descState.started_at)) / 1000));
+  };
+  const getFieldNumber = function (name, fallback) {
+    const el = descForm.querySelector('[name="' + name + '"]');
+    return Math.max(0, parseInt((el && el.value) || String(fallback || 0), 10) || 0);
+  };
+  const getStopOnError = function () { return !!descForm.querySelector('[name="stop_on_error"]')?.checked; };
+  const getSleepMs = function () { return Math.max(100, getFieldNumber('sleep_ms', 1200)); };
+  const getMaxRuntime = function () { return getFieldNumber('max_runtime', 0); };
+
+  const descBuildBody = function () {
+    const fd = new URLSearchParams();
+    fd.set('action', config.descriptionAction || 'gpswiss_ovoko_update_description_from_listing_text');
+    fd.set('_ajax_nonce', config.descriptionNonce || '');
+    fd.set('after_product_id', String(descState.current_after_product_id));
+    fd.set('limit', String(getFieldNumber('limit', 1)));
+    fd.set('batch_size', String(getFieldNumber('batch_size', 1)));
+    fd.set('dry_run', '0');
+    fd.set('save_to_meta_only', '0');
+    fd.set('update_only_empty_description', '0');
+    fd.set('replace_existing_description', '1');
+    fd.set('prepend_to_existing_description', '0');
+    fd.set('stop_on_error', '1');
+    return fd;
+  };
+
+  const descStop = function (status) {
+    if (descTimer) clearTimeout(descTimer);
+    descState.running = false;
+    descState.status = status || 'stopped';
+    descUpdateDuration();
+    descRender();
+  };
+
+  const descTick = async function () {
+    if (!descState.running || descInFlight) return;
+    if (getMaxRuntime() > 0 && descState.duration_seconds >= getMaxRuntime()) { descStop('stopped'); return; }
+    descInFlight = true;
+    const body = descBuildBody();
+    let res;
+    try {
+      const r = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+      res = JSON.parse(await r.text());
+      if (!r.ok) throw new Error('network');
+    } catch (e) {
+      descLogRows.push({ timestamp: nowIso(), type: 'ajax_error', last_after_product_id: descState.current_after_product_id, last_next_after_product_id: descState.last_next_after_product_id });
+      descInFlight = false;
+      descStop('error');
+      return;
+    }
+    descInFlight = false;
+    const counts = res.counts || {};
+    const reqAfter = descState.current_after_product_id;
+    const nextAfter = parseInt(res.next_after_product_id || 0, 10);
+    descState.total_scanned += parseInt(counts.total_scanned || 0, 10);
+    descState.total_with_ovoko_id += parseInt(counts.with_ovoko_id || 0, 10);
+    descState.total_updated += parseInt(counts.description_updated || 0, 10);
+    descState.total_old_allegro_removed += parseInt(counts.old_allegro_description_removed || 0, 10);
+    descState.total_missing_ovoko_id += parseInt(counts.missing_ovoko_id || 0, 10);
+    descState.total_listing_missing += parseInt(counts.ovoko_listing_text_missing || 0, 10);
+    descState.total_errors += parseInt(counts.errors || 0, 10);
+    descState.last_next_after_product_id = nextAfter;
+    if (nextAfter > 0) descState.last_safe_next_after_product_id = nextAfter;
+    descLogRows.push({ timestamp: nowIso(), request_after_product_id: reqAfter, response_next_after_product_id: nextAfter, ok: !!res.ok, done: !!res.done, counts: counts, results: res.results || [] });
+
+    const hardStop = !res.ok || parseInt(counts.errors || 0, 10) > 0;
+    const doneStop = !!res.done || !nextAfter || nextAfter <= reqAfter || !((res.results || []).length);
+    if (hardStop && getStopOnError()) { descState.status = 'error'; descStop('error'); return; }
+    if (doneStop) { descStop('done'); return; }
+    descState.current_after_product_id = nextAfter;
+    descUpdateDuration();
+    descRender();
+    descTimer = setTimeout(descTick, getSleepMs());
+  };
+
+  $('gpswiss_desc_autorun_start')?.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (descState.running) return;
+    descState.running = true;
+    descState.status = 'running';
+    descState.started_at = nowIso();
+    descState.duration_seconds = 0;
+    descState.current_after_product_id = getFieldNumber('after_product_id', 0);
+    descState.last_next_after_product_id = 0;
+    descState.last_safe_next_after_product_id = 0;
+    descState.total_scanned = 0; descState.total_with_ovoko_id = 0; descState.total_updated = 0; descState.total_old_allegro_removed = 0; descState.total_missing_ovoko_id = 0; descState.total_listing_missing = 0; descState.total_errors = 0;
+    descLogRows.length = 0;
+    descRender();
+    descTick();
+  });
+  $('gpswiss_desc_autorun_stop')?.addEventListener('click', function (e) { e.preventDefault(); descStop('stopped'); });
 });
