@@ -2656,10 +2656,21 @@ class OvokoIntegrationService
         $single=$client->preview_fetch_single_part((int)$ovokoId);
         if(empty($single['ok'])){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'reason'=>'ovoko_fetch_failed','fetch'=>$single];}
         $payload=(array)($single['payload']??[]);
-        $path=trim((string)($payload['category_title_path']??''));
+        $record = $client->extract_single_part_record($payload);
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $categoryResolve = $this->resolve_ovoko_category_title_path($payload, $record, $normalized);
+        $path = $categoryResolve['category_title_path'];
+        $debug = [
+            'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'nested_keys_depth_4' => $this->collect_nested_keys_to_depth($payload, 4),
+            'category_candidate_paths_checked' => $categoryResolve['checked_paths'],
+            'category_title_path_source_key' => $categoryResolve['source_key'],
+            'raw_category_title_path_value' => $categoryResolve['raw_value'],
+        ];
         if($path===''){
             $counts['ovoko_category_missing']++;$counts['products_skipped']++;
-            return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>'','reason'=>'ovoko_category_missing','planned_action'=>'skip'];
+            $debug['fields_matching_category_title_path'] = $this->collect_matching_nested_fields($payload, ['category', 'title', 'path']);
+            return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>'','reason'=>'ovoko_category_missing','planned_action'=>'skip','debug'=>$debug];
         }
         $counts['ovoko_category_found']++;
         $levels=array_values(array_filter(array_map('trim',explode('/',$path)),fn($v)=>$v!==''));
@@ -2676,7 +2687,7 @@ class OvokoIntegrationService
             if(!$term){$chainOk=false;break;}
             $parent=(int)$term->term_id;$finalId=$parent;
         }
-        $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false];
+        $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false,'debug'=>$debug];
         if($dryRun){return $result;}
         if(!$chainOk || $finalId<=0){$counts['products_skipped']++;$counts['errors']++;$result['ok']=false;$result['reason']='category_hierarchy_unresolved';return $result;}
         $setIds=$replaceExisting?[$finalId]:array_values(array_unique(array_merge($currentIds,[$finalId])));
@@ -2698,6 +2709,79 @@ class OvokoIntegrationService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    private function resolve_ovoko_category_title_path(array $payload, array $record, array $normalized): array
+    {
+        $candidates = [
+            'category_title_path' => $record['category_title_path'] ?? null,
+            'data.category_title_path' => is_array($payload['data'] ?? null) ? (($payload['data']['category_title_path'] ?? null)) : null,
+            'part.category_title_path' => is_array($payload['part'] ?? null) ? (($payload['part']['category_title_path'] ?? null)) : null,
+            'list.0.0.category_title_path' => $payload['list'][0][0]['category_title_path'] ?? null,
+            'list.0.category_title_path' => $payload['list'][0]['category_title_path'] ?? null,
+            'category.title_path' => is_array($payload['category'] ?? null) ? (($payload['category']['title_path'] ?? null)) : null,
+            'category.path' => is_array($payload['category'] ?? null) ? (($payload['category']['path'] ?? null)) : null,
+        ];
+
+        // Source of truth should come from the same normalized part record as descriptions.
+        if (trim((string) ($normalized['category_title_path'] ?? '')) !== '') {
+            $candidates = ['category_title_path' => $normalized['category_title_path']] + $candidates;
+        }
+
+        foreach ($candidates as $sourceKey => $value) {
+            $trimmed = trim((string) $value);
+            if ($trimmed !== '') {
+                return [
+                    'category_title_path' => $trimmed,
+                    'source_key' => $sourceKey,
+                    'raw_value' => $value,
+                    'checked_paths' => array_keys($candidates),
+                ];
+            }
+        }
+
+        return [
+            'category_title_path' => '',
+            'source_key' => '',
+            'raw_value' => null,
+            'checked_paths' => array_keys($candidates),
+        ];
+    }
+
+    private function collect_nested_keys_to_depth(array $value, int $maxDepth = 4, string $prefix = '', int $depth = 1): array
+    {
+        if ($depth > $maxDepth) {
+            return [];
+        }
+        $paths = [];
+        foreach ($value as $key => $child) {
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . (string) $key;
+            $paths[] = $path;
+            if (is_array($child)) {
+                $paths = array_merge($paths, $this->collect_nested_keys_to_depth($child, $maxDepth, $path, $depth + 1));
+            }
+        }
+        return array_values(array_unique($paths));
+    }
+
+    private function collect_matching_nested_fields(array $payload, array $needles): array
+    {
+        $allPaths = $this->collect_nested_keys_to_depth($payload, 8);
+        $matches = [];
+        foreach ($allPaths as $path) {
+            $lower = strtolower($path);
+            $ok = true;
+            foreach ($needles as $needle) {
+                if (strpos($lower, strtolower($needle)) === false) {
+                    $ok = false;
+                    break;
+                }
+            }
+            if ($ok) {
+                $matches[] = $path;
+            }
+        }
+        return $matches;
     }
 
     private function normalize_description_text_for_compare(string $text): string
