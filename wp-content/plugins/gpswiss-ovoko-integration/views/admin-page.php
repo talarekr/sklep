@@ -274,8 +274,8 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label><input type="checkbox" name="prepend_to_existing_description" value="1" /> prepend_to_existing_description (default false)</label>
             <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
             <br><br>
-            <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run description update</button>
-            <button class="button button-primary" type="submit" name="apply" value="1">Apply description update</button>
+            <button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry run description update</button>
+            <button class="button button-primary" type="submit" name="submit_action" value="apply">Apply description update</button>
         </form>
     </div>
 
