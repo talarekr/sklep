@@ -2465,6 +2465,62 @@ class OvokoIntegrationService
         return ['ok'=>true,'action_name'=>'Single enrichment dry-run','handler_used'=>(string) ($options['handler_used'] ?? 'single_enrichment_dry_run_memory_safe'),'form_source'=>(string) ($options['form_source'] ?? 'single_update_form'),'product_id'=>$productId,'dry_run'=>true,'details_only'=>$detailsOnly,'minimal_response'=>true,'disable_debug_heavy_logs'=>true,'matched_ovoko_part_id'=>(string)($match['matched_ovoko_part_id'] ?? ($normalized['part_id'] ?? '')),'matched_ovoko_car_id'=>(string)($normalized['car_id'] ?? ''),'match_confidence'=>(string)($match['match_confidence'] ?? 'none'),'vehicle_label'=>$vehicleLabel,'vehicle_slug'=>$vehicleSlug,'vehicle_parts_url'=>$vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : '','old_parts_url'=>!empty($normalized['car_id']) ? add_query_arg('ovoko_car_id', rawurlencode((string) $normalized['car_id']), get_post_type_archive_link('product')) : '','would_write_attributes_count'=>count($attrs),'would_write_attributes_labels'=>array_keys($attrs),'skipped_fields_count'=>count($filterDebug),'no_price_change'=>true,'no_stock_change'=>true,'no_images_change'=>true,'no_title_change'=>true,'no_status_change'=>true,'memory_peak_mb'=>round(memory_get_peak_usage(true)/1048576, 2),'memory_stages'=>$memoryStages] + $this->build_apply_guard_status($memoryStages);
     }
 
+    public function update_woo_description_from_ovoko_listing_text(array $options = []): array
+    {
+        $productId = isset($options['product_id']) ? (int) $options['product_id'] : 0;
+        $overrideOvokoId = isset($options['ovoko_id']) ? trim((string) $options['ovoko_id']) : '';
+        $dryRun = !array_key_exists('dry_run', $options) || !empty($options['dry_run']);
+        $replaceExisting = !empty($options['replace_existing_description']);
+        $saveToMetaOnly = !empty($options['save_to_meta_only']);
+        $prepend = !empty($options['prepend_to_existing_description']);
+        $metaKey = sanitize_key((string) ($options['listing_text_meta_key'] ?? '_ovoko_listing_text'));
+        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
+        if ($productId <= 0) return ['ok'=>false,'reason'=>'missing_product_id','counts'=>$counts];
+        $counts['total_scanned'] = 1;
+        $product = wc_get_product($productId);
+        if (!$product) return ['ok'=>false,'reason'=>'product_not_found','product_id'=>$productId,'counts'=>$counts];
+        $ovokoId = $overrideOvokoId !== '' ? $overrideOvokoId : trim((string) get_post_meta($productId, '_ovoko_part_id', true));
+        if ($ovokoId === '') { $counts['missing_ovoko_id']++; return ['ok'=>false,'reason'=>'missing_ovoko_id','product_id'=>$productId,'counts'=>$counts]; }
+        $counts['with_ovoko_id']++;
+        $single = $this->rrr->preview_fetch_single_part((int) $ovokoId);
+        if (empty($single['ok'])) { $counts['errors']++; return ['ok'=>false,'reason'=>'ovoko_fetch_failed','product_id'=>$productId,'ovoko_id'=>$ovokoId,'fetch'=>$single,'counts'=>$counts]; }
+        $payload = (array) ($single['payload'] ?? []);
+        $detected = $this->extract_ovoko_listing_text($payload);
+        $listingText = $detected['text'];
+        $listingSource = $detected['source_key'];
+        if ($listingText === '') $counts['ovoko_listing_text_missing']++; else $counts['ovoko_listing_text_found']++;
+        $currentContent = (string) get_post_field('post_content', $productId);
+        $currentShort = (string) $product->get_short_description();
+        $isContentEmpty = trim(wp_strip_all_tags($currentContent)) === '';
+        if ($isContentEmpty) $counts['woo_description_empty']++;
+        $wouldOverwrite = (!$isContentEmpty && !$saveToMetaOnly && ($replaceExisting || $prepend));
+        $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($isContentEmpty || $replaceExisting || $prepend ? 'update_post_content' : 'skip_existing_description');
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'current_woo_post_content_length'=>mb_strlen($currentContent),'current_woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'woo_description_would_be_overwritten'=>$wouldOverwrite,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'listing_text_meta_key'=>$metaKey,'counts'=>$counts];
+        if ($dryRun || $listingText === '') return $result;
+        if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
+        elseif (!$isContentEmpty && !$replaceExisting && !$prepend) { $counts['skipped_existing_description']++; }
+        else {
+            $newContent = $prepend && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
+            $update = wp_update_post(['ID'=>$productId,'post_content'=>$newContent], true);
+            if (is_wp_error($update)) { $counts['errors']++; $result['ok'] = false; $result['reason'] = 'woo_update_failed'; $result['error'] = $update->get_error_message(); }
+            else { $counts['description_updated']++; }
+        }
+        $result['counts'] = $counts;
+        return $result;
+    }
+
+    private function extract_ovoko_listing_text(array $payload): array
+    {
+        $candidates = ['announcement_text','listing_text','advert_text','ad_text','text','description','notes','name'];
+        foreach ($candidates as $key) {
+            if (array_key_exists($key, $payload)) {
+                $value = trim((string) $payload[$key]);
+                if ($value !== '') return ['source_key' => $key, 'text' => sanitize_textarea_field($value)];
+            }
+        }
+        return ['source_key' => '', 'text' => ''];
+    }
+
     private function build_vehicle_label_from_attributes(array $attrs): string
     {
         $parts = [];
