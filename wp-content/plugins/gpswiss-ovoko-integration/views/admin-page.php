@@ -139,7 +139,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Update single existing product from CSV mapping</h3>
         <p>Updates only Ovoko/RRR detail attributes and meta. Does not change price, stock, images, title or publication status.</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form id="gpswiss_ovoko_description_update_form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_single_enrichment_dry_run'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_single_enrichment_dry_run" />
             <input type="hidden" name="details_only" value="1" />
@@ -151,7 +151,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label><input type="checkbox" name="replace_description" value="1" /> Replace old Allegro description</label>
             <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run</button>
         </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form id="gpswiss_ovoko_description_update_form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_apply_allegro_to_ovoko_details'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_apply_allegro_to_ovoko_details" />
             <input type="hidden" name="details_only" value="1" />
@@ -255,7 +255,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Update Woo descriptions from Ovoko listing text</h3>
         <p>Updates only Woo description/meta from Ovoko listing text. No price/stock/images/gallery/listing-image/title/status/category/Allegro/eBay/attributes sync changes.</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form id="gpswiss_ovoko_description_update_form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_update_description_from_listing_text'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_update_description_from_listing_text" />
             <label for="desc_product_id">product_id (optional):</label>
@@ -266,6 +266,10 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input id="desc_limit" type="number" min="1" max="100" name="limit" value="1" />
             <label for="desc_batch_size">batch_size:</label>
             <input id="desc_batch_size" type="number" min="1" max="100" name="batch_size" value="1" />
+            <label for="desc_sleep_ms">sleep_ms:</label>
+            <input id="desc_sleep_ms" type="number" min="100" step="100" name="sleep_ms" value="1200" />
+            <label for="desc_max_runtime">max_runtime (s):</label>
+            <input id="desc_max_runtime" type="number" min="0" step="1" name="max_runtime" value="0" />
             <br><br>
             <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> dry_run (default true)</label>
             <label><input type="checkbox" name="save_to_meta_only" value="1" checked="checked" /> save_to_meta_only (default true)</label>
@@ -276,7 +280,25 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <br><br>
             <button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry run description update</button>
             <button class="button button-primary" type="submit" name="submit_action" value="apply">Apply description update</button>
+            <button class="button button-primary" type="button" id="gpswiss_desc_autorun_start">Start auto-run descriptions</button>
+            <button class="button" type="button" id="gpswiss_desc_autorun_stop">Stop auto-run descriptions</button>
         </form>
+        <div id="gpswiss_desc_autorun_status" style="margin-top:10px;padding:10px;background:#f6f7f7;">
+            <strong>Status:</strong> <span data-k="status">stopped</span> |
+            Started at: <span data-k="started_at">-</span> |
+            Duration: <span data-k="duration_seconds">0</span>s |
+            Current after_product_id: <span data-k="current_after_product_id">0</span> |
+            Last next_after_product_id: <span data-k="last_next_after_product_id">0</span><br>
+            Total scanned: <span data-k="total_scanned">0</span> |
+            Total with ovoko_id: <span data-k="total_with_ovoko_id">0</span> |
+            Total updated: <span data-k="total_updated">0</span> |
+            Total old_allegro_description_removed: <span data-k="total_old_allegro_removed">0</span> |
+            Total missing_ovoko_id: <span data-k="total_missing_ovoko_id">0</span> |
+            Total ovoko_listing_text_missing: <span data-k="total_listing_missing">0</span> |
+            Total errors: <span data-k="total_errors">0</span><br>
+            Last safe next_after_product_id: <span data-k="last_safe_next_after_product_id">0</span>
+        </div>
+        <pre id="gpswiss_desc_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">

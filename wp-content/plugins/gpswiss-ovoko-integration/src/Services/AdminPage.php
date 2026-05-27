@@ -53,6 +53,7 @@ class AdminPage
         add_action('wp_ajax_gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment', [$this, 'handle_bulk_allegro_to_ovoko_details_enrichment']);
         add_action('admin_post_gpswiss_ovoko_single_enrichment_dry_run', [$this, 'handle_single_enrichment_dry_run']);
         add_action('admin_post_gpswiss_ovoko_update_description_from_listing_text', [$this, 'handle_update_description_from_listing_text']);
+        add_action('wp_ajax_gpswiss_ovoko_update_description_from_listing_text', [$this, 'handle_update_description_from_listing_text_ajax']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
 
@@ -82,6 +83,8 @@ class AdminPage
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment'),
             'action' => 'gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment',
+            'descriptionNonce' => wp_create_nonce('gpswiss_ovoko_update_description_from_listing_text'),
+            'descriptionAction' => 'gpswiss_ovoko_update_description_from_listing_text',
         ]);
     }
 
@@ -266,6 +269,33 @@ class AdminPage
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 60);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
+    }
+
+    public function handle_update_description_from_listing_text_ajax(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403);
+        }
+        check_ajax_referer('gpswiss_ovoko_update_description_from_listing_text');
+
+        $options = [
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'ovoko_id' => sanitize_text_field((string) ($_POST['ovoko_id'] ?? '')),
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
+            'dry_run' => !empty($_POST['dry_run']),
+            'update_only_empty_description' => !empty($_POST['update_only_empty_description']),
+            'replace_existing_description' => !empty($_POST['replace_existing_description']),
+            'save_to_meta_only' => !empty($_POST['save_to_meta_only']),
+            'prepend_to_existing_description' => !empty($_POST['prepend_to_existing_description']),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
+            'listing_text_meta_key' => sanitize_key((string) ($_POST['listing_text_meta_key'] ?? '_ovoko_listing_text')),
+        ];
+
+        $result = $this->service->update_woo_description_from_ovoko_listing_text($options);
+        $result['done'] = empty($result['next_after_product_id']) || ((int) ($result['next_after_product_id'] ?? 0) <= (int) ($result['after_product_id'] ?? 0)) || empty($result['results']);
+        wp_send_json($result);
     }
 
     public function handle_probe_ovoko_image_url_variants(): void
