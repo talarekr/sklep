@@ -2549,15 +2549,39 @@ class OvokoIntegrationService
         if ($isContentEmpty) $counts['woo_description_empty']++;
         $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prepend;
         $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : 'update_post_content');
-        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload];
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload,'description_updated_verified'=>false,'wp_update_post_result'=>null,'wp_update_post_error'=>null,'post_content_source_field'=>'post_content','post_content_before_length'=>mb_strlen($currentContent),'post_content_after_length'=>mb_strlen($currentContent),'post_content_before_preview'=>mb_substr($currentContent, 0, 240),'post_content_after_preview'=>mb_substr($currentContent, 0, 240),'attempted_post_content_length'=>0,'post_content_after_contains_listing_text'=>false,'write_target_product_id'=>$productId,'write_target_ovoko_id'=>$ovokoId];
         if ($dryRun || $listingText === '') return $result;
         if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
         elseif ($shouldSkipExisting) { $counts['skipped_existing_description']++; }
         else {
             $newContent = $prepend && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
+            $result['attempted_post_content_length'] = mb_strlen($newContent);
             $update = wp_update_post(['ID'=>$productId,'post_content'=>$newContent], true);
-            if (is_wp_error($update)) { $counts['errors']++; $result['ok'] = false; $result['reason'] = 'woo_update_failed'; $result['error'] = $update->get_error_message(); }
-            else { $counts['description_updated']++; }
+            if (is_wp_error($update)) {
+                $counts['errors']++;
+                $result['ok'] = false;
+                $result['reason'] = 'woo_update_failed';
+                $result['error'] = $update->get_error_message();
+                $result['woo_write_error'] = true;
+                $result['error_message'] = $update->get_error_message();
+                $result['wp_update_post_error'] = $update->get_error_message();
+            } else {
+                $result['wp_update_post_result'] = (int) $update;
+                $afterContent = (string) get_post_field('post_content', $productId);
+                $containsListingText = $listingText !== '' && strpos($afterContent, $listingText) !== false;
+                $containsFallbackFragment = strpos($afterContent, 'SILNIK KOMPLETNY') !== false;
+                $verified = $containsListingText || $containsFallbackFragment;
+                $result['post_content_after_length'] = mb_strlen($afterContent);
+                $result['post_content_after_preview'] = mb_substr($afterContent, 0, 240);
+                $result['post_content_after_contains_listing_text'] = $verified;
+                $result['description_updated_verified'] = $verified;
+                if ($verified) {
+                    $counts['description_updated']++;
+                } else {
+                    $result['ok'] = false;
+                    $result['warning'] = 'post_content_write_not_verified';
+                }
+            }
         }
         $result['counts'] = $counts;
         return $result;
