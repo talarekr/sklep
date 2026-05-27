@@ -1935,15 +1935,15 @@ class OvokoIntegrationService
 
     private function stream_missing_ovoko_id_report_rows($out): array
     {
-        $batchSize = 200;
+        $batchSize = max(1, (int) ($_GET['batch_size'] ?? 50));
         $startAfterProductId = max(0, (int) ($_GET['start_after_product_id'] ?? 0));
-        $maxToProcess = max(0, (int) ($_GET['limit'] ?? 0));
+        $isBatchOnly = !empty($_GET['batch_only']) || !empty($_GET['missing_ovoko_batch_only']);
+        $maxToProcess = max(0, (int) ($_GET['limit'] ?? ($isBatchOnly ? 500 : 0)));
         $processedInRequest = 0;
 
         $settings = $this->get_settings();
         $csvMap = (array) ($settings['ovoko_csv_mapping'] ?? []);
         $summary = ['total_products_checked' => 0, 'products_with_ovoko_id' => 0, 'products_missing_ovoko_id' => 0, 'missing_allegro_id_count' => 0, 'no_csv_match_count' => 0, 'not_allegro_product_count' => 0, 'ovoko_id_conflict_count' => 0, 'api_error_count' => 0, 'unknown_count' => 0];
-        $metaKeysToPrime = ['ovoko_id', '_ovoko_part_id', '_allegro_offer_id', 'allegro_offer_id', '_awi_offer_id', '_awi_source', 'source', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason', '_last_sync_action', '_last_sync_error', '_last_sync_skip_reason', 'skip_reason', 'error', '_sku'];
         $lastId = $startAfterProductId;
 
         fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason']);
@@ -1951,49 +1951,50 @@ class OvokoIntegrationService
         global $wpdb;
 
         do {
-            $ids = $wpdb->get_col($wpdb->prepare(
-                "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT ID, post_title, post_status FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
                 'product',
                 $lastId,
                 $batchSize
-            ));
+            ), ARRAY_A);
 
-            $ids = array_map('intval', (array) $ids);
-            if (empty($ids)) {
+            $rows = (array) $rows;
+            if (empty($rows)) {
                 break;
             }
 
-            if (function_exists('update_meta_cache')) {
-                update_meta_cache('post', $ids);
-            }
+            error_log(sprintf('[gpswiss_ovoko_export_missing_batch_start] batch_start_last_id=%d batch_count=%d processed_total=%d mem=%d peak=%d', $lastId, count($rows), $summary['total_products_checked'], memory_get_usage(true), memory_get_peak_usage(true)));
 
-            foreach ($ids as $productId) {
+            foreach ($rows as $row) {
+                $productId = (int) ($row['ID'] ?? 0);
+                if ($productId <= 0) {
+                    continue;
+                }
                 $lastId = $productId;
                 $summary['total_products_checked']++;
                 $processedInRequest++;
 
-                $ovokoId = sanitize_text_field((string) get_post_meta($productId, 'ovoko_id', true));
-                $ovokoPartId = sanitize_text_field((string) get_post_meta($productId, '_ovoko_part_id', true));
+                $ovokoId = $this->read_post_meta_single_sql($productId, 'ovoko_id');
+                $ovokoPartId = $this->read_post_meta_single_sql($productId, '_ovoko_part_id');
                 if ($ovokoId !== '' || $ovokoPartId !== '') {
                     $summary['products_with_ovoko_id']++;
-                    $this->clear_product_caches($productId, $metaKeysToPrime);
+                    $this->clear_product_caches($productId);
                     continue;
                 }
                 $summary['products_missing_ovoko_id']++;
 
-                $audit = $this->collect_allegro_product_context($productId, true);
-                $allegroId = sanitize_text_field((string) ($audit['allegro_offer_id'] ?? ''));
-                if ($allegroId === '' && !empty($audit['detected_allegro_meta_keys'])) {
-                    $allegroId = sanitize_text_field((string) reset($audit['detected_allegro_meta_keys']));
-                }
+                $allegroId = $this->read_first_meta_value_sql($productId, ['_allegro_offer_id', 'allegro_offer_id', '_awi_offer_id']);
+                $awiSource = strtolower($this->read_first_meta_value_sql($productId, ['_awi_source', 'source']));
 
-                $lastAction = $this->read_first_meta_value($productId, ['last_sync_action', '_last_sync_action']);
-                $lastError = $this->read_first_meta_value($productId, ['last_sync_error', '_last_sync_error', 'error']);
-                $lastSkip = $this->read_first_meta_value($productId, ['last_sync_skip_reason', '_last_sync_skip_reason', 'skip_reason']);
+                $lastAction = $this->read_first_meta_value_sql($productId, ['last_sync_action']);
+                $lastError = $this->read_first_meta_value_sql($productId, ['last_sync_error']);
+                $lastSkip = $this->read_first_meta_value_sql($productId, ['last_sync_skip_reason']);
 
                 $reason = 'unknown';
                 if ($allegroId === '') {
                     $reason = 'missing_allegro_id';
+                } elseif (str_contains($awiSource, 'allegro') === false && str_contains($lastSkip, 'not_allegro_product')) {
+                    $reason = 'not_allegro_product';
                 } elseif (str_contains($lastSkip, 'not_allegro_product')) {
                     $reason = 'not_allegro_product';
                 } elseif (str_contains($lastSkip, 'ovoko_id_conflict')) {
@@ -2011,9 +2012,9 @@ class OvokoIntegrationService
 
                 fputcsv($out, [
                     (string) $productId,
-                    sanitize_text_field((string) get_post_meta($productId, '_sku', true)),
-                    (string) get_post_field('post_title', $productId),
-                    (string) get_post_field('post_status', $productId),
+                    $this->read_post_meta_single_sql($productId, '_sku'),
+                    sanitize_text_field((string) ($row['post_title'] ?? '')),
+                    sanitize_text_field((string) ($row['post_status'] ?? '')),
                     $allegroId,
                     $ovokoId,
                     $ovokoPartId,
@@ -2023,7 +2024,7 @@ class OvokoIntegrationService
                     $lastSkip,
                 ]);
 
-                $this->clear_product_caches($productId, $metaKeysToPrime);
+                $this->clear_product_caches($productId);
 
                 if ($processedInRequest % 500 === 0) {
                     error_log(sprintf('[gpswiss_ovoko_export_missing] processed=%d missing_count=%d last_id=%d mem=%d peak=%d', $summary['total_products_checked'], $summary['products_missing_ovoko_id'], $lastId, memory_get_usage(true), memory_get_peak_usage(true)));
@@ -2036,16 +2037,44 @@ class OvokoIntegrationService
                 }
             }
 
-            unset($ids);
+            if (function_exists('wp_cache_flush_runtime')) {
+                wp_cache_flush_runtime();
+            }
+            unset($rows);
             if (function_exists('gc_collect_cycles')) {
                 gc_collect_cycles();
             }
+            error_log(sprintf('[gpswiss_ovoko_export_missing_batch_end] batch_start_last_id=%d batch_count=%d processed_total=%d mem=%d peak=%d', $lastId, $batchSize, $summary['total_products_checked'], memory_get_usage(true), memory_get_peak_usage(true)));
         } while (true);
 
         $summary['export_start_after_product_id'] = $startAfterProductId;
         $summary['export_limit'] = $maxToProcess;
         $summary['last_processed_product_id'] = $lastId;
         return $summary;
+    }
+
+    private function read_post_meta_single_sql(int $productId, string $metaKey): string
+    {
+        global $wpdb;
+        $value = $wpdb->get_var($wpdb->prepare(
+            "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s LIMIT 1",
+            $productId,
+            $metaKey
+        ));
+
+        return sanitize_text_field((string) $value);
+    }
+
+    private function read_first_meta_value_sql(int $productId, array $keys): string
+    {
+        foreach ($keys as $key) {
+            $value = $this->read_post_meta_single_sql($productId, (string) $key);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     private function clear_product_caches(int $productId, array $metaKeysToClear = []): void
