@@ -1899,100 +1899,163 @@ class OvokoIntegrationService
 
     public function export_missing_ovoko_id_report_csv(): void
     {
-        $report = $this->build_missing_ovoko_id_report();
-        nocache_headers();
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename=woo_products_missing_ovoko_id.csv');
-        $out = fopen('php://output', 'wb');
-        if ($out === false) {
-            wp_die('Cannot open CSV output stream.');
-        }
+        try {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(0);
+            }
 
-        fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason']);
-        foreach ((array) ($report['rows'] ?? []) as $row) {
-            fputcsv($out, [
-                (string) ($row['product_id'] ?? ''),
-                (string) ($row['sku'] ?? ''),
-                (string) ($row['title'] ?? ''),
-                (string) ($row['status'] ?? ''),
-                (string) ($row['allegro_id'] ?? ''),
-                (string) ($row['ovoko_id'] ?? ''),
-                (string) ($row['_ovoko_part_id'] ?? ''),
-                (string) ($row['reason'] ?? ''),
-                (string) ($row['last_sync_action'] ?? ''),
-                (string) ($row['last_sync_error'] ?? ''),
-                (string) ($row['last_sync_skip_reason'] ?? ''),
-            ]);
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
+            nocache_headers();
+            header('Content-Type: text/csv; charset=utf-8');
+            header('Content-Disposition: attachment; filename="woo_products_missing_ovoko_id.csv"');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+
+            $out = fopen('php://output', 'wb');
+            if ($out === false) {
+                wp_die('Cannot open CSV output stream.');
+            }
+
+            $summary = $this->stream_missing_ovoko_id_report_rows($out);
+
+            fputcsv($out, []);
+            foreach ((array) $summary as $key => $value) {
+                fputcsv($out, [(string) $key, (string) $value]);
+            }
+
+            fclose($out);
+            exit;
+        } catch (\Throwable $e) {
+            wp_die('Export failed: ' . esc_html($e->getMessage()));
         }
-        fputcsv($out, []);
-        foreach ((array) ($report['summary'] ?? []) as $key => $value) {
-            fputcsv($out, [(string) $key, (string) $value]);
-        }
-        fclose($out);
     }
 
-    private function build_missing_ovoko_id_report(): array
+    private function stream_missing_ovoko_id_report_rows($out): array
     {
-        $ids = get_posts(['post_type' => 'product', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids']);
+        $batchSize = 200;
+        $startAfterProductId = max(0, (int) ($_GET['start_after_product_id'] ?? 0));
+        $maxToProcess = max(0, (int) ($_GET['limit'] ?? 0));
+        $processedInRequest = 0;
+
         $settings = $this->get_settings();
         $csvMap = (array) ($settings['ovoko_csv_mapping'] ?? []);
-        $rows = [];
         $summary = ['total_products_checked' => 0, 'products_with_ovoko_id' => 0, 'products_missing_ovoko_id' => 0, 'missing_allegro_id_count' => 0, 'no_csv_match_count' => 0, 'not_allegro_product_count' => 0, 'ovoko_id_conflict_count' => 0, 'api_error_count' => 0, 'unknown_count' => 0];
+        $metaKeysToPrime = ['ovoko_id', '_ovoko_part_id', '_allegro_offer_id', 'allegro_offer_id', '_awi_offer_id', '_awi_source', 'source', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason', '_last_sync_action', '_last_sync_error', '_last_sync_skip_reason', 'skip_reason', 'error', '_sku'];
+        $lastId = $startAfterProductId;
 
-        foreach ((array) $ids as $id) {
-            $productId = (int) $id;
-            $summary['total_products_checked']++;
-            $ovokoId = sanitize_text_field((string) get_post_meta($productId, 'ovoko_id', true));
-            $ovokoPartId = sanitize_text_field((string) get_post_meta($productId, '_ovoko_part_id', true));
-            if ($ovokoId !== '' || $ovokoPartId !== '') {
-                $summary['products_with_ovoko_id']++;
-                continue;
+        fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason']);
+
+        global $wpdb;
+
+        do {
+            $ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+                'product',
+                $lastId,
+                $batchSize
+            ));
+
+            $ids = array_map('intval', (array) $ids);
+            if (empty($ids)) {
+                break;
             }
-            $summary['products_missing_ovoko_id']++;
 
-            $audit = $this->collect_allegro_product_context($productId, true);
-            $allegroId = sanitize_text_field((string) ($audit['allegro_offer_id'] ?? ''));
-            if ($allegroId === '' && !empty($audit['detected_allegro_meta_keys'])) {
-                $allegroId = sanitize_text_field((string) reset($audit['detected_allegro_meta_keys']));
+            if (function_exists('update_meta_cache')) {
+                update_meta_cache('post', $ids);
             }
 
-            $lastAction = $this->read_first_meta_value($productId, ['last_sync_action', '_last_sync_action']);
-            $lastError = $this->read_first_meta_value($productId, ['last_sync_error', '_last_sync_error', 'error']);
-            $lastSkip = $this->read_first_meta_value($productId, ['last_sync_skip_reason', '_last_sync_skip_reason', 'skip_reason']);
+            foreach ($ids as $productId) {
+                $lastId = $productId;
+                $summary['total_products_checked']++;
+                $processedInRequest++;
 
-            $reason = 'unknown';
-            if ($allegroId === '') {
-                $reason = 'missing_allegro_id';
-            } elseif (str_contains($lastSkip, 'not_allegro_product')) {
-                $reason = 'not_allegro_product';
-            } elseif (str_contains($lastSkip, 'ovoko_id_conflict')) {
-                $reason = 'ovoko_id_conflict';
-            } elseif (str_contains($lastSkip, 'api_error') || $lastError !== '') {
-                $reason = 'api_error';
-            } else {
-                $csvEntries = (array) ($csvMap[strtolower($allegroId)] ?? []);
-                if (empty($csvEntries)) {
-                    $reason = 'no_csv_match';
+                $ovokoId = sanitize_text_field((string) get_post_meta($productId, 'ovoko_id', true));
+                $ovokoPartId = sanitize_text_field((string) get_post_meta($productId, '_ovoko_part_id', true));
+                if ($ovokoId !== '' || $ovokoPartId !== '') {
+                    $summary['products_with_ovoko_id']++;
+                    $this->clear_product_caches($productId, $metaKeysToPrime);
+                    continue;
+                }
+                $summary['products_missing_ovoko_id']++;
+
+                $audit = $this->collect_allegro_product_context($productId, true);
+                $allegroId = sanitize_text_field((string) ($audit['allegro_offer_id'] ?? ''));
+                if ($allegroId === '' && !empty($audit['detected_allegro_meta_keys'])) {
+                    $allegroId = sanitize_text_field((string) reset($audit['detected_allegro_meta_keys']));
+                }
+
+                $lastAction = $this->read_first_meta_value($productId, ['last_sync_action', '_last_sync_action']);
+                $lastError = $this->read_first_meta_value($productId, ['last_sync_error', '_last_sync_error', 'error']);
+                $lastSkip = $this->read_first_meta_value($productId, ['last_sync_skip_reason', '_last_sync_skip_reason', 'skip_reason']);
+
+                $reason = 'unknown';
+                if ($allegroId === '') {
+                    $reason = 'missing_allegro_id';
+                } elseif (str_contains($lastSkip, 'not_allegro_product')) {
+                    $reason = 'not_allegro_product';
+                } elseif (str_contains($lastSkip, 'ovoko_id_conflict')) {
+                    $reason = 'ovoko_id_conflict';
+                } elseif (str_contains($lastSkip, 'api_error') || $lastError !== '') {
+                    $reason = 'api_error';
+                } else {
+                    $csvEntries = (array) ($csvMap[strtolower($allegroId)] ?? []);
+                    if (empty($csvEntries)) {
+                        $reason = 'no_csv_match';
+                    }
+                }
+
+                $summary[$reason . '_count'] = (int) ($summary[$reason . '_count'] ?? 0) + 1;
+
+                fputcsv($out, [
+                    (string) $productId,
+                    sanitize_text_field((string) get_post_meta($productId, '_sku', true)),
+                    (string) get_post_field('post_title', $productId),
+                    (string) get_post_field('post_status', $productId),
+                    $allegroId,
+                    $ovokoId,
+                    $ovokoPartId,
+                    $reason,
+                    $lastAction,
+                    $lastError,
+                    $lastSkip,
+                ]);
+
+                $this->clear_product_caches($productId, $metaKeysToPrime);
+
+                if ($processedInRequest % 500 === 0) {
+                    error_log(sprintf('[gpswiss_ovoko_export_missing] processed=%d missing_count=%d last_id=%d mem=%d peak=%d', $summary['total_products_checked'], $summary['products_missing_ovoko_id'], $lastId, memory_get_usage(true), memory_get_peak_usage(true)));
+                }
+
+                if ($maxToProcess > 0 && $processedInRequest >= $maxToProcess) {
+                    $summary['partial_export'] = 1;
+                    $summary['next_start_after_product_id'] = $lastId;
+                    break 2;
                 }
             }
 
-            $summary[$reason . '_count'] = (int) ($summary[$reason . '_count'] ?? 0) + 1;
-            $post = get_post($productId);
-            $rows[] = [
-                'product_id' => $productId,
-                'sku' => sanitize_text_field((string) get_post_meta($productId, '_sku', true)),
-                'title' => $post ? (string) $post->post_title : '',
-                'status' => $post ? (string) $post->post_status : '',
-                'allegro_id' => $allegroId,
-                'ovoko_id' => $ovokoId,
-                '_ovoko_part_id' => $ovokoPartId,
-                'reason' => $reason,
-                'last_sync_action' => $lastAction,
-                'last_sync_error' => $lastError,
-                'last_sync_skip_reason' => $lastSkip,
-            ];
+            unset($ids);
+            if (function_exists('gc_collect_cycles')) {
+                gc_collect_cycles();
+            }
+        } while (true);
+
+        $summary['export_start_after_product_id'] = $startAfterProductId;
+        $summary['export_limit'] = $maxToProcess;
+        $summary['last_processed_product_id'] = $lastId;
+        return $summary;
+    }
+
+    private function clear_product_caches(int $productId, array $metaKeysToClear = []): void
+    {
+        clean_post_cache($productId);
+        wp_cache_delete($productId, 'post_meta');
+
+        foreach ($metaKeysToClear as $metaKey) {
+            wp_cache_delete($productId . ':' . $metaKey, 'post_meta');
         }
-        return ['rows' => $rows, 'summary' => $summary];
     }
 
     private function read_first_meta_value(int $productId, array $keys): string
