@@ -2480,7 +2480,7 @@ class OvokoIntegrationService
         $stopOnError = !empty($options['stop_on_error']);
         $showFullPayloadDebug = !empty($options['show_full_ovoko_part_payload_for_description_debug']);
         $metaKey = sanitize_key((string) ($options['listing_text_meta_key'] ?? '_ovoko_listing_text'));
-        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'already_contains_listing_text'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
+        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'already_contains_listing_text'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'old_allegro_description_removed'=>0,'errors'=>0];
 
         $productIds = [];
         if ($productId > 0) {
@@ -2550,14 +2550,23 @@ class OvokoIntegrationService
         $normalizedListingText = $this->normalize_description_text_for_compare($listingText);
         $normalizedCurrentContent = $this->normalize_description_text_for_compare($currentContent);
         $alreadyContainsListingText = $normalizedListingText !== '' && $normalizedCurrentContent !== '' && strpos($normalizedCurrentContent, $normalizedListingText) !== false;
-        $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prepend;
-        $shouldSkipBecauseAlreadyContains = !$saveToMetaOnly && !$isContentEmpty && $prepend && $alreadyContainsListingText;
-        $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : 'update_post_content');
+        $hasWitamOfertaDotyczy = stripos($currentContent, 'Witam oferta dotyczy:') !== false;
+        $containsOldAllegroTextBefore = $hasWitamOfertaDotyczy;
+        $replaceMode = $replaceExisting && !$saveToMetaOnly;
+        $prependEffective = $replaceMode ? false : $prepend;
+        $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prependEffective;
+        $shouldSkipBecauseAlreadyContains = !$saveToMetaOnly && !$isContentEmpty && $prependEffective && $alreadyContainsListingText;
+        $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : ($replaceMode ? 'replace_post_content_from_ovoko' : 'update_post_content'));
         if ($shouldSkipBecauseAlreadyContains) {
             $plannedAction = 'already_contains_listing_text';
         }
-        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload,'description_updated_verified'=>false,'wp_update_post_result'=>null,'wp_update_post_error'=>null,'post_content_source_field'=>'post_content','post_content_before_length'=>mb_strlen($currentContent),'post_content_after_length'=>mb_strlen($currentContent),'post_content_before_preview'=>mb_substr($currentContent, 0, 240),'post_content_after_preview'=>mb_substr($currentContent, 0, 240),'attempted_post_content_length'=>0,'post_content_after_contains_listing_text'=>$alreadyContainsListingText,'write_target_product_id'=>$productId,'write_target_ovoko_id'=>$ovokoId];
-        if ($dryRun || $listingText === '') return $result;
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'prepend_to_existing_description_effective'=>$prependEffective,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload,'description_updated_verified'=>false,'wp_update_post_result'=>null,'wp_update_post_error'=>null,'post_content_source_field'=>'post_content','post_content_before_length'=>mb_strlen($currentContent),'post_content_after_length'=>mb_strlen($currentContent),'post_content_before_preview'=>mb_substr($currentContent, 0, 240),'post_content_after_preview'=>mb_substr($currentContent, 0, 240),'attempted_post_content_length'=>0,'post_content_after_contains_listing_text'=>$alreadyContainsListingText,'post_content_after_contains_old_allegro_text'=>$containsOldAllegroTextBefore,'current_post_content_preview'=>mb_substr($currentContent, 0, 240),'planned_new_post_content_preview'=>mb_substr($listingText, 0, 240),'current_length'=>mb_strlen($currentContent),'new_length'=>mb_strlen($listingText),'contains_witam_oferta_dotyczy'=>$hasWitamOfertaDotyczy,'old_allegro_description_will_be_removed'=>$replaceMode && $listingText !== '' && !$isContentEmpty,'write_target_product_id'=>$productId,'write_target_ovoko_id'=>$ovokoId];
+        if ($listingText === '') {
+            $result['planned_action'] = 'skip_ovoko_listing_text_missing';
+            $result['reason'] = 'ovoko_listing_text_missing';
+            return $result;
+        }
+        if ($dryRun) return $result;
         if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
         elseif ($shouldSkipExisting) { $counts['skipped_existing_description']++; }
         elseif ($shouldSkipBecauseAlreadyContains) {
@@ -2567,7 +2576,7 @@ class OvokoIntegrationService
             $result['skipped_verified'] = true;
         }
         else {
-            $newContent = $prepend && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
+            $newContent = $prependEffective && !$isContentEmpty ? trim($listingText . "\n\n" . $currentContent) : $listingText;
             $result['attempted_post_content_length'] = mb_strlen($newContent);
             $update = wp_update_post(['ID'=>$productId,'post_content'=>$newContent], true);
             if (is_wp_error($update)) {
@@ -2582,12 +2591,14 @@ class OvokoIntegrationService
                 $result['wp_update_post_result'] = (int) $update;
                 $afterContent = (string) get_post_field('post_content', $productId);
                 $containsListingText = $listingText !== '' && strpos($afterContent, $listingText) !== false;
-                $containsFallbackFragment = strpos($afterContent, 'SILNIK KOMPLETNY') !== false;
-                $verified = $containsListingText || $containsFallbackFragment;
+                $containsOldAllegroTextAfter = stripos($afterContent, 'Witam oferta dotyczy:') !== false;
+                $verified = $replaceMode ? ($afterContent === $listingText) : $containsListingText;
                 $result['post_content_after_length'] = mb_strlen($afterContent);
                 $result['post_content_after_preview'] = mb_substr($afterContent, 0, 240);
-                $result['post_content_after_contains_listing_text'] = $verified;
-                $result['description_updated_verified'] = $verified;
+                $result['post_content_after_contains_listing_text'] = $containsListingText;
+                $result['post_content_after_contains_old_allegro_text'] = $containsOldAllegroTextAfter;
+                $result['description_updated_verified'] = $verified && !$containsOldAllegroTextAfter;
+                if ($replaceMode && !$containsOldAllegroTextAfter && $containsOldAllegroTextBefore) { $counts['old_allegro_description_removed']++; }
                 if ($verified) {
                     $counts['description_updated']++;
                 } else {
