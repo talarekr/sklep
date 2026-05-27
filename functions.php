@@ -2014,10 +2014,10 @@ function gp_render_ovoko_description_and_details_tab(): void
     $descriptionHtml = '';
     $descriptionSource = 'none';
     if ($postContentNormalized !== '') {
-        $descriptionHtml = apply_filters('the_content', $postContent);
+        $descriptionHtml = gp_prepare_ovoko_listing_description_html($postContent);
         $descriptionSource = 'post_content';
     } elseif ($ovokoListingTextNormalized !== '') {
-        $descriptionHtml = apply_filters('the_content', $ovokoListingText);
+        $descriptionHtml = gp_prepare_ovoko_listing_description_html($ovokoListingText);
         $descriptionSource = '_ovoko_listing_text_fallback';
     }
     $rows = [];
@@ -2056,6 +2056,19 @@ function gp_render_ovoko_description_and_details_tab(): void
         <?php endif; ?>
     </div>
     <?php
+}
+
+function gp_prepare_ovoko_listing_description_html(string $rawDescription): string
+{
+    $allowedHtml = wp_kses_post($rawDescription);
+    $plainText = wp_strip_all_tags($allowedHtml);
+    $normalizedText = preg_replace('/\s+/u', ' ', $plainText);
+    $normalizedText = is_string($normalizedText) ? trim($normalizedText) : '';
+    if ($normalizedText === '') {
+        return '';
+    }
+
+    return '<div class="gp-ovoko-listing-description"><p>' . esc_html($normalizedText) . '</p></div>';
 }
 
 add_action('pre_get_posts', function (WP_Query $query): void {
