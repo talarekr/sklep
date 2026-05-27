@@ -2612,6 +2612,85 @@ class OvokoIntegrationService
     }
 
 
+
+
+    public function update_woo_categories_from_ovoko(array $options = []): array
+    {
+        $productId = max(0, (int) ($options['product_id'] ?? 0));
+        $afterProductId = max(0, (int) ($options['after_product_id'] ?? 0));
+        $limit = max(1, min(200, (int) ($options['limit'] ?? 10)));
+        $batchSize = max(1, min(200, (int) ($options['batch_size'] ?? 10)));
+        $dryRun = !array_key_exists('dry_run', $options) || !empty($options['dry_run']);
+        $createMissing = !array_key_exists('create_missing_categories', $options) || !empty($options['create_missing_categories']);
+        $replaceExisting = !array_key_exists('replace_existing_categories', $options) || !empty($options['replace_existing_categories']);
+        $stopOnError = !empty($options['stop_on_error']);
+
+        $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0];
+        $productIds = [];
+        if ($productId > 0) { $productIds[] = $productId; }
+        else {
+            $query = new \WP_Query(['post_type'=>'product','post_status'=>['publish','draft','private'],'fields'=>'ids','posts_per_page'=>$limit,'orderby'=>'ID','order'=>'ASC','no_found_rows'=>true,'post__not_in'=>$afterProductId>0?range(1,$afterProductId):[]]);
+            $productIds = array_slice(array_map('intval', (array) $query->posts), 0, $batchSize);
+        }
+        if ($productIds === []) return ['ok'=>true,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'counts'=>$counts,'results'=>[],'after_product_id'=>$afterProductId,'next_after_product_id'=>$afterProductId,'limit'=>$limit,'batch_size'=>$batchSize];
+        $results=[];
+        foreach($productIds as $pid){
+            $counts['total_scanned']++;
+            $single=$this->update_single_woo_category_from_ovoko($pid,$dryRun,$createMissing,$replaceExisting,$counts);
+            $results[]=$single;
+            if (empty($single['ok']) && $stopOnError) break;
+        }
+        return ['ok'=>$counts['errors']===0,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'create_missing_categories'=>$createMissing,'replace_existing_categories'=>$replaceExisting,'after_product_id'=>$afterProductId,'next_after_product_id'=>max($afterProductId,(int) end($productIds)),'limit'=>$limit,'batch_size'=>$batchSize,'results'=>$results,'counts'=>$counts];
+    }
+
+    private function update_single_woo_category_from_ovoko(int $productId, bool $dryRun, bool $createMissing, bool $replaceExisting, array &$counts): array
+    {
+        $product=wc_get_product($productId);
+        if(!$product){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'reason'=>'product_not_found'];}
+        $ovokoId=trim((string)get_post_meta($productId,'_ovoko_part_id',true));
+        if($ovokoId===''){$ovokoId=trim((string)get_post_meta($productId,'ovoko_id',true));}
+        if($ovokoId===''){ $counts['missing_ovoko_id']++; $counts['products_skipped']++; return ['ok'=>false,'product_id'=>$productId,'reason'=>'missing_ovoko_id']; }
+        $counts['with_ovoko_id']++;
+        $client=$this->build_rrr_api_client();
+        if($client===null){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'reason'=>'rrr_api_client_not_initialized'];}
+        $single=$client->preview_fetch_single_part((int)$ovokoId);
+        if(empty($single['ok'])){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'reason'=>'ovoko_fetch_failed','fetch'=>$single];}
+        $payload=(array)($single['payload']??[]);
+        $path=trim((string)($payload['category_title_path']??''));
+        if($path===''){
+            $counts['ovoko_category_missing']++;$counts['products_skipped']++;
+            return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>'','reason'=>'ovoko_category_missing','planned_action'=>'skip'];
+        }
+        $counts['ovoko_category_found']++;
+        $levels=array_values(array_filter(array_map('trim',explode('/',$path)),fn($v)=>$v!==''));
+        $currentTerms=wp_get_post_terms($productId,'product_cat',['fields'=>'all']);
+        $currentCats=[];$currentIds=[];
+        foreach((array)$currentTerms as $t){$currentCats[]=['term_id'=>(int)$t->term_id,'name'=>(string)$t->name,'parent'=>(int)$t->parent];$currentIds[]=(int)$t->term_id;}
+        $hier=[];$missing=[];$parent=0;$finalId=0;$chainOk=true;
+        foreach($levels as $name){
+            $existing=get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'name'=>$name,'parent'=>$parent]);
+            $term=$existing[0]??null;
+            if($term){$counts['categories_existing']++;}
+            else { $missing[]=['name'=>$name,'parent_id'=>$parent]; if(!$dryRun && $createMissing){$created=wp_insert_term($name,'product_cat',['parent'=>$parent]); if(is_wp_error($created)){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'error'=>$created->get_error_message(),'reason'=>'category_create_failed'];} $term=get_term((int)$created['term_id'],'product_cat'); $counts['categories_created']++; } }
+            $hier[]=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0];
+            if(!$term){$chainOk=false;break;}
+            $parent=(int)$term->term_id;$finalId=$parent;
+        }
+        $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false];
+        if($dryRun){return $result;}
+        if(!$chainOk || $finalId<=0){$counts['products_skipped']++;$counts['errors']++;$result['ok']=false;$result['reason']='category_hierarchy_unresolved';return $result;}
+        $setIds=$replaceExisting?[$finalId]:array_values(array_unique(array_merge($currentIds,[$finalId])));
+        $set=wp_set_post_terms($productId,$setIds,'product_cat',false);
+        if(is_wp_error($set)){$counts['errors']++;$result['ok']=false;$result['reason']='product_category_assign_failed';$result['error']=$set->get_error_message();return $result;}
+        $counts['products_categories_updated']++;
+        $afterIds=array_map('intval',wp_get_post_terms($productId,'product_cat',['fields'=>'ids']));
+        $verified=in_array($finalId,$afterIds,true);
+        $result['assigned_term_ids_after']=$afterIds;
+        $result['category_update_verified']=$verified;
+        if($verified){$counts['products_categories_verified']++;} else {$counts['errors']++;}
+        return $result;
+    }
+
     private function build_rrr_api_client(): ?RrrApiClient
     {
         try {
