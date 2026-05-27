@@ -937,6 +937,63 @@ class RrrApiClient
         return $results;
     }
 
+
+    public function test_update_part_place_once(string $partId, string $place): array
+    {
+        $partId = trim($partId);
+        $place = trim($place);
+        $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
+        if ($baseUrl === '') {
+            return ['ok' => false, 'http_status' => null, 'status_code' => '', 'message' => 'Missing RRR base URL'];
+        }
+
+        $endpointPath = '/crm/updatePart';
+        $endpoint = $baseUrl . $endpointPath;
+        $requestParams = [
+            'part_id' => $partId,
+            'place' => $place,
+        ] + $this->get_auth_form_fields();
+
+        $response = wp_remote_post($endpoint, [
+            'timeout' => 20,
+            'body' => $requestParams,
+            'headers' => [
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
+        ]);
+
+        if (is_wp_error($response)) {
+            return [
+                'ok' => false,
+                'endpoint' => $endpoint,
+                'http_status' => null,
+                'raw_response_body' => '',
+                'parsed_json' => null,
+                'status_code' => '',
+                'message' => 'RRR request failed: ' . $response->get_error_code() . ' ' . $response->get_error_message(),
+            ];
+        }
+
+        $httpStatus = (int) wp_remote_retrieve_response_code($response);
+        $rawBody = (string) wp_remote_retrieve_body($response);
+        $parsed = json_decode($rawBody, true);
+        $jsonStatus = is_array($parsed) ? sanitize_text_field((string) ($parsed['status_code'] ?? '')) : '';
+        $apiMessage = is_array($parsed)
+            ? sanitize_text_field((string) ($parsed['message'] ?? $parsed['msg'] ?? $parsed['error'] ?? ''))
+            : 'Non-JSON response';
+
+        return [
+            'ok' => $jsonStatus === 'R200',
+            'endpoint' => $endpoint,
+            'endpoint_path' => $endpointPath,
+            'http_status' => $httpStatus,
+            'raw_response_body' => $rawBody,
+            'parsed_json' => is_array($parsed) ? $parsed : null,
+            'status_code' => $jsonStatus,
+            'message' => $apiMessage,
+        ];
+    }
+
     private function post_form(string $path, array $payload, bool $includeRawPayload = false): array
     {
         $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
