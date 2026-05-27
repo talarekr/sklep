@@ -214,13 +214,13 @@ document.addEventListener('DOMContentLoaded', function () {
   const descLogsEl = $('gpswiss_desc_autorun_logs');
   if (!descForm || !descStatusEl || !descLogsEl) { return; }
 
-  const descState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, current_after_product_id: 0, last_next_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, total_with_ovoko_id: 0, total_updated: 0, total_old_allegro_removed: 0, total_missing_ovoko_id: 0, total_listing_missing: 0, total_errors: 0 };
+  const descState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_next_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, total_with_ovoko_id: 0, total_updated: 0, total_old_allegro_removed: 0, total_missing_ovoko_id: 0, total_listing_missing: 0, total_errors: 0 };
   let descTimer = null;
   let descInFlight = false;
   const descLogRows = [];
 
   const descRender = function () {
-    ['status','started_at','duration_seconds','current_after_product_id','last_next_after_product_id','last_safe_next_after_product_id','total_scanned','total_with_ovoko_id','total_updated','total_old_allegro_removed','total_missing_ovoko_id','total_listing_missing','total_errors']
+    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_next_after_product_id','last_safe_next_after_product_id','total_scanned','total_with_ovoko_id','total_updated','total_old_allegro_removed','total_missing_ovoko_id','total_listing_missing','total_errors']
       .forEach(function (k) {
         const n = descStatusEl.querySelector('[data-k="' + k + '"]');
         if (n) { n.textContent = String(descState[k] || 0); }
@@ -232,7 +232,7 @@ document.addEventListener('DOMContentLoaded', function () {
     descState.duration_seconds = Math.max(0, Math.round((Date.now() - Date.parse(descState.started_at)) / 1000));
   };
   const getFieldNumber = function (name, fallback) {
-    const el = descForm.querySelector('[name="' + name + '"]');
+    const el = descForm.querySelector('#desc_' + name) || descForm.querySelector('[name="' + name + '"]');
     return Math.max(0, parseInt((el && el.value) || String(fallback || 0), 10) || 0);
   };
   const getStopOnError = function () { return !!descForm.querySelector('[name="stop_on_error"]')?.checked; };
@@ -283,6 +283,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const counts = res.counts || {};
     const reqAfter = descState.current_after_product_id;
     const nextAfter = parseInt(res.next_after_product_id || 0, 10);
+    descState.request_after_product_id = reqAfter;
+    descState.response_next_after_product_id = nextAfter;
     descState.total_scanned += parseInt(counts.total_scanned || 0, 10);
     descState.total_with_ovoko_id += parseInt(counts.with_ovoko_id || 0, 10);
     descState.total_updated += parseInt(counts.description_updated || 0, 10);
@@ -292,7 +294,7 @@ document.addEventListener('DOMContentLoaded', function () {
     descState.total_errors += parseInt(counts.errors || 0, 10);
     descState.last_next_after_product_id = nextAfter;
     if (nextAfter > 0) descState.last_safe_next_after_product_id = nextAfter;
-    descLogRows.push({ timestamp: nowIso(), request_after_product_id: reqAfter, response_next_after_product_id: nextAfter, ok: !!res.ok, done: !!res.done, counts: counts, results: res.results || [] });
+    descLogRows.push({ timestamp: nowIso(), form_after_product_id_at_start: descState.start_after_product_id, request_after_product_id: reqAfter, response_next_after_product_id: nextAfter, ok: !!res.ok, done: !!res.done, counts: counts, results: res.results || [] });
 
     const hardStop = !res.ok || parseInt(counts.errors || 0, 10) > 0;
     const doneStop = !!res.done || !nextAfter || nextAfter <= reqAfter || !((res.results || []).length);
@@ -311,7 +313,11 @@ document.addEventListener('DOMContentLoaded', function () {
     descState.status = 'running';
     descState.started_at = nowIso();
     descState.duration_seconds = 0;
-    descState.current_after_product_id = getFieldNumber('after_product_id', 0);
+    const formAfterProductId = getFieldNumber('after_product_id', 0);
+    descState.start_after_product_id = formAfterProductId;
+    descState.request_after_product_id = formAfterProductId;
+    descState.response_next_after_product_id = formAfterProductId;
+    descState.current_after_product_id = formAfterProductId;
     descState.last_next_after_product_id = 0;
     descState.last_safe_next_after_product_id = 0;
     descState.total_scanned = 0; descState.total_with_ovoko_id = 0; descState.total_updated = 0; descState.total_old_allegro_removed = 0; descState.total_missing_ovoko_id = 0; descState.total_listing_missing = 0; descState.total_errors = 0;
