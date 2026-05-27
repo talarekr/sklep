@@ -2478,6 +2478,7 @@ class OvokoIntegrationService
         $prepend = !empty($options['prepend_to_existing_description']);
         $updateOnlyEmpty = !array_key_exists('update_only_empty_description', $options) || !empty($options['update_only_empty_description']);
         $stopOnError = !empty($options['stop_on_error']);
+        $showFullPayloadDebug = !empty($options['show_full_ovoko_part_payload_for_description_debug']);
         $metaKey = sanitize_key((string) ($options['listing_text_meta_key'] ?? '_ovoko_listing_text'));
         $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_listing_text_found'=>0,'ovoko_listing_text_missing'=>0,'woo_description_empty'=>0,'skipped_existing_description'=>0,'description_updated'=>0,'saved_to_meta_only'=>0,'errors'=>0];
 
@@ -2493,14 +2494,14 @@ class OvokoIntegrationService
         $results = [];
         foreach ($productIds as $pid) {
             $counts['total_scanned']++;
-            $singleResult = $this->update_single_woo_description_from_ovoko_listing_text($pid, $overrideOvokoId, $dryRun, $replaceExisting, $saveToMetaOnly, $prepend, $updateOnlyEmpty, $metaKey, $counts);
+            $singleResult = $this->update_single_woo_description_from_ovoko_listing_text($pid, $overrideOvokoId, $dryRun, $replaceExisting, $saveToMetaOnly, $prepend, $updateOnlyEmpty, $metaKey, $showFullPayloadDebug, $counts);
             $results[] = $singleResult;
             if (empty($singleResult['ok']) && $stopOnError) break;
         }
         return ['ok' => $counts['errors'] === 0, 'action_name' => 'Update Woo descriptions from Ovoko listing text', 'dry_run' => $dryRun, 'save_to_meta_only' => $saveToMetaOnly, 'update_only_empty_description' => $updateOnlyEmpty, 'replace_existing_description' => $replaceExisting, 'prepend_to_existing_description' => $prepend, 'limit' => $limit, 'batch_size' => $batchSize, 'after_product_id' => $afterProductId, 'next_after_product_id' => max($afterProductId, (int) end($productIds)), 'results' => $results, 'product_id' => (int) ($results[0]['product_id'] ?? 0), 'ovoko_id' => (string) ($results[0]['ovoko_id'] ?? ''), 'ovoko_listing_text_found' => (bool) ($results[0]['ovoko_listing_text_found'] ?? false), 'ovoko_listing_text_source_key' => (string) ($results[0]['ovoko_listing_text_source_key'] ?? ''), 'ovoko_listing_text' => (string) ($results[0]['ovoko_listing_text'] ?? ''), 'woo_post_content_length' => (int) ($results[0]['woo_post_content_length'] ?? 0), 'woo_short_description_length' => (int) ($results[0]['woo_short_description_length'] ?? 0), 'planned_action' => (string) ($results[0]['planned_action'] ?? ''), 'counts' => $counts];
     }
 
-    private function update_single_woo_description_from_ovoko_listing_text(int $productId, string $overrideOvokoId, bool $dryRun, bool $replaceExisting, bool $saveToMetaOnly, bool $prepend, bool $updateOnlyEmpty, string $metaKey, array &$counts): array
+    private function update_single_woo_description_from_ovoko_listing_text(int $productId, string $overrideOvokoId, bool $dryRun, bool $replaceExisting, bool $saveToMetaOnly, bool $prepend, bool $updateOnlyEmpty, string $metaKey, bool $showFullPayloadDebug, array &$counts): array
     {
         $sourceMethod = __METHOD__;
         $product = wc_get_product($productId);
@@ -2538,6 +2539,7 @@ class OvokoIntegrationService
         }
         $payload = (array) ($single['payload'] ?? []);
         $detected = $this->extract_ovoko_listing_text($payload);
+        $debugPayload = $this->build_ovoko_listing_text_debug($payload, $showFullPayloadDebug);
         $listingText = $detected['text'];
         $listingSource = $detected['source_key'];
         if ($listingText === '') $counts['ovoko_listing_text_missing']++; else $counts['ovoko_listing_text_found']++;
@@ -2547,7 +2549,7 @@ class OvokoIntegrationService
         if ($isContentEmpty) $counts['woo_description_empty']++;
         $shouldSkipExisting = !$isContentEmpty && $updateOnlyEmpty && !$replaceExisting && !$prepend;
         $plannedAction = $saveToMetaOnly ? 'save_to_meta_only' : ($shouldSkipExisting ? 'skip_existing_description' : 'update_post_content');
-        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey];
+        $result = ['ok'=>true,'dry_run'=>$dryRun,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_listing_text_found'=>$listingText !== '','ovoko_listing_text_source_key'=>$listingSource,'ovoko_listing_text'=>$listingText,'ovoko_listing_text_length'=>mb_strlen($listingText),'woo_post_content_length'=>mb_strlen($currentContent),'woo_short_description_length'=>mb_strlen($currentShort),'planned_action'=>$plannedAction,'woo_description_is_empty'=>$isContentEmpty,'replace_existing_description'=>$replaceExisting,'save_to_meta_only'=>$saveToMetaOnly,'prepend_to_existing_description'=>$prepend,'update_only_empty_description'=>$updateOnlyEmpty,'listing_text_meta_key'=>$metaKey,'ovoko_description_debug'=>$debugPayload];
         if ($dryRun || $listingText === '') return $result;
         if ($saveToMetaOnly) { update_post_meta($productId, $metaKey, $listingText); $counts['saved_to_meta_only']++; }
         elseif ($shouldSkipExisting) { $counts['skipped_existing_description']++; }
@@ -2573,14 +2575,94 @@ class OvokoIntegrationService
 
     private function extract_ovoko_listing_text(array $payload): array
     {
-        $candidates = ['announcement_text','listing_text','advert_text','ad_text','text','description','notes','name'];
-        foreach ($candidates as $key) {
-            if (array_key_exists($key, $payload)) {
-                $value = trim((string) $payload[$key]);
-                if ($value !== '') return ['source_key' => $key, 'text' => sanitize_textarea_field($value)];
+        $candidates = [
+            'description','description_text','advert_description','advertisement_description','announcement_description','listing_description',
+            'listing_text','text','content','comment','notes','note','public_description','part_description','seller_description',
+            'ad_text','ad_description','announcement_text','description_for_sale','sale_description','advert_text','name'
+        ];
+
+        $best = ['source_key' => '', 'text' => ''];
+        $walker = static function ($node, string $path = '') use (&$walker, $candidates, &$best): void {
+            if (!is_array($node)) {
+                return;
             }
-        }
-        return ['source_key' => '', 'text' => ''];
+            foreach ($node as $key => $value) {
+                $k = (string) $key;
+                $nextPath = $path === '' ? $k : $path . '.' . $k;
+                if (is_array($value)) {
+                    $walker($value, $nextPath);
+                    continue;
+                }
+                if (!is_scalar($value)) {
+                    continue;
+                }
+                $normalizedKey = strtolower($k);
+                $stringValue = trim((string) $value);
+                if ($stringValue === '') {
+                    continue;
+                }
+                if (in_array($normalizedKey, $candidates, true)) {
+                    if ($best['text'] === '' || mb_strlen($stringValue) > mb_strlen($best['text'])) {
+                        $best = ['source_key' => $nextPath, 'text' => sanitize_textarea_field($stringValue)];
+                    }
+                }
+            }
+        };
+        $walker($payload, '');
+
+        return $best;
+    }
+
+    private function build_ovoko_listing_text_debug(array $payload, bool $showFullPayload): array
+    {
+        $maxDepth = 4;
+        $topLevelKeys = array_values(array_map('strval', array_keys($payload)));
+        $nestedKeys = [];
+        $textFields = [];
+        $phrases = ['SILNIK KOMPLETNY', 'PRZEBIEG', 'PERFECT', 'CENA ZA SILNIK'];
+        $phraseMatches = [];
+
+        $walk = static function ($node, string $path = '', int $depth = 0) use (&$walk, $maxDepth, &$nestedKeys, &$textFields, $phrases, &$phraseMatches): void {
+            if ($depth > $maxDepth || !is_array($node)) return;
+            foreach ($node as $key => $value) {
+                $k = (string) $key;
+                $nextPath = $path === '' ? $k : $path . '.' . $k;
+                $nestedKeys[] = $nextPath;
+                if (is_array($value)) {
+                    $walk($value, $nextPath, $depth + 1);
+                    continue;
+                }
+                if (!is_scalar($value)) continue;
+                $text = trim((string) $value);
+                if (mb_strlen($text) > 10) {
+                    $textFields[] = ['path' => $nextPath, 'value' => $text, 'length' => mb_strlen($text)];
+                }
+                $textUpper = mb_strtoupper($text);
+                foreach ($phrases as $phrase) {
+                    if ($text !== '' && mb_strpos($textUpper, $phrase) !== false) {
+                        $phraseMatches[] = ['found_phrase' => true, 'phrase' => $phrase, 'path' => $nextPath, 'value' => $text];
+                    }
+                }
+            }
+        };
+        $walk($payload, '', 0);
+
+        $integrationMethods = array_values(array_filter(get_class_methods(RrrApiClient::class), static fn($m) => str_starts_with($m, 'preview_') || str_starts_with($m, 'fetch_') || str_contains($m, 'part')));
+
+        return [
+            'show_full_ovoko_part_payload_for_description_debug' => $showFullPayload,
+            'top_level_keys' => $topLevelKeys,
+            'nested_keys_depth_4' => $nestedKeys,
+            'string_fields_length_gt_10' => $textFields,
+            'phrase_search' => [
+                'phrases' => $phrases,
+                'found_phrase' => !empty($phraseMatches),
+                'matches' => $phraseMatches,
+            ],
+            'integration_part_fetch_methods_found' => $integrationMethods,
+            'endpoint_diagnostic_hint' => 'If /get/part/{id} lacks listing text, likely fetched in Ovoko SPA/private endpoint; inspect browser network for fields labeled Tekst ogłoszenia / Opis (treść ogłoszenia).',
+            'full_payload' => $showFullPayload ? $payload : null,
+        ];
     }
 
     private function build_vehicle_label_from_attributes(array $attrs): string
