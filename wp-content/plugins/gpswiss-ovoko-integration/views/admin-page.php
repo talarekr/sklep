@@ -28,6 +28,7 @@ $productActionNames = [
     'Update product cards from Ovoko CSV mapping',
     'Single enrichment dry-run',
     'Apply Allegro to Ovoko details enrichment',
+    'Update Woo descriptions from Ovoko listing text',
 ];
 $hasApiMarkers = isset($noticePayload['status_label']) || isset($noticePayload['tested_endpoint']) || isset($noticePayload['http_status']);
 $hasProductId = !empty($noticePayload['product_id']) || !empty($noticePayload['sample_results'][0]['product_id']);
@@ -249,6 +250,33 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <button class="button" type="button" id="gpswiss_autorun_js_test">Test auto-run JS</button>
         </p>
         <pre id="gpswiss_autorun_logs" style="max-height:260px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px;">
+        <h3>Update Woo descriptions from Ovoko listing text</h3>
+        <p>Updates only Woo description/meta from Ovoko listing text. No price/stock/images/gallery/listing-image/title/status/category/Allegro/eBay/attributes sync changes.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_update_description_from_listing_text'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_update_description_from_listing_text" />
+            <label for="desc_product_id">product_id (optional):</label>
+            <input id="desc_product_id" type="number" min="0" name="product_id" value="0" />
+            <label for="desc_after_product_id">after_product_id:</label>
+            <input id="desc_after_product_id" type="number" min="0" name="after_product_id" value="0" />
+            <label for="desc_limit">limit:</label>
+            <input id="desc_limit" type="number" min="1" max="100" name="limit" value="1" />
+            <label for="desc_batch_size">batch_size:</label>
+            <input id="desc_batch_size" type="number" min="1" max="100" name="batch_size" value="1" />
+            <br><br>
+            <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> dry_run (default true)</label>
+            <label><input type="checkbox" name="save_to_meta_only" value="1" checked="checked" /> save_to_meta_only (default true)</label>
+            <label><input type="checkbox" name="update_only_empty_description" value="1" checked="checked" /> update_only_empty_description (default true)</label>
+            <label><input type="checkbox" name="replace_existing_description" value="1" /> replace_existing_description (default false)</label>
+            <label><input type="checkbox" name="prepend_to_existing_description" value="1" /> prepend_to_existing_description (default false)</label>
+            <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
+            <br><br>
+            <button class="button button-secondary" type="submit" name="dry_run" value="1">Dry run description update</button>
+            <button class="button button-primary" type="submit" name="apply" value="1">Apply description update</button>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">

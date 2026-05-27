@@ -237,10 +237,15 @@ class AdminPage
         $options = [
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'ovoko_id' => sanitize_text_field((string) ($_POST['ovoko_id'] ?? '')),
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
             'dry_run' => !isset($_POST['dry_run']) || !empty($_POST['dry_run']),
+            'update_only_empty_description' => !array_key_exists('update_only_empty_description', $_POST) || !empty($_POST['update_only_empty_description']),
             'replace_existing_description' => !empty($_POST['replace_existing_description']),
             'save_to_meta_only' => !empty($_POST['save_to_meta_only']),
             'prepend_to_existing_description' => !empty($_POST['prepend_to_existing_description']),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
             'listing_text_meta_key' => sanitize_key((string) ($_POST['listing_text_meta_key'] ?? '_ovoko_listing_text')),
         ];
         $result = $this->service->update_woo_description_from_ovoko_listing_text($options);
