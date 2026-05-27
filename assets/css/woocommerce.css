@@ -1585,14 +1585,29 @@
 .gp-ovoko-listing-description {
   width: 100%;
   max-width: 960px;
-  margin: 0 auto 20px;
-  color: #334155;
+  margin: 0 auto 24px;
+  padding: 18px 24px;
+  font-family: inherit;
   font-size: 15px;
   line-height: 1.6;
+  color: inherit;
+  text-align: center;
+  background: #f8fbff;
+  border: 1px solid #dbe5f3;
+  border-radius: 12px;
+  box-sizing: border-box;
 }
 
 .gp-ovoko-listing-description p {
   margin: 0;
+}
+
+@media (max-width: 768px) {
+  .gp-ovoko-listing-description {
+    width: 100%;
+    padding: 14px 16px;
+    text-align: center;
+  }
 }
 
 .gpswiss-product-details__heading {
