@@ -63,6 +63,11 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <?php if (!empty($apiConnection)): ?>
             <details style="display:inline-block; vertical-align:middle;"><summary>Show API test details</summary><pre><?php echo esc_html(wp_json_encode($apiConnection, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
         <?php endif; ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-left:8px;">
+            <?php wp_nonce_field('gpswiss_ovoko_export_missing_ovoko_id'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_export_missing_ovoko_id" />
+            <?php submit_button('Export products missing Ovoko ID', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
     <?php if (!empty($notice)): ?>
