@@ -234,13 +234,20 @@ class AdminPage
             wp_die('Unauthorized');
         }
         check_admin_referer('gpswiss_ovoko_update_description_from_listing_text');
+        $submittedButton = sanitize_key((string) ($_POST['submit_action'] ?? ''));
+        $rawDryRunParam = $_POST['dry_run'] ?? null;
+        $resolvedDryRun = $submittedButton === 'apply' ? false : true;
+        if ($submittedButton !== 'apply' && $submittedButton !== 'dry_run') {
+            $resolvedDryRun = !isset($_POST['dry_run']) || !empty($_POST['dry_run']);
+        }
+
         $options = [
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'ovoko_id' => sanitize_text_field((string) ($_POST['ovoko_id'] ?? '')),
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
             'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
-            'dry_run' => !isset($_POST['dry_run']) || !empty($_POST['dry_run']),
+            'dry_run' => $resolvedDryRun,
             'update_only_empty_description' => !array_key_exists('update_only_empty_description', $_POST) || !empty($_POST['update_only_empty_description']),
             'replace_existing_description' => !empty($_POST['replace_existing_description']),
             'save_to_meta_only' => !empty($_POST['save_to_meta_only']),
@@ -249,6 +256,13 @@ class AdminPage
             'listing_text_meta_key' => sanitize_key((string) ($_POST['listing_text_meta_key'] ?? '_ovoko_listing_text')),
         ];
         $result = $this->service->update_woo_description_from_ovoko_listing_text($options);
+        $result['submitted_button'] = $submittedButton;
+        $result['submit_action'] = $submittedButton;
+        $result['raw_dry_run_param'] = is_scalar($rawDryRunParam) ? (string) $rawDryRunParam : wp_json_encode($rawDryRunParam);
+        $result['resolved_dry_run'] = $resolvedDryRun;
+        $result['save_to_meta_only'] = $options['save_to_meta_only'];
+        $result['replace_existing_description'] = $options['replace_existing_description'];
+        $result['prepend_to_existing_description'] = $options['prepend_to_existing_description'];
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 60);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
