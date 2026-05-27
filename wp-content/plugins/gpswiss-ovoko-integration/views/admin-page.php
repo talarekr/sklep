@@ -312,6 +312,28 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <pre id="gpswiss_desc_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
 
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px;">
+        <h3>Update Woo categories from Ovoko</h3>
+        <p>Source of truth: Ovoko <code>category_title_path</code> by product <code>ovoko_id/_ovoko_part_id</code>. Replaces only product category assignments.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_update_categories_from_ovoko'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_update_categories_from_ovoko" />
+            <label>product_id (optional): <input type="number" min="0" name="product_id" value="0" /></label>
+            <label>after_product_id: <input type="number" min="0" name="after_product_id" value="0" /></label>
+            <label>limit: <input type="number" min="1" max="200" name="limit" value="10" /></label>
+            <label>batch_size: <input type="number" min="1" max="200" name="batch_size" value="10" /></label>
+            <br><br>
+            <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> dry_run (default true)</label>
+            <label><input type="checkbox" name="create_missing_categories" value="1" checked="checked" /> create_missing_categories (default true)</label>
+            <label><input type="checkbox" name="replace_existing_categories" value="1" checked="checked" /> replace_existing_categories (default true)</label>
+            <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
+            <br><br>
+            <button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry run categories update</button>
+            <button class="button button-primary" type="submit" name="submit_action" value="apply">Apply categories update</button>
+        </form>
+    </div>
+
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>CSV mapping</h3>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">

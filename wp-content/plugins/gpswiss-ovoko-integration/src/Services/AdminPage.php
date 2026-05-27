@@ -55,6 +55,8 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_single_enrichment_dry_run', [$this, 'handle_single_enrichment_dry_run']);
         add_action('admin_post_gpswiss_ovoko_update_description_from_listing_text', [$this, 'handle_update_description_from_listing_text']);
         add_action('wp_ajax_gpswiss_ovoko_update_description_from_listing_text', [$this, 'handle_update_description_from_listing_text_ajax']);
+        add_action('admin_post_gpswiss_ovoko_update_categories_from_ovoko', [$this, 'handle_update_categories_from_ovoko']);
+        add_action('wp_ajax_gpswiss_ovoko_update_categories_from_ovoko', [$this, 'handle_update_categories_from_ovoko_ajax']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
 
@@ -303,7 +305,52 @@ class AdminPage
         wp_send_json($result);
     }
 
-    public function handle_probe_ovoko_image_url_variants(): void
+    
+
+    public function handle_update_categories_from_ovoko(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_update_categories_from_ovoko');
+        $submittedButton = sanitize_key((string) ($_POST['submit_action'] ?? ''));
+        $resolvedDryRun = $submittedButton === 'apply' ? false : true;
+        if ($submittedButton !== 'apply' && $submittedButton !== 'dry_run') {
+            $resolvedDryRun = !isset($_POST['dry_run']) || !empty($_POST['dry_run']);
+        }
+        $options = [
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
+            'dry_run' => $resolvedDryRun,
+            'create_missing_categories' => !array_key_exists('create_missing_categories', $_POST) || !empty($_POST['create_missing_categories']),
+            'replace_existing_categories' => !array_key_exists('replace_existing_categories', $_POST) || !empty($_POST['replace_existing_categories']),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
+        ];
+        $result = $this->service->update_woo_categories_from_ovoko($options);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 60);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_update_categories_from_ovoko_ajax(): void
+    {
+        if (!current_user_can('manage_options')) { wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403); }
+        check_ajax_referer('gpswiss_ovoko_update_categories_from_ovoko');
+        $options = [
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
+            'dry_run' => !array_key_exists('dry_run', $_POST) || !empty($_POST['dry_run']),
+            'create_missing_categories' => !array_key_exists('create_missing_categories', $_POST) || !empty($_POST['create_missing_categories']),
+            'replace_existing_categories' => !array_key_exists('replace_existing_categories', $_POST) || !empty($_POST['replace_existing_categories']),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
+        ];
+        $result = $this->service->update_woo_categories_from_ovoko($options);
+        $result['done'] = empty($result['next_after_product_id']) || ((int) ($result['next_after_product_id'] ?? 0) <= (int) ($result['after_product_id'] ?? 0)) || empty($result['results']);
+        wp_send_json($result);
+    }
+public function handle_probe_ovoko_image_url_variants(): void
     {
         if (!current_user_can('manage_options')) {
             wp_die('Unauthorized');
