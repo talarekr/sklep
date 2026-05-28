@@ -61,99 +61,10 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
 };
 
 $all_product_categories = [];
-if (taxonomy_exists('product_cat')) {
-    $motoryzacja_term = get_term_by('slug', sanitize_title('motoryzacja'), 'product_cat');
-
-    if (!$motoryzacja_term instanceof WP_Term) {
-        $motoryzacja_term = get_term_by('name', 'Motoryzacja', 'product_cat');
-    }
-
-    if ($motoryzacja_term instanceof WP_Term) {
-        $is_technical_category = static function (WP_Term $term): bool {
-            $technical_slugs = [
-                'motoryzacja',
-                'czesci-samochodowe',
-            ];
-            $technical_names = [
-                'motoryzacja',
-                'części samochodowe',
-            ];
-
-            if (in_array(sanitize_title($term->slug), $technical_slugs, true)) {
-                return true;
-            }
-
-            return in_array(mb_strtolower(wp_strip_all_tags((string) $term->name)), $technical_names, true);
-        };
-
-        $terms_by_parent = [];
-        $all_terms = get_terms([
-            'taxonomy' => 'product_cat',
-            'hide_empty' => false,
-            'orderby' => 'name',
-            'order' => 'ASC',
-            'fields' => 'all',
-        ]);
-
-        if (is_array($all_terms)) {
-            foreach ($all_terms as $term) {
-                if (!$term instanceof WP_Term) {
-                    continue;
-                }
-
-                $parent_id = (int) $term->parent;
-                if (!isset($terms_by_parent[$parent_id])) {
-                    $terms_by_parent[$parent_id] = [];
-                }
-
-                $terms_by_parent[$parent_id][] = $term;
-            }
-        }
-
-        $queue = [(int) $motoryzacja_term->term_id];
-        $visited = [];
-        $resolved_ids = [];
-
-        while ($queue !== []) {
-            $parent_id = array_shift($queue);
-            if (isset($visited[$parent_id])) {
-                continue;
-            }
-
-            $visited[$parent_id] = true;
-            $children = $terms_by_parent[$parent_id] ?? [];
-
-            foreach ($children as $child) {
-                if (!$child instanceof WP_Term) {
-                    continue;
-                }
-
-                if ($is_technical_category($child)) {
-                    $queue[] = (int) $child->term_id;
-                    continue;
-                }
-
-                if ((int) $child->count > 0) {
-                    $resolved_ids[] = (int) $child->term_id;
-                }
-            }
-        }
-
-        $resolved_ids = array_values(array_unique($resolved_ids));
-
-        if ($resolved_ids !== []) {
-            $all_product_categories = get_terms([
-                'taxonomy' => 'product_cat',
-                'include' => $resolved_ids,
-                'hide_empty' => true,
-                'orderby' => 'name',
-                'order' => 'ASC',
-            ]);
-        }
-    }
-
-    if (is_wp_error($all_product_categories) || !is_array($all_product_categories)) {
-        $all_product_categories = [];
+if (taxonomy_exists('product_cat') && function_exists('gp_get_menu_product_categories')) {
+    $all_product_categories = gp_get_menu_product_categories();
+    if (function_exists('gp_log_product_category_display_debug')) {
+        gp_log_product_category_display_debug('front_menu', $all_product_categories);
     }
 }
 ?>
@@ -273,19 +184,7 @@ if (taxonomy_exists('product_cat')) {
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
                     <ul class="gp-all-cat-dropdown__list">
                         <?php if (!empty($all_product_categories)) : ?>
-                            <?php foreach ($all_product_categories as $category) : ?>
-                                <?php
-                                $category_link = get_term_link($category);
-                                if (is_wp_error($category_link)) {
-                                    continue;
-                                }
-                                ?>
-                                <li>
-                                    <a href="<?php echo esc_url($category_link); ?>">
-                                        <?php echo esc_html($category->name); ?>
-                                    </a>
-                                </li>
-                            <?php endforeach; ?>
+                            <?php if (function_exists('gp_render_all_categories_dropdown_items')) { gp_render_all_categories_dropdown_items($all_product_categories); } ?>
                         <?php else : ?>
                             <li class="gp-all-cat-dropdown__empty"><?php esc_html_e('Brak dostępnych kategorii.', 'gp-clone'); ?></li>
                         <?php endif; ?>
