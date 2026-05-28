@@ -1008,6 +1008,15 @@ class RrrApiClient
                 $nearbyRecords[$k] = $byId[$k];
             }
         }
+        $dynamicTargetDebug = [
+            'category_target_id' => $categoryId,
+            'category_target_search_performed' => true,
+            'category_target_found' => (bool) $target,
+            'category_target_node_if_found' => $target ?: null,
+            'category_target_nearby_records' => $nearbyRecords,
+            'category_target_parent_chain' => [],
+            'category_target_resolved_path' => '',
+        ];
         if (!$target) {
             return [
                 'ok' => false,
@@ -1026,6 +1035,12 @@ class RrrApiClient
                 'category_id_322_found' => $categoryId === 322 ? false : null,
                 'category_id_322_node_if_found' => null,
                 'category_id_322_nearby_records' => $categoryId === 322 ? $nearbyRecords : [],
+                'category_target_search_performed' => $dynamicTargetDebug['category_target_search_performed'],
+                'category_target_found' => $dynamicTargetDebug['category_target_found'],
+                'category_target_node_if_found' => $dynamicTargetDebug['category_target_node_if_found'],
+                'category_target_nearby_records' => $dynamicTargetDebug['category_target_nearby_records'],
+                'category_target_parent_chain' => $dynamicTargetDebug['category_target_parent_chain'],
+                'category_target_resolved_path' => $dynamicTargetDebug['category_target_resolved_path'],
                 'count_nodes_with_id_field' => $countNodesWithIdField,
                 'min_category_id' => $minCategoryId,
                 'max_category_id' => $maxCategoryId,
@@ -1050,6 +1065,8 @@ class RrrApiClient
         $segments = array_values(array_filter(array_map(function ($n): string {
             return trim((string) ($n['pl'] ?? $n['en'] ?? $n['title'] ?? $n['name'] ?? $n['label'] ?? ''));
         }, $chain), static fn($v) => $v !== ''));
+        $dynamicTargetDebug['category_target_parent_chain'] = $chain;
+        $dynamicTargetDebug['category_target_resolved_path'] = implode(' / ', $segments);
 
         return [
             'ok' => !empty($segments),
@@ -1068,6 +1085,12 @@ class RrrApiClient
             'category_id_322_found' => $categoryId === 322 ? true : null,
             'category_id_322_node_if_found' => $categoryId === 322 ? $target : null,
             'category_id_322_nearby_records' => $categoryId === 322 ? $nearbyRecords : [],
+            'category_target_search_performed' => $dynamicTargetDebug['category_target_search_performed'],
+            'category_target_found' => $dynamicTargetDebug['category_target_found'],
+            'category_target_node_if_found' => $dynamicTargetDebug['category_target_node_if_found'],
+            'category_target_nearby_records' => $dynamicTargetDebug['category_target_nearby_records'],
+            'category_target_parent_chain' => $dynamicTargetDebug['category_target_parent_chain'],
+            'category_target_resolved_path' => $dynamicTargetDebug['category_target_resolved_path'],
             'count_nodes_with_id_field' => $countNodesWithIdField,
             'min_category_id' => $minCategoryId,
             'max_category_id' => $maxCategoryId,
@@ -1151,44 +1174,31 @@ class RrrApiClient
         if ($payload === []) {
             return [];
         }
-
-        if (!method_exists($this, 'flatten_nested_fields')) {
-            return [];
-        }
-
-        $flat = $this->flatten_nested_fields($payload, 8, '', 1, 5000);
-        if ($flat === []) {
-            return [];
-        }
-
-        $candidateParents = [];
-        foreach ($flat as $path => $value) {
-            if (preg_match('/^(.*)\.(id|category_id)$/', (string) $path, $m)) {
-                $candidateParents[] = $m[1];
-            }
-        }
         $nodes = [];
-        foreach (array_unique($candidateParents) as $prefix) {
-            $id = (string) ($this->value_from_path($payload, $prefix . '.id') ?? $this->value_from_path($payload, $prefix . '.category_id') ?? '');
+        $list = is_array($payload['list'] ?? null) ? $payload['list'] : [];
+        foreach ($list as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = (string) ($row['id'] ?? $row['category_id'] ?? '');
             if (trim($id) === '') { continue; }
-            $parentId = (string) ($this->value_from_path($payload, $prefix . '.parent_id') ?? $this->value_from_path($payload, $prefix . '.parent') ?? '0');
+            $parentId = (string) ($row['parent_id'] ?? $row['parent'] ?? '0');
             $title = (string) (
-                $this->value_from_path($payload, $prefix . '.pl')
-                ?? $this->value_from_path($payload, $prefix . '.en')
-                ?? $this->value_from_path($payload, $prefix . '.title')
-                ?? $this->value_from_path($payload, $prefix . '.name')
-                ?? $this->value_from_path($payload, $prefix . '.label')
-                ?? $this->value_from_path($payload, $prefix . '.category_title')
+                ($row['pl'] ?? null)
+                ?? ($row['en'] ?? null)
+                ?? ($row['title'] ?? null)
+                ?? ($row['name'] ?? null)
+                ?? ($row['label'] ?? null)
+                ?? ($row['category_title'] ?? null)
                 ?? ''
             );
             $nodes[] = [
                 'id' => sanitize_text_field($id),
                 'parent_id' => sanitize_text_field($parentId),
                 'title' => sanitize_text_field($title),
-                'pl' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.pl') ?? '')),
-                'en' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.en') ?? '')),
-                'level' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.level') ?? '')),
-                'path' => $prefix,
+                'pl' => sanitize_text_field((string) ($row['pl'] ?? '')),
+                'en' => sanitize_text_field((string) ($row['en'] ?? '')),
+                'level' => sanitize_text_field((string) ($row['level'] ?? '')),
             ];
         }
         return $nodes;
