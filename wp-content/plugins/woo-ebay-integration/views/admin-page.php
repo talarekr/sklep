@@ -470,6 +470,14 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <input type="text" name="product_or_sku" placeholder="Product ID or SKU (test: 6084 / GPSW-6084)" required />
             <button class="button button-secondary">Preview eBay.de description template</button>
         </form>
+        <h3>Dry-run eBay.de publish description payload</h3>
+        <p class="description">Builds the same <code>product.description</code> that normal eBay.de export/publish will place in the Inventory Item payload. No eBay API call, no listing creation, no Woo product changes.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_description_template_publish_dry_run'); ?>
+            <input type="hidden" name="action" value="wei_description_template_publish_dry_run" />
+            <input type="text" name="product_or_sku" value="58068" placeholder="Product ID or SKU" required />
+            <button class="button button-secondary">Dry-run publish description payload</button>
+        </form>
         <h3>eBay.de description template update</h3>
         <p class="description"><strong>Disabled for this stage:</strong> only local preview is available. No active eBay listings are updated, no new listings are created, and no eBay/Ovoko API call is made by the preview action.</p>
         <?php if (!empty($listing_quality_audit)): ?>

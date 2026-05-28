@@ -32,6 +32,7 @@ class AdminPage
         add_action('admin_post_wei_basic_specifics_single', [$this, 'basic_specifics_single']);
         add_action('admin_post_wei_description_condition_cleanup_single', [$this, 'description_condition_cleanup_single']);
         add_action('admin_post_wei_description_template_preview', [$this, 'description_template_preview']);
+        add_action('admin_post_wei_description_template_publish_dry_run', [$this, 'description_template_publish_dry_run']);
         add_action('admin_post_wei_description_template_single', [$this, 'description_template_single']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
@@ -2234,6 +2235,33 @@ class AdminPage
         $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
         $res = $this->adapter->preview_ebay_de_description_template($input);
         $this->render_description_template_preview_response($res);
+    }
+
+    public function description_template_publish_dry_run(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_description_template_publish_dry_run');
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $res = $this->adapter->dry_run_ebay_de_publish_description_payload($input);
+        $this->render_description_template_publish_dry_run_response($res);
+    }
+
+    private function render_description_template_publish_dry_run_response(array $res): void
+    {
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        $backUrl = esc_url(admin_url('admin.php?page=woo-ebay'));
+        $payloadExcerpt = (array) ($res['payload_excerpt'] ?? []);
+        unset($res['payload_excerpt']);
+        echo '<div class="wrap" style="font-family:Arial,Helvetica,sans-serif;margin:20px;">';
+        echo '<h1>Safe eBay.de publish description dry-run</h1>';
+        echo '<p><a href="' . $backUrl . '">&larr; Back to Woo eBay Integration</a></p>';
+        echo '<p><strong>Safety:</strong> local payload description dry-run only; no eBay API call, no listing creation, no listing update, no Woo product changes, no Ovoko API call.</p>';
+        echo '<h2>Dry-run checks</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+        echo '<h2>Payload description excerpt</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($payloadExcerpt, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+        echo '</div>';
+        exit;
     }
 
     private function render_description_template_preview_response(array $res): void
