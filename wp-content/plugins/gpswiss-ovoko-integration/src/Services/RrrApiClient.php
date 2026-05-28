@@ -886,6 +886,42 @@ class RrrApiClient
         return ['ok'=>true,'car_id'=>$carId,'endpoints'=>$rows];
     }
 
+    public function probe_category_endpoints(int $categoryId = 0): array
+    {
+        $paths = [
+            '/get/categories','/get/category','/get/category/' . max(1, $categoryId),
+            '/get/part/categories','/get/parts/categories','/get/categories/tree',
+            '/crm/get/categories','/crm/export/categories',
+        ];
+        $v2 = [];
+        foreach ($paths as $path) { $v2[] = '/v2' . $path; }
+        $all = array_values(array_unique(array_merge($paths, $v2)));
+        $rows = [];
+        foreach ($all as $path) {
+            $raw = $this->post_form($path, [], true);
+            $payload = (array) ($raw['payload'] ?? []);
+            $flat = $this->flatten_payload_paths($payload);
+            $matched = [];
+            foreach ($flat as $k => $v) {
+                $lower = strtolower((string) $k);
+                if (str_contains($lower, 'category') || str_contains($lower, 'path') || str_contains($lower, 'breadcrumb')) {
+                    $matched[] = ['path' => $k, 'value' => is_scalar($v) ? sanitize_text_field((string) $v) : gettype($v)];
+                }
+            }
+            $rows[] = [
+                'path' => $path,
+                'http_code' => $raw['http_code'] ?? null,
+                'status_code' => (string) ($raw['status_code'] ?? ''),
+                'success' => !empty($raw['success']),
+                'msg' => (string) ($raw['msg'] ?? ''),
+                'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'category_related_matches' => array_slice($matched, 0, 40),
+                'full_payload_omitted' => true,
+            ];
+        }
+        return ['ok' => true, 'category_id' => $categoryId, 'endpoints' => $rows];
+    }
+
     private function local_confirmed_dictionary_for_car(array $record, string $carId): array
     {
         if ($carId === '378') {
