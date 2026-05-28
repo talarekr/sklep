@@ -355,11 +355,10 @@ document.addEventListener('DOMContentLoaded', function () {
   const catStatusEl = $('gpswiss_cat_autorun_status');
   const catLogsEl = $('gpswiss_cat_autorun_logs');
   if (!catForm || !catStatusEl || !catLogsEl) { return; }
-  const catState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, with_ovoko_id: 0, missing_ovoko_id: 0, ovoko_category_found: 0, ovoko_category_missing: 0, categories_created: 0, categories_existing: 0, products_categories_updated: 0, products_categories_verified: 0, products_skipped: 0, errors: 0, category_after_product_id_element_found: false, category_after_product_id_raw_value: '""', parsed_start_after_product_id: 0, js_asset_version: '', admin_autorun_js_url: '', admin_autorun_js_version: '', categoryAction: '', categoryNonce_present: false, category_run_id: '', csv_log_file: '', csv_download_url: '', csv_total_rows_written: 0 };
+  const catState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, with_ovoko_id: 0, missing_ovoko_id: 0, ovoko_category_found: 0, ovoko_category_missing: 0, categories_created: 0, categories_existing: 0, products_categories_updated: 0, products_categories_verified: 0, products_skipped: 0, errors: 0, category_after_product_id_element_found: false, category_after_product_id_raw_value: '""', parsed_start_after_product_id: 0, js_asset_version: '', admin_autorun_js_url: '', admin_autorun_js_version: '', categoryAction: '', categoryNonce_present: false };
   let catTimer = null; let catInFlight = false; const catLogRows = [];
   const catRender = function () {
-    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_safe_next_after_product_id','total_scanned','with_ovoko_id','missing_ovoko_id','ovoko_category_found','ovoko_category_missing','categories_created','categories_existing','products_categories_updated','products_categories_verified','products_skipped','errors','category_after_product_id_element_found','category_after_product_id_raw_value','parsed_start_after_product_id','js_asset_version','admin_autorun_js_url','admin_autorun_js_version','categoryAction','categoryNonce_present','category_run_id','csv_log_file','csv_download_url','csv_total_rows_written'].forEach(function (k) { const n = catStatusEl.querySelector('[data-k="' + k + '"]'); if (n) n.textContent = String(catState[k] || 0); });
-    const csvLink = catStatusEl.querySelector('[data-k="csv_download_link"]'); if (csvLink) { if (catState.csv_download_url) { csvLink.href = String(catState.csv_download_url); csvLink.style.display = ''; } else { csvLink.style.display = 'none'; } }
+    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_safe_next_after_product_id','total_scanned','with_ovoko_id','missing_ovoko_id','ovoko_category_found','ovoko_category_missing','categories_created','categories_existing','products_categories_updated','products_categories_verified','products_skipped','errors','category_after_product_id_element_found','category_after_product_id_raw_value','parsed_start_after_product_id','js_asset_version','admin_autorun_js_url','admin_autorun_js_version','categoryAction','categoryNonce_present'].forEach(function (k) { const n = catStatusEl.querySelector('[data-k="' + k + '"]'); if (n) n.textContent = String(catState[k] || 0); });
     catLogsEl.textContent = catLogRows.slice(-30).map(function (x) { return JSON.stringify(x); }).join('\n');
   };
   const catUpdateDuration = function () { if (!catState.started_at) { catState.duration_seconds = 0; return; } catState.duration_seconds = Math.max(0, Math.round((Date.now() - Date.parse(catState.started_at)) / 1000)); };
@@ -375,10 +374,6 @@ document.addEventListener('DOMContentLoaded', function () {
     fd.set('create_missing_categories', '1');
     fd.set('replace_existing_categories', '1');
     fd.set('stop_on_error', '1');
-    fd.set('csv_logging_enabled', '1');
-    fd.set('csv_logging_required', '1');
-    fd.set('category_run_id', String(catState.category_run_id || ''));
-    fd.set('csv_log_file', String(catState.csv_log_file || ''));
     fd.set('product_id', '');
     fd.set('after_product_id', String(catState.current_after_product_id));
     fd.set('limit', String(catField('category_limit', 10)));
@@ -417,10 +412,6 @@ document.addEventListener('DOMContentLoaded', function () {
     catState.products_categories_verified += parseInt(counts.products_categories_verified || 0, 10);
     catState.products_skipped += parseInt(counts.products_skipped || 0, 10);
     catState.errors += parseInt(counts.errors || 0, 10);
-    catState.category_run_id = String(res.category_run_id || catState.category_run_id || '');
-    catState.csv_log_file = String(res.csv_log_file || catState.csv_log_file || '');
-    catState.csv_download_url = String(res.csv_download_url || catState.csv_download_url || '');
-    catState.csv_total_rows_written += parseInt(res.csv_rows_written_this_batch || 0, 10);
     if (nextAfter > 0) catState.last_safe_next_after_product_id = nextAfter;
     const riskyConfidence = (res.results || []).some(function (r) { return (parseInt(r.ovoko_id || 0, 10) > 0) && String(r.category_resolution_confidence || '') !== 'high'; });
     catLogRows.push({ timestamp: nowIso(), request_after_product_id: reqAfter, response_next_after_product_id: nextAfter, counts: counts, product_issues: (res.results || []).filter(function (r) { return r.error || r.skip_reason; }).map(function (r) { return { product_id: r.product_id, error: r.error || '', skip_reason: r.skip_reason || '' }; }) });
@@ -446,10 +437,6 @@ document.addEventListener('DOMContentLoaded', function () {
     catState.running = true; catState.status = 'running'; catState.started_at = nowIso(); catState.duration_seconds = 0;
     catState.start_after_product_id = dbg.parsedValue; catState.request_after_product_id = dbg.parsedValue; catState.response_next_after_product_id = dbg.parsedValue; catState.current_after_product_id = dbg.parsedValue; catState.last_safe_next_after_product_id = 0;
     ['total_scanned','with_ovoko_id','missing_ovoko_id','ovoko_category_found','ovoko_category_missing','categories_created','categories_existing','products_categories_updated','products_categories_verified','products_skipped','errors'].forEach(function (k) { catState[k] = 0; });
-    catState.category_run_id = '';
-    catState.csv_log_file = '';
-    catState.csv_download_url = '';
-    catState.csv_total_rows_written = 0;
     catLogRows.length = 0; catRender(); catTick();
   });
   $('gpswiss_cat_autorun_stop')?.addEventListener('click', function (e) { e.preventDefault(); catStop('stopped'); });
