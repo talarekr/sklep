@@ -997,6 +997,77 @@ class RrrApiClient
         ];
     }
 
+    public function resolve_category_path_from_parts_categories(int $categoryId): array
+    {
+        $categoryId = max(1, $categoryId);
+        $path = '/v2/get/parts/categories';
+        $loaded = [];
+        $matching = [];
+        $pagesFetched = [];
+        $totalCount = null;
+        $limit = 200;
+        $maxPages = 10;
+
+        for ($page = 1; $page <= $maxPages; $page++) {
+            $raw = $this->post_form($path, ['page' => $page, 'limit' => $limit], true);
+            $payload = (array) ($raw['payload'] ?? []);
+            $data = is_array($payload['data'] ?? null) ? $payload['data'] : [];
+            $pagination = is_array($payload['pagination'] ?? null) ? $payload['pagination'] : [];
+            $totalCount = isset($pagination['total_count']) ? (int) $pagination['total_count'] : $totalCount;
+            $pagesFetched[] = ['page' => $page, 'records' => count($data), 'pagination' => $pagination];
+            if (empty($raw['success'])) { break; }
+            if ($data === []) { break; }
+            foreach ($data as $idx => $row) {
+                if (!is_array($row)) { continue; }
+                $loaded[] = $row;
+                if ((int) ($row['category_id'] ?? 0) === $categoryId) {
+                    $matching[] = ['index' => $idx, 'record' => $row];
+                }
+            }
+            if ($totalCount !== null && count($loaded) >= $totalCount) { break; }
+            if (count($data) < $limit) { break; }
+        }
+
+        $candidateParentFields = [];
+        $candidateTitleFields = [];
+        foreach ($matching as $m) {
+            $flat = $this->flatten_nested_fields((array) $m['record'], 4, '', 1, 500);
+            foreach ($flat as $k => $v) {
+                $lk = strtolower((string) $k);
+                if (str_contains($lk, 'parent')) { $candidateParentFields[$k] = $v; }
+                if (str_contains($lk, 'title') || str_contains($lk, 'name') || str_contains($lk, 'path') || str_contains($lk, 'category')) { $candidateTitleFields[$k] = $v; }
+            }
+        }
+
+        $resolvedPath = '';
+        if (!empty($matching)) {
+            $record = (array) $matching[0]['record'];
+            $candidates = [
+                $record['category_title_path'] ?? null,
+                $record['title_path'] ?? null,
+                $record['path'] ?? null,
+                $record['breadcrumb'] ?? null,
+                $record['full_path'] ?? null,
+            ];
+            foreach ($candidates as $candidate) {
+                $v = trim((string) $candidate);
+                if ($v !== '') { $resolvedPath = $v; break; }
+            }
+        }
+
+        return [
+            'ok' => $resolvedPath !== '',
+            'parts_categories_endpoint_used' => $path,
+            'parts_categories_total_records_loaded' => count($loaded),
+            'parts_categories_pagination' => $pagesFetched,
+            'parts_categories_records_matching_category_id' => $matching,
+            'parts_categories_candidate_parent_fields' => $candidateParentFields,
+            'parts_categories_candidate_title_fields' => $candidateTitleFields,
+            'parts_categories_resolved_path' => $resolvedPath,
+            'parts_categories_requires_more_pages' => $totalCount !== null ? (count($loaded) < $totalCount) : false,
+        ];
+    }
+
     private function extract_category_nodes(array $payload): array
     {
         if ($payload === []) {
