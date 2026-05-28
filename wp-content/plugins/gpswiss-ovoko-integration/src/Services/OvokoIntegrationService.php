@@ -2669,6 +2669,7 @@ class OvokoIntegrationService
             'raw_category_title_path_value' => $categoryResolve['raw_category_title_path'] ?? null,
             'all_category_related_fields' => $categoryDiagnostics['all_category_related_fields'],
             'full_category_related_payload_fragment' => $categoryDiagnostics['full_category_related_payload_fragment'],
+            'category_tree_payload_fragment' => $categoryDiagnostics['category_tree_payload_fragment'] ?? [],
             'category_endpoint_probe' => $categoryDiagnostics['category_endpoint_probe'],
             'category_resolution' => $categoryResolve,
         ];
@@ -2676,6 +2677,10 @@ class OvokoIntegrationService
             $counts['ovoko_category_missing']++;$counts['products_skipped']++;
             $debug['fields_matching_category_title_path'] = $this->collect_matching_nested_fields($payload, ['category', 'title', 'path']);
             return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>'','reason'=>'ovoko_category_missing','planned_action'=>'skip','debug'=>$debug];
+        }
+        if (($categoryResolve['category_resolution_confidence'] ?? 'low') !== 'high') {
+            $counts['products_skipped']++;
+            return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>$path,'reason'=>'ovoko_category_tree_resolution_failed','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','planned_action'=>'skip','debug'=>$debug];
         }
         $counts['ovoko_category_found']++;
         $levels=array_values(array_filter(array_map('trim',explode('/',$path)),fn($v)=>$v!==''));
@@ -2720,12 +2725,30 @@ class OvokoIntegrationService
         $resolved['category_id_path'] = (string) ($this->first_non_empty_value_from_paths($payload, ['category_id_path','data.category_id_path','part.category_id_path']) ?? '');
         $resolved['category_resolution_method'] = $resolved['category_title_path_source_key'] !== '' ? 'payload_field_direct' : 'not_resolved';
         $resolved['category_resolution_confidence'] = $resolved['resolved_full_ovoko_category_path'] !== '' ? 'medium' : 'low';
-        $endpointProbe = $this->build_rrr_api_client()?->probe_category_endpoints((int) $categoryId);
+        $client = $this->build_rrr_api_client();
+        $endpointProbe = $client?->probe_category_endpoints((int) $categoryId);
+        $treeResolution = $client?->resolve_category_path_from_tree((int) $categoryId);
+        if (is_array($treeResolution)) {
+            $resolved['category_tree_endpoint_used'] = (string) ($treeResolution['category_tree_endpoint_used'] ?? '');
+            $resolved['category_tree_node_found'] = !empty($treeResolution['category_tree_node_found']);
+            $resolved['category_tree_node'] = $treeResolution['category_tree_node'] ?? null;
+            $resolved['category_tree_parent_chain'] = $treeResolution['category_tree_parent_chain'] ?? [];
+            $resolved['category_tree_resolved_path'] = (string) ($treeResolution['category_tree_resolved_path'] ?? '');
+            if (!empty($treeResolution['ok']) && trim((string) ($treeResolution['category_tree_resolved_path'] ?? '')) !== '') {
+                $resolved['resolved_full_ovoko_category_path'] = trim((string) $treeResolution['category_tree_resolved_path']);
+                $resolved['category_resolution_method'] = 'category_tree_by_id';
+                $resolved['category_resolution_confidence'] = 'high';
+            } else {
+                $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
+                $resolved['category_resolution_confidence'] = 'low';
+            }
+        }
         return [
             'resolution' => $resolved,
             'all_category_related_fields' => $allCategoryRelatedFields,
             'full_category_related_payload_fragment' => $fragment,
             'category_endpoint_probe' => $endpointProbe,
+            'category_tree_payload_fragment' => $treeResolution['category_tree_payload_fragment'] ?? [],
         ];
     }
 

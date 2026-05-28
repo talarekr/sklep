@@ -922,6 +922,126 @@ class RrrApiClient
         return ['ok' => true, 'category_id' => $categoryId, 'endpoints' => $rows];
     }
 
+    public function resolve_category_path_from_tree(int $categoryId): array
+    {
+        $categoryId = max(1, $categoryId);
+        $candidates = ['/get/categories/tree', '/v2/get/categories/tree', '/get/categories', '/v2/get/categories'];
+        $selectedPayload = [];
+        $selectedEndpoint = '';
+        foreach ($candidates as $path) {
+            $raw = $this->post_form($path, [], true);
+            $payload = (array) ($raw['payload'] ?? []);
+            if (!empty($raw['success']) && !empty($payload)) {
+                $selectedPayload = $payload;
+                $selectedEndpoint = $path;
+                break;
+            }
+        }
+
+        if ($selectedEndpoint === '') {
+            return [
+                'ok' => false,
+                'category_tree_endpoint_used' => '',
+                'category_tree_node_found' => false,
+                'category_tree_node' => null,
+                'category_tree_parent_chain' => [],
+                'category_tree_resolved_path' => '',
+                'category_tree_payload_fragment' => [],
+            ];
+        }
+
+        $nodes = $this->extract_category_nodes($selectedPayload);
+        $byId = [];
+        foreach ($nodes as $node) {
+            $id = (int) ($node['id'] ?? 0);
+            if ($id > 0) { $byId[$id] = $node; }
+        }
+
+        $target = $byId[$categoryId] ?? null;
+        if (!$target) {
+            return [
+                'ok' => false,
+                'category_tree_endpoint_used' => $selectedEndpoint,
+                'category_tree_node_found' => false,
+                'category_tree_node' => null,
+                'category_tree_parent_chain' => [],
+                'category_tree_resolved_path' => '',
+                'category_tree_payload_fragment' => [],
+            ];
+        }
+
+        $chain = [];
+        $visited = [];
+        $cursor = $target;
+        for ($i = 0; $i < 20; $i++) {
+            $id = (int) ($cursor['id'] ?? 0);
+            if ($id <= 0 || isset($visited[$id])) { break; }
+            $visited[$id] = true;
+            $chain[] = $cursor;
+            $parentId = (int) ($cursor['parent_id'] ?? 0);
+            if ($parentId <= 0) { break; }
+            if (!isset($byId[$parentId])) { break; }
+            $cursor = $byId[$parentId];
+        }
+        $chain = array_reverse($chain);
+        $segments = array_values(array_filter(array_map(static fn($n) => trim((string) ($n['title'] ?? '')), $chain), static fn($v) => $v !== ''));
+
+        return [
+            'ok' => !empty($segments),
+            'category_tree_endpoint_used' => $selectedEndpoint,
+            'category_tree_node_found' => true,
+            'category_tree_node' => $target,
+            'category_tree_parent_chain' => $chain,
+            'category_tree_resolved_path' => implode(' / ', $segments),
+            'category_tree_payload_fragment' => $this->build_category_tree_fragment_for_id($nodes, $categoryId),
+        ];
+    }
+
+    private function extract_category_nodes(array $payload): array
+    {
+        $flat = $this->flatten_nested_fields($payload, 8);
+        $candidateParents = [];
+        foreach ($flat as $path => $value) {
+            if (preg_match('/^(.*)\.(id|category_id)$/', (string) $path, $m)) {
+                $candidateParents[] = $m[1];
+            }
+        }
+        $nodes = [];
+        foreach (array_unique($candidateParents) as $prefix) {
+            $id = (int) ($this->value_from_path($payload, $prefix . '.id') ?? $this->value_from_path($payload, $prefix . '.category_id') ?? 0);
+            if ($id <= 0) { continue; }
+            $parentId = (int) ($this->value_from_path($payload, $prefix . '.parent_id') ?? $this->value_from_path($payload, $prefix . '.parent') ?? 0);
+            $title = (string) ($this->value_from_path($payload, $prefix . '.title') ?? $this->value_from_path($payload, $prefix . '.name') ?? $this->value_from_path($payload, $prefix . '.category_title') ?? '');
+            if (trim($title) === '') { continue; }
+            $nodes[] = ['id' => $id, 'parent_id' => $parentId, 'title' => sanitize_text_field($title), 'path' => $prefix];
+        }
+        return $nodes;
+    }
+
+    private function build_category_tree_fragment_for_id(array $nodes, int $categoryId): array
+    {
+        $byId = [];
+        foreach ($nodes as $node) { $byId[(int) $node['id']] = $node; }
+        if (!isset($byId[$categoryId])) { return []; }
+        $target = $byId[$categoryId];
+        $parentId = (int) ($target['parent_id'] ?? 0);
+        $siblings = [];
+        foreach ($nodes as $node) {
+            if ((int) ($node['parent_id'] ?? 0) === $parentId) { $siblings[] = $node; }
+        }
+        return ['target' => $target, 'siblings_with_same_parent' => array_values($siblings)];
+    }
+
+    private function value_from_path(array $payload, string $path)
+    {
+        $node = $payload;
+        foreach (explode('.', $path) as $part) {
+            if (!is_array($node) || !array_key_exists($part, $node)) { return null; }
+            $node = $node[$part];
+        }
+        return $node;
+    }
+
     private function local_confirmed_dictionary_for_car(array $record, string $carId): array
     {
         if ($carId === '378') {
