@@ -216,14 +216,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['result' => 'error', 'error' => $preflight['status'], 'message' => $preflight['message'], 'details' => $preflight];
         }
 
+        $descriptionResolution = $this->resolve_inventory_item_description($product, $product_id, $content, $aspects, $category, $settings, $marketplaceId);
         $itemPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
-                'description' => $this->should_use_ebay_de_description_template($settings)
-                    ? $this->build_ebay_de_description_template($product, $product_id, $content, $aspects, $category)
-                    : (string) ($content['description'] ?? ''),
+                'description' => (string) ($descriptionResolution['description'] ?? ''),
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
                 'aspects' => $aspects,
             ],
@@ -1941,9 +1940,26 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return '<div style="color:#1f2937;line-height:1.6;">' . $html . '</div>';
     }
 
-    private function should_use_ebay_de_description_template(array $settings): bool
+    private function resolve_inventory_item_description($product, int $productId, array $content, array $aspects, array $category, array $settings, string $marketplaceId): array
     {
-        return !empty($settings['enable_ebay_de_description_template']);
+        if ($this->should_use_ebay_de_description_template($settings, $marketplaceId)) {
+            return [
+                'description' => $this->build_ebay_de_description_template($product, $productId, $content, $aspects, $category),
+                'source' => 'approved_ebay_de_template',
+                'template_enabled' => true,
+            ];
+        }
+
+        return [
+            'description' => (string) ($content['description'] ?? ''),
+            'source' => 'resolved_german_content',
+            'template_enabled' => !empty($settings['enable_ebay_de_description_template']),
+        ];
+    }
+
+    private function should_use_ebay_de_description_template(array $settings, string $marketplaceId): bool
+    {
+        return $marketplaceId === 'EBAY_DE' && !empty($settings['enable_ebay_de_description_template']);
     }
 
     private function resolve_product_by_id_or_sku(string $identifier): array
@@ -1958,6 +1974,85 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         $product = wc_get_product($productId);
         return ['product_id' => $productId, 'product' => $product ?: null];
+    }
+
+    public function dry_run_ebay_de_publish_description_payload(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
+        $this->logger->info('EBAY_DE_PUBLISH_DESCRIPTION_DRY_RUN_START', ['input' => $identifier, 'safety' => 'local_payload_dry_run_no_ebay_api_no_write_to_woo_or_ovoko']);
+        try {
+            $resolved = $this->resolve_product_by_id_or_sku($identifier);
+            $productId = (int) ($resolved['product_id'] ?? 0);
+            $product = $resolved['product'];
+            if ($productId <= 0 || !$product) return ['result' => 'error', 'error' => 'product_not_found'];
+
+            $settings = $this->settings();
+            $settings['_wei_suppress_side_effects'] = true;
+            $settings['auto_generate_german_content_preflight'] = 0;
+            $settings['regenerate_german_content_on_hash_change'] = 0;
+            $marketplaceId = $this->marketplace_id();
+            $content = $this->resolve_german_content($product, $productId, $marketplaceId, $settings);
+            $category = ['category_id' => '', 'source' => 'dry_run_not_resolved'];
+            $aspects = [];
+            $descriptionResolution = $this->resolve_inventory_item_description($product, $productId, $content, $aspects, $category, $settings, $marketplaceId);
+            $description = (string) ($descriptionResolution['description'] ?? '');
+            $productImageUrls = array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids()))));
+            $productImagesInDescription = [];
+            foreach ($productImageUrls as $url) {
+                $url = (string) $url;
+                if ($url !== '' && str_contains($description, $url)) {
+                    $productImagesInDescription[] = $url;
+                }
+            }
+            $templateImageUrls = [
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/icon-shipping.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/icon-returns.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/icon-packaging.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/icon-original.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/europe-map.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/dhl-logo.png',
+                'https://gpswiss.pl/wp-content/uploads/ebay-template/dpd-logo.png',
+            ];
+            $presentTemplateImageUrls = [];
+            $missingTemplateImageUrls = [];
+            foreach ($templateImageUrls as $url) {
+                if (str_contains($description, $url)) {
+                    $presentTemplateImageUrls[] = $url;
+                } else {
+                    $missingTemplateImageUrls[] = $url;
+                }
+            }
+
+            return [
+                'result' => 'success',
+                'product_id' => $productId,
+                'sku' => (string) $product->get_sku(),
+                'marketplace_id' => $marketplaceId,
+                'description_source' => (string) ($descriptionResolution['source'] ?? ''),
+                'template_setting_enabled' => !empty($settings['enable_ebay_de_description_template']),
+                'product_description_contains_new_template' => str_contains($description, 'gpswiss.pl/wp-content/uploads/ebay-template/') && str_contains($description, 'Schneller weltweiter Versand'),
+                'product_description_contains_product_images' => $productImagesInDescription !== [],
+                'product_image_urls_found_in_description' => $productImagesInDescription,
+                'template_image_urls_present' => $presentTemplateImageUrls,
+                'template_image_urls_missing' => $missingTemplateImageUrls,
+                'description_length' => mb_strlen($description),
+                'payload_excerpt' => [
+                    'product' => [
+                        'description' => mb_substr($description, 0, 1200),
+                    ],
+                ],
+                'safety' => [
+                    'created_ebay_listing' => false,
+                    'called_ebay_api' => false,
+                    'modified_woo_product' => false,
+                    'called_ovoko_api' => false,
+                ],
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->error('EBAY_DE_PUBLISH_DESCRIPTION_DRY_RUN_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
+            return ['result' => 'error', 'error' => $e->getMessage()];
+        }
     }
 
     public function preview_ebay_de_description_template(string $productOrSku): array
