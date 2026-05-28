@@ -1601,25 +1601,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $detailsByPolishLabel[(string) $field['polish_label']] = (string) $field['value'];
         }
 
-        $sku = method_exists($product, 'get_sku') ? trim((string) $product->get_sku()) : '';
-        $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
-        $reference = $ebaySku !== '' ? $ebaySku : $sku;
-        $partNumber = $this->first_non_empty([
-            $detailsByPolishLabel['Numer części'] ?? '',
-            function_exists('gp_get_product_part_number') ? (string) gp_get_product_part_number($product) : '',
-            get_post_meta($productId, '_part_number', true),
-            get_post_meta($productId, '_oem_number', true),
-            $sku,
-        ]);
-        if (function_exists('gp_get_product_part_number') && in_array($partNumber, ['Brak', 'brak'], true)) {
-            $partNumber = '';
-        }
-
-        $manufacturer = $this->first_non_empty([
-            $detailsByPolishLabel['Producent'] ?? '',
-            get_post_meta($productId, '_manufacturer', true),
-            get_post_meta($productId, '_brand', true),
-        ]);
         $fitment = $this->build_template_fitment_value($detailsByPolishLabel);
         $condition = $this->first_non_empty([$detailsByPolishLabel['Stan'] ?? '', 'Gebraucht']);
         $untranslatedFields = $this->detect_likely_polish_template_fields($details['fields']);
@@ -1633,34 +1614,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        $importantRows = $this->render_ebay_template_rows([
-            'Teilenummer' => $partNumber,
-            'Hersteller' => $manufacturer,
-            'Referenznummer / SKU' => $reference,
-            'Passend für' => $fitment,
-        ]);
-
-        $specRows = '';
-        foreach ($details['fields'] as $field) {
-            $specRows .= $this->render_ebay_template_row((string) $field['german_label'], (string) $field['value']);
-        }
-        if ($specRows === '') {
-            $specRows = $this->render_ebay_template_rows([]);
-        }
-
-        $vehicleRows = $this->render_ebay_template_rows([
-            'Hersteller' => $detailsByPolishLabel['Producent'] ?? '',
-            'Modell' => $detailsByPolishLabel['Model'] ?? '',
-            'Variante / Ausführung' => $detailsByPolishLabel['Modyfikacja'] ?? '',
-            'Baujahr des Fahrzeugs' => $detailsByPolishLabel['Rok produkcji samochodu'] ?? '',
-            'Bauzeitraum' => $detailsByPolishLabel['Okres'] ?? '',
-            'Motorcode' => $detailsByPolishLabel['Kod silnika'] ?? '',
-            'Kraftstoffart' => $detailsByPolishLabel['Rodzaj paliwa'] ?? '',
-            'Getriebeart' => $detailsByPolishLabel['Typ skrzyni biegów'] ?? '',
-            'Antrieb' => $detailsByPolishLabel['Koła napędowe'] ?? '',
-            'Lenkradposition' => $detailsByPolishLabel['Pozycja kierownicy'] ?? '',
-            'Laufleistung' => $detailsByPolishLabel['Przebieg'] ?? '',
-        ]);
+        $specRows = $this->render_ebay_template_specification_rows($details['fields']);
 
         $buttonHtml = $sameVehicleUrl !== ''
             ? '<div style="text-align:center;margin:20px 0 24px;"><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">Andere Teile aus diesem Fahrzeug ansehen</a></div>'
@@ -1682,13 +1636,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<h1 style="margin:0;color:#06275d;font-size:38px;line-height:1.16;font-weight:900;letter-spacing:.3px;text-transform:uppercase;">' . esc_html($title) . '</h1>'
             . '<div style="width:92px;height:4px;background:#0057d9;margin:14px 0 16px;border-radius:2px;"></div>'
             . '<div style="display:inline-block;background:#f2f7ff;border:1px solid #cfe0f6;color:#06275d;border-radius:6px;padding:10px 15px;margin:0 0 24px;font-size:15px;font-weight:800;">Zustand: ' . esc_html($condition) . '</div>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
-            . '<td width="40%" valign="top" style="padding:0 12px 22px 0;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Wichtigste Daten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $importantRows . '</table></div></td>'
-            . '<td width="60%" valign="top" style="padding:0 0 22px 12px;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div></td>'
-            . '</tr><tr>'
-            . '<td width="40%" valign="top" style="padding:0 12px 22px 0;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Fahrzeug- / Spenderfahrzeugdaten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $vehicleRows . '</table></div></td>'
-            . '<td width="60%" valign="top" style="padding:0 0 22px 12px;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Beschreibung</div><div style="padding:20px 22px;">' . $descriptionBlock . '</div></div></td>'
-            . '</tr></table>'
+            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div>'
+            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Beschreibung</div><div style="padding:20px 22px;">' . $descriptionBlock . '</div></div>'
             . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:2px 0 0;border-radius:8px;overflow:hidden;">'
             . '<div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Kompatibilität / Passgenauigkeit</div>'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
@@ -1878,6 +1827,27 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $html = '';
         foreach ($rows as $label => $value) {
             $html .= $this->render_ebay_template_row((string) $label, (string) $value);
+        }
+        return $html !== '' ? $html : '<tr><td style="padding:10px 12px;color:#4b5563;">Nicht angegeben</td></tr>';
+    }
+
+    private function render_ebay_template_specification_rows(array $fields): string
+    {
+        $html = '';
+        $seenLabels = [];
+        foreach ($fields as $field) {
+            $label = (string) ($field['german_label'] ?? '');
+            $value = (string) ($field['value'] ?? '');
+            $normalizedLabel = $this->normalize_template_label($label);
+            if ($normalizedLabel === '' || $normalizedLabel === 'zustand' || isset($seenLabels[$normalizedLabel])) {
+                continue;
+            }
+            $row = $this->render_ebay_template_row($label, $value);
+            if ($row === '') {
+                continue;
+            }
+            $seenLabels[$normalizedLabel] = true;
+            $html .= $row;
         }
         return $html !== '' ? $html : '<tr><td style="padding:10px 12px;color:#4b5563;">Nicht angegeben</td></tr>';
     }
