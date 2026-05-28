@@ -2737,7 +2737,7 @@ class OvokoIntegrationService
         $client = $this->build_rrr_api_client();
         $endpointProbe = $client?->probe_category_endpoints((int) $categoryId);
         $treeResolution = $client?->resolve_category_path_from_tree((int) $categoryId);
-        $partsCategoriesResolution = $client?->resolve_category_path_from_parts_categories((int) $categoryId);
+        $partsCategoriesResolution = null;
         if (is_array($treeResolution)) {
             $resolved['category_tree_endpoint_used'] = (string) ($treeResolution['category_tree_endpoint_used'] ?? '');
             $resolved['category_tree_node_found'] = !empty($treeResolution['category_tree_node_found']);
@@ -2746,27 +2746,26 @@ class OvokoIntegrationService
             $resolved['category_tree_resolved_path'] = (string) ($treeResolution['category_tree_resolved_path'] ?? '');
             if (!empty($treeResolution['ok']) && trim((string) ($treeResolution['category_tree_resolved_path'] ?? '')) !== '') {
                 $resolved['resolved_full_ovoko_category_path'] = trim((string) $treeResolution['category_tree_resolved_path']);
-                $resolved['category_resolution_method'] = 'category_tree_by_id';
+                $resolved['category_resolution_method'] = 'get_categories_tree_by_id';
                 $resolved['category_resolution_confidence'] = 'high';
             } else {
                 $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
                 $resolved['category_resolution_confidence'] = 'low';
             }
         }
-        if ((($resolved['category_resolution_confidence'] ?? 'low') !== 'high') && is_array($partsCategoriesResolution)) {
-            $resolved['parts_categories_endpoint_used'] = (string) ($partsCategoriesResolution['parts_categories_endpoint_used'] ?? '/v2/get/parts/categories');
-            $resolved['parts_categories_records_matching_category_id'] = $partsCategoriesResolution['parts_categories_records_matching_category_id'] ?? [];
-            $resolved['parts_categories_total_records_loaded'] = (int) ($partsCategoriesResolution['parts_categories_total_records_loaded'] ?? 0);
-            $resolved['parts_categories_pagination'] = $partsCategoriesResolution['parts_categories_pagination'] ?? [];
-            $resolved['parts_categories_candidate_parent_fields'] = $partsCategoriesResolution['parts_categories_candidate_parent_fields'] ?? [];
-            $resolved['parts_categories_candidate_title_fields'] = $partsCategoriesResolution['parts_categories_candidate_title_fields'] ?? [];
-            $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
-            $resolved['category_resolution_confidence'] = 'low';
-        }
         $resolved['categories_endpoint_used'] = (string) ($resolved['category_tree_endpoint_used'] ?? '');
         $resolved['categories_payload_shape'] = $treeResolution['categories_payload_shape'] ?? [];
         $resolved['categories_sample_records'] = $treeResolution['categories_sample_records'] ?? [];
         $resolved['categories_sample_keys'] = $treeResolution['categories_sample_keys'] ?? [];
+        $resolved['category_target_id'] = $treeResolution['category_target_id'] ?? (int) $categoryId;
+        $resolved['categories_total_loaded'] = $treeResolution['categories_total_loaded'] ?? 0;
+        $resolved['category_id_322_search_performed'] = $treeResolution['category_id_322_search_performed'] ?? (((int) $categoryId) === 322);
+        $resolved['category_id_322_found'] = $treeResolution['category_id_322_found'] ?? null;
+        $resolved['category_id_322_node_if_found'] = $treeResolution['category_id_322_node_if_found'] ?? null;
+        $resolved['category_id_322_nearby_records'] = $treeResolution['category_id_322_nearby_records'] ?? [];
+        $resolved['count_nodes_with_id_field'] = $treeResolution['count_nodes_with_id_field'] ?? 0;
+        $resolved['min_category_id'] = $treeResolution['min_category_id'] ?? null;
+        $resolved['max_category_id'] = $treeResolution['max_category_id'] ?? null;
         $resolved['category_322_found_in_categories_endpoint'] = ((int) $categoryId === 322) ? !empty($resolved['category_tree_node_found']) : null;
         $resolved['category_322_node'] = ((int) $categoryId === 322) ? ($resolved['category_tree_node'] ?? null) : null;
         $resolved['category_322_parent_chain'] = ((int) $categoryId === 322) ? ($resolved['category_tree_parent_chain'] ?? []) : [];
