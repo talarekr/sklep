@@ -926,11 +926,36 @@ class RrrApiClient
     {
         $categoryId = max(1, $categoryId);
         $candidates = ['/get/categories/tree', '/v2/get/categories/tree', '/get/categories', '/v2/get/categories'];
+        $endpointDiagnostics = [];
         $selectedPayload = [];
         $selectedEndpoint = '';
         foreach ($candidates as $path) {
             $raw = $this->post_form($path, [], true);
             $payload = (array) ($raw['payload'] ?? []);
+            $list = is_array($payload['list'] ?? null) ? $payload['list'] : [];
+            $sampleRecord = [];
+            if ($list !== []) {
+                $first = $list[0] ?? [];
+                if (is_array($first) && isset($first[0]) && is_array($first[0])) {
+                    $sampleRecord = (array) $first[0];
+                } elseif (is_array($first)) {
+                    $sampleRecord = (array) $first;
+                }
+            }
+            $endpointDiagnostics[] = [
+                'endpoint' => $path,
+                'http_code' => $raw['http_code'] ?? null,
+                'status_code' => (string) ($raw['status_code'] ?? ''),
+                'success' => !empty($raw['success']),
+                'payload_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'list_structure' => [
+                    'is_list_array' => is_array($payload['list'] ?? null),
+                    'list_count' => count($list),
+                    'first_item_type' => $list !== [] ? gettype($list[0]) : '',
+                ],
+                'sample_records_first_20' => array_slice($list, 0, 20),
+                'sample_keys' => array_values(array_map('strval', array_keys($sampleRecord))),
+            ];
             if (!empty($raw['success']) && !empty($payload)) {
                 $selectedPayload = $payload;
                 $selectedEndpoint = $path;
@@ -947,6 +972,10 @@ class RrrApiClient
                 'category_tree_parent_chain' => [],
                 'category_tree_resolved_path' => '',
                 'category_tree_payload_fragment' => [],
+                'categories_payload_shape' => [],
+                'categories_sample_records' => [],
+                'categories_sample_keys' => [],
+                'categories_endpoints_debug' => $endpointDiagnostics,
             ];
         }
 
@@ -967,6 +996,10 @@ class RrrApiClient
                 'category_tree_parent_chain' => [],
                 'category_tree_resolved_path' => '',
                 'category_tree_payload_fragment' => [],
+                'categories_payload_shape' => $this->describe_categories_payload_shape($selectedPayload),
+                'categories_sample_records' => $this->extract_categories_sample_records($selectedPayload),
+                'categories_sample_keys' => $this->extract_categories_sample_keys($selectedPayload),
+                'categories_endpoints_debug' => $endpointDiagnostics,
             ];
         }
 
@@ -994,6 +1027,10 @@ class RrrApiClient
             'category_tree_parent_chain' => $chain,
             'category_tree_resolved_path' => implode(' / ', $segments),
             'category_tree_payload_fragment' => $this->build_category_tree_fragment_for_id($nodes, $categoryId),
+            'categories_payload_shape' => $this->describe_categories_payload_shape($selectedPayload),
+            'categories_sample_records' => $this->extract_categories_sample_records($selectedPayload),
+            'categories_sample_keys' => $this->extract_categories_sample_keys($selectedPayload),
+            'categories_endpoints_debug' => $endpointDiagnostics,
         ];
     }
 
@@ -1094,11 +1131,50 @@ class RrrApiClient
             $id = (int) ($this->value_from_path($payload, $prefix . '.id') ?? $this->value_from_path($payload, $prefix . '.category_id') ?? 0);
             if ($id <= 0) { continue; }
             $parentId = (int) ($this->value_from_path($payload, $prefix . '.parent_id') ?? $this->value_from_path($payload, $prefix . '.parent') ?? 0);
-            $title = (string) ($this->value_from_path($payload, $prefix . '.title') ?? $this->value_from_path($payload, $prefix . '.name') ?? $this->value_from_path($payload, $prefix . '.category_title') ?? '');
+            $title = (string) (
+                $this->value_from_path($payload, $prefix . '.title')
+                ?? $this->value_from_path($payload, $prefix . '.name')
+                ?? $this->value_from_path($payload, $prefix . '.label')
+                ?? $this->value_from_path($payload, $prefix . '.category_title')
+                ?? ''
+            );
             if (trim($title) === '') { continue; }
             $nodes[] = ['id' => $id, 'parent_id' => $parentId, 'title' => sanitize_text_field($title), 'path' => $prefix];
         }
         return $nodes;
+    }
+
+    private function describe_categories_payload_shape(array $payload): array
+    {
+        $list = $payload['list'] ?? null;
+        return [
+            'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'has_list' => is_array($list),
+            'list_count' => is_array($list) ? count($list) : 0,
+            'list_first_item_type' => is_array($list) && $list !== [] ? gettype($list[0]) : '',
+        ];
+    }
+
+    private function extract_categories_sample_records(array $payload): array
+    {
+        $list = is_array($payload['list'] ?? null) ? $payload['list'] : [];
+        return array_slice($list, 0, 20);
+    }
+
+    private function extract_categories_sample_keys(array $payload): array
+    {
+        $list = is_array($payload['list'] ?? null) ? $payload['list'] : [];
+        if ($list === []) {
+            return [];
+        }
+        $first = $list[0] ?? [];
+        if (is_array($first) && isset($first[0]) && is_array($first[0])) {
+            return array_values(array_map('strval', array_keys((array) $first[0])));
+        }
+        if (is_array($first)) {
+            return array_values(array_map('strval', array_keys((array) $first)));
+        }
+        return [];
     }
 
     private function flatten_nested_fields($payload, int $maxDepth = 8, string $prefix = '', int $depth = 1, int $maxFields = 5000, int &$fieldCount = 0): array
