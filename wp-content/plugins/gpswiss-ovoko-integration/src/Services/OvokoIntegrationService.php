@@ -2826,6 +2826,12 @@ class OvokoIntegrationService
         $resolved['categories_sample_records'] = $treeResolution['categories_sample_records'] ?? [];
         $resolved['categories_sample_keys'] = $treeResolution['categories_sample_keys'] ?? [];
         $resolved['category_target_id'] = $treeResolution['category_target_id'] ?? (int) $categoryId;
+        $resolved['category_target_search_performed'] = $treeResolution['category_target_search_performed'] ?? true;
+        $resolved['category_target_found'] = $treeResolution['category_target_found'] ?? null;
+        $resolved['category_target_node_if_found'] = $treeResolution['category_target_node_if_found'] ?? null;
+        $resolved['category_target_nearby_records'] = $treeResolution['category_target_nearby_records'] ?? [];
+        $resolved['category_target_parent_chain'] = $treeResolution['category_target_parent_chain'] ?? [];
+        $resolved['category_target_resolved_path'] = (string) ($treeResolution['category_target_resolved_path'] ?? '');
         $resolved['categories_total_loaded'] = $treeResolution['categories_total_loaded'] ?? 0;
         $resolved['category_id_322_search_performed'] = $treeResolution['category_id_322_search_performed'] ?? (((int) $categoryId) === 322);
         $resolved['category_id_322_found'] = $treeResolution['category_id_322_found'] ?? null;
