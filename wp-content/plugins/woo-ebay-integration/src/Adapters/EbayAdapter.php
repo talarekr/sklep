@@ -1567,106 +1567,301 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function build_ebay_de_description_template($product, int $productId, array $content, array $aspects, array $category): string
     {
-        $settings = $this->settings();
-        $descriptionText = trim(wp_strip_all_tags((string) ($content['description'] ?? '')));
-        $baseDescription = [
-            'Dieser Artikel wurde bereits benutzt. Der Artikel kann optische Gebrauchsspuren aufweisen, ist jedoch voll funktionsfähig und funktioniert wie vorgesehen.',
-            'Bitte vergleichen Sie Ihre Teilenummer mit der von uns angegebenen Teilenummer und prüfen Sie die Fotos vor dem Kauf sorgfältig.',
-            'Sie erhalten genau den Artikel, der auf den Bildern zu sehen ist.',
-        ];
-        $blockedNewLikeWords = '/\b(NEU|NEUE|NEUER|NEUES|FABRIKNEU|BRANDNEU|NOWY|NOWA|NOWE|NEW)\b/ui';
-        if ($descriptionText === '' || (bool) preg_match($blockedNewLikeWords, $descriptionText)) {
-            $descriptionText = '';
-        }
-
-        $properties = $this->collect_template_properties($product, $productId, $aspects);
-        $featureRows = '';
-        foreach ($properties as $label => $value) {
-            $featureRows .= '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">' . esc_html($label) . '</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html($value) . '</td></tr>';
-        }
-
-        $allPartNumbers = $this->normalize_part_numbers([
-            $aspects['MPN'] ?? [],
-            $aspects['Herstellernummer'] ?? [],
-            $aspects['Manufacturer Part Number'] ?? [],
-            $aspects['OE/OEM Referenznummer'] ?? [],
-            $aspects['OE/OEM Referenznummer(n)'] ?? [],
-        ]);
-        $primaryPartNumber = (string) ($allPartNumbers[0] ?? '');
-
-        $manufacturer = (string) ($aspects['Hersteller'][0] ?? $aspects['Marke'][0] ?? $aspects['Brand'][0] ?? '');
-        if ($manufacturer === '') {
-            $manufacturer = (string) ($category['manufacturer'] ?? '');
-        }
-        if ($manufacturer === '') {
-            $manufacturer = (string) get_post_meta($productId, '_manufacturer', true);
-        }
-        $specRows = [];
-        $specRows['Artikelzustand'] = (string) ($aspects['Artikelzustand'][0] ?? '');
-        $specRows['Marke / Hersteller'] = $manufacturer;
-        $specRows['MPN'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['MPN'][0] ?? '');
-        $specRows['Kategorie'] = (string) ($category['category_path'] ?? '');
-        $specRows['Herstellernummer'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['Herstellernummer'][0] ?? '');
-        $specRows['Manufacturer Part Number'] = $primaryPartNumber !== '' ? $primaryPartNumber : (string) ($aspects['Manufacturer Part Number'][0] ?? '');
-        $specRows['OE/OEM Referenznummer'] = $allPartNumbers !== [] ? implode(', ', $allPartNumbers) : '';
-        $specRows['Ursprungsland'] = (string) ($aspects['Ursprungsland'][0] ?? '');
-        $specRows['Hinweise des Verkäufers'] = 'Gebraucht, geprüft, voll funktionsfähig';
-
-        $specHtml = '';
-        foreach ($specRows as $label => $value) {
-            if (trim($value) === '') {
-                continue;
-            }
-            $specHtml .= '<tr><td style="padding:10px;border:1px solid #d1d5db;background:#f9fafb;font-weight:600;color:#0b2a57;">' . esc_html($label) . '</td><td style="padding:10px;border:1px solid #d1d5db;color:#111827;">' . esc_html($value) . '</td></tr>';
-        }
-
-        $paragraphs = '';
-        foreach ($baseDescription as $paragraph) {
-            $paragraphs .= '<p style="margin:0 0 10px;color:#1f2937;line-height:1.55;">' . esc_html($paragraph) . '</p>';
-        }
-        if ($descriptionText !== '' && mb_stripos(implode(' ', $baseDescription), $descriptionText) === false) {
-            $paragraphs .= '<p style="margin:0 0 10px;color:#1f2937;line-height:1.55;">' . esc_html($descriptionText) . '</p>';
-        }
-
-        $mapUrl = trim((string) ($settings['ebay_de_delivery_map_url'] ?? ''));
-        $deliveryMap = $mapUrl !== ''
-            ? '<img src="' . esc_url($mapUrl) . '" alt="Lieferung in Europa" style="display:block;width:100%;height:auto;border:0;">'
-            : '<div style="height:230px;border:1px dashed #cbd5e1;background:linear-gradient(145deg,#f8fafc,#e2e8f0);display:flex;align-items:center;justify-content:center;text-align:center;color:#0b2a57;font-weight:700;padding:18px;line-height:1.5;">Kartenplatzhalter<br>Lieferung in Europa inkl. UK und Inseln</div>';
-
-        return '<div style="max-width:1080px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#111827;background:#fff;border:1px solid #dbe3ef;">'
-            . '<div style="background:#0b2a57;color:#fff;padding:12px 18px;font-size:15px;font-weight:700;"><table role="presentation" width="100%"><tr><td>✓ Geprüfte gebrauchte Autoteile</td><td>↻ Kundenservice 24/7</td><td>🚚 Schneller Versand in Europa (2–5 Werktage)</td></tr></table></div>'
-            . '<div style="padding:20px;">'
-            . '<h2 style="margin:0 0 18px;color:#0b2a57;font-size:48px;line-height:1.12;font-weight:800;">' . esc_html((string) ($content['title'] ?? $product->get_name())) . '</h2>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
-            . '<td valign="top" width="52%" style="padding-right:12px;">'
-            . '<h3 style="margin:0 0 10px;color:#0b2a57;font-size:34px;line-height:1.2;">🟧 Beschreibung</h3>' . $paragraphs
-            . '<h3 style="margin:20px 0 10px;color:#0b2a57;font-size:34px;line-height:1.2;">⚙️ Produktdetails</h3>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $featureRows
-            . ($allPartNumbers !== [] ? '<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#0b2a57;font-weight:600;">Teilenummern</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#111827;">' . esc_html(implode(', ', $allPartNumbers)) . '</td></tr>' : '')
-            . '</table></td>'
-            . '<td valign="top" width="48%" style="padding-left:12px;">'
-            . '<div style="background:#f8fafc;border:1px solid #d1d5db;border-radius:6px;padding:14px;">'
-            . '<h3 style="margin:0 0 12px;color:#0b2a57;font-size:34px;line-height:1.2;">☰ Artikelmerkmale</h3>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#fff;">' . $specHtml . '</table></div></td>'
-            . '</tr></table>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:20px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;"><tr>'
-            . '<td width="52%" style="padding:0;vertical-align:top;background:#f8fafc;">' . $deliveryMap . '</td>'
-            . '<td width="48%" style="padding:16px;vertical-align:top;background:#fff;">'
-            . '<div style="color:#0b2a57;font-size:34px;font-weight:800;line-height:1.2;margin-bottom:8px;">🚚 Lieferung in ganz Europa</div>'
-            . '<div style="color:#111827;font-size:30px;font-weight:800;line-height:1.2;margin-bottom:12px;">Lieferzeit: 2–5 Werktage</div>'
-            . '<ul style="margin:0;padding-left:18px;color:#1f2937;line-height:1.6;"><li>Schneller und zuverlässiger Versand.</li><li>Sichere Verpackung zum Schutz der Ware.</li><li>Sendungsverfolgung für jede Bestellung.</li><li>Liefergebiet: EU, UK und benachbarte Inseln.</li></ul>'
-            . '</td></tr></table>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:16px;"><tr>'
-            . '<td width="50%" style="padding-right:8px;"><div style="background:#0b2a57;color:#fff;padding:14px;border-radius:6px;font-weight:700;text-align:center;">Andere Teile aus diesem Fahrzeug ansehen</div></td>'
-            . '<td width="50%" style="padding-left:8px;"><div style="background:#0b2a57;color:#fff;padding:14px;border-radius:6px;font-weight:700;text-align:center;">Andere Artikel aus dieser Kategorie ansehen</div></td>'
-            . '</tr></table>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">'
-            . '<tr><td style="padding:10px 12px;background:#f8fafc;color:#0b2a57;font-weight:700;">FAQ</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Rückgabe</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Versand</td><td style="padding:10px 12px;background:#f8fafc;color:#6b7280;font-weight:700;">Zahlung</td></tr>'
-            . '<tr><td colspan="4" style="padding:12px 14px;color:#1f2937;line-height:1.55;"><strong>FAQ:</strong> Bitte vergleichen Sie Teilenummer und Fahrzeugdaten vor dem Kauf.<br><strong>Rückgabe:</strong> Rückgabe gemäß eBay-Richtlinien innerhalb der vorgesehenen Frist.<br><strong>Versand:</strong> Zustellung in Europa, inklusive UK und benachbarter Inseln, in der Regel 2–5 Werktage.<br><strong>Zahlung:</strong> Zahlung über die von eBay bereitgestellten sicheren Methoden.</td></tr>'
-            . '</div>'
-            . '<div style="margin-top:16px;border:1px solid #d1d5db;padding:12px 14px;background:#fff;color:#0b2a57;font-weight:700;">Versandpartner: <span style="display:inline-block;background:#ffcc00;color:#c60000;padding:4px 12px;border-radius:4px;font-weight:800;">DHL</span></div>'
-            . '</div></div>';
+        $preview = $this->build_ebay_de_description_preview_data($product, $productId, (string) ($content['title'] ?? ''));
+        return (string) ($preview['html'] ?? '');
     }
+
+    private function build_ebay_de_description_preview_data($product, int $productId, string $preferredTitle = ''): array
+    {
+        $title = trim(wp_strip_all_tags($preferredTitle));
+        if ($title === '' && method_exists($product, 'get_name')) {
+            $title = trim(wp_strip_all_tags((string) $product->get_name()));
+        }
+
+        $rawDescription = (string) get_post_field('post_content', $productId);
+        if (trim(wp_strip_all_tags($rawDescription)) === '' && method_exists($product, 'get_description')) {
+            $rawDescription = (string) $product->get_description();
+        }
+        $descriptionHtml = $this->sanitize_ebay_template_description_html($rawDescription);
+
+        $details = $this->collect_woo_product_details_for_ebay_template($product, $productId);
+        $detailsByPolishLabel = [];
+        foreach ($details['fields'] as $field) {
+            $detailsByPolishLabel[(string) $field['polish_label']] = (string) $field['value'];
+        }
+
+        $sku = method_exists($product, 'get_sku') ? trim((string) $product->get_sku()) : '';
+        $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
+        $reference = $ebaySku !== '' ? $ebaySku : $sku;
+        $partNumber = $this->first_non_empty([
+            $detailsByPolishLabel['Numer części'] ?? '',
+            function_exists('gp_get_product_part_number') ? (string) gp_get_product_part_number($product) : '',
+            get_post_meta($productId, '_part_number', true),
+            get_post_meta($productId, '_oem_number', true),
+            $sku,
+        ]);
+        if (function_exists('gp_get_product_part_number') && in_array($partNumber, ['Brak', 'brak'], true)) {
+            $partNumber = '';
+        }
+
+        $manufacturer = $this->first_non_empty([
+            $detailsByPolishLabel['Producent'] ?? '',
+            get_post_meta($productId, '_manufacturer', true),
+            get_post_meta($productId, '_brand', true),
+        ]);
+        $fitment = $this->build_template_fitment_value($detailsByPolishLabel);
+        $condition = $this->first_non_empty([$detailsByPolishLabel['Stan'] ?? '', 'Gebraucht']);
+
+        $sameVehicleUrl = function_exists('gp_get_vehicle_parts_url_for_product') ? trim((string) gp_get_vehicle_parts_url_for_product($productId)) : '';
+        $ovokoCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true));
+        if ($sameVehicleUrl === '' && $ovokoCarId !== '' && function_exists('get_post_type_archive_link')) {
+            $archive = (string) get_post_type_archive_link('product');
+            if ($archive !== '') {
+                $sameVehicleUrl = add_query_arg('ovoko_car_id', rawurlencode($ovokoCarId), $archive);
+            }
+        }
+
+        $importantRows = $this->render_ebay_template_rows([
+            'Teilenummer' => $partNumber,
+            'Hersteller' => $manufacturer,
+            'Referenznummer / SKU' => $reference,
+            'Passend für' => $fitment,
+        ]);
+
+        $specRows = '';
+        foreach ($details['fields'] as $field) {
+            $specRows .= $this->render_ebay_template_row((string) $field['german_label'], (string) $field['value']);
+        }
+
+        $vehicleRows = $this->render_ebay_template_rows([
+            'Hersteller' => $detailsByPolishLabel['Producent'] ?? '',
+            'Modell' => $detailsByPolishLabel['Model'] ?? '',
+            'Variante / Ausführung' => $detailsByPolishLabel['Modyfikacja'] ?? '',
+            'Baujahr des Fahrzeugs' => $detailsByPolishLabel['Rok produkcji samochodu'] ?? '',
+            'Bauzeitraum' => $detailsByPolishLabel['Okres'] ?? '',
+            'Motorcode' => $detailsByPolishLabel['Kod silnika'] ?? '',
+            'Kraftstoffart' => $detailsByPolishLabel['Rodzaj paliwa'] ?? '',
+            'Getriebeart' => $detailsByPolishLabel['Typ skrzyni biegów'] ?? '',
+            'Antrieb' => $detailsByPolishLabel['Koła napędowe'] ?? '',
+            'Lenkradposition' => $detailsByPolishLabel['Pozycja kierownicy'] ?? '',
+            'Laufleistung' => $detailsByPolishLabel['Przebieg'] ?? '',
+        ]);
+
+        $buttonHtml = $sameVehicleUrl !== ''
+            ? '<p style="margin:18px 0 0;"><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0b2a57;color:#ffffff;text-decoration:none;padding:13px 18px;border-radius:4px;font-weight:700;">Andere Teile aus diesem Fahrzeug ansehen</a></p>'
+            : '';
+
+        $descriptionBlock = $descriptionHtml !== ''
+            ? $descriptionHtml
+            : '<p style="margin:0;color:#4b5563;line-height:1.6;">Nicht angegeben</p>';
+
+        $html = '<div style="max-width:1060px;margin:0 auto;background:#ffffff;color:#111827;font-family:Arial,Helvetica,sans-serif;border:1px solid #dbe3ef;">'
+            . '<div style="background:#0b2a57;color:#ffffff;padding:18px 22px;">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="font-size:28px;font-weight:800;letter-spacing:.2px;">eBay</td><td align="right" style="font-size:15px;font-weight:700;">Originales gebrauchtes OEM-Teil</td></tr></table>'
+            . '</div>'
+            . '<div style="background:#f3f6fb;border-bottom:1px solid #dbe3ef;padding:10px 14px;">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
+            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">✓ Schneller weltweiter Versand</td>'
+            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">↻ 30 Tage Rückgabe</td>'
+            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">▣ Sichere Verpackung</td>'
+            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">★ 100% Originalteil</td>'
+            . '</tr></table></div>'
+            . '<div style="padding:24px 22px;">'
+            . '<h1 style="margin:0 0 8px;color:#0b2a57;font-size:30px;line-height:1.22;font-weight:800;">' . esc_html($title) . '</h1>'
+            . '<p style="margin:0 0 20px;color:#374151;font-size:16px;"><strong>Zustand:</strong> ' . esc_html($condition) . '</p>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
+            . '<td width="48%" valign="top" style="padding:0 10px 18px 0;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#0b2a57;color:#fff;padding:11px 14px;font-weight:800;">Wichtigste Daten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $importantRows . '</table></div></td>'
+            . '<td width="52%" valign="top" style="padding:0 0 18px 10px;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#0b2a57;color:#fff;padding:11px 14px;font-weight:800;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div></td>'
+            . '</tr><tr>'
+            . '<td width="48%" valign="top" style="padding:0 10px 18px 0;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#f3f6fb;color:#0b2a57;padding:11px 14px;font-weight:800;">Fahrzeug- / Spenderfahrzeugdaten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $vehicleRows . '</table>' . $buttonHtml . '</div></td>'
+            . '<td width="52%" valign="top" style="padding:0 0 18px 10px;"><div style="border:1px solid #dbe3ef;border-radius:4px;padding:14px;"><div style="color:#0b2a57;font-weight:800;margin-bottom:10px;font-size:18px;">Beschreibung</div>' . $descriptionBlock . '</div></td>'
+            . '</tr></table>'
+            . '<div style="border:1px solid #dbe3ef;background:#f8fafc;padding:16px;margin:2px 0 18px;border-radius:4px;">'
+            . '<h2 style="margin:0 0 8px;color:#0b2a57;font-size:20px;">Kompatibilität / Passgenauigkeit</h2>'
+            . '<p style="margin:0 0 8px;color:#1f2937;line-height:1.55;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p>'
+            . '<p style="margin:0;color:#1f2937;line-height:1.55;">Das Teil passt möglicherweise nicht zu Fahrzeugen ohne passende Ausstattung / Paket.</p>'
+            . '</div>'
+            . '<div style="border:1px solid #dbe3ef;padding:16px;margin-bottom:18px;border-radius:4px;">'
+            . '<h2 style="margin:0 0 8px;color:#0b2a57;font-size:20px;">Wir liefern in ganz Europa</h2>'
+            . '<p style="margin:0 0 8px;color:#111827;font-weight:700;">Lieferzeit: 2–5 Tage</p>'
+            . '<p style="margin:0;color:#1f2937;">Logistikpartner: DHL / DPD</p>'
+            . '</div>'
+            . '</div>'
+            . '<div style="background:#0b2a57;color:#ffffff;text-align:center;padding:18px 22px;">'
+            . '<div style="font-size:20px;font-weight:800;margin-bottom:5px;">Kaufen Sie mit Vertrauen</div>'
+            . '<div style="font-size:14px;">Geprüfte gebrauchte Teile | Sorgfältig kontrolliert | Professionell verpackt</div>'
+            . '</div></div>';
+
+        return [
+            'html' => $html,
+            'title' => $title,
+            'source_description' => $rawDescription,
+            'description_source' => 'post_content',
+            'used_fields' => $details['used_fields'],
+            'missing_fields' => $details['missing_fields'],
+            'field_mapping' => $details['field_mapping'],
+            'same_vehicle_url' => $sameVehicleUrl,
+            'warnings' => $details['warnings'],
+        ];
+    }
+
+    private function collect_woo_product_details_for_ebay_template($product, int $productId): array
+    {
+        $rawRows = function_exists('gp_get_product_details_rows') ? (array) gp_get_product_details_rows($productId) : $this->fallback_product_details_rows($productId);
+        $mapping = $this->ebay_de_template_field_mapping();
+        $fields = [];
+        $used = [];
+        $missing = [];
+        $fullMapping = [];
+
+        foreach ($mapping as $polishLabel => $config) {
+            $value = $this->value_from_labeled_rows($rawRows, (array) $config['aliases']);
+            $row = [
+                'polish_label' => $polishLabel,
+                'german_label' => (string) $config['german_label'],
+                'source' => 'WooCommerce product attributes displayed by gp_get_product_details_rows()',
+                'meta_key_or_function' => '_product_attributes / gp_get_product_details_rows()',
+                'example_value' => $value,
+                'required' => (bool) $config['required'],
+                'fallback' => 'empty row hidden',
+            ];
+            $fullMapping[] = $row;
+            if ($value !== '') {
+                $fields[] = $row + ['value' => $value];
+                $used[] = $row + ['value' => $value];
+            } else {
+                $missing[] = $row;
+            }
+        }
+
+        return [
+            'fields' => $fields,
+            'used_fields' => $used,
+            'missing_fields' => $missing,
+            'field_mapping' => $fullMapping,
+            'warnings' => $rawRows === [] ? ['No visible product detail rows found in _product_attributes.'] : [],
+        ];
+    }
+
+    private function ebay_de_template_field_mapping(): array
+    {
+        return [
+            'Kod koloru' => ['german_label' => 'Farbcode', 'aliases' => ['Kod koloru'], 'required' => false],
+            'Kod silnika' => ['german_label' => 'Motorcode', 'aliases' => ['Kod silnika'], 'required' => false],
+            'Kolor' => ['german_label' => 'Farbe', 'aliases' => ['Kolor'], 'required' => false],
+            'Koła napędowe' => ['german_label' => 'Antrieb', 'aliases' => ['Koła napędowe', 'Kola napedowe'], 'required' => false],
+            'Moc silnika' => ['german_label' => 'Motorleistung', 'aliases' => ['Moc silnika'], 'required' => false],
+            'Model' => ['german_label' => 'Modell', 'aliases' => ['Model'], 'required' => false],
+            'Modyfikacja' => ['german_label' => 'Variante / Ausführung', 'aliases' => ['Modyfikacja'], 'required' => false],
+            'Numer części' => ['german_label' => 'Teilenummer', 'aliases' => ['Numer części', 'Numer czesci'], 'required' => true],
+            'Okres' => ['german_label' => 'Bauzeitraum', 'aliases' => ['Okres'], 'required' => false],
+            'Pojemność silnika' => ['german_label' => 'Hubraum', 'aliases' => ['Pojemność silnika', 'Pojemnosc silnika'], 'required' => false],
+            'Pozycja kierownicy' => ['german_label' => 'Lenkradposition', 'aliases' => ['Pozycja kierownicy'], 'required' => false],
+            'Producent' => ['german_label' => 'Hersteller', 'aliases' => ['Producent'], 'required' => true],
+            'Przebieg' => ['german_label' => 'Laufleistung', 'aliases' => ['Przebieg'], 'required' => false],
+            'Rodzaj paliwa' => ['german_label' => 'Kraftstoffart', 'aliases' => ['Rodzaj paliwa'], 'required' => false],
+            'Rok produkcji samochodu' => ['german_label' => 'Baujahr des Fahrzeugs', 'aliases' => ['Rok produkcji samochodu'], 'required' => false],
+            'Stan' => ['german_label' => 'Zustand', 'aliases' => ['Stan'], 'required' => false],
+            'Stan opakowania' => ['german_label' => 'Verpackungszustand', 'aliases' => ['Stan opakowania'], 'required' => false],
+            'Typ skrzyni biegów' => ['german_label' => 'Getriebeart', 'aliases' => ['Typ skrzyni biegów', 'Typ skrzyni biegow'], 'required' => false],
+        ];
+    }
+
+    private function fallback_product_details_rows(int $productId): array
+    {
+        $rows = [];
+        $attributes = (array) get_post_meta($productId, '_product_attributes', true);
+        foreach ($attributes as $attribute) {
+            $name = trim((string) ($attribute['name'] ?? ''));
+            $value = $this->clean_template_value((string) ($attribute['value'] ?? ''));
+            if ($name !== '' && $value !== '' && !empty($attribute['is_visible'])) {
+                $rows[$name] = $value;
+            }
+        }
+        return $rows;
+    }
+
+    private function value_from_labeled_rows(array $rows, array $labels): string
+    {
+        foreach ($labels as $label) {
+            foreach ($rows as $rowLabel => $value) {
+                if ($this->normalize_template_label((string) $rowLabel) === $this->normalize_template_label((string) $label)) {
+                    return $this->clean_template_value((string) $value);
+                }
+            }
+        }
+        return '';
+    }
+
+    private function normalize_template_label(string $label): string
+    {
+        $label = remove_accents($label);
+        $label = function_exists('mb_strtolower') ? mb_strtolower($label) : strtolower($label);
+        return preg_replace('/[^a-z0-9]+/u', '', $label) ?: '';
+    }
+
+    private function clean_template_value(string $value): string
+    {
+        $value = trim(wp_strip_all_tags(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        if ($value === '' || $value === '-') {
+            return '';
+        }
+        $lower = function_exists('mb_strtolower') ? mb_strtolower($value) : strtolower($value);
+        return in_array($lower, ['brak', 'null', 'n/a', 'none'], true) ? '' : $value;
+    }
+
+    private function first_non_empty(array $values): string
+    {
+        foreach ($values as $value) {
+            $clean = $this->clean_template_value((string) $value);
+            if ($clean !== '') {
+                return $clean;
+            }
+        }
+        return '';
+    }
+
+    private function build_template_fitment_value(array $detailsByPolishLabel): string
+    {
+        $parts = array_filter([
+            $detailsByPolishLabel['Producent'] ?? '',
+            $detailsByPolishLabel['Model'] ?? '',
+            $detailsByPolishLabel['Modyfikacja'] ?? '',
+            $detailsByPolishLabel['Rok produkcji samochodu'] ?? '',
+        ], static fn ($value): bool => trim((string) $value) !== '');
+        return implode(' ', $parts);
+    }
+
+    private function render_ebay_template_rows(array $rows): string
+    {
+        $html = '';
+        foreach ($rows as $label => $value) {
+            $html .= $this->render_ebay_template_row((string) $label, (string) $value);
+        }
+        return $html !== '' ? $html : '<tr><td style="padding:10px 12px;color:#4b5563;">Nicht angegeben</td></tr>';
+    }
+
+    private function render_ebay_template_row(string $label, string $value): string
+    {
+        $value = $this->clean_template_value($value);
+        if ($value === '') {
+            return '';
+        }
+        return '<tr><td style="width:42%;padding:10px 12px;border-top:1px solid #e5e7eb;background:#f8fafc;color:#0b2a57;font-weight:700;">' . esc_html($label) . '</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;">' . esc_html($value) . '</td></tr>';
+    }
+
+    private function sanitize_ebay_template_description_html(string $rawDescription): string
+    {
+        $allowed = wp_kses_post($rawDescription);
+        $plain = trim(wp_strip_all_tags($allowed));
+        if ($plain === '') {
+            return '';
+        }
+        $html = wpautop($allowed);
+        $html = preg_replace('/<\/?(script|style|iframe|object|embed|form|input|button|canvas|svg)[^>]*>/iu', '', (string) $html) ?: '';
+        return '<div style="color:#1f2937;line-height:1.6;">' . $html . '</div>';
+    }
+
     private function should_use_ebay_de_description_template(array $settings): bool
     {
         return !empty($settings['enable_ebay_de_description_template']);
@@ -1690,19 +1885,36 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $identifier = trim($productOrSku);
         if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
-        $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_START', ['input' => $identifier]);
+        $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_START', ['input' => $identifier, 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
         try {
             $resolved = $this->resolve_product_by_id_or_sku($identifier);
             $productId = (int) ($resolved['product_id'] ?? 0);
             $product = $resolved['product'];
             if ($productId <= 0 || !$product) return ['result' => 'error', 'error' => 'product_not_found'];
-            $settings = $this->settings();
-            $content = $this->resolve_german_content($product, $productId, $this->marketplace_id(), $settings);
-            $category = $this->resolve_category($product, $productId, (string) $product->get_sku(), $this->marketplace_id(), $settings);
-            $aspects = $this->resolve_product_aspects($product, $productId, (string) $product->get_sku(), $settings, (string) ($category['category_id'] ?? ''), $content);
-            $html = $this->build_ebay_de_description_template($product, $productId, $content, $aspects, $category);
-            $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html)]);
-            return ['result' => 'success', 'product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html' => $html];
+            $preview = $this->build_ebay_de_description_preview_data($product, $productId);
+            $html = (string) ($preview['html'] ?? '');
+            $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html), 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
+            return [
+                'result' => 'success',
+                'product_id' => $productId,
+                'sku' => (string) $product->get_sku(),
+                'title' => (string) ($preview['title'] ?? ''),
+                'source_description' => (string) ($preview['source_description'] ?? ''),
+                'description_source' => (string) ($preview['description_source'] ?? 'post_content'),
+                'used_fields' => (array) ($preview['used_fields'] ?? []),
+                'missing_fields' => (array) ($preview['missing_fields'] ?? []),
+                'field_mapping' => (array) ($preview['field_mapping'] ?? []),
+                'same_vehicle_url' => (string) ($preview['same_vehicle_url'] ?? ''),
+                'warnings' => (array) ($preview['warnings'] ?? []),
+                'safety' => [
+                    'called_ebay_api' => false,
+                    'called_ovoko_api' => false,
+                    'updated_ebay_listing' => false,
+                    'created_ebay_listing' => false,
+                    'modified_woo_product' => false,
+                ],
+                'html' => $html,
+            ];
         } catch (\Throwable $e) {
             $this->logger->error('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
             return ['result' => 'error', 'error' => $e->getMessage()];
