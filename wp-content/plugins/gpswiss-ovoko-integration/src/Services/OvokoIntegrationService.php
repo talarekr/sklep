@@ -2737,6 +2737,11 @@ class OvokoIntegrationService
             $hier[]=$hierItem;
 
             if(!$term){$chainOk=false; if($dryRun){continue;} break;}
+            if(!$dryRun && $ovokoCategoryId > 0){
+                update_term_meta((int)$term->term_id, '_gpswiss_ovoko_category_id', (string)$ovokoCategoryId);
+                update_term_meta((int)$term->term_id, '_gpswiss_ovoko_category_level_index', (string)$levelIndex);
+                update_term_meta((int)$term->term_id, '_gpswiss_ovoko_category_path', (string)$path);
+            }
             $parent=(int)$term->term_id;$finalId=$parent;
         }
         $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'raw_category_title_path'=>$categoryResolve['raw_category_title_path'] ?? '','category_id'=>$categoryResolve['category_id'] ?? '','category_title_path_source_key'=>$categoryResolve['category_title_path_source_key'] ?? '','all_category_related_fields'=>$categoryDiagnostics['all_category_related_fields'],'resolved_full_ovoko_category_path'=>$categoryResolve['resolved_full_ovoko_category_path'] ?? '','category_resolution_method'=>$categoryResolve['category_resolution_method'] ?? '','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false,'debug'=>$debug];
@@ -3556,6 +3561,436 @@ private function filter_customer_facing_technical_attributes(array $attrs, array
             if(!empty($a['is_visible']) && $name!==''){$rows[$name]=$v;}
         }
         return $this->filter_customer_facing_technical_attributes($rows);
+    }
+
+
+    public function audit_old_categories_for_cleanup(): array
+    {
+        if (!taxonomy_exists('product_cat')) {
+            return ['ok' => false, 'error' => 'product_cat taxonomy is not available'];
+        }
+
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'fields' => 'all']);
+        if (is_wp_error($terms)) {
+            return ['ok' => false, 'error' => $terms->get_error_message()];
+        }
+
+        $termsById = [];
+        $childrenByParent = [];
+        foreach ((array) $terms as $term) {
+            if (!$term instanceof \WP_Term) {
+                continue;
+            }
+            $termId = (int) $term->term_id;
+            $termsById[$termId] = $term;
+            $parentId = (int) $term->parent;
+            if (!isset($childrenByParent[$parentId])) {
+                $childrenByParent[$parentId] = [];
+            }
+            $childrenByParent[$parentId][] = $termId;
+        }
+
+        $directProductCounts = $this->get_direct_product_counts_by_category();
+        $ovokoTreeIds = $this->detect_ovoko_product_category_tree_ids($termsById);
+        $menuCategoryIds = $this->detect_homepage_menu_product_category_ids($termsById, $childrenByParent);
+        $systemCategoryIds = $this->detect_system_product_category_ids($termsById);
+
+        $rows = [];
+        $counts = [
+            'total_product_categories' => count($termsById),
+            'ovoko_tree_categories' => count($ovokoTreeIds),
+            'old_categories_candidates' => 0,
+            'categories_with_products' => 0,
+            'empty_old_categories' => 0,
+            'blocked_from_deletion' => 0,
+            'safe_to_delete' => 0,
+            'in_homepage_menu' => count($menuCategoryIds),
+        ];
+
+        foreach ($termsById as $termId => $term) {
+            $productCount = (int) ($directProductCounts[$termId] ?? 0);
+            $children = $childrenByParent[$termId] ?? [];
+            $childrenProductCount = $this->count_descendant_products($termId, $childrenByParent, $directProductCounts);
+            $inOvokoTree = isset($ovokoTreeIds[$termId]);
+            $hasOvokoDescendant = $this->has_descendant_in_set($termId, $childrenByParent, $ovokoTreeIds);
+            $inMenu = isset($menuCategoryIds[$termId]);
+            $isSystem = isset($systemCategoryIds[$termId]);
+            $reasonParts = [];
+
+            if ($productCount > 0) {
+                $reasonParts[] = 'has_direct_products';
+                $counts['categories_with_products']++;
+            }
+            if ($childrenProductCount > 0) {
+                $reasonParts[] = 'has_children_with_products';
+            }
+            if ($inOvokoTree) {
+                $reasonParts[] = 'in_ovoko_tree';
+            }
+            if ($hasOvokoDescendant) {
+                $reasonParts[] = 'parent_needed_for_ovoko_tree';
+            }
+            if ($isSystem) {
+                $reasonParts[] = 'system_or_special_category';
+            }
+            if ($inMenu) {
+                $reasonParts[] = 'used_in_homepage_or_wp_menu';
+            }
+
+            $isOldCandidate = !$inOvokoTree && !$hasOvokoDescendant;
+            if ($isOldCandidate) {
+                $counts['old_categories_candidates']++;
+                if ($productCount === 0 && $childrenProductCount === 0) {
+                    $counts['empty_old_categories']++;
+                }
+            }
+
+            $safeToDelete = $isOldCandidate && $productCount === 0 && $childrenProductCount === 0 && !$isSystem && !$inMenu;
+            if ($safeToDelete) {
+                $counts['safe_to_delete']++;
+                $reason = 'safe_to_delete_empty_old_category';
+            } else {
+                $counts['blocked_from_deletion']++;
+                if ($reasonParts === []) {
+                    $reasonParts[] = 'blocked_by_safety_policy';
+                }
+                $reason = implode('|', array_values(array_unique($reasonParts)));
+            }
+
+            $parent = isset($termsById[(int) $term->parent]) ? $termsById[(int) $term->parent] : null;
+            $rows[] = [
+                'category_id' => $termId,
+                'name' => (string) $term->name,
+                'slug' => (string) $term->slug,
+                'parent_id' => (int) $term->parent,
+                'parent_name' => $parent instanceof \WP_Term ? (string) $parent->name : '',
+                'product_count' => $productCount,
+                'children_count' => count($children),
+                'children_product_count' => $childrenProductCount,
+                'in_ovoko_tree' => $inOvokoTree ? 'yes' : 'no',
+                'in_menu' => $inMenu ? 'yes' : 'no',
+                'safe_to_delete' => $safeToDelete ? 'yes' : 'no',
+                'reason' => $reason,
+            ];
+        }
+
+        usort($rows, static function (array $a, array $b): int {
+            if ($a['safe_to_delete'] !== $b['safe_to_delete']) {
+                return $a['safe_to_delete'] === 'yes' ? -1 : 1;
+            }
+            return strcasecmp((string) $a['name'], (string) $b['name']);
+        });
+
+        return [
+            'ok' => true,
+            'action_name' => 'Audit old categories — dry-run only',
+            'dry_run' => true,
+            'no_deletions_performed' => true,
+            'counts' => $counts,
+            'safe_to_delete' => array_values(array_filter($rows, static fn(array $row): bool => $row['safe_to_delete'] === 'yes')),
+            'blocked_from_deletion' => array_values(array_filter($rows, static fn(array $row): bool => $row['safe_to_delete'] !== 'yes')),
+            'rows' => $rows,
+        ];
+    }
+
+    public function build_category_cleanup_csv(): string
+    {
+        $audit = $this->audit_old_categories_for_cleanup();
+        $handle = fopen('php://temp', 'r+');
+        $headers = ['category_id', 'name', 'slug', 'parent_id', 'parent_name', 'product_count', 'children_count', 'in_ovoko_tree', 'in_menu', 'safe_to_delete', 'reason'];
+        fputcsv($handle, $headers);
+        foreach ((array) ($audit['rows'] ?? []) as $row) {
+            fputcsv($handle, array_map(static fn(string $key) => (string) ($row[$key] ?? ''), $headers));
+        }
+        rewind($handle);
+        $csv = stream_get_contents($handle);
+        fclose($handle);
+        return (string) $csv;
+    }
+
+    public function preview_homepage_menu_changes(): array
+    {
+        $audit = $this->audit_old_categories_for_cleanup();
+        if (empty($audit['ok'])) {
+            return $audit;
+        }
+
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'fields' => 'all']);
+        $termsById = [];
+        $childrenByParent = [];
+        foreach ((array) $terms as $term) {
+            if (!$term instanceof \WP_Term) {
+                continue;
+            }
+            $termId = (int) $term->term_id;
+            $termsById[$termId] = $term;
+            $childrenByParent[(int) $term->parent][] = $termId;
+        }
+
+        $directProductCounts = $this->get_direct_product_counts_by_category();
+        $ovokoTreeIds = $this->detect_ovoko_product_category_tree_ids($termsById);
+        $menuCategoryIds = $this->detect_homepage_menu_product_category_ids($termsById, $childrenByParent);
+        $systemCategoryIds = $this->detect_system_product_category_ids($termsById);
+        $currentVisible = [];
+        foreach (array_keys($menuCategoryIds) as $termId) {
+            if (!isset($termsById[$termId])) {
+                continue;
+            }
+            $term = $termsById[$termId];
+            $currentVisible[] = $this->category_menu_row($term, $termsById, $directProductCounts, isset($ovokoTreeIds[$termId]));
+        }
+
+        $topOvoko = [];
+        foreach (array_keys($ovokoTreeIds) as $termId) {
+            if (!isset($termsById[$termId])) {
+                continue;
+            }
+            $parentId = (int) $termsById[$termId]->parent;
+            if ($parentId !== 0 && isset($ovokoTreeIds[$parentId])) {
+                continue;
+            }
+            if (isset($systemCategoryIds[$termId])) {
+                continue;
+            }
+            $topOvoko[] = $this->category_menu_row($termsById[$termId], $termsById, $directProductCounts, true);
+        }
+        usort($topOvoko, static fn(array $a, array $b): int => strcasecmp((string) $a['name'], (string) $b['name']));
+
+        $oldMenuItems = array_values(array_filter($currentVisible, static fn(array $row): bool => empty($row['in_ovoko_tree'])));
+        $newItems = array_values(array_filter($topOvoko, static fn(array $row): bool => !empty($row['in_ovoko_tree'])));
+
+        return [
+            'ok' => true,
+            'action_name' => 'Preview homepage menu changes — dry-run only',
+            'dry_run' => true,
+            'no_menu_changes_performed' => true,
+            'mechanisms' => [
+                ['type' => 'custom_theme_template', 'file' => 'template-parts/home/store-header.php', 'description' => 'Dynamic "Wszystkie kategorie" list from product_cat under Motoryzacja, excluding technical parent categories.'],
+                ['type' => 'custom_theme_template', 'file' => 'template-parts/home/category-mega.php', 'description' => 'Static category mega section with placeholder # links.'],
+                ['type' => 'custom_theme_template', 'file' => 'template-parts/home/popular-products.php', 'description' => 'Static shortcut/product sections resolved against Woo product_cat names/slugs.'],
+                ['type' => 'wordpress_nav_menus', 'file' => 'database', 'description' => 'WP nav menu product_cat items, if configured.'],
+            ],
+            'current_visible_category_menu_items' => $currentVisible,
+            'old_menu_items_to_remove_or_replace' => $oldMenuItems,
+            'new_top_level_ovoko_items_to_add' => $newItems,
+            'plan' => [
+                'recommended_menu_depth' => 'top_level_only_initially',
+                'recommended_order' => 'alphabetical_by_category_name_unless_business_priority_is_confirmed',
+                'links' => 'use get_term_link(product_cat) for each Ovoko category',
+                'manual_confirmation_required' => true,
+                'future_apply_actions' => ['delete_safe_old_empty_categories', 'update_homepage_category_menu'],
+            ],
+        ];
+    }
+
+    private function category_menu_row(\WP_Term $term, array $termsById, array $directProductCounts, bool $inOvokoTree): array
+    {
+        $link = get_term_link($term);
+        $parent = isset($termsById[(int) $term->parent]) ? $termsById[(int) $term->parent] : null;
+        return [
+            'category_id' => (int) $term->term_id,
+            'name' => (string) $term->name,
+            'slug' => (string) $term->slug,
+            'parent_id' => (int) $term->parent,
+            'parent_name' => $parent instanceof \WP_Term ? (string) $parent->name : '',
+            'product_count' => (int) ($directProductCounts[(int) $term->term_id] ?? 0),
+            'children_count' => count(get_term_children((int) $term->term_id, 'product_cat') ?: []),
+            'in_ovoko_tree' => $inOvokoTree,
+            'top_level' => (int) $term->parent === 0,
+            'url' => is_wp_error($link) ? '' : (string) $link,
+        ];
+    }
+
+    private function get_direct_product_counts_by_category(): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results(
+            "SELECT tt.term_id, COUNT(DISTINCT p.ID) AS product_count
+             FROM {$wpdb->term_taxonomy} tt
+             LEFT JOIN {$wpdb->term_relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             LEFT JOIN {$wpdb->posts} p ON p.ID = tr.object_id AND p.post_type = 'product' AND p.post_status NOT IN ('trash', 'auto-draft')
+             WHERE tt.taxonomy = 'product_cat'
+             GROUP BY tt.term_id",
+            ARRAY_A
+        );
+        $counts = [];
+        foreach ((array) $rows as $row) {
+            $counts[(int) $row['term_id']] = (int) $row['product_count'];
+        }
+        return $counts;
+    }
+
+    private function detect_ovoko_product_category_tree_ids(array $termsById): array
+    {
+        $ids = [];
+        $markerKeys = ['_gpswiss_ovoko_category_id', 'gpswiss_ovoko_category_id', '_ovoko_category_id', 'ovoko_category_id', '_gpswiss_ovoko_category_path', 'gpswiss_ovoko_category_path'];
+        foreach ($termsById as $termId => $term) {
+            foreach ($markerKeys as $key) {
+                $value = get_term_meta((int) $termId, $key, true);
+                if (trim((string) $value) !== '') {
+                    $this->add_term_and_ancestors_to_set((int) $termId, $termsById, $ids);
+                    break;
+                }
+            }
+        }
+
+        $ovokoProductIds = get_posts([
+            'post_type' => 'product',
+            'post_status' => ['publish', 'draft', 'private'],
+            'fields' => 'ids',
+            'posts_per_page' => -1,
+            'no_found_rows' => true,
+            'meta_query' => [
+                'relation' => 'OR',
+                ['key' => '_ovoko_part_id', 'compare' => 'EXISTS'],
+                ['key' => 'ovoko_id', 'compare' => 'EXISTS'],
+            ],
+        ]);
+        foreach ((array) $ovokoProductIds as $productId) {
+            $termIds = wp_get_post_terms((int) $productId, 'product_cat', ['fields' => 'ids']);
+            foreach ((array) $termIds as $termId) {
+                $this->add_term_and_ancestors_to_set((int) $termId, $termsById, $ids);
+            }
+            $path = trim((string) get_post_meta((int) $productId, '_ovoko_category', true));
+            foreach ($this->find_term_ids_by_category_path($path, $termsById) as $termId) {
+                $this->add_term_and_ancestors_to_set((int) $termId, $termsById, $ids);
+            }
+        }
+
+        return $ids;
+    }
+
+    private function find_term_ids_by_category_path(string $path, array $termsById): array
+    {
+        $parts = array_values(array_filter(array_map('trim', preg_split('/\s*>\s*|\s*\/\s*/', $path) ?: [])));
+        if ($parts === []) {
+            return [];
+        }
+        $parent = 0;
+        $matched = [];
+        foreach ($parts as $name) {
+            $found = null;
+            foreach ($termsById as $term) {
+                if ((int) $term->parent === $parent && sanitize_title((string) $term->name) === sanitize_title($name)) {
+                    $found = $term;
+                    break;
+                }
+            }
+            if (!$found instanceof \WP_Term) {
+                break;
+            }
+            $matched[] = (int) $found->term_id;
+            $parent = (int) $found->term_id;
+        }
+        return $matched;
+    }
+
+    private function add_term_and_ancestors_to_set(int $termId, array $termsById, array &$set): void
+    {
+        while ($termId > 0 && isset($termsById[$termId])) {
+            $set[$termId] = true;
+            $termId = (int) $termsById[$termId]->parent;
+        }
+    }
+
+    private function detect_homepage_menu_product_category_ids(array $termsById, array $childrenByParent): array
+    {
+        $ids = [];
+        foreach ((array) wp_get_nav_menus() as $menu) {
+            $items = wp_get_nav_menu_items($menu->term_id);
+            foreach ((array) $items as $item) {
+                if (($item->object ?? '') === 'product_cat') {
+                    $ids[(int) $item->object_id] = true;
+                }
+            }
+        }
+
+        foreach ($this->detect_store_header_dynamic_category_ids($termsById, $childrenByParent) as $termId) {
+            $ids[$termId] = true;
+        }
+
+        $hardcodedLabels = ['Silniki', 'Skrzynia biegów', 'Filtry DPF', 'Felgi', 'Fotele', 'Zwrotnice', 'Silniki i osprzęt', 'Skrzynie biegów i napędy', 'Felgi i opony', 'Układ kierowniczy', 'Układ hamulcowy', 'Oświetlenie', 'Zawieszenie', 'Elektronika', 'Wnętrze / kokpit', 'Karoseria', 'Chłodzenie', 'Akcesoria'];
+        foreach ($hardcodedLabels as $label) {
+            foreach ($termsById as $termId => $term) {
+                $haystack = sanitize_title((string) $term->slug . ' ' . (string) $term->name);
+                $needle = sanitize_title($label);
+                if ($needle !== '' && (str_contains($haystack, $needle) || str_contains($needle, $haystack))) {
+                    $ids[(int) $termId] = true;
+                }
+            }
+        }
+
+        return $ids;
+    }
+
+    private function detect_store_header_dynamic_category_ids(array $termsById, array $childrenByParent): array
+    {
+        $root = null;
+        foreach ($termsById as $term) {
+            if (sanitize_title((string) $term->slug) === 'motoryzacja' || sanitize_title((string) $term->name) === 'motoryzacja') {
+                $root = $term;
+                break;
+            }
+        }
+        if (!$root instanceof \WP_Term) {
+            return [];
+        }
+        $ids = [];
+        $queue = [(int) $root->term_id];
+        $technicalSlugs = ['motoryzacja', 'czesci-samochodowe'];
+        while ($queue !== []) {
+            $parentId = array_shift($queue);
+            foreach (($childrenByParent[$parentId] ?? []) as $childId) {
+                $child = $termsById[$childId] ?? null;
+                if (!$child instanceof \WP_Term) {
+                    continue;
+                }
+                if (in_array(sanitize_title((string) $child->slug), $technicalSlugs, true)) {
+                    $queue[] = (int) $child->term_id;
+                    continue;
+                }
+                if ((int) $child->count > 0) {
+                    $ids[(int) $child->term_id] = true;
+                }
+            }
+        }
+        return $ids;
+    }
+
+    private function detect_system_product_category_ids(array $termsById): array
+    {
+        $ids = [];
+        $defaultProductCat = (int) get_option('default_product_cat', 0);
+        if ($defaultProductCat > 0) {
+            $ids[$defaultProductCat] = true;
+        }
+        $specialSlugs = ['uncategorized', 'bez-kategorii', 'motoryzacja', 'czesci-samochodowe'];
+        foreach ($termsById as $termId => $term) {
+            if (in_array(sanitize_title((string) $term->slug), $specialSlugs, true)) {
+                $ids[(int) $termId] = true;
+            }
+        }
+        return $ids;
+    }
+
+    private function count_descendant_products(int $termId, array $childrenByParent, array $directProductCounts): int
+    {
+        $total = 0;
+        foreach (($childrenByParent[$termId] ?? []) as $childId) {
+            $total += (int) ($directProductCounts[$childId] ?? 0);
+            $total += $this->count_descendant_products((int) $childId, $childrenByParent, $directProductCounts);
+        }
+        return $total;
+    }
+
+    private function has_descendant_in_set(int $termId, array $childrenByParent, array $set): bool
+    {
+        foreach (($childrenByParent[$termId] ?? []) as $childId) {
+            if (isset($set[$childId]) || $this->has_descendant_in_set((int) $childId, $childrenByParent, $set)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public function run_local_test_callback(string $partId, string $status): array

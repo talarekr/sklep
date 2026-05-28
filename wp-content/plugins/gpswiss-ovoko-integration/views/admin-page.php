@@ -368,6 +368,31 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <pre id="gpswiss_cat_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
 
+
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px;">
+        <h3>Safe cleanup old Woo categories + homepage menu preview</h3>
+        <p><strong>Safety:</strong> all actions in this box are dry-run/report-only. They do not delete categories, do not edit products, do not change Ovoko, Allegro, eBay, and do not update menus.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_audit_old_categories'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_audit_old_categories" />
+                <?php submit_button('Audit old categories — dry-run only', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_download_category_cleanup_csv'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_download_category_cleanup_csv" />
+                <?php submit_button('Download category cleanup CSV', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_preview_homepage_menu_changes'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_preview_homepage_menu_changes" />
+                <?php submit_button('Preview homepage menu changes — dry-run only', 'secondary', 'submit', false); ?>
+            </form>
+        </div>
+        <p><em>Apply operations intentionally are not wired here yet:</em> deleting safe old empty categories and updating the homepage category menu must be added/run only after separate confirmation.</p>
+    </div>
+
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>CSV mapping</h3>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
