@@ -2728,6 +2728,7 @@ class OvokoIntegrationService
         $client = $this->build_rrr_api_client();
         $endpointProbe = $client?->probe_category_endpoints((int) $categoryId);
         $treeResolution = $client?->resolve_category_path_from_tree((int) $categoryId);
+        $partsCategoriesResolution = $client?->resolve_category_path_from_parts_categories((int) $categoryId);
         if (is_array($treeResolution)) {
             $resolved['category_tree_endpoint_used'] = (string) ($treeResolution['category_tree_endpoint_used'] ?? '');
             $resolved['category_tree_node_found'] = !empty($treeResolution['category_tree_node_found']);
@@ -2743,12 +2744,29 @@ class OvokoIntegrationService
                 $resolved['category_resolution_confidence'] = 'low';
             }
         }
+        if ((($resolved['category_resolution_confidence'] ?? 'low') !== 'high') && is_array($partsCategoriesResolution)) {
+            $resolved['parts_categories_endpoint_used'] = (string) ($partsCategoriesResolution['parts_categories_endpoint_used'] ?? '/v2/get/parts/categories');
+            $resolved['parts_categories_records_matching_category_id'] = $partsCategoriesResolution['parts_categories_records_matching_category_id'] ?? [];
+            $resolved['parts_categories_total_records_loaded'] = (int) ($partsCategoriesResolution['parts_categories_total_records_loaded'] ?? 0);
+            $resolved['parts_categories_pagination'] = $partsCategoriesResolution['parts_categories_pagination'] ?? [];
+            $resolved['parts_categories_candidate_parent_fields'] = $partsCategoriesResolution['parts_categories_candidate_parent_fields'] ?? [];
+            $resolved['parts_categories_candidate_title_fields'] = $partsCategoriesResolution['parts_categories_candidate_title_fields'] ?? [];
+            if (!empty($partsCategoriesResolution['ok']) && trim((string) ($partsCategoriesResolution['parts_categories_resolved_path'] ?? '')) !== '') {
+                $resolved['resolved_full_ovoko_category_path'] = trim((string) $partsCategoriesResolution['parts_categories_resolved_path']);
+                $resolved['category_resolution_method'] = 'v2_parts_categories_by_id';
+                $resolved['category_resolution_confidence'] = 'high';
+            } else {
+                $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
+                $resolved['category_resolution_confidence'] = 'low';
+            }
+        }
         return [
             'resolution' => $resolved,
             'all_category_related_fields' => $allCategoryRelatedFields,
             'full_category_related_payload_fragment' => $fragment,
             'category_endpoint_probe' => $endpointProbe,
             'category_tree_payload_fragment' => $treeResolution['category_tree_payload_fragment'] ?? [],
+            'parts_categories_payload_fragment' => $partsCategoriesResolution['parts_categories_records_matching_category_id'] ?? [],
         ];
     }
 
