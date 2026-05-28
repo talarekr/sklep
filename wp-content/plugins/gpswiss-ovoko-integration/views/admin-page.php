@@ -363,7 +363,12 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             admin_autorun_js_url: <span data-k="admin_autorun_js_url"><?php echo esc_html((string) ($autoRunExpectedAssetUrl ?? '')); ?></span> |
             admin_autorun_js_version: <span data-k="admin_autorun_js_version"><?php echo esc_html((string) ($autoRunAssetVersion ?? 'n/a')); ?></span><br>
             categoryAction: <span data-k="categoryAction">gpswiss_ovoko_update_categories_from_ovoko</span> |
-            categoryNonce present: <span data-k="categoryNonce_present">false</span>
+            categoryNonce present: <span data-k="categoryNonce_present">false</span><br>
+            category_run_id: <span data-k="category_run_id">-</span> |
+            csv_log_file: <span data-k="csv_log_file">-</span> |
+            csv_total_rows_written: <span data-k="csv_total_rows_written">0</span><br>
+            csv_download_url: <span data-k="csv_download_url">-</span> |
+            <a data-k="csv_download_link" href="#" style="display:none;" target="_blank" rel="noopener">Download categories CSV log</a>
         </div>
         <pre id="gpswiss_cat_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>

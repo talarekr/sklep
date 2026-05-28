@@ -327,6 +327,10 @@ class AdminPage
             'create_missing_categories' => !array_key_exists('create_missing_categories', $_POST) || !empty($_POST['create_missing_categories']),
             'replace_existing_categories' => !array_key_exists('replace_existing_categories', $_POST) || !empty($_POST['replace_existing_categories']),
             'stop_on_error' => !empty($_POST['stop_on_error']),
+            'csv_logging_enabled' => !empty($_POST['csv_logging_enabled']),
+            'csv_logging_required' => !empty($_POST['csv_logging_required']),
+            'category_run_id' => sanitize_key((string) ($_POST['category_run_id'] ?? '')),
+            'csv_log_file' => sanitize_file_name((string) ($_POST['csv_log_file'] ?? '')),
         ];
         $result = $this->service->update_woo_categories_from_ovoko($options);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 60);
@@ -347,6 +351,10 @@ class AdminPage
             'create_missing_categories' => !array_key_exists('create_missing_categories', $_POST) || !empty($_POST['create_missing_categories']),
             'replace_existing_categories' => !array_key_exists('replace_existing_categories', $_POST) || !empty($_POST['replace_existing_categories']),
             'stop_on_error' => !empty($_POST['stop_on_error']),
+            'csv_logging_enabled' => !empty($_POST['csv_logging_enabled']),
+            'csv_logging_required' => !empty($_POST['csv_logging_required']),
+            'category_run_id' => sanitize_key((string) ($_POST['category_run_id'] ?? '')),
+            'csv_log_file' => sanitize_file_name((string) ($_POST['csv_log_file'] ?? '')),
         ];
         $result = $this->service->update_woo_categories_from_ovoko($options);
         $result['done'] = empty($result['next_after_product_id']) || ((int) ($result['next_after_product_id'] ?? 0) <= (int) ($result['after_product_id'] ?? 0)) || empty($result['results']);

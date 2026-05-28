@@ -2624,23 +2624,79 @@ class OvokoIntegrationService
         $createMissing = !array_key_exists('create_missing_categories', $options) || !empty($options['create_missing_categories']);
         $replaceExisting = !array_key_exists('replace_existing_categories', $options) || !empty($options['replace_existing_categories']);
         $stopOnError = !empty($options['stop_on_error']);
+        $csvLoggingEnabled = !empty($options['csv_logging_enabled']);
+        $csvLoggingRequired = !empty($options['csv_logging_required']);
+        $categoryRunId = sanitize_key((string) ($options['category_run_id'] ?? ''));
+        $csvLogFile = (string) ($options['csv_log_file'] ?? '');
 
         $counts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0];
+        $csvContext = $this->prepare_categories_csv_log_context($csvLoggingEnabled, $categoryRunId, $csvLogFile);
+        if (empty($csvContext['ok']) && $csvLoggingRequired) {
+            return ['ok' => false, 'error' => (string) ($csvContext['error'] ?? 'csv_log_init_failed'), 'reason' => 'csv_log_required_but_unavailable'];
+        }
         $productIds = [];
         if ($productId > 0) { $productIds[] = $productId; }
         else {
             $query = new \WP_Query(['post_type'=>'product','post_status'=>['publish','draft','private'],'fields'=>'ids','posts_per_page'=>$limit,'orderby'=>'ID','order'=>'ASC','no_found_rows'=>true,'post__not_in'=>$afterProductId>0?range(1,$afterProductId):[]]);
             $productIds = array_slice(array_map('intval', (array) $query->posts), 0, $batchSize);
         }
-        if ($productIds === []) return ['ok'=>true,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'counts'=>$counts,'results'=>[],'after_product_id'=>$afterProductId,'next_after_product_id'=>$afterProductId,'limit'=>$limit,'batch_size'=>$batchSize];
+        if ($productIds === []) return ['ok'=>true,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'counts'=>$counts,'results'=>[],'after_product_id'=>$afterProductId,'next_after_product_id'=>$afterProductId,'limit'=>$limit,'batch_size'=>$batchSize,'category_run_id'=>$csvContext['run_id'] ?? '','csv_log_file'=>$csvContext['file'] ?? '','csv_download_url'=>$csvContext['url'] ?? '','csv_rows_written_this_batch'=>0];
         $results=[];
+        $csvRows = [];
         foreach($productIds as $pid){
             $counts['total_scanned']++;
             $single=$this->update_single_woo_category_from_ovoko($pid,$dryRun,$createMissing,$replaceExisting,$counts);
             $results[]=$single;
+            if (!empty($csvContext['ok'])) {
+                $csvRows[] = $this->build_category_csv_row($single, $csvContext['run_id'], $dryRun, $afterProductId, 0);
+            }
             if (empty($single['ok']) && $stopOnError) break;
         }
-        return ['ok'=>$counts['errors']===0,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'create_missing_categories'=>$createMissing,'replace_existing_categories'=>$replaceExisting,'after_product_id'=>$afterProductId,'next_after_product_id'=>max($afterProductId,(int) end($productIds)),'limit'=>$limit,'batch_size'=>$batchSize,'results'=>$results,'counts'=>$counts];
+        $nextAfter = max($afterProductId,(int) end($productIds));
+        $writtenThisBatch = 0;
+        if (!empty($csvContext['ok'])) {
+            foreach ($csvRows as &$row) { $row['batch_response_next_after_product_id'] = $nextAfter; }
+            unset($row);
+            $appendResult = $this->append_categories_csv_rows($csvContext, $csvRows);
+            if (empty($appendResult['ok']) && $csvLoggingRequired) {
+                return ['ok' => false, 'error' => (string) ($appendResult['error'] ?? 'csv_log_write_failed'), 'reason' => 'csv_log_required_but_unwritable', 'category_run_id'=>$csvContext['run_id'],'csv_log_file'=>$csvContext['file'],'csv_download_url'=>$csvContext['url']];
+            }
+            $writtenThisBatch = (int) ($appendResult['rows_written'] ?? 0);
+        }
+        return ['ok'=>$counts['errors']===0,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'create_missing_categories'=>$createMissing,'replace_existing_categories'=>$replaceExisting,'after_product_id'=>$afterProductId,'next_after_product_id'=>$nextAfter,'limit'=>$limit,'batch_size'=>$batchSize,'results'=>$results,'counts'=>$counts,'category_run_id'=>$csvContext['run_id'] ?? '','csv_log_file'=>$csvContext['file'] ?? '','csv_download_url'=>$csvContext['url'] ?? '','csv_rows_written_this_batch'=>$writtenThisBatch];
+    }
+
+    private function prepare_categories_csv_log_context(bool $enabled, string $runId, string $csvLogFile): array
+    {
+        if (!$enabled) { return ['ok' => false, 'error' => 'disabled']; }
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? '')) . 'gpswiss-ovoko-logs';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? '')) . 'gpswiss-ovoko-logs';
+        if (!wp_mkdir_p($baseDir)) { return ['ok' => false, 'error' => 'cannot_create_log_dir']; }
+        if ($runId === '') { $runId = gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false); }
+        $runId = preg_replace('/[^a-zA-Z0-9\\-_]/', '', $runId) ?: ('run-' . gmdate('Ymd-His'));
+        $file = $csvLogFile !== '' ? basename($csvLogFile) : ('categories-autorun-' . gmdate('Ymd-His') . '-' . $runId . '.csv');
+        $path = trailingslashit($baseDir) . $file;
+        if (!file_exists($path)) {
+            $h = @fopen($path, 'w');
+            if (!$h) { return ['ok' => false, 'error' => 'cannot_create_csv_file']; }
+            fputcsv($h, $this->category_csv_headers());
+            fclose($h);
+        }
+        return ['ok' => true, 'run_id' => $runId, 'file' => $file, 'path' => $path, 'url' => trailingslashit($baseUrl) . $file];
+    }
+
+    private function category_csv_headers(): array { return ['timestamp','run_id','dry_run','batch_request_after_product_id','batch_response_next_after_product_id','product_id','ovoko_id','ok','planned_action','reason','category_id','raw_category_title_path','resolved_full_ovoko_category_path','category_resolution_method','category_resolution_confidence','current_woo_categories','planned_category_hierarchy','planned_final_category','categories_to_be_replaced','categories_that_would_be_created','assigned_term_ids_after','category_update_verified','assigned_category_name','assigned_category_parent_name','assigned_category_grandparent_name','errors','warnings']; }
+    private function csv_val($v): string { return is_array($v) || is_object($v) ? (string) wp_json_encode($v) : (string) $v; }
+    private function build_category_csv_row(array $r, string $runId, bool $dryRun, int $batchAfter, int $batchNext): array {
+        $ver=(array)($r['assigned_category_verification']??[]);
+        return ['timestamp'=>gmdate('c'),'run_id'=>$runId,'dry_run'=>$dryRun?'1':'0','batch_request_after_product_id'=>$batchAfter,'batch_response_next_after_product_id'=>$batchNext,'product_id'=>(int)($r['product_id']??0),'ovoko_id'=>(string)($r['ovoko_id']??''),'ok'=>!empty($r['ok'])?'1':'0','planned_action'=>(string)($r['planned_action']??''),'reason'=>(string)($r['reason']??''),'category_id'=>(string)($r['category_id']??''),'raw_category_title_path'=>(string)($r['raw_category_title_path']??''),'resolved_full_ovoko_category_path'=>(string)($r['resolved_full_ovoko_category_path']??($r['ovoko_category_title_path']??'')),'category_resolution_method'=>(string)($r['category_resolution_method']??''),'category_resolution_confidence'=>(string)($r['category_resolution_confidence']??''),'current_woo_categories'=>$this->csv_val($r['current_woo_categories']??[]),'planned_category_hierarchy'=>$this->csv_val($r['planned_category_hierarchy']??[]),'planned_final_category'=>$this->csv_val($r['planned_final_category']??''),'categories_to_be_replaced'=>$this->csv_val($r['categories_to_be_replaced']??[]),'categories_that_would_be_created'=>$this->csv_val($r['categories_that_would_be_created']??[]),'assigned_term_ids_after'=>$this->csv_val($r['assigned_term_ids_after']??[]),'category_update_verified'=>!empty($r['category_update_verified'])?'1':'0','assigned_category_name'=>(string)($ver['assigned_category_name']??''),'assigned_category_parent_name'=>(string)($ver['assigned_category_parent_name']??''),'assigned_category_grandparent_name'=>(string)($ver['assigned_category_grandparent_name']??''),'errors'=>$this->csv_val($r['errors']??($r['error']??'')),'warnings'=>$this->csv_val($r['warnings']??[])];
+    }
+    private function append_categories_csv_rows(array $ctx, array $rows): array {
+        if ($rows === []) { return ['ok'=>true,'rows_written'=>0]; }
+        $h=@fopen((string)$ctx['path'],'a'); if(!$h){ return ['ok'=>false,'error'=>'cannot_open_csv_for_append'];}
+        $written=0; foreach($rows as $row){ $line=[]; foreach($this->category_csv_headers() as $k){$line[]=$this->csv_val($row[$k]??'');} if(fputcsv($h,$line)!==false){$written++;}}
+        fclose($h); return ['ok'=>true,'rows_written'=>$written];
     }
 
     private function update_single_woo_category_from_ovoko(int $productId, bool $dryRun, bool $createMissing, bool $replaceExisting, array &$counts): array
