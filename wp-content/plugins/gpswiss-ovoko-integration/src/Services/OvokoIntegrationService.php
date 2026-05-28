@@ -2671,7 +2671,16 @@ class OvokoIntegrationService
             'full_category_related_payload_fragment' => $categoryDiagnostics['full_category_related_payload_fragment'],
             'category_tree_payload_fragment' => $categoryDiagnostics['category_tree_payload_fragment'] ?? [],
             'category_endpoint_probe' => $categoryDiagnostics['category_endpoint_probe'],
+            'categories_endpoints_debug' => $categoryDiagnostics['categories_endpoints_debug'] ?? [],
             'category_resolution' => $categoryResolve,
+            'categories_endpoint_used' => $categoryResolve['categories_endpoint_used'] ?? '',
+            'categories_payload_shape' => $categoryResolve['categories_payload_shape'] ?? [],
+            'categories_sample_records' => $categoryResolve['categories_sample_records'] ?? [],
+            'categories_sample_keys' => $categoryResolve['categories_sample_keys'] ?? [],
+            'category_322_found_in_categories_endpoint' => $categoryResolve['category_322_found_in_categories_endpoint'] ?? null,
+            'category_322_node' => $categoryResolve['category_322_node'] ?? null,
+            'category_322_parent_chain' => $categoryResolve['category_322_parent_chain'] ?? [],
+            'category_322_resolved_path' => $categoryResolve['category_322_resolved_path'] ?? '',
         ];
         if($path===''){
             $counts['ovoko_category_missing']++;$counts['products_skipped']++;
@@ -2751,15 +2760,17 @@ class OvokoIntegrationService
             $resolved['parts_categories_pagination'] = $partsCategoriesResolution['parts_categories_pagination'] ?? [];
             $resolved['parts_categories_candidate_parent_fields'] = $partsCategoriesResolution['parts_categories_candidate_parent_fields'] ?? [];
             $resolved['parts_categories_candidate_title_fields'] = $partsCategoriesResolution['parts_categories_candidate_title_fields'] ?? [];
-            if (!empty($partsCategoriesResolution['ok']) && trim((string) ($partsCategoriesResolution['parts_categories_resolved_path'] ?? '')) !== '') {
-                $resolved['resolved_full_ovoko_category_path'] = trim((string) $partsCategoriesResolution['parts_categories_resolved_path']);
-                $resolved['category_resolution_method'] = 'v2_parts_categories_by_id';
-                $resolved['category_resolution_confidence'] = 'high';
-            } else {
-                $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
-                $resolved['category_resolution_confidence'] = 'low';
-            }
+            $resolved['category_resolution_method'] = 'ovoko_category_tree_resolution_failed';
+            $resolved['category_resolution_confidence'] = 'low';
         }
+        $resolved['categories_endpoint_used'] = (string) ($resolved['category_tree_endpoint_used'] ?? '');
+        $resolved['categories_payload_shape'] = $treeResolution['categories_payload_shape'] ?? [];
+        $resolved['categories_sample_records'] = $treeResolution['categories_sample_records'] ?? [];
+        $resolved['categories_sample_keys'] = $treeResolution['categories_sample_keys'] ?? [];
+        $resolved['category_322_found_in_categories_endpoint'] = ((int) $categoryId === 322) ? !empty($resolved['category_tree_node_found']) : null;
+        $resolved['category_322_node'] = ((int) $categoryId === 322) ? ($resolved['category_tree_node'] ?? null) : null;
+        $resolved['category_322_parent_chain'] = ((int) $categoryId === 322) ? ($resolved['category_tree_parent_chain'] ?? []) : [];
+        $resolved['category_322_resolved_path'] = ((int) $categoryId === 322) ? (string) ($resolved['category_tree_resolved_path'] ?? '') : '';
         return [
             'resolution' => $resolved,
             'all_category_related_fields' => $allCategoryRelatedFields,
@@ -2767,6 +2778,7 @@ class OvokoIntegrationService
             'category_endpoint_probe' => $endpointProbe,
             'category_tree_payload_fragment' => $treeResolution['category_tree_payload_fragment'] ?? [],
             'parts_categories_payload_fragment' => $partsCategoriesResolution['parts_categories_records_matching_category_id'] ?? [],
+            'categories_endpoints_debug' => $treeResolution['categories_endpoints_debug'] ?? [],
         ];
     }
 
