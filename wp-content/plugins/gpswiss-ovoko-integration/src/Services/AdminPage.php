@@ -89,6 +89,8 @@ class AdminPage
             'action' => 'gpswiss_ovoko_bulk_allegro_to_ovoko_details_enrichment',
             'descriptionNonce' => wp_create_nonce('gpswiss_ovoko_update_description_from_listing_text'),
             'descriptionAction' => 'gpswiss_ovoko_update_description_from_listing_text',
+            'categoryNonce' => wp_create_nonce('gpswiss_ovoko_update_categories_from_ovoko'),
+            'categoryAction' => 'gpswiss_ovoko_update_categories_from_ovoko',
             'adminAutorunJsUrl' => $this->autorunScriptUrl,
             'adminAutorunJsVersion' => $this->autorunScriptVersion,
         ]);

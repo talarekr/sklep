@@ -316,13 +316,15 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Update Woo categories from Ovoko</h3>
         <p>Source of truth: Ovoko <code>category_title_path</code> by product <code>ovoko_id/_ovoko_part_id</code>. Replaces only product category assignments.</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form id="gpswiss_ovoko_categories_update_form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_update_categories_from_ovoko'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_update_categories_from_ovoko" />
             <label>product_id (optional): <input type="number" min="0" name="product_id" value="0" /></label>
-            <label>after_product_id: <input type="number" min="0" name="after_product_id" value="0" /></label>
-            <label>limit: <input type="number" min="1" max="200" name="limit" value="10" /></label>
-            <label>batch_size: <input type="number" min="1" max="200" name="batch_size" value="10" /></label>
+            <label>after_product_id: <input id="category_after_product_id" type="number" min="0" name="after_product_id" value="0" /></label>
+            <label>limit: <input id="category_limit" type="number" min="1" max="200" name="limit" value="10" /></label>
+            <label>batch_size: <input id="category_batch_size" type="number" min="1" max="200" name="batch_size" value="10" /></label>
+            <label>sleep_ms: <input id="category_sleep_ms" type="number" min="100" step="100" name="sleep_ms" value="1200" /></label>
+            <label>max_runtime (s): <input id="category_max_runtime" type="number" min="0" step="1" name="max_runtime" value="0" /></label>
             <br><br>
             <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> dry_run (default true)</label>
             <label><input type="checkbox" name="create_missing_categories" value="1" checked="checked" /> create_missing_categories (default true)</label>
@@ -331,7 +333,39 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <br><br>
             <button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry run categories update</button>
             <button class="button button-primary" type="submit" name="submit_action" value="apply">Apply categories update</button>
+            <button class="button button-primary" type="button" id="gpswiss_cat_autorun_start">Start auto-run categories</button>
+            <button class="button" type="button" id="gpswiss_cat_autorun_stop">Stop auto-run categories</button>
         </form>
+        <div id="gpswiss_cat_autorun_status" style="margin-top:10px;padding:10px;background:#f6f7f7;">
+            <strong>Status:</strong> <span data-k="status">stopped</span> |
+            started_at: <span data-k="started_at">-</span> |
+            duration: <span data-k="duration_seconds">0</span>s |
+            start_after_product_id: <span data-k="start_after_product_id">0</span><br>
+            request_after_product_id: <span data-k="request_after_product_id">0</span> |
+            response_next_after_product_id: <span data-k="response_next_after_product_id">0</span> |
+            current_after_product_id: <span data-k="current_after_product_id">0</span> |
+            last_safe_next_after_product_id: <span data-k="last_safe_next_after_product_id">0</span><br>
+            total_scanned: <span data-k="total_scanned">0</span> |
+            with_ovoko_id: <span data-k="with_ovoko_id">0</span> |
+            missing_ovoko_id: <span data-k="missing_ovoko_id">0</span> |
+            ovoko_category_found: <span data-k="ovoko_category_found">0</span> |
+            ovoko_category_missing: <span data-k="ovoko_category_missing">0</span><br>
+            categories_created: <span data-k="categories_created">0</span> |
+            categories_existing: <span data-k="categories_existing">0</span> |
+            products_categories_updated: <span data-k="products_categories_updated">0</span> |
+            products_categories_verified: <span data-k="products_categories_verified">0</span> |
+            products_skipped: <span data-k="products_skipped">0</span> |
+            errors: <span data-k="errors">0</span><br>
+            category_after_product_id_element_found: <span data-k="category_after_product_id_element_found">false</span> |
+            category_after_product_id_raw_value: <span data-k="category_after_product_id_raw_value">""</span> |
+            parsed_start_after_product_id: <span data-k="parsed_start_after_product_id">0</span><br>
+            js_asset_version: <span data-k="js_asset_version"><?php echo esc_html((string) ($autoRunAssetVersion ?? 'n/a')); ?></span> |
+            admin_autorun_js_url: <span data-k="admin_autorun_js_url"><?php echo esc_html((string) ($autoRunExpectedAssetUrl ?? '')); ?></span> |
+            admin_autorun_js_version: <span data-k="admin_autorun_js_version"><?php echo esc_html((string) ($autoRunAssetVersion ?? 'n/a')); ?></span><br>
+            categoryAction: <span data-k="categoryAction">gpswiss_ovoko_update_categories_from_ovoko</span> |
+            categoryNonce present: <span data-k="categoryNonce_present">false</span>
+        </div>
+        <pre id="gpswiss_cat_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
