@@ -980,13 +980,34 @@ class RrrApiClient
         }
 
         $nodes = $this->extract_category_nodes($selectedPayload);
+        $categoryIdAsString = (string) $categoryId;
         $byId = [];
+        $countNodesWithIdField = 0;
+        $minCategoryId = null;
+        $maxCategoryId = null;
         foreach ($nodes as $node) {
-            $id = (int) ($node['id'] ?? 0);
-            if ($id > 0) { $byId[$id] = $node; }
+            if (!array_key_exists('id', $node)) {
+                continue;
+            }
+            $countNodesWithIdField++;
+            $rawId = (string) $node['id'];
+            if ($rawId === '') {
+                continue;
+            }
+            $asInt = (int) $rawId;
+            $minCategoryId = $minCategoryId === null ? $asInt : min($minCategoryId, $asInt);
+            $maxCategoryId = $maxCategoryId === null ? $asInt : max($maxCategoryId, $asInt);
+            $byId[$rawId] = $node;
         }
 
-        $target = $byId[$categoryId] ?? null;
+        $target = $byId[$categoryIdAsString] ?? null;
+        $nearbyRecords = [];
+        for ($i = max(1, $categoryId - 2); $i <= ($categoryId + 3); $i++) {
+            $k = (string) $i;
+            if (isset($byId[$k])) {
+                $nearbyRecords[$k] = $byId[$k];
+            }
+        }
         if (!$target) {
             return [
                 'ok' => false,
@@ -999,6 +1020,15 @@ class RrrApiClient
                 'categories_payload_shape' => $this->describe_categories_payload_shape($selectedPayload),
                 'categories_sample_records' => $this->extract_categories_sample_records($selectedPayload),
                 'categories_sample_keys' => $this->extract_categories_sample_keys($selectedPayload),
+                'category_target_id' => $categoryId,
+                'categories_total_loaded' => count($nodes),
+                'category_id_322_search_performed' => $categoryId === 322,
+                'category_id_322_found' => $categoryId === 322 ? false : null,
+                'category_id_322_node_if_found' => null,
+                'category_id_322_nearby_records' => $categoryId === 322 ? $nearbyRecords : [],
+                'count_nodes_with_id_field' => $countNodesWithIdField,
+                'min_category_id' => $minCategoryId,
+                'max_category_id' => $maxCategoryId,
                 'categories_endpoints_debug' => $endpointDiagnostics,
             ];
         }
@@ -1007,17 +1037,19 @@ class RrrApiClient
         $visited = [];
         $cursor = $target;
         for ($i = 0; $i < 20; $i++) {
-            $id = (int) ($cursor['id'] ?? 0);
-            if ($id <= 0 || isset($visited[$id])) { break; }
+            $id = (string) ($cursor['id'] ?? '');
+            if ($id === '' || isset($visited[$id])) { break; }
             $visited[$id] = true;
             $chain[] = $cursor;
-            $parentId = (int) ($cursor['parent_id'] ?? 0);
-            if ($parentId <= 0) { break; }
+            $parentId = (string) ($cursor['parent_id'] ?? '');
+            if ($parentId === '' || $parentId === '0') { break; }
             if (!isset($byId[$parentId])) { break; }
             $cursor = $byId[$parentId];
         }
         $chain = array_reverse($chain);
-        $segments = array_values(array_filter(array_map(static fn($n) => trim((string) ($n['title'] ?? '')), $chain), static fn($v) => $v !== ''));
+        $segments = array_values(array_filter(array_map(function ($n): string {
+            return trim((string) ($n['pl'] ?? $n['en'] ?? $n['title'] ?? $n['name'] ?? $n['label'] ?? ''));
+        }, $chain), static fn($v) => $v !== ''));
 
         return [
             'ok' => !empty($segments),
@@ -1030,6 +1062,15 @@ class RrrApiClient
             'categories_payload_shape' => $this->describe_categories_payload_shape($selectedPayload),
             'categories_sample_records' => $this->extract_categories_sample_records($selectedPayload),
             'categories_sample_keys' => $this->extract_categories_sample_keys($selectedPayload),
+            'category_target_id' => $categoryId,
+            'categories_total_loaded' => count($nodes),
+            'category_id_322_search_performed' => $categoryId === 322,
+            'category_id_322_found' => $categoryId === 322 ? true : null,
+            'category_id_322_node_if_found' => $categoryId === 322 ? $target : null,
+            'category_id_322_nearby_records' => $categoryId === 322 ? $nearbyRecords : [],
+            'count_nodes_with_id_field' => $countNodesWithIdField,
+            'min_category_id' => $minCategoryId,
+            'max_category_id' => $maxCategoryId,
             'categories_endpoints_debug' => $endpointDiagnostics,
         ];
     }
@@ -1128,18 +1169,27 @@ class RrrApiClient
         }
         $nodes = [];
         foreach (array_unique($candidateParents) as $prefix) {
-            $id = (int) ($this->value_from_path($payload, $prefix . '.id') ?? $this->value_from_path($payload, $prefix . '.category_id') ?? 0);
-            if ($id <= 0) { continue; }
-            $parentId = (int) ($this->value_from_path($payload, $prefix . '.parent_id') ?? $this->value_from_path($payload, $prefix . '.parent') ?? 0);
+            $id = (string) ($this->value_from_path($payload, $prefix . '.id') ?? $this->value_from_path($payload, $prefix . '.category_id') ?? '');
+            if (trim($id) === '') { continue; }
+            $parentId = (string) ($this->value_from_path($payload, $prefix . '.parent_id') ?? $this->value_from_path($payload, $prefix . '.parent') ?? '0');
             $title = (string) (
-                $this->value_from_path($payload, $prefix . '.title')
+                $this->value_from_path($payload, $prefix . '.pl')
+                ?? $this->value_from_path($payload, $prefix . '.en')
+                ?? $this->value_from_path($payload, $prefix . '.title')
                 ?? $this->value_from_path($payload, $prefix . '.name')
                 ?? $this->value_from_path($payload, $prefix . '.label')
                 ?? $this->value_from_path($payload, $prefix . '.category_title')
                 ?? ''
             );
-            if (trim($title) === '') { continue; }
-            $nodes[] = ['id' => $id, 'parent_id' => $parentId, 'title' => sanitize_text_field($title), 'path' => $prefix];
+            $nodes[] = [
+                'id' => sanitize_text_field($id),
+                'parent_id' => sanitize_text_field($parentId),
+                'title' => sanitize_text_field($title),
+                'pl' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.pl') ?? '')),
+                'en' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.en') ?? '')),
+                'level' => sanitize_text_field((string) ($this->value_from_path($payload, $prefix . '.level') ?? '')),
+                'path' => $prefix,
+            ];
         }
         return $nodes;
     }
