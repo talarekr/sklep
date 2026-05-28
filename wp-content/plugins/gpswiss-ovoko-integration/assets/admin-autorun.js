@@ -350,4 +350,94 @@ document.addEventListener('DOMContentLoaded', function () {
     descTick();
   });
   $('gpswiss_desc_autorun_stop')?.addEventListener('click', function (e) { e.preventDefault(); descStop('stopped'); });
+
+  const catForm = $('gpswiss_ovoko_categories_update_form');
+  const catStatusEl = $('gpswiss_cat_autorun_status');
+  const catLogsEl = $('gpswiss_cat_autorun_logs');
+  if (!catForm || !catStatusEl || !catLogsEl) { return; }
+  const catState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, with_ovoko_id: 0, missing_ovoko_id: 0, ovoko_category_found: 0, ovoko_category_missing: 0, categories_created: 0, categories_existing: 0, products_categories_updated: 0, products_categories_verified: 0, products_skipped: 0, errors: 0, category_after_product_id_element_found: false, category_after_product_id_raw_value: '""', parsed_start_after_product_id: 0, js_asset_version: '', admin_autorun_js_url: '', admin_autorun_js_version: '', categoryAction: '', categoryNonce_present: false };
+  let catTimer = null; let catInFlight = false; const catLogRows = [];
+  const catRender = function () {
+    ['status','started_at','duration_seconds','start_after_product_id','request_after_product_id','response_next_after_product_id','current_after_product_id','last_safe_next_after_product_id','total_scanned','with_ovoko_id','missing_ovoko_id','ovoko_category_found','ovoko_category_missing','categories_created','categories_existing','products_categories_updated','products_categories_verified','products_skipped','errors','category_after_product_id_element_found','category_after_product_id_raw_value','parsed_start_after_product_id','js_asset_version','admin_autorun_js_url','admin_autorun_js_version','categoryAction','categoryNonce_present'].forEach(function (k) { const n = catStatusEl.querySelector('[data-k="' + k + '"]'); if (n) n.textContent = String(catState[k] || 0); });
+    catLogsEl.textContent = catLogRows.slice(-30).map(function (x) { return JSON.stringify(x); }).join('\n');
+  };
+  const catUpdateDuration = function () { if (!catState.started_at) { catState.duration_seconds = 0; return; } catState.duration_seconds = Math.max(0, Math.round((Date.now() - Date.parse(catState.started_at)) / 1000)); };
+  const catAfterDebug = function () { const el = $('category_after_product_id'); const raw = el ? String(el.value || '') : ''; return { found: !!el, rawValue: raw, parsedValue: Math.max(0, parseInt(raw || '0', 10) || 0) }; };
+  const catField = function (id, fallback) { const el = $(id); return Math.max(0, parseInt((el && el.value) || String(fallback || 0), 10) || 0); };
+  const catSleepMs = function () { return Math.max(100, catField('category_sleep_ms', 1200)); };
+  const catMaxRuntime = function () { return catField('category_max_runtime', 0); };
+  const catBuildBody = function () {
+    const fd = new URLSearchParams();
+    fd.set('action', config.categoryAction || 'gpswiss_ovoko_update_categories_from_ovoko');
+    fd.set('_ajax_nonce', config.categoryNonce || '');
+    fd.set('dry_run', '0');
+    fd.set('create_missing_categories', '1');
+    fd.set('replace_existing_categories', '1');
+    fd.set('stop_on_error', '1');
+    fd.set('product_id', '');
+    fd.set('after_product_id', String(catState.current_after_product_id));
+    fd.set('limit', String(catField('category_limit', 10)));
+    fd.set('batch_size', String(catField('category_batch_size', 10)));
+    return fd;
+  };
+  const catStop = function (status) { if (catTimer) clearTimeout(catTimer); catState.running = false; catState.status = status || 'stopped'; catUpdateDuration(); catRender(); };
+  const catTick = async function () {
+    if (!catState.running || catInFlight) return;
+    catUpdateDuration();
+    if (catMaxRuntime() > 0 && catState.duration_seconds >= catMaxRuntime()) { catStop('max_runtime_exceeded'); return; }
+    catInFlight = true;
+    const reqAfter = catState.current_after_product_id;
+    let res;
+    try {
+      const r = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: catBuildBody().toString() });
+      res = JSON.parse(await r.text());
+      if (!r.ok) throw new Error('network');
+    } catch (e) {
+      catLogRows.push({ timestamp: nowIso(), type: 'ajax_error', request_after_product_id: reqAfter, error: String(e && e.message || 'network') });
+      catInFlight = false; catStop('ajax_error'); return;
+    }
+    catInFlight = false;
+    const counts = res.counts || {};
+    const nextAfter = parseInt(res.next_after_product_id || 0, 10);
+    catState.request_after_product_id = reqAfter;
+    catState.response_next_after_product_id = nextAfter;
+    catState.total_scanned += parseInt(counts.total_scanned || 0, 10);
+    catState.with_ovoko_id += parseInt(counts.with_ovoko_id || 0, 10);
+    catState.missing_ovoko_id += parseInt(counts.missing_ovoko_id || 0, 10);
+    catState.ovoko_category_found += parseInt(counts.ovoko_category_found || 0, 10);
+    catState.ovoko_category_missing += parseInt(counts.ovoko_category_missing || 0, 10);
+    catState.categories_created += parseInt(counts.categories_created || 0, 10);
+    catState.categories_existing += parseInt(counts.categories_existing || 0, 10);
+    catState.products_categories_updated += parseInt(counts.products_categories_updated || 0, 10);
+    catState.products_categories_verified += parseInt(counts.products_categories_verified || 0, 10);
+    catState.products_skipped += parseInt(counts.products_skipped || 0, 10);
+    catState.errors += parseInt(counts.errors || 0, 10);
+    if (nextAfter > 0) catState.last_safe_next_after_product_id = nextAfter;
+    const riskyConfidence = (res.results || []).some(function (r) { return (parseInt(r.ovoko_id || 0, 10) > 0) && String(r.category_resolution_confidence || '') !== 'high'; });
+    catLogRows.push({ timestamp: nowIso(), request_after_product_id: reqAfter, response_next_after_product_id: nextAfter, counts: counts, product_issues: (res.results || []).filter(function (r) { return r.error || r.skip_reason; }).map(function (r) { return { product_id: r.product_id, error: r.error || '', skip_reason: r.skip_reason || '' }; }) });
+    if (!res.ok || catState.errors > 0 || parseInt(counts.ovoko_category_missing || 0, 10) > 0 || riskyConfidence) { catStop('error'); return; }
+    if (res.done || !nextAfter || nextAfter <= reqAfter) { catStop('done'); return; }
+    catState.current_after_product_id = nextAfter;
+    catUpdateDuration(); catRender();
+    catTimer = setTimeout(catTick, catSleepMs());
+  };
+  $('gpswiss_cat_autorun_start')?.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (catState.running) return;
+    const dbg = catAfterDebug();
+    catState.category_after_product_id_element_found = dbg.found;
+    catState.category_after_product_id_raw_value = '"' + dbg.rawValue + '"';
+    catState.parsed_start_after_product_id = dbg.parsedValue;
+    catState.admin_autorun_js_url = String(config.adminAutorunJsUrl || '');
+    catState.admin_autorun_js_version = String(config.adminAutorunJsVersion || '');
+    catState.js_asset_version = String(config.adminAutorunJsVersion || '');
+    catState.categoryAction = String(config.categoryAction || '');
+    catState.categoryNonce_present = !!(config.categoryNonce && String(config.categoryNonce).length > 0);
+    if (!dbg.found) { catState.status = 'error'; catLogRows.push({ timestamp: nowIso(), type: 'startup_error', message: 'category_after_product_id input not found' }); catRender(); return; }
+    catState.running = true; catState.status = 'running'; catState.started_at = nowIso(); catState.duration_seconds = 0;
+    catState.start_after_product_id = dbg.parsedValue; catState.request_after_product_id = dbg.parsedValue; catState.response_next_after_product_id = dbg.parsedValue; catState.current_after_product_id = dbg.parsedValue; catState.last_safe_next_after_product_id = 0;
+    ['total_scanned','with_ovoko_id','missing_ovoko_id','ovoko_category_found','ovoko_category_missing','categories_created','categories_existing','products_categories_updated','products_categories_verified','products_skipped','errors'].forEach(function (k) { catState[k] = 0; });
+    catLogRows.length = 0; catRender(); catTick();
+  });
+  $('gpswiss_cat_autorun_stop')?.addEventListener('click', function (e) { e.preventDefault(); catStop('stopped'); });
 });
