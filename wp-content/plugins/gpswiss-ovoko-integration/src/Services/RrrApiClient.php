@@ -999,7 +999,19 @@ class RrrApiClient
 
     private function extract_category_nodes(array $payload): array
     {
-        $flat = $this->flatten_nested_fields($payload, 8);
+        if ($payload === []) {
+            return [];
+        }
+
+        if (!method_exists($this, 'flatten_nested_fields')) {
+            return [];
+        }
+
+        $flat = $this->flatten_nested_fields($payload, 8, '', 1, 5000);
+        if ($flat === []) {
+            return [];
+        }
+
         $candidateParents = [];
         foreach ($flat as $path => $value) {
             if (preg_match('/^(.*)\.(id|category_id)$/', (string) $path, $m)) {
@@ -1016,6 +1028,43 @@ class RrrApiClient
             $nodes[] = ['id' => $id, 'parent_id' => $parentId, 'title' => sanitize_text_field($title), 'path' => $prefix];
         }
         return $nodes;
+    }
+
+    private function flatten_nested_fields($payload, int $maxDepth = 8, string $prefix = '', int $depth = 1, int $maxFields = 5000, int &$fieldCount = 0): array
+    {
+        if ($depth > $maxDepth || $fieldCount >= $maxFields) {
+            return [];
+        }
+
+        if (is_object($payload)) {
+            $payload = (array) $payload;
+        }
+
+        if (!is_array($payload)) {
+            if ($prefix === '') {
+                return [];
+            }
+            $fieldCount++;
+            return [$prefix => $payload];
+        }
+
+        $out = [];
+        foreach ($payload as $key => $value) {
+            if ($fieldCount >= $maxFields) {
+                break;
+            }
+
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . (string) $key;
+            if (is_array($value) || is_object($value)) {
+                $out += $this->flatten_nested_fields($value, $maxDepth, $path, $depth + 1, $maxFields, $fieldCount);
+                continue;
+            }
+
+            $fieldCount++;
+            $out[$path] = $value;
+        }
+
+        return $out;
     }
 
     private function build_category_tree_fragment_for_id(array $nodes, int $categoryId): array
