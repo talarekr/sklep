@@ -2252,6 +2252,8 @@ class AdminPage
             'sku' => (string) ($res['sku'] ?? ''),
             'title' => (string) ($res['title'] ?? ''),
             'description_source' => (string) ($res['description_source'] ?? 'post_content'),
+            'translation_source' => (array) ($res['translation_source'] ?? []),
+            'untranslated_fields' => (array) ($res['untranslated_fields'] ?? []),
             'same_vehicle_url' => (string) ($res['same_vehicle_url'] ?? ''),
             'warnings' => (array) ($res['warnings'] ?? []),
             'safety' => (array) ($res['safety'] ?? []),

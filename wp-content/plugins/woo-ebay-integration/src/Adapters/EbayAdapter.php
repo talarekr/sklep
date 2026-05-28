@@ -1567,21 +1567,32 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function build_ebay_de_description_template($product, int $productId, array $content, array $aspects, array $category): string
     {
-        $preview = $this->build_ebay_de_description_preview_data($product, $productId, (string) ($content['title'] ?? ''));
+        $preview = $this->build_ebay_de_description_preview_data($product, $productId, $content);
         return (string) ($preview['html'] ?? '');
     }
 
-    private function build_ebay_de_description_preview_data($product, int $productId, string $preferredTitle = ''): array
+    private function build_ebay_de_description_preview_data($product, int $productId, array $germanContent = []): array
     {
+        $preferredTitle = (string) ($germanContent['title'] ?? '');
         $title = trim(wp_strip_all_tags($preferredTitle));
         if ($title === '' && method_exists($product, 'get_name')) {
             $title = trim(wp_strip_all_tags((string) $product->get_name()));
         }
 
-        $rawDescription = (string) get_post_field('post_content', $productId);
-        if (trim(wp_strip_all_tags($rawDescription)) === '' && method_exists($product, 'get_description')) {
-            $rawDescription = (string) $product->get_description();
+        $postContent = (string) get_post_field('post_content', $productId);
+        if (trim(wp_strip_all_tags($postContent)) === '' && method_exists($product, 'get_description')) {
+            $postContent = (string) $product->get_description();
         }
+        $translatedDescription = trim((string) ($germanContent['description'] ?? ''));
+        $hasTranslatedDescription = $translatedDescription !== '' && !empty($germanContent['ready']) && (string) ($germanContent['source'] ?? '') !== 'missing';
+        $rawDescription = $hasTranslatedDescription ? $translatedDescription : $postContent;
+        $descriptionSource = $hasTranslatedDescription ? (string) ($germanContent['source'] ?? 'german_content') : 'post_content';
+        $translationSource = [
+            'title' => $preferredTitle !== '' ? ((string) ($germanContent['source'] ?? 'german_content')) : 'product_name',
+            'description' => $descriptionSource,
+            'attributes' => 'WooCommerce product attributes displayed by gp_get_product_details_rows(); labels are translated by ebay_de_template_field_mapping(), values are shown as stored (no Google API call during preview).',
+            'values' => 'stored WooCommerce/Ovoko attribute values via gp_get_product_details_rows(); no manual PL→DE value mapping and no translation API call during preview.',
+        ];
         $descriptionHtml = $this->sanitize_ebay_template_description_html($rawDescription);
 
         $details = $this->collect_woo_product_details_for_ebay_template($product, $productId);
@@ -1611,6 +1622,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
         $fitment = $this->build_template_fitment_value($detailsByPolishLabel);
         $condition = $this->first_non_empty([$detailsByPolishLabel['Stan'] ?? '', 'Gebraucht']);
+        $untranslatedFields = $this->detect_likely_polish_template_fields($details['fields']);
 
         $sameVehicleUrl = function_exists('gp_get_vehicle_parts_url_for_product') ? trim((string) gp_get_vehicle_parts_url_for_product($productId)) : '';
         $ovokoCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true));
@@ -1632,6 +1644,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         foreach ($details['fields'] as $field) {
             $specRows .= $this->render_ebay_template_row((string) $field['german_label'], (string) $field['value']);
         }
+        if ($specRows === '') {
+            $specRows = $this->render_ebay_template_rows([]);
+        }
 
         $vehicleRows = $this->render_ebay_template_rows([
             'Hersteller' => $detailsByPolishLabel['Producent'] ?? '',
@@ -1648,55 +1663,62 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
 
         $buttonHtml = $sameVehicleUrl !== ''
-            ? '<p style="margin:18px 0 0;"><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0b2a57;color:#ffffff;text-decoration:none;padding:13px 18px;border-radius:4px;font-weight:700;">Andere Teile aus diesem Fahrzeug ansehen</a></p>'
+            ? '<div style="text-align:center;margin:20px 0 24px;"><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">Andere Teile aus diesem Fahrzeug ansehen</a></div>'
             : '';
 
         $descriptionBlock = $descriptionHtml !== ''
             ? $descriptionHtml
-            : '<p style="margin:0;color:#4b5563;line-height:1.6;">Nicht angegeben</p>';
+            : '<p style="margin:0;color:#4b5563;line-height:1.7;">Nicht angegeben</p>';
 
-        $html = '<div style="max-width:1060px;margin:0 auto;background:#ffffff;color:#111827;font-family:Arial,Helvetica,sans-serif;border:1px solid #dbe3ef;">'
-            . '<div style="background:#0b2a57;color:#ffffff;padding:18px 22px;">'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="font-size:28px;font-weight:800;letter-spacing:.2px;">eBay</td><td align="right" style="font-size:15px;font-weight:700;">Originales gebrauchtes OEM-Teil</td></tr></table>'
-            . '</div>'
-            . '<div style="background:#f3f6fb;border-bottom:1px solid #dbe3ef;padding:10px 14px;">'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
-            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">✓ Schneller weltweiter Versand</td>'
-            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">↻ 30 Tage Rückgabe</td>'
-            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">▣ Sichere Verpackung</td>'
-            . '<td style="padding:6px 8px;color:#0b2a57;font-weight:700;">★ 100% Originalteil</td>'
-            . '</tr></table></div>'
-            . '<div style="padding:24px 22px;">'
-            . '<h1 style="margin:0 0 8px;color:#0b2a57;font-size:30px;line-height:1.22;font-weight:800;">' . esc_html($title) . '</h1>'
-            . '<p style="margin:0 0 20px;color:#374151;font-size:16px;"><strong>Zustand:</strong> ' . esc_html($condition) . '</p>'
+        $html = '<div style="max-width:1080px;margin:0 auto;background:#ffffff;color:#111827;font-family:Arial,Helvetica,sans-serif;border:1px solid #dbe3ef;border-radius:10px;overflow:hidden;box-shadow:0 10px 28px rgba(15,23,42,.08);">'
+            . '<div style="background:#f8fbff;border-bottom:1px solid #dbe3ef;">'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
-            . '<td width="48%" valign="top" style="padding:0 10px 18px 0;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#0b2a57;color:#fff;padding:11px 14px;font-weight:800;">Wichtigste Daten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $importantRows . '</table></div></td>'
-            . '<td width="52%" valign="top" style="padding:0 0 18px 10px;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#0b2a57;color:#fff;padding:11px 14px;font-weight:800;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div></td>'
+            . '<td width="25%" align="center" style="padding:16px 12px;color:#06275d;font-weight:800;font-size:15px;border-right:1px solid #dbe3ef;"><span style="font-size:24px;vertical-align:middle;margin-right:7px;color:#0057d9;">✓</span>Schneller weltweiter Versand</td>'
+            . '<td width="25%" align="center" style="padding:16px 12px;color:#06275d;font-weight:800;font-size:15px;border-right:1px solid #dbe3ef;"><span style="font-size:24px;vertical-align:middle;margin-right:7px;color:#0057d9;">↻</span>30 Tage Rückgabe</td>'
+            . '<td width="25%" align="center" style="padding:16px 12px;color:#06275d;font-weight:800;font-size:15px;border-right:1px solid #dbe3ef;"><span style="font-size:24px;vertical-align:middle;margin-right:7px;color:#0057d9;">▣</span>Sichere Verpackung</td>'
+            . '<td width="25%" align="center" style="padding:16px 12px;color:#06275d;font-weight:800;font-size:15px;"><span style="font-size:24px;vertical-align:middle;margin-right:7px;color:#0057d9;">★</span>100% Originalteil</td>'
+            . '</tr></table></div>'
+            . '<div style="padding:32px 30px 28px;">'
+            . '<h1 style="margin:0;color:#06275d;font-size:38px;line-height:1.16;font-weight:900;letter-spacing:.3px;text-transform:uppercase;">' . esc_html($title) . '</h1>'
+            . '<div style="width:92px;height:4px;background:#0057d9;margin:14px 0 16px;border-radius:2px;"></div>'
+            . '<div style="display:inline-block;background:#f2f7ff;border:1px solid #cfe0f6;color:#06275d;border-radius:6px;padding:10px 15px;margin:0 0 24px;font-size:15px;font-weight:800;">Zustand: ' . esc_html($condition) . '</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
+            . '<td width="40%" valign="top" style="padding:0 12px 22px 0;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Wichtigste Daten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $importantRows . '</table></div></td>'
+            . '<td width="60%" valign="top" style="padding:0 0 22px 12px;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div></td>'
             . '</tr><tr>'
-            . '<td width="48%" valign="top" style="padding:0 10px 18px 0;"><div style="border:1px solid #dbe3ef;border-radius:4px;overflow:hidden;"><div style="background:#f3f6fb;color:#0b2a57;padding:11px 14px;font-weight:800;">Fahrzeug- / Spenderfahrzeugdaten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $vehicleRows . '</table>' . $buttonHtml . '</div></td>'
-            . '<td width="52%" valign="top" style="padding:0 0 18px 10px;"><div style="border:1px solid #dbe3ef;border-radius:4px;padding:14px;"><div style="color:#0b2a57;font-weight:800;margin-bottom:10px;font-size:18px;">Beschreibung</div>' . $descriptionBlock . '</div></td>'
+            . '<td width="40%" valign="top" style="padding:0 12px 22px 0;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Fahrzeug- / Spenderfahrzeugdaten</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $vehicleRows . '</table></div></td>'
+            . '<td width="60%" valign="top" style="padding:0 0 22px 12px;"><div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Beschreibung</div><div style="padding:20px 22px;">' . $descriptionBlock . '</div></div></td>'
             . '</tr></table>'
-            . '<div style="border:1px solid #dbe3ef;background:#f8fafc;padding:16px;margin:2px 0 18px;border-radius:4px;">'
-            . '<h2 style="margin:0 0 8px;color:#0b2a57;font-size:20px;">Kompatibilität / Passgenauigkeit</h2>'
-            . '<p style="margin:0 0 8px;color:#1f2937;line-height:1.55;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p>'
-            . '<p style="margin:0;color:#1f2937;line-height:1.55;">Das Teil passt möglicherweise nicht zu Fahrzeugen ohne passende Ausstattung / Paket.</p>'
+            . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:2px 0 0;border-radius:8px;overflow:hidden;">'
+            . '<div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Kompatibilität / Passgenauigkeit</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
+            . '<td width="50%" valign="top" style="padding:20px 22px;border-right:1px solid #dbe3ef;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;">Passend für</div><p style="margin:0;color:#1f2937;line-height:1.7;">' . esc_html($fitment !== '' ? $fitment : 'Bitte anhand der Teilenummer prüfen.') . '</p></td>'
+            . '<td width="50%" valign="top" style="padding:20px 22px;background:#f8fbff;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;">Wichtige Hinweise</div><p style="margin:0 0 8px;color:#1f2937;line-height:1.7;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p><p style="margin:0;color:#1f2937;line-height:1.7;">Das Teil passt möglicherweise nicht zu Fahrzeugen ohne passende Ausstattung / Paket.</p></td>'
+            . '</tr></table></div>'
+            . $buttonHtml
+            . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:0 0 20px;border-radius:8px;overflow:hidden;">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
+            . '<td width="58%" valign="middle" style="padding:26px 28px;"><h2 style="margin:0 0 10px;color:#06275d;font-size:26px;line-height:1.2;font-weight:900;">Wir liefern in ganz Europa</h2><p style="margin:0 0 16px;color:#1f2937;font-size:16px;line-height:1.7;">Wir versenden in alle europäischen Länder – schnell, zuverlässig und sicher.</p><div style="display:inline-block;background:#eaf2ff;border:1px solid #c9dcf8;color:#06275d;border-radius:6px;padding:12px 16px;font-size:16px;font-weight:900;">Lieferzeit 2–5 Tage</div></td>'
+            . '<td width="42%" valign="middle" align="center" style="padding:22px;background:#f4f8fe;border-left:1px solid #dbe3ef;"><div style="border:2px dashed #b9c9df;border-radius:12px;padding:28px 18px;color:#06275d;font-weight:900;font-size:22px;line-height:1.35;">EUROPA<br><span style="font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:#4b6588;">schneller Versand</span></div></td>'
+            . '</tr></table></div>'
+            . '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:0 0 22px;border-radius:8px;padding:18px 20px;">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
+            . '<td width="50%" align="center" style="padding:0 10px 0 0;"><div style="background:#ffffff;border:1px solid #dbe3ef;border-radius:8px;padding:18px 12px;color:#06275d;font-size:28px;font-weight:900;letter-spacing:1px;">DHL</div></td>'
+            . '<td width="50%" align="center" style="padding:0 0 0 10px;"><div style="background:#ffffff;border:1px solid #dbe3ef;border-radius:8px;padding:18px 12px;color:#06275d;font-size:28px;font-weight:900;letter-spacing:1px;">DPD</div></td>'
+            . '</tr></table></div>'
             . '</div>'
-            . '<div style="border:1px solid #dbe3ef;padding:16px;margin-bottom:18px;border-radius:4px;">'
-            . '<h2 style="margin:0 0 8px;color:#0b2a57;font-size:20px;">Wir liefern in ganz Europa</h2>'
-            . '<p style="margin:0 0 8px;color:#111827;font-weight:700;">Lieferzeit: 2–5 Tage</p>'
-            . '<p style="margin:0;color:#1f2937;">Logistikpartner: DHL / DPD</p>'
-            . '</div>'
-            . '</div>'
-            . '<div style="background:#0b2a57;color:#ffffff;text-align:center;padding:18px 22px;">'
-            . '<div style="font-size:20px;font-weight:800;margin-bottom:5px;">Kaufen Sie mit Vertrauen</div>'
-            . '<div style="font-size:14px;">Geprüfte gebrauchte Teile | Sorgfältig kontrolliert | Professionell verpackt</div>'
+            . '<div style="background:#06275d;color:#ffffff;text-align:center;padding:24px 24px;border-top:4px solid #0057d9;">'
+            . '<div style="font-size:23px;font-weight:900;margin-bottom:7px;letter-spacing:.3px;">Kaufen Sie mit Vertrauen</div>'
+            . '<div style="font-size:15px;font-weight:700;color:#dbeafe;">Geprüfte gebrauchte Teile | Sorgfältig kontrolliert | Professionell verpackt</div>'
             . '</div></div>';
 
         return [
             'html' => $html,
             'title' => $title,
             'source_description' => $rawDescription,
-            'description_source' => 'post_content',
+            'description_source' => $descriptionSource,
+            'translation_source' => $translationSource,
+            'untranslated_fields' => $untranslatedFields,
             'used_fields' => $details['used_fields'],
             'missing_fields' => $details['missing_fields'],
             'field_mapping' => $details['field_mapping'],
@@ -1765,6 +1787,25 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'Stan opakowania' => ['german_label' => 'Verpackungszustand', 'aliases' => ['Stan opakowania'], 'required' => false],
             'Typ skrzyni biegów' => ['german_label' => 'Getriebeart', 'aliases' => ['Typ skrzyni biegów', 'Typ skrzyni biegow'], 'required' => false],
         ];
+    }
+
+    private function detect_likely_polish_template_fields(array $fields): array
+    {
+        $warnings = [];
+        $polishPattern = '/[ąćęłńóśźż]|\b(lewy|prawy|przód|przod|tył|tyl|manualna|automatyczna|benzyna|diesel|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        foreach ($fields as $field) {
+            $value = trim((string) ($field['value'] ?? ''));
+            if ($value === '' || !preg_match($polishPattern, $value)) {
+                continue;
+            }
+            $warnings[] = [
+                'label' => (string) ($field['german_label'] ?? $field['polish_label'] ?? ''),
+                'polish_label' => (string) ($field['polish_label'] ?? ''),
+                'value' => $value,
+                'message' => 'Value appears to remain in Polish; preview does not call Google Translate or write translated meta.',
+            ];
+        }
+        return $warnings;
     }
 
     private function fallback_product_details_rows(int $productId): array
@@ -1847,7 +1888,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($value === '') {
             return '';
         }
-        return '<tr><td style="width:42%;padding:10px 12px;border-top:1px solid #e5e7eb;background:#f8fafc;color:#0b2a57;font-weight:700;">' . esc_html($label) . '</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;">' . esc_html($value) . '</td></tr>';
+        return '<tr><td style="width:42%;padding:13px 15px;border-top:1px solid #e5e7eb;background:#f8fafc;color:#06275d;font-weight:800;line-height:1.45;">' . esc_html($label) . '</td><td style="padding:13px 15px;border-top:1px solid #e5e7eb;color:#111827;line-height:1.45;">' . esc_html($value) . '</td></tr>';
     }
 
     private function sanitize_ebay_template_description_html(string $rawDescription): string
@@ -1891,7 +1932,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $productId = (int) ($resolved['product_id'] ?? 0);
             $product = $resolved['product'];
             if ($productId <= 0 || !$product) return ['result' => 'error', 'error' => 'product_not_found'];
-            $preview = $this->build_ebay_de_description_preview_data($product, $productId);
+            $settings = $this->settings();
+            $settings['_wei_suppress_side_effects'] = true;
+            $settings['auto_generate_german_content_preflight'] = 0;
+            $settings['regenerate_german_content_on_hash_change'] = 0;
+            $content = $this->resolve_german_content($product, $productId, 'EBAY_DE', $settings);
+            $preview = $this->build_ebay_de_description_preview_data($product, $productId, $content);
             $html = (string) ($preview['html'] ?? '');
             $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html), 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
             return [
@@ -1901,6 +1947,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'title' => (string) ($preview['title'] ?? ''),
                 'source_description' => (string) ($preview['source_description'] ?? ''),
                 'description_source' => (string) ($preview['description_source'] ?? 'post_content'),
+                'translation_source' => (array) ($preview['translation_source'] ?? []),
+                'untranslated_fields' => (array) ($preview['untranslated_fields'] ?? []),
                 'used_fields' => (array) ($preview['used_fields'] ?? []),
                 'missing_fields' => (array) ($preview['missing_fields'] ?? []),
                 'field_mapping' => (array) ($preview['field_mapping'] ?? []),
