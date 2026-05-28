@@ -1602,17 +1602,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         $fitment = $this->build_template_fitment_value($detailsByPolishLabel);
-        $condition = $this->first_non_empty([$detailsByPolishLabel['Stan'] ?? '', 'Gebraucht']);
         $untranslatedFields = $this->detect_likely_polish_template_fields($details['fields']);
-
-        $sameVehicleUrl = function_exists('gp_get_vehicle_parts_url_for_product') ? trim((string) gp_get_vehicle_parts_url_for_product($productId)) : '';
-        $ovokoCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true));
-        if ($sameVehicleUrl === '' && $ovokoCarId !== '' && function_exists('get_post_type_archive_link')) {
-            $archive = (string) get_post_type_archive_link('product');
-            if ($archive !== '') {
-                $sameVehicleUrl = add_query_arg('ovoko_car_id', rawurlencode($ovokoCarId), $archive);
-            }
-        }
+        $sameVehicle = $this->resolve_ebay_same_vehicle_url_for_product($productId);
+        $sameVehicleUrl = (string) ($sameVehicle['url'] ?? '');
+        $warnings = array_merge($details['warnings'], (array) ($sameVehicle['warnings'] ?? []));
 
         $specRows = $this->render_ebay_template_specification_rows($details['fields']);
 
@@ -1633,21 +1626,20 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<td width="25%" align="center" style="padding:16px 12px;color:#06275d;font-weight:800;font-size:15px;"><span style="font-size:24px;vertical-align:middle;margin-right:7px;color:#0057d9;">★</span>100% Originalteil</td>'
             . '</tr></table></div>'
             . '<div style="padding:32px 30px 28px;">'
-            . '<h1 style="margin:0;color:#06275d;font-size:38px;line-height:1.16;font-weight:900;letter-spacing:.3px;text-transform:uppercase;">' . esc_html($title) . '</h1>'
-            . '<div style="width:92px;height:4px;background:#0057d9;margin:14px 0 16px;border-radius:2px;"></div>'
-            . '<div style="display:inline-block;background:#f2f7ff;border:1px solid #cfe0f6;color:#06275d;border-radius:6px;padding:10px 15px;margin:0 0 24px;font-size:15px;font-weight:800;">Zustand: ' . esc_html($condition) . '</div>'
-            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">' . $specRows . '</table></div>'
-            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Beschreibung</div><div style="padding:20px 22px;">' . $descriptionBlock . '</div></div>'
+            . '<h1 style="margin:0;color:#06275d;font-size:38px;line-height:1.16;font-weight:900;letter-spacing:.3px;text-transform:uppercase;text-align:center;">' . esc_html($title) . '</h1>'
+            . '<div style="width:92px;height:4px;background:#0057d9;margin:14px auto 22px;border-radius:2px;"></div>'
+            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Beschreibung</div><div style="padding:20px 22px;text-align:center;">' . $descriptionBlock . '</div></div>'
+            . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;text-align:center;">' . $specRows . '</table></div>'
             . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:2px 0 0;border-radius:8px;overflow:hidden;">'
-            . '<div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;">Kompatibilität / Passgenauigkeit</div>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
-            . '<td width="50%" valign="top" style="padding:20px 22px;border-right:1px solid #dbe3ef;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;">Passend für</div><p style="margin:0;color:#1f2937;line-height:1.7;">' . esc_html($fitment !== '' ? $fitment : 'Bitte anhand der Teilenummer prüfen.') . '</p></td>'
-            . '<td width="50%" valign="top" style="padding:20px 22px;background:#f8fbff;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;">Wichtige Hinweise</div><p style="margin:0 0 8px;color:#1f2937;line-height:1.7;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p><p style="margin:0;color:#1f2937;line-height:1.7;">Das Teil passt möglicherweise nicht zu Fahrzeugen ohne passende Ausstattung / Paket.</p></td>'
+            . '<div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Kompatibilität / Passgenauigkeit</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;text-align:center;"><tr>'
+            . '<td width="50%" valign="top" align="center" style="padding:20px 22px;border-right:1px solid #dbe3ef;text-align:center;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;text-align:center;">Passend für</div><p style="margin:0;color:#1f2937;line-height:1.7;text-align:center;">' . esc_html($fitment !== '' ? $fitment : 'Bitte anhand der Teilenummer prüfen.') . '</p></td>'
+            . '<td width="50%" valign="top" align="center" style="padding:20px 22px;background:#f8fbff;text-align:center;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;text-align:center;">Wichtige Hinweise</div><p style="margin:0;color:#1f2937;line-height:1.7;text-align:center;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p></td>'
             . '</tr></table></div>'
             . $buttonHtml
             . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:0 0 20px;border-radius:8px;overflow:hidden;">'
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>'
-            . '<td width="58%" valign="middle" style="padding:26px 28px;"><h2 style="margin:0 0 10px;color:#06275d;font-size:26px;line-height:1.2;font-weight:900;">Wir liefern in ganz Europa</h2><p style="margin:0 0 16px;color:#1f2937;font-size:16px;line-height:1.7;">Wir versenden in alle europäischen Länder – schnell, zuverlässig und sicher.</p><div style="display:inline-block;background:#eaf2ff;border:1px solid #c9dcf8;color:#06275d;border-radius:6px;padding:12px 16px;font-size:16px;font-weight:900;">Lieferzeit 2–5 Tage</div></td>'
+            . '<td width="58%" valign="middle" align="center" style="padding:26px 28px;text-align:center;"><h2 style="margin:0 0 10px;color:#06275d;font-size:26px;line-height:1.2;font-weight:900;text-align:center;">Wir liefern in ganz Europa</h2><p style="margin:0 0 16px;color:#1f2937;font-size:16px;line-height:1.7;text-align:center;">Wir versenden in alle europäischen Länder – schnell, zuverlässig und sicher.</p><div style="display:inline-block;background:#eaf2ff;border:1px solid #c9dcf8;color:#06275d;border-radius:6px;padding:12px 16px;font-size:16px;font-weight:900;">Lieferzeit 2–5 Tage</div></td>'
             . '<td width="42%" valign="middle" align="center" style="padding:22px;background:#f4f8fe;border-left:1px solid #dbe3ef;"><div style="border:2px dashed #b9c9df;border-radius:12px;padding:28px 18px;color:#06275d;font-weight:900;font-size:22px;line-height:1.35;">EUROPA<br><span style="font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:#4b6588;">schneller Versand</span></div></td>'
             . '</tr></table></div>'
             . '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:0 0 22px;border-radius:8px;padding:18px 20px;">'
@@ -1672,8 +1664,81 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'missing_fields' => $details['missing_fields'],
             'field_mapping' => $details['field_mapping'],
             'same_vehicle_url' => $sameVehicleUrl,
-            'warnings' => $details['warnings'],
+            'warnings' => $warnings,
         ];
+    }
+
+    private function resolve_ebay_same_vehicle_url_for_product(int $productId): array
+    {
+        $warnings = [];
+        $candidates = [];
+        foreach (['wei_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_vehicle_parts_url_for_product'] as $helper) {
+            if (!function_exists($helper)) {
+                continue;
+            }
+            $url = trim((string) $helper($productId));
+            if ($url !== '') {
+                $candidates[] = ['source' => $helper, 'url' => $url];
+            }
+        }
+
+        foreach (['_wei_ebay_same_vehicle_url', '_wei_ebay_vehicle_parts_url', '_ebay_same_vehicle_url'] as $metaKey) {
+            $url = trim((string) get_post_meta($productId, $metaKey, true));
+            if ($url !== '') {
+                $candidates[] = ['source' => $metaKey, 'url' => $url];
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $url = (string) ($candidate['url'] ?? '');
+            if ($this->is_ebay_public_url($url)) {
+                return ['url' => esc_url_raw($url), 'source' => (string) ($candidate['source'] ?? 'unknown'), 'warnings' => $warnings];
+            }
+            $warnings[] = [
+                'code' => 'same_vehicle_url_not_ebay',
+                'source' => (string) ($candidate['source'] ?? 'unknown'),
+                'message' => 'Same-vehicle CTA URL was ignored because it is not an eBay URL.',
+            ];
+        }
+
+        $legacyWooUrl = function_exists('gp_get_vehicle_parts_url_for_product') ? trim((string) gp_get_vehicle_parts_url_for_product($productId)) : '';
+        if ($legacyWooUrl !== '') {
+            $warnings[] = [
+                'code' => 'legacy_woo_same_vehicle_url_ignored',
+                'source' => 'gp_get_vehicle_parts_url_for_product',
+                'message' => 'Legacy same-vehicle URL points to Woo/gpswiss.pl and is intentionally not used for the eBay CTA.',
+            ];
+        }
+
+        $ovokoCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true));
+        $vehicleSlug = trim((string) get_post_meta($productId, '_gpswiss_vehicle_slug', true));
+        $vehicleLabel = trim((string) get_post_meta($productId, '_gpswiss_vehicle_label', true));
+        $sku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
+        $warnings[] = [
+            'code' => 'missing_ebay_same_vehicle_url',
+            'message' => 'No eBay same-vehicle URL/helper/meta is available; CTA is hidden and no gpswiss.pl URL is used.',
+            'checked' => [
+                'helpers' => ['wei_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_vehicle_parts_url_for_product'],
+                'meta_keys' => ['_wei_ebay_same_vehicle_url', '_wei_ebay_vehicle_parts_url', '_ebay_same_vehicle_url'],
+                'ovoko_car_id' => $ovokoCarId,
+                'vehicle_slug' => $vehicleSlug,
+                'vehicle_label' => $vehicleLabel,
+                'ebay_sku' => $sku,
+            ],
+        ];
+
+        return ['url' => '', 'source' => '', 'warnings' => $warnings];
+    }
+
+    private function is_ebay_public_url(string $url): bool
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($host === '') {
+            return false;
+        }
+        return $host === 'ebay.com'
+            || str_ends_with($host, '.ebay.com')
+            || preg_match('/(^|\.)ebay\.[a-z.]+$/', $host) === 1;
     }
 
     private function collect_woo_product_details_for_ebay_template($product, int $productId): array
@@ -1828,7 +1893,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         foreach ($rows as $label => $value) {
             $html .= $this->render_ebay_template_row((string) $label, (string) $value);
         }
-        return $html !== '' ? $html : '<tr><td style="padding:10px 12px;color:#4b5563;">Nicht angegeben</td></tr>';
+        return $html !== '' ? $html : '<tr><td align="center" style="padding:10px 12px;color:#4b5563;text-align:center;">Nicht angegeben</td></tr>';
     }
 
     private function render_ebay_template_specification_rows(array $fields): string
@@ -1849,7 +1914,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $seenLabels[$normalizedLabel] = true;
             $html .= $row;
         }
-        return $html !== '' ? $html : '<tr><td style="padding:10px 12px;color:#4b5563;">Nicht angegeben</td></tr>';
+        return $html !== '' ? $html : '<tr><td align="center" style="padding:10px 12px;color:#4b5563;text-align:center;">Nicht angegeben</td></tr>';
     }
 
     private function render_ebay_template_row(string $label, string $value): string
@@ -1858,7 +1923,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($value === '') {
             return '';
         }
-        return '<tr><td style="width:42%;padding:13px 15px;border-top:1px solid #e5e7eb;background:#f8fafc;color:#06275d;font-weight:800;line-height:1.45;">' . esc_html($label) . '</td><td style="padding:13px 15px;border-top:1px solid #e5e7eb;color:#111827;line-height:1.45;">' . esc_html($value) . '</td></tr>';
+        return '<tr><td align="center" style="width:42%;padding:13px 15px;border-top:1px solid #e5e7eb;background:#f8fafc;color:#06275d;font-weight:800;line-height:1.45;text-align:center;">' . esc_html($label) . '</td><td align="center" style="padding:13px 15px;border-top:1px solid #e5e7eb;color:#111827;line-height:1.45;text-align:center;">' . esc_html($value) . '</td></tr>';
     }
 
     private function sanitize_ebay_template_description_html(string $rawDescription): string
