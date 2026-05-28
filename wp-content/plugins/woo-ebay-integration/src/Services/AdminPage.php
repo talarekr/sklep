@@ -2233,18 +2233,51 @@ class AdminPage
         check_admin_referer('wei_description_template_preview');
         $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
         $res = $this->adapter->preview_ebay_de_description_template($input);
-        update_option('wei_ebay_description_template_preview', $res, false);
-        $this->set_status('eBay.de description template preview: ' . wp_json_encode(['result' => (string) ($res['result'] ?? 'error'), 'product_id' => (int) ($res['product_id'] ?? 0), 'sku' => (string) ($res['sku'] ?? ''), 'html_length' => mb_strlen((string) ($res['html'] ?? ''))]));
-        $this->go();
+        $this->render_description_template_preview_response($res);
+    }
+
+    private function render_description_template_preview_response(array $res): void
+    {
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        $backUrl = esc_url(admin_url('admin.php?page=woo-ebay'));
+        echo '<div class="wrap" style="font-family:Arial,Helvetica,sans-serif;margin:20px;">';
+        echo '<h1>Safe eBay.de description template preview</h1>';
+        echo '<p><a href="' . $backUrl . '">&larr; Back to Woo eBay Integration</a></p>';
+        echo '<p><strong>Safety:</strong> local preview only; no eBay API, no Ovoko API, no active listing update, no new listing, no Woo product changes.</p>';
+        echo '<h2>Preview metadata</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode([
+            'result' => (string) ($res['result'] ?? 'error'),
+            'product_id' => (int) ($res['product_id'] ?? 0),
+            'sku' => (string) ($res['sku'] ?? ''),
+            'title' => (string) ($res['title'] ?? ''),
+            'description_source' => (string) ($res['description_source'] ?? 'post_content'),
+            'same_vehicle_url' => (string) ($res['same_vehicle_url'] ?? ''),
+            'warnings' => (array) ($res['warnings'] ?? []),
+            'safety' => (array) ($res['safety'] ?? []),
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Used fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['used_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Missing fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['missing_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Field mapping</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['field_mapping'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Source description</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['source_description'] ?? '')) . '</pre>';
+        echo '<h2>Rendered HTML</h2><div style="background:#fff;border:1px solid #dcdcde;padding:12px;overflow:auto;">' . wp_kses_post((string) ($res['html'] ?? '')) . '</div>';
+        echo '<h2>Raw HTML</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['html'] ?? '')) . '</pre>';
+        echo '</div>';
+        exit;
     }
 
     public function description_template_single(): void
     {
         $this->require_manage_options();
         check_admin_referer('wei_description_template_single');
-        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
-        $res = $this->adapter->update_description_template_single($input);
-        $this->set_status('eBay.de single description template update: ' . wp_json_encode($res));
+        $res = [
+            'result' => 'disabled',
+            'reason' => 'description_template_updates_disabled_preview_stage',
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+        ];
+        $this->set_status('eBay.de single description template update disabled: ' . wp_json_encode($res));
         $this->go();
     }
 

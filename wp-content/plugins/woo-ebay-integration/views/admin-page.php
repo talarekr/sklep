@@ -470,22 +470,8 @@ $technicalPreview = static function ($value, int $maxLength = 6000) use ($redact
             <input type="text" name="product_or_sku" placeholder="Product ID or SKU (test: 6084 / GPSW-6084)" required />
             <button class="button button-secondary">Preview eBay.de description template</button>
         </form>
-        <h3>Update eBay.de description template for one listing</h3>
-        <p class="description">Safe single-listing update: changes only inventory <code>product.description</code> and runs safe updateOffer refresh. No createOffer/publishOffer and no title/price/stock/shipping/category/aspects changes.</p>
-        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
-            <?php wp_nonce_field('wei_description_template_single'); ?>
-            <input type="hidden" name="action" value="wei_description_template_single" />
-            <input type="text" name="product_or_sku" placeholder="Product ID or SKU (test: 6084 / GPSW-6084)" required />
-            <button class="button button-secondary">Update eBay.de description template for one listing</button>
-        </form>
-        <?php $descPreview = get_option('wei_ebay_description_template_preview', []); if (is_array($descPreview) && !empty($descPreview['html'])): ?>
-            <details>
-                <summary>Latest eBay.de description template preview (<?php echo esc_html((string) ($descPreview['product_id'] ?? '')); ?> / <?php echo esc_html((string) ($descPreview['sku'] ?? '')); ?>)</summary>
-                <div class="wei-scroll" style="background:#fff;padding:12px;border:1px solid #ddd;"><?php echo wp_kses_post((string) $descPreview['html']); ?></div>
-                <h4>Raw HTML</h4>
-                <pre class="wei-scroll"><?php echo esc_html((string) $descPreview['html']); ?></pre>
-            </details>
-        <?php endif; ?>
+        <h3>eBay.de description template update</h3>
+        <p class="description"><strong>Disabled for this stage:</strong> only local preview is available. No active eBay listings are updated, no new listings are created, and no eBay/Ovoko API call is made by the preview action.</p>
         <?php if (!empty($listing_quality_audit)): ?>
             <div class="wei-grid" style="margin-top:8px;">
                 <div class="wei-card"><span>Generated at</span><strong><?php echo esc_html((string) ($listing_quality_audit['generated_at'] ?? '-')); ?></strong></div>
