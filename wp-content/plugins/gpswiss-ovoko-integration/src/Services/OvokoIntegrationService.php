@@ -2692,17 +2692,35 @@ class OvokoIntegrationService
             return ['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'ovoko_category_title_path'=>$path,'reason'=>'ovoko_category_tree_resolution_failed','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','planned_action'=>'skip','debug'=>$debug];
         }
         $counts['ovoko_category_found']++;
-        $levels=array_values(array_filter(array_map('trim',explode('/',$path)),fn($v)=>$v!==''));
+        $treeParentChain = is_array($categoryResolve['category_tree_parent_chain'] ?? null) ? $categoryResolve['category_tree_parent_chain'] : [];
+        $levels = $this->extract_category_levels_from_parent_chain_or_path($treeParentChain, $path);
         $currentTerms=wp_get_post_terms($productId,'product_cat',['fields'=>'all']);
         $currentCats=[];$currentIds=[];
         foreach((array)$currentTerms as $t){$currentCats[]=['term_id'=>(int)$t->term_id,'name'=>(string)$t->name,'parent'=>(int)$t->parent];$currentIds[]=(int)$t->term_id;}
-        $hier=[];$missing=[];$parent=0;$finalId=0;$chainOk=true;
-        foreach($levels as $name){
+        $hier=[];$missing=[];$parent=0;$finalId=0;$chainOk=true;$levelIndex=0;$pendingByOvokoId=[];
+        foreach($levels as $level){
+            $levelIndex++;
+            $name=(string) ($level['name'] ?? '');
+            $ovokoCategoryId=(int) ($level['ovoko_category_id'] ?? 0);
             $existing=get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'name'=>$name,'parent'=>$parent]);
             $term=$existing[0]??null;
             if($term){$counts['categories_existing']++;}
-            else { $missing[]=['name'=>$name,'parent_id'=>$parent]; if(!$dryRun && $createMissing){$created=wp_insert_term($name,'product_cat',['parent'=>$parent]); if(is_wp_error($created)){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'error'=>$created->get_error_message(),'reason'=>'category_create_failed'];} $term=get_term((int)$created['term_id'],'product_cat'); $counts['categories_created']++; } }
-            $hier[]=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0];
+            else {
+                $missingItem=['name'=>$name,'parent_id'=>$parent,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
+                $parentOvokoCategoryId=(int) ($level['parent_ovoko_category_id'] ?? 0);
+                if($parentOvokoCategoryId > 0 && !empty($pendingByOvokoId[$parentOvokoCategoryId])){
+                    $missingItem['parent_pending_create']=true;
+                    $missingItem['parent_name']=(string) ($pendingByOvokoId[$parentOvokoCategoryId]['name'] ?? '');
+                    $missingItem['parent_ovoko_category_id']=$parentOvokoCategoryId;
+                    $missingItem['parent_level_index']=(int) ($pendingByOvokoId[$parentOvokoCategoryId]['level_index'] ?? 0);
+                } else {
+                    $missingItem['parent_pending_create']=false;
+                }
+                $missing[]=$missingItem;
+                if(!$dryRun && $createMissing){$created=wp_insert_term($name,'product_cat',['parent'=>$parent]); if(is_wp_error($created)){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'error'=>$created->get_error_message(),'reason'=>'category_create_failed'];} $term=get_term((int)$created['term_id'],'product_cat'); $counts['categories_created']++; }
+                if($ovokoCategoryId > 0){$pendingByOvokoId[$ovokoCategoryId]=['name'=>$name,'level_index'=>$levelIndex];}
+            }
+            $hier[]=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
             if(!$term){$chainOk=false;break;}
             $parent=(int)$term->term_id;$finalId=$parent;
         }
@@ -2717,8 +2735,43 @@ class OvokoIntegrationService
         $verified=in_array($finalId,$afterIds,true);
         $result['assigned_term_ids_after']=$afterIds;
         $result['category_update_verified']=$verified;
+        if($verified){
+            $deepTerm=get_term($finalId,'product_cat');
+            $parentTerm=$deepTerm && !is_wp_error($deepTerm) ? get_term((int) $deepTerm->parent,'product_cat') : null;
+            $grandParentTerm=$parentTerm && !is_wp_error($parentTerm) ? get_term((int) $parentTerm->parent,'product_cat') : null;
+            $result['assigned_category_verification']=[
+                'assigned_category_name'=>$deepTerm && !is_wp_error($deepTerm) ? (string) $deepTerm->name : '',
+                'assigned_category_parent_name'=>$parentTerm && !is_wp_error($parentTerm) ? (string) $parentTerm->name : '',
+                'assigned_category_grandparent_name'=>$grandParentTerm && !is_wp_error($grandParentTerm) ? (string) $grandParentTerm->name : '',
+            ];
+        }
         if($verified){$counts['products_categories_verified']++;} else {$counts['errors']++;}
         return $result;
+    }
+
+    private function extract_category_levels_from_parent_chain_or_path(array $chain, string $fallbackPath): array
+    {
+        $levels = [];
+        if ($chain !== []) {
+            foreach ($chain as $i => $node) {
+                if (!is_array($node)) { continue; }
+                $name = trim((string) ($node['pl'] ?? $node['name'] ?? ''));
+                if ($name === '') { continue; }
+                $levels[] = [
+                    'name' => $name,
+                    'ovoko_category_id' => (int) ($node['id'] ?? 0),
+                    'parent_ovoko_category_id' => (int) ($node['parent_id'] ?? 0),
+                    'level_index' => $i + 1,
+                ];
+            }
+        }
+        if ($levels === []) {
+            $flat = array_values(array_filter(array_map('trim', explode('/', $fallbackPath)), fn($v) => $v !== ''));
+            foreach ($flat as $i => $name) {
+                $levels[] = ['name' => (string) $name, 'ovoko_category_id' => 0, 'parent_ovoko_category_id' => 0, 'level_index' => $i + 1];
+            }
+        }
+        return $levels;
     }
 
     private function build_ovoko_category_diagnostics(array $payload, array $record, array $normalized): array
