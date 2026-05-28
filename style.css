@@ -570,20 +570,6 @@ body {
   border-radius: 8px;
   font-weight: 600;
 }
-.gp-all-cat-dropdown__children {
-  margin-top: 4px;
-  padding-left: 10px;
-  border-left: 1px solid #e5eaf2;
-}
-.gp-all-cat-dropdown__children a {
-  display: block;
-  padding: 6px 10px;
-  color: #5d687c;
-  text-decoration: none;
-  border-radius: 7px;
-  font-size: 14px;
-  line-height: 1.25;
-}
 .gp-all-cat-dropdown__list a:hover,
 .gp-all-cat-dropdown__list a:focus-visible {
   background: #f5f7fb;
