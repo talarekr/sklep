@@ -2702,13 +2702,19 @@ class OvokoIntegrationService
             $levelIndex++;
             $name=(string) ($level['name'] ?? '');
             $ovokoCategoryId=(int) ($level['ovoko_category_id'] ?? 0);
-            $existing=get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'name'=>$name,'parent'=>$parent]);
-            $term=$existing[0]??null;
+            $parentOvokoCategoryId=(int) ($level['parent_ovoko_category_id'] ?? 0);
+            $parentPendingCreate = $parentOvokoCategoryId > 0 && !empty($pendingByOvokoId[$parentOvokoCategoryId]);
+
+            $term=null;
+            if(!$parentPendingCreate){
+                $existing=get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'name'=>$name,'parent'=>$parent]);
+                $term=$existing[0]??null;
+            }
+
             if($term){$counts['categories_existing']++;}
             else {
                 $missingItem=['name'=>$name,'parent_id'=>$parent,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
-                $parentOvokoCategoryId=(int) ($level['parent_ovoko_category_id'] ?? 0);
-                if($parentOvokoCategoryId > 0 && !empty($pendingByOvokoId[$parentOvokoCategoryId])){
+                if($parentPendingCreate){
                     $missingItem['parent_pending_create']=true;
                     $missingItem['parent_name']=(string) ($pendingByOvokoId[$parentOvokoCategoryId]['name'] ?? '');
                     $missingItem['parent_ovoko_category_id']=$parentOvokoCategoryId;
@@ -2720,8 +2726,17 @@ class OvokoIntegrationService
                 if(!$dryRun && $createMissing){$created=wp_insert_term($name,'product_cat',['parent'=>$parent]); if(is_wp_error($created)){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'error'=>$created->get_error_message(),'reason'=>'category_create_failed'];} $term=get_term((int)$created['term_id'],'product_cat'); $counts['categories_created']++; }
                 if($ovokoCategoryId > 0){$pendingByOvokoId[$ovokoCategoryId]=['name'=>$name,'level_index'=>$levelIndex];}
             }
-            $hier[]=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
-            if(!$term){$chainOk=false;break;}
+
+            $hierItem=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
+            if($parentPendingCreate){
+                $hierItem['parent_pending_create']=true;
+                $hierItem['parent_name']=(string) ($pendingByOvokoId[$parentOvokoCategoryId]['name'] ?? '');
+                $hierItem['parent_ovoko_category_id']=$parentOvokoCategoryId;
+                $hierItem['parent_level_index']=(int) ($pendingByOvokoId[$parentOvokoCategoryId]['level_index'] ?? 0);
+            }
+            $hier[]=$hierItem;
+
+            if(!$term){$chainOk=false; if($dryRun){continue;} break;}
             $parent=(int)$term->term_id;$finalId=$parent;
         }
         $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'raw_category_title_path'=>$categoryResolve['raw_category_title_path'] ?? '','category_id'=>$categoryResolve['category_id'] ?? '','category_title_path_source_key'=>$categoryResolve['category_title_path_source_key'] ?? '','all_category_related_fields'=>$categoryDiagnostics['all_category_related_fields'],'resolved_full_ovoko_category_path'=>$categoryResolve['resolved_full_ovoko_category_path'] ?? '','category_resolution_method'=>$categoryResolve['category_resolution_method'] ?? '','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false,'debug'=>$debug];
