@@ -38,6 +38,7 @@ $autoSyncCounts = (array) ($autoSyncStatus['counts'] ?? []);
 $autoSyncDashboardCounters = (array) ($autoSyncStatus['dashboard_counters'] ?? []);
 $buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
 $bidirectionalStatus = (array) ($data['bidirectional_sync_status'] ?? []);
+$bidirectionalRecentRuns = array_values(array_filter((array) ($data['bidirectional_sync_recent_runs'] ?? []), 'is_array'));
 
 $noticePayload = null;
 if (!empty($notice['text']) && is_string($notice['text'])) {
@@ -178,6 +179,73 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <?php submit_button('Retry failed Woo → Ovoko sales', 'secondary', 'submit', false); ?>
             </form>
         </div>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+            <h3 style="margin:0;">Recent cron runs</h3>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_bidirectional_clear_recent_runs'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_clear_recent_runs" />
+                <?php submit_button('Clear cron logs', 'secondary', 'submit', false); ?>
+            </form>
+        </div>
+        <?php if ($bidirectionalRecentRuns === []): ?>
+            <p>No cron runs logged yet.</p>
+        <?php else: ?>
+            <div style="overflow-x:auto;margin-top:12px;">
+                <table class="widefat striped" style="min-width:1180px;">
+                    <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Trigger</th>
+                        <th>Status</th>
+                        <th>Date from</th>
+                        <th>Page</th>
+                        <th>Ovoko processed / created / updated / skipped</th>
+                        <th>Woo sales processed / success / failed</th>
+                        <th>Duration</th>
+                        <th>Error / warning</th>
+                        <th>Technical</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($bidirectionalRecentRuns as $run): ?>
+                        <?php
+                        $ovokoRun = (array) ($run['ovoko_to_woo'] ?? []);
+                        $wooRun = (array) ($run['woo_to_ovoko'] ?? []);
+                        $skippedTotal = (int) ($ovokoRun['skipped_missing_price'] ?? 0) + (int) ($ovokoRun['skipped_already_synced'] ?? 0);
+                        $pageLabel = ($run['page'] ?? null) === null ? '—' : (string) $run['page'];
+                        if (($run['next_page'] ?? null) !== null) {
+                            $pageLabel .= ' → ' . (string) $run['next_page'];
+                        }
+                        if (($run['has_more_pages'] ?? null) !== null) {
+                            $pageLabel .= !empty($run['has_more_pages']) ? ' (more)' : ' (done)';
+                        }
+                        $errorWarning = trim((string) (($run['last_error'] ?? '') ?: ($run['last_warning'] ?? '')));
+                        ?>
+                        <tr>
+                            <td><code><?php echo esc_html((string) ($run['started_at'] ?? '')); ?></code><br><small>finished: <?php echo esc_html((string) ($run['finished_at'] ?? '')); ?></small></td>
+                            <td><?php echo esc_html((string) ($run['trigger'] ?? '')); ?></td>
+                            <td><code><?php echo esc_html((string) ($run['status'] ?? '')); ?></code></td>
+                            <td><code><?php echo esc_html((string) (($run['date_from_used'] ?? '') ?: '—')); ?></code></td>
+                            <td><?php echo esc_html($pageLabel); ?></td>
+                            <td><?php echo esc_html((string) ($ovokoRun['processed'] ?? 0)); ?> / <?php echo esc_html((string) ($ovokoRun['created'] ?? 0)); ?> / <?php echo esc_html((string) ($ovokoRun['updated'] ?? 0)); ?> / <?php echo esc_html((string) $skippedTotal); ?><br><small>missing price: <?php echo esc_html((string) ($ovokoRun['skipped_missing_price'] ?? 0)); ?>, already synced: <?php echo esc_html((string) ($ovokoRun['skipped_already_synced'] ?? 0)); ?>, errors: <?php echo esc_html((string) ($ovokoRun['errors_count'] ?? 0)); ?>, warnings: <?php echo esc_html((string) ($ovokoRun['warnings_count'] ?? 0)); ?></small></td>
+                            <td><?php echo esc_html((string) ($wooRun['processed'] ?? 0)); ?> / <?php echo esc_html((string) ($wooRun['success'] ?? 0)); ?> / <?php echo esc_html((string) ($wooRun['failed'] ?? 0)); ?><br><small>skipped: <?php echo esc_html((string) ($wooRun['skipped'] ?? 0)); ?></small></td>
+                            <td><?php echo esc_html((string) ($run['duration_seconds'] ?? 0)); ?>s</td>
+                            <td><?php echo esc_html($errorWarning !== '' ? $errorWarning : '—'); ?></td>
+                            <td>
+                                <details>
+                                    <summary>Show technical JSON</summary>
+                                    <textarea readonly rows="8" style="width:360px;max-width:100%;font-family:monospace;"><?php echo esc_textarea(wp_json_encode($run, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></textarea>
+                                </details>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
     </div>
 
     <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
