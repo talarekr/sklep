@@ -6,7 +6,6 @@ class OvokoBidirectionalSyncOrchestrator
 {
     public const STATUS_OPTION = 'gpswiss_ovoko_bidirectional_sync_status';
     public const ENABLED_OPTION = 'ovoko_bidirectional_sync_enabled';
-    public const SALE_SYNC_ENABLED_OPTION = 'woo_to_ovoko_sale_sync_enabled';
     public const LOCK_TRANSIENT = 'gpswiss_ovoko_bidirectional_sync_lock';
     public const CRON_HOOK = 'gpswiss_ovoko_bidirectional_sync';
     public const CRON_SCHEDULE = 'gpswiss_ovoko_every_15_minutes';
@@ -42,7 +41,7 @@ class OvokoBidirectionalSyncOrchestrator
 
     public function ensure_schedule_state(): void
     {
-        if ($this->is_enabled_for_live_writes()) {
+        if ($this->auto_cron_enabled()) {
             $this->schedule_cron_if_needed();
             return;
         }
@@ -61,8 +60,9 @@ class OvokoBidirectionalSyncOrchestrator
         $next = wp_next_scheduled(self::CRON_HOOK);
 
         $status['sync_enabled'] = (bool) get_option(self::ENABLED_OPTION, false);
-        $status['woo_to_ovoko_sale_sync_enabled'] = (bool) get_option(self::SALE_SYNC_ENABLED_OPTION, false);
-        $status['guard_enabled'] = $this->live_cron_allowed();
+        if (!$status['sync_enabled'] && !in_array((string) ($status['status'] ?? ''), ['running', 'error'], true)) {
+            $status['status'] = 'paused';
+        }
         $status['delta_filter_used'] = self::DELTA_FILTER;
         $status['date_from_used'] = (string) ($status['date_from_used'] ?: ($legacyOvokoToWoo['date_from_used'] ?? $legacyOvokoToWoo['date_from'] ?? ''));
         $status['last_successful_sync_at'] = (string) ($status['last_successful_sync_at'] ?: ($legacyOvokoToWoo['last_successful_sync_at'] ?? ''));
@@ -81,48 +81,27 @@ class OvokoBidirectionalSyncOrchestrator
         $status['failed_woo_to_ovoko_sales'] = (int) $saleCounts['failed'];
         $status['lock_status'] = get_transient(self::LOCK_TRANSIENT) ? 'locked' : 'unlocked';
         $status['lock_started_at'] = (string) (get_transient(self::LOCK_TRANSIENT) ?: '');
-        $status['next_scheduled_sync_at'] = $next ? gmdate('c', (int) $next) : '';
-        $status['automation_guard'] = $this->live_cron_allowed() ? 'live_cron_allowed' : 'live_cron_requires_explicit_code_confirmation';
+        $status['next_scheduled_sync_at'] = $next ? gmdate('c', (int) $next) : 'not scheduled';
 
         return $status;
     }
 
     public function request_enable_automatic_sync(): array
     {
-        if (!$this->live_cron_allowed()) {
-            update_option(self::ENABLED_OPTION, false, false);
-            update_option(self::SALE_SYNC_ENABLED_OPTION, false, false);
-            update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), [
-                'status' => 'paused',
-                'last_error' => 'automatic_live_cron_not_enabled_without_GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON',
-            ]), false);
-
-            return [
-                'ok' => false,
-                'action_name' => 'Enable automatic Ovoko ↔ Woo sync',
-                'message' => 'Automatic live cron remains disabled because explicit code-level confirmation is missing.',
-                'required_confirmation' => 'Define GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON=true after controlled live tests are approved.',
-                'cron_scheduled' => false,
-                'sync_enabled' => false,
-            ];
-        }
-
         update_option(self::ENABLED_OPTION, true, false);
-        update_option(self::SALE_SYNC_ENABLED_OPTION, true, false);
         $scheduled = $this->schedule_cron_if_needed();
         update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'idle', 'last_error' => '', 'last_warning' => '']), false);
 
-        return ['ok' => true, 'action_name' => 'Enable automatic Ovoko ↔ Woo sync', 'sync_enabled' => true, 'woo_to_ovoko_sale_sync_enabled' => true, 'cron_scheduled' => $scheduled, 'schedule' => self::CRON_SCHEDULE];
+        return ['ok' => true, 'action_name' => 'Enable auto cron', 'sync_enabled' => true, 'cron_scheduled' => $scheduled, 'schedule' => self::CRON_SCHEDULE];
     }
 
     public function pause_sync(): array
     {
         update_option(self::ENABLED_OPTION, false, false);
-        update_option(self::SALE_SYNC_ENABLED_OPTION, false, false);
         update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'paused']), false);
         wp_clear_scheduled_hook(self::CRON_HOOK);
 
-        return ['ok' => true, 'action_name' => 'Disable / Pause sync', 'sync_enabled' => false, 'woo_to_ovoko_sale_sync_enabled' => false, 'cron_scheduled' => false];
+        return ['ok' => true, 'action_name' => 'Disable auto cron', 'sync_enabled' => false, 'cron_scheduled' => false, 'next_scheduled_sync_at' => 'not scheduled'];
     }
 
     public function run_now(): array
@@ -132,22 +111,18 @@ class OvokoBidirectionalSyncOrchestrator
 
     public function retry_failed_sales(): array
     {
-        if (!$this->is_enabled_for_live_writes()) {
-            return ['ok' => false, 'action_name' => 'Retry failed Woo → Ovoko sale sync', 'status' => 'paused', 'message' => 'Retry is blocked until panel setting is enabled and GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON is true.'];
-        }
-
-        return $this->saleQueue->process_queue(['retry_failed_only' => true]);
+        return $this->saleQueue->process_queue(['retry_failed_only' => true, 'force' => true]);
     }
 
     public function run_cron_guarded(string $trigger = 'cron'): array
     {
-        if (!$this->is_enabled_for_live_writes()) {
+        if ($trigger === 'cron' && !$this->auto_cron_enabled()) {
             $status = array_merge($this->dashboard_status(), [
                 'status' => 'paused',
-                'last_warning' => 'Bidirectional live cron is disabled by panel setting or code guard.',
+                'last_warning' => 'Auto cron is disabled in the plugin panel.',
             ]);
             update_option(self::STATUS_OPTION, $status, false);
-            return ['ok' => false, 'status' => 'paused', 'message' => 'Bidirectional live cron is not enabled.', 'trigger' => $trigger];
+            return ['ok' => false, 'status' => 'paused', 'message' => 'Auto cron is disabled.', 'trigger' => $trigger];
         }
 
         if (get_transient(self::LOCK_TRANSIENT)) {
@@ -161,7 +136,7 @@ class OvokoBidirectionalSyncOrchestrator
             update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'running', 'last_error' => '', 'last_warning' => '', 'lock_started_at' => $startedAt]), false);
 
             $ovokoResult = $this->run_ovoko_to_woo_delta();
-            $saleResult = $this->saleQueue->process_queue(['retry_failed_only' => false]);
+            $saleResult = $this->saleQueue->process_queue(['retry_failed_only' => false, 'force' => $trigger !== 'cron']);
             $ok = !empty($ovokoResult['ok']) && !empty($saleResult['ok']);
             $now = gmdate('c');
             $status = array_merge($this->dashboard_status(), [
@@ -198,7 +173,7 @@ class OvokoBidirectionalSyncOrchestrator
                 ],
                 '2_woo_to_ovoko' => $this->saleQueue->design_summary(),
             ],
-            'live_cron_enabled_now' => $this->is_enabled_for_live_writes(),
+            'auto_cron_enabled_now' => $this->auto_cron_enabled(),
         ];
     }
 
@@ -279,8 +254,6 @@ class OvokoBidirectionalSyncOrchestrator
     {
         return [
             'sync_enabled' => false,
-            'woo_to_ovoko_sale_sync_enabled' => false,
-            'guard_enabled' => false,
             'status' => 'idle',
             'last_successful_sync_at' => '',
             'last_successful_sync_date' => '',
@@ -317,14 +290,9 @@ class OvokoBidirectionalSyncOrchestrator
         return (bool) wp_schedule_event(time() + 15 * MINUTE_IN_SECONDS, self::CRON_SCHEDULE, self::CRON_HOOK);
     }
 
-    private function is_enabled_for_live_writes(): bool
+    private function auto_cron_enabled(): bool
     {
-        return $this->live_cron_allowed() && (bool) get_option(self::ENABLED_OPTION, false);
-    }
-
-    private function live_cron_allowed(): bool
-    {
-        return defined('GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON') && GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON;
+        return (bool) get_option(self::ENABLED_OPTION, false);
     }
 
     private function first_error_message(array $results): string
