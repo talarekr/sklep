@@ -186,8 +186,9 @@ class OvokoAutoSyncDryRunService
             'mode' => 'dry_run_no_ovoko_write',
             'order_id' => $orderId,
             'endpoint_confirmed' => false,
-            'recommended_endpoint_policy' => 'Current client only contains a confirmed write probe for /crm/updatePart place updates; sale/stock/status write endpoint is not confirmed and must remain disabled until Ovoko/RRR confirms the contract.',
-            'candidate_endpoints_to_confirm_with_ovoko' => ['/crm/updatePart', '/crm/create/order', '/crm/sellPart', '/crm/reservePart', '/v2/update/part'],
+            'recommended_endpoint_policy' => 'Current client only contains confirmed write probes for /crm/updatePart place/internal_notes fields; sale/stock/status write endpoint is not confirmed and must remain disabled until Ovoko/RRR confirms the contract.',
+            'candidate_endpoints_to_confirm_with_ovoko' => ['/crm/updatePart', '/crm/create/order', '/crm/sellPart', '/crm/reservePart', '/v2/update/part', '/v2/parts/{id}/status'],
+            'endpoint_contract_analysis' => $this->sale_stock_endpoint_analysis(),
             'idempotency_meta_keys' => $this->sale_sync_meta_keys(),
             'queue_design' => $this->sale_queue_design(),
             'conflict_policy' => $this->conflict_policy(),
@@ -247,6 +248,7 @@ class OvokoAutoSyncDryRunService
         $client = new RrrApiClient($this->integrationService->get_settings());
         $sample = $client->preview_fetch_parts_sample(1, 1);
         $deltaProbe = $client->probe_parts_delta_filter_support();
+        $preciseDeltaProbe = (array) ($deltaProbe['precise_updated_from_probe'] ?? []);
         $record = (array) (($sample['records'][0] ?? []));
         $fields = array_values(array_map('strval', array_keys($record)));
         $hasUpdatedAt = array_key_exists('updated_at', $record);
@@ -256,7 +258,8 @@ class OvokoAutoSyncDryRunService
             'ok' => true,
             'action_name' => 'Ovoko/RRR endpoint capability analysis for safe cron',
             'read_endpoints_confirmed_in_client' => ['/v2/get/parts?limit={n}&page={p}', '/get/part/{part_id}', '/get/categories/tree', '/v2/get/parts/categories'],
-            'write_endpoint_seen_in_client' => ['/crm/updatePart' => 'Only tested for place update; not approved for sale/stock/status sync.'],
+            'write_endpoint_seen_in_client' => ['/crm/updatePart' => 'Only tested for place/internal_notes update; not approved for sale/stock/status sync.'],
+            'woo_to_ovoko_sale_stock_endpoint_analysis' => $this->sale_stock_endpoint_analysis(),
             'parts_page_probe' => [
                 'ok' => !empty($sample['ok']),
                 'status_code' => (string) ($sample['status_code'] ?? ''),
@@ -269,8 +272,11 @@ class OvokoAutoSyncDryRunService
                 'updated_at_available_in_payload' => $hasUpdatedAt,
                 'from_or_updated_after_filter_confirmed' => !empty($deltaProbe['delta_sync_confirmed']),
                 'delta_sync_confirmed' => !empty($deltaProbe['delta_sync_confirmed']),
-                'delta_filter_used' => (string) ($deltaProbe['delta_filter_used'] ?? ''),
+                'delta_filter_used' => (string) ($preciseDeltaProbe['delta_filter_used'] ?? ($deltaProbe['delta_filter_used'] ?? '')),
                 'delta_filter_probe' => $deltaProbe,
+                'precise_updated_from_probe' => $preciseDeltaProbe,
+                'delta_cron_rules' => $this->delta_cron_rules((string) ($preciseDeltaProbe['delta_filter_used'] ?? '')),
+                'live_sync_scope_after_delta_confirmation' => $this->live_sync_scope_design(),
                 'recommendation' => !empty($deltaProbe['delta_sync_confirmed'])
                     ? 'Delta candidate found in read-only probe; review returned records and Ovoko/RRR documentation before enabling live cron.'
                     : 'Live cron must remain disabled. Manual page-based dry-run is allowed only for diagnostics; ask Ovoko/RRR for the official changed-products endpoint or date filter.',
@@ -438,7 +444,7 @@ class OvokoAutoSyncDryRunService
 
     private function empty_ovoko_to_woo_report(int $limit, int $page): array
     {
-        $keys = ['existing_product_price_untouched','existing_product_internal_notes_price_ignored','existing_product_internal_notes_missing_ignored','new_product_price_from_internal_notes_ok','new_product_missing_price_in_internal_notes','new_product_invalid_internal_notes_price','new_product_would_create_as_draft_or_skip_due_to_missing_price','existing_products_images_untouched','new_products_images_would_import','existing_products_missing_images_warning','descriptions_would_update','descriptions_empty_from_ovoko','details_would_update','details_missing_from_ovoko','details_empty_from_ovoko','details_fields_changed','stock_would_update','categories_would_update','products_would_create','products_would_update','products_would_skip','products_unavailable_in_ovoko'];
+        $keys = ['existing_product_price_untouched','existing_product_internal_notes_price_ignored','existing_product_internal_notes_missing_ignored','new_product_price_from_internal_notes_ok','new_product_missing_price_in_internal_notes','new_product_invalid_internal_notes_price','new_product_would_create_as_draft_or_skip_due_to_missing_price','existing_products_images_untouched','new_products_images_would_import','existing_products_missing_images_warning','descriptions_would_update','descriptions_empty_from_ovoko','details_would_update','details_missing_from_ovoko','details_empty_from_ovoko','details_fields_changed','stock_would_update','categories_would_update','products_would_create','products_would_update','products_would_skip','products_would_skip_already_synced','products_unavailable_in_ovoko'];
         return [
             'ok' => true,
             'action_name' => 'Dry-run Ovoko → Woo near real-time sync',
@@ -664,6 +670,7 @@ class OvokoAutoSyncDryRunService
             'delta_sync_confirmed' => !empty($report['delta_sync_confirmed']),
             'delta_filter_used' => (string) ($report['delta_filter_used'] ?? ''),
             'last_successful_sync_at' => !empty($report['delta_sync_confirmed']) ? (string) ($report['current_delta_window']['delta_to'] ?? '') : (string) ($report['last_successful_sync_at'] ?? ''),
+            'last_successful_sync_date' => !empty($report['delta_sync_confirmed']) ? gmdate('Y-m-d', strtotime((string) ($report['current_delta_window']['delta_to'] ?? 'now')) ?: time()) : (string) ($report['last_successful_sync_date'] ?? ''),
             'last_attempted_sync_at' => (string) ($report['last_attempted_sync_at'] ?? gmdate('c')),
             'last_delta_from' => (string) ($report['current_delta_window']['delta_from'] ?? ''),
             'last_delta_to' => (string) ($report['current_delta_window']['delta_to'] ?? ''),
@@ -676,6 +683,9 @@ class OvokoAutoSyncDryRunService
             'created' => (int) ($counts['products_would_create'] ?? 0),
             'updated' => (int) ($counts['products_would_update'] ?? 0),
             'skipped' => (int) ($counts['products_would_skip'] ?? 0),
+            'created_from_delta' => (int) ($counts['products_would_create'] ?? 0),
+            'updated_from_delta' => (int) ($counts['products_would_update'] ?? 0),
+            'skipped_already_synced' => (int) ($counts['products_would_skip_already_synced'] ?? 0),
             'errors' => (array) ($report['errors'] ?? []),
             'warnings' => (array) ($report['warnings'] ?? []),
             'counts' => $counts,
@@ -698,6 +708,66 @@ class OvokoAutoSyncDryRunService
         ];
     }
 
+
+    private function delta_cron_rules(string $confirmedFilter): array
+    {
+        $filter = $confirmedFilter !== '' ? $confirmedFilter : 'not_confirmed';
+        return [
+            'delta_sync_confirmed' => $confirmedFilter !== '',
+            'delta_filter_used' => $filter,
+            'no_full_scan' => true,
+            'no_page_based_full_dataset_scan' => true,
+            'paging_scope' => 'Page/cursor only inside the confirmed delta result window, never across the full catalog.',
+            'lock' => self::LOCK_OPTION,
+            'status_fields' => ['delta_sync_confirmed','delta_filter_used','last_successful_sync_at','last_successful_sync_date','last_delta_from','last_delta_to','last_cursor/page','processed_changed_products','skipped_already_synced','created_from_delta','updated_from_delta','errors','warnings'],
+            'date_from_dedup_required' => $confirmedFilter === 'date_from',
+            'date_from_dedup_meta_keys' => ['_gpswiss_ovoko_last_synced_updated_at','_gpswiss_ovoko_last_synced_hash'],
+            'date_from_skip_condition' => 'If part_id + updated_at + normalized payload hash did not change, skip/no-op.',
+        ];
+    }
+
+    private function live_sync_scope_design(): array
+    {
+        return [
+            'existing_woo_products' => [
+                'stock_status' => 'sync',
+                'description' => 'sync',
+                'technical_details' => 'sync',
+                'categories' => 'verify_only_do_not_change',
+                'price' => 'do_not_touch',
+                'images' => 'do_not_touch',
+            ],
+            'new_ovoko_products' => [
+                'create_only_when_internal_notes_price_valid' => true,
+                'price_source' => 'internal_notes_only',
+                'categories_source' => 'category_id + /get/categories/tree',
+                'images' => 'may_import_from_ovoko_for_new_products_only',
+                'missing_price_policy' => 'skip_or_draft_but_do_not_publish',
+            ],
+        ];
+    }
+
+    private function sale_stock_endpoint_analysis(): array
+    {
+        return [
+            'mode' => 'read_only_static_client_contract_analysis',
+            'no_ovoko_write' => true,
+            'confirmed_write_endpoint_in_client' => [
+                '/crm/updatePart' => 'Implemented only for internal_notes and place probes; not confirmed for status=sold, reserved, or stock=0.',
+            ],
+            'gemini_candidate_endpoints' => [
+                '/v2/update/part' => ['exists_in_client' => false, 'payload_confirmed' => false, 'safe_to_use' => false],
+                '/v2/parts/{id}/status' => ['exists_in_client' => false, 'payload_confirmed' => false, 'safe_to_use' => false],
+            ],
+            'candidate_legacy_endpoints_to_confirm_with_ovoko_rrr' => ['/crm/updatePart','/crm/create/order','/crm/sellPart','/crm/reservePart'],
+            'sold_or_reserved_supported' => 'not_confirmed',
+            'stock_or_status_after_woo_sale_supported' => 'not_confirmed',
+            'payload' => 'not_confirmed; do not send status=sold or stock=0 until Ovoko/RRR provides the contract.',
+            'idempotency' => 'No remote idempotency key confirmed; proposed local idempotency is one request_id per Woo order item and skip after success.',
+            'decision' => 'Woo → Ovoko sale/stock sync remains disabled/dry-run only.',
+        ];
+    }
+
     private function sale_sync_meta_keys(): array
     {
         return ['ovoko_sale_sync_status','ovoko_sale_sync_attempted_at','ovoko_sale_sync_success_at','ovoko_sale_sync_error','ovoko_sale_sync_request_id','ovoko_sale_sync_order_id','ovoko_sale_sync_part_id'];
@@ -715,7 +785,7 @@ class OvokoAutoSyncDryRunService
 
     private function cron_design(): array
     {
-        return ['live_cron' => 'disabled_until_delta_sync_confirmed', 'delta_window' => 'delta_from = last_successful_sync_at - 5 minutes overlap; delta_to = now - 2 minutes delay', 'cursor' => 'last_cursor/page is only for the current delta window; never for full-dataset cron scans', 'lock' => self::LOCK_OPTION, 'status_fields' => ['running/idle/error','last_successful_sync_at','last_attempted_sync_at','last_delta_from','last_delta_to','last_cursor','processed_changed_products','created','updated','skipped','errors','warnings'], 'parallel_runs' => 'blocked by lock/transient before any work starts'];
+        return ['live_cron' => 'disabled_until_delta_sync_confirmed', 'delta_window' => 'delta_from = last_successful_sync_at - 5 minutes overlap; delta_to = now - 2 minutes delay', 'cursor' => 'last_cursor/page is only for the current delta window; never for full-dataset cron scans', 'lock' => self::LOCK_OPTION, 'status_fields' => ['running/idle/error','delta_sync_confirmed','delta_filter_used','last_successful_sync_at','last_successful_sync_date','last_attempted_sync_at','last_delta_from','last_delta_to','last_cursor/page','processed_changed_products','skipped_already_synced','created_from_delta','updated_from_delta','errors','warnings'], 'parallel_runs' => 'blocked by lock/transient before any work starts'];
     }
 
     private function unavailable_policy(): array
