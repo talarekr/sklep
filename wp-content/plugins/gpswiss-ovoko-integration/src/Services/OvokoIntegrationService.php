@@ -4651,6 +4651,11 @@ class OvokoIntegrationService
         return ['raw_value'=>$raw,'confidence'=>$confidence,'manufacturer'=>$make,'model'=>$model,'model_modification'=>$model,'period'=>$period,'year'=>$year,'engine_power_kw'=>(string)($power[1] ?? ''),'engine_capacity_cc'=>(string)($cap[1] ?? '')];
     }
 
+    public function preview_ovoko_technical_attributes_from_normalized(array $normalized): array
+    {
+        return $this->build_ovoko_technical_attributes_from_normalized($normalized);
+    }
+
     private function build_ovoko_technical_attributes_from_normalized(array $normalized): array
     {
         return array_filter([
