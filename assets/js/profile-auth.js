@@ -52,6 +52,11 @@
     var allCatTrigger = allCatMenu.querySelector('[data-gp-all-cat-trigger]');
     var allCatDropdown = allCatMenu.querySelector('[data-gp-all-cat-dropdown]');
     var megaMenu = allCatMenu.querySelector('[data-gp-mega-menu]');
+    var mobileMenuQuery = window.matchMedia ? window.matchMedia('(max-width: 1199px)') : null;
+
+    var isMobileCategoryMenu = function () {
+      return mobileMenuQuery ? mobileMenuQuery.matches : window.innerWidth <= 1199;
+    };
 
     if (!allCatTrigger || !allCatDropdown) {
       return;
@@ -86,7 +91,7 @@
         }
 
         var toggle = item.querySelector('[data-gp-mega-category-toggle]');
-        if (toggle) {
+        if (toggle && !isMobileCategoryMenu()) {
           toggle.setAttribute('aria-expanded', String(isActive));
         }
       });
@@ -138,15 +143,21 @@
 
       megaMenu.querySelectorAll('[data-gp-mega-category-trigger]').forEach(function (trigger) {
         trigger.addEventListener('mouseenter', function () {
-          activateMegaCategory(trigger.getAttribute('data-category-id'));
+          if (!isMobileCategoryMenu()) {
+            activateMegaCategory(trigger.getAttribute('data-category-id'));
+          }
         });
 
         trigger.addEventListener('focus', function () {
-          activateMegaCategory(trigger.getAttribute('data-category-id'));
+          if (!isMobileCategoryMenu()) {
+            activateMegaCategory(trigger.getAttribute('data-category-id'));
+          }
         });
 
         trigger.addEventListener('touchstart', function () {
-          activateMegaCategory(trigger.getAttribute('data-category-id'));
+          if (!isMobileCategoryMenu()) {
+            activateMegaCategory(trigger.getAttribute('data-category-id'));
+          }
         }, { passive: true });
       });
 
@@ -154,7 +165,34 @@
         toggle.addEventListener('click', function (event) {
           event.preventDefault();
           event.stopPropagation();
+
+          if (isMobileCategoryMenu()) {
+            var item = toggle.closest('[data-gp-mega-category-item]');
+            if (!item) {
+              return;
+            }
+
+            var isOpen = item.classList.toggle('is-mobile-open');
+            toggle.setAttribute('aria-expanded', String(isOpen));
+            return;
+          }
+
           activateMegaCategory(toggle.getAttribute('data-category-id'));
+        });
+      });
+
+      megaMenu.querySelectorAll('[data-gp-mobile-category-toggle]').forEach(function (toggle) {
+        toggle.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          var item = toggle.closest('[data-gp-mobile-category-item]');
+          if (!item) {
+            return;
+          }
+
+          var isOpen = item.classList.toggle('is-mobile-open');
+          toggle.setAttribute('aria-expanded', String(isOpen));
         });
       });
 

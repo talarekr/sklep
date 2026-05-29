@@ -248,10 +248,52 @@ if (function_exists('gp_log_product_category_display_debug')) {
                                                 <?php endif; ?>
                                             </a>
                                             <?php if (!empty($child_categories)) : ?>
-                                                <button class="gp-all-cat-dropdown__mobile-toggle" type="button" data-gp-mega-category-toggle data-category-id="<?php echo esc_attr((string) $category_id); ?>" aria-controls="gp-mega-panel-<?php echo esc_attr((string) $category_id); ?>" aria-expanded="<?php echo $is_active_category ? 'true' : 'false'; ?>">
+                                                <button class="gp-all-cat-dropdown__mobile-toggle" type="button" data-gp-mega-category-toggle data-category-id="<?php echo esc_attr((string) $category_id); ?>" aria-controls="gp-mobile-cat-children-<?php echo esc_attr((string) $category_id); ?>" aria-expanded="false">
                                                     <span class="screen-reader-text"><?php echo esc_html(sprintf(__('Pokaż podkategorie: %s', 'gp-clone'), $category->name)); ?></span>
-                                                    <span aria-hidden="true">›</span>
+                                                    <span class="gp-all-cat-dropdown__toggle-symbol gp-all-cat-dropdown__toggle-symbol--open" aria-hidden="true">+</span>
+                                                    <span class="gp-all-cat-dropdown__toggle-symbol gp-all-cat-dropdown__toggle-symbol--close" aria-hidden="true">−</span>
                                                 </button>
+                                            <?php endif; ?>
+                                            <?php if (!empty($child_categories)) : ?>
+                                                <ul class="gp-all-cat-dropdown__mobile-children gp-all-cat-dropdown__mobile-children--level-2" id="gp-mobile-cat-children-<?php echo esc_attr((string) $category_id); ?>">
+                                                    <?php foreach ($child_categories as $level_two_category) : ?>
+                                                        <?php
+                                                        $level_two_id = (int) $level_two_category->term_id;
+                                                        $level_two_link = get_term_link($level_two_category);
+                                                        if (is_wp_error($level_two_link)) {
+                                                            continue;
+                                                        }
+                                                        $level_three_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children($level_two_id) : [];
+                                                        ?>
+                                                        <li class="gp-all-cat-dropdown__mobile-item" data-gp-mobile-category-item data-category-id="<?php echo esc_attr((string) $level_two_id); ?>">
+                                                            <div class="gp-all-cat-dropdown__mobile-row">
+                                                                <a class="gp-all-cat-dropdown__mobile-link" href="<?php echo esc_url($level_two_link); ?>"><?php echo esc_html($level_two_category->name); ?></a>
+                                                                <?php if (!empty($level_three_categories)) : ?>
+                                                                    <button class="gp-all-cat-dropdown__mobile-toggle gp-all-cat-dropdown__mobile-toggle--nested" type="button" data-gp-mobile-category-toggle data-category-id="<?php echo esc_attr((string) $level_two_id); ?>" aria-controls="gp-mobile-cat-children-<?php echo esc_attr((string) $level_two_id); ?>" aria-expanded="false">
+                                                                        <span class="screen-reader-text"><?php echo esc_html(sprintf(__('Pokaż podkategorie: %s', 'gp-clone'), $level_two_category->name)); ?></span>
+                                                                        <span class="gp-all-cat-dropdown__toggle-symbol gp-all-cat-dropdown__toggle-symbol--open" aria-hidden="true">+</span>
+                                                                        <span class="gp-all-cat-dropdown__toggle-symbol gp-all-cat-dropdown__toggle-symbol--close" aria-hidden="true">−</span>
+                                                                    </button>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <?php if (!empty($level_three_categories)) : ?>
+                                                                <ul class="gp-all-cat-dropdown__mobile-children gp-all-cat-dropdown__mobile-children--level-3" id="gp-mobile-cat-children-<?php echo esc_attr((string) $level_two_id); ?>">
+                                                                    <?php foreach ($level_three_categories as $level_three_category) : ?>
+                                                                        <?php
+                                                                        $level_three_link = get_term_link($level_three_category);
+                                                                        if (is_wp_error($level_three_link)) {
+                                                                            continue;
+                                                                        }
+                                                                        ?>
+                                                                        <li class="gp-all-cat-dropdown__mobile-item gp-all-cat-dropdown__mobile-item--leaf">
+                                                                            <a class="gp-all-cat-dropdown__mobile-link" href="<?php echo esc_url($level_three_link); ?>"><?php echo esc_html($level_three_category->name); ?></a>
+                                                                        </li>
+                                                                    <?php endforeach; ?>
+                                                                </ul>
+                                                            <?php endif; ?>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ul>
                                             <?php endif; ?>
                                         </li>
                                     <?php endforeach; ?>
