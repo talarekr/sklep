@@ -193,6 +193,23 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>max_products: <input type="number" min="1" max="500" name="max_products" value="100" style="width:90px;" /></label>
             <?php submit_button('Dry-run backfill Ovoko internal_notes prices from Woo', 'secondary', 'submit', false); ?>
         </form>
+
+        <hr style="margin:16px 0;" />
+        <h4>Single-part live probe: update Ovoko internal_notes only</h4>
+        <p><strong>Live write for one part only.</strong> The probe reads Ovoko before/after, sends only auth + <code>part_id</code> + <code>internal_notes</code> to <code>/crm/updatePart</code>, appends one <code>woo_price=XXX.XX PLN</code> line, and reports a critical warning if any monitored non-notes field changes.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li>Fill exactly one identifier: Woo <code>product_id</code> or Ovoko <code>ovoko_id</code>.</li>
+            <li>Required confirmation phrase: <code>UPDATE OVOKO INTERNAL NOTES ONLY</code>.</li>
+            <li>Does not write Woo, stock, Ovoko price, category, photos or public notes/description.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
+            <?php wp_nonce_field('gpswiss_ovoko_single_part_internal_notes_live_probe'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_single_part_internal_notes_live_probe" />
+            <label>product_id: <input type="number" min="1" name="product_id" placeholder="2080" style="width:100px;" /></label>
+            <label>ovoko_id: <input type="number" min="1" name="ovoko_id" placeholder="10776" style="width:100px;" /></label>
+            <label style="display:block; margin-top:8px;">confirmation: <input type="text" name="confirmation" placeholder="UPDATE OVOKO INTERNAL NOTES ONLY" style="width:360px;" /></label>
+            <?php submit_button('Run single-part live probe', 'delete', 'submit', false); ?>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
