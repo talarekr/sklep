@@ -82,11 +82,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sidebarCategorySelect && sidebarSubcategoryList) {
     const maxVisibleItems = 6;
 
+    const getTopLevelItems = (list) => Array.from(list.children).filter((item) => item.tagName === 'LI');
+
     const setupShowMore = () => {
       const list = sidebarSubcategoryList.querySelector('.gp-cat-filter__list');
       if (!list || !sidebarMoreButton) return;
 
-      const items = Array.from(list.querySelectorAll('li'));
+      const items = getTopLevelItems(list);
       const shouldCollapse = items.length > maxVisibleItems;
       list.classList.toggle('is-collapsed', shouldCollapse);
 
@@ -100,6 +102,28 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     setupShowMore();
+
+    sidebarSubcategoryList.querySelectorAll('[data-gp-category-toggle]').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        const childrenId = toggle.getAttribute('aria-controls');
+        const children = childrenId ? document.getElementById(childrenId) : null;
+        if (!children) return;
+
+        const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', isExpanded ? 'false' : 'true');
+        children.hidden = isExpanded;
+
+        const icon = toggle.querySelector('.gp-cat-filter__toggle-icon');
+        if (icon) {
+          icon.textContent = isExpanded ? '+' : '−';
+        }
+
+        const item = toggle.closest('.gp-cat-filter__item');
+        if (item) {
+          item.classList.toggle('is-expanded', !isExpanded);
+        }
+      });
+    });
 
     sidebarCategorySelect.addEventListener('change', () => {
       const targetUrl = sidebarCategorySelect.value;
@@ -121,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!list) return;
 
         const isExpanded = sidebarMoreButton.getAttribute('data-expanded') === '1';
-        const items = Array.from(list.querySelectorAll('li'));
+        const items = getTopLevelItems(list);
         items.forEach((item, index) => {
           if (index < maxVisibleItems) {
             item.hidden = false;

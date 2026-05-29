@@ -1397,8 +1397,21 @@
   gap: 8px;
 }
 
+.gp-cat-filter__item {
+  min-width: 0;
+}
+
+.gp-cat-filter__item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .gp-cat-filter__link {
   display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   border-radius: 0;
   border: 0;
   background: transparent;
@@ -1417,6 +1430,51 @@
 .gp-cat-filter__link.is-active {
   color: #0f2f7a;
   font-weight: 700;
+}
+
+.gp-cat-filter__link.is-parent-active {
+  color: #123a86;
+}
+
+.gp-cat-filter__toggle {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #123a86;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: border-color .2s ease, color .2s ease, background .2s ease;
+}
+
+.gp-cat-filter__toggle:hover,
+.gp-cat-filter__toggle:focus-visible {
+  border-color: #123a86;
+  background: #eef4ff;
+  outline: none;
+}
+
+.gp-cat-filter__children {
+  margin-top: 6px;
+}
+
+.gp-cat-filter__list--nested {
+  border-left: 1px solid #e5e7eb;
+  gap: 6px;
+  margin-left: 5px;
+  padding-left: 14px;
+}
+
+.gp-cat-filter__list--nested .gp-cat-filter__link {
+  font-size: 13px;
 }
 
 .gp-cat-filter__empty {
