@@ -217,11 +217,16 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
             <li><strong>Current status:</strong> <code>design_only_not_sending_to_ovoko</code>.</li>
         </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_analyze_sale_stock_endpoint'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_analyze_sale_stock_endpoint" />
+            <?php submit_button('Analyze Woo → Ovoko sale/stock endpoint', 'secondary', 'submit', false); ?>
+        </form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_sale_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
             <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
-            <?php submit_button('Dry-run Woo → Ovoko sale/stock sync', 'secondary', 'submit', false); ?>
+            <?php submit_button('Dry-run Woo order → Ovoko sale sync', 'secondary', 'submit', false); ?>
         </form>
     </div>
 
