@@ -16,6 +16,12 @@ $lastSyncStatus = (string) ($data['settings']['ovoko_sync_mode'] ?? 'unknown');
 $autoSyncStatus = (array) get_option('gpswiss_ovoko_auto_sync_status', []);
 $autoSyncStatusLabel = (string) ($autoSyncStatus['status'] ?? 'idle');
 $autoSyncLastSuccessfulAt = (string) ($autoSyncStatus['last_successful_sync_at'] ?? 'not run yet');
+$autoSyncLastAttemptedAt = (string) ($autoSyncStatus['last_attempted_sync_at'] ?? 'not run yet');
+$autoSyncDeltaConfirmed = !empty($autoSyncStatus['delta_sync_confirmed']);
+$autoSyncDeltaFilterUsed = (string) ($autoSyncStatus['delta_filter_used'] ?? '');
+$autoSyncCurrentDeltaWindow = (array) ($autoSyncStatus['current_delta_window'] ?? []);
+$autoSyncUpdatedAtStats = (array) ($autoSyncStatus['updated_at_stats'] ?? []);
+$autoSyncReturnedRecordsCount = (int) ($autoSyncStatus['returned_records_count'] ?? 0);
 $autoSyncLastCursor = (array) ($autoSyncStatus['last_cursor'] ?? []);
 $autoSyncProcessed = (int) ($autoSyncStatus['processed'] ?? 0);
 $autoSyncCreated = (int) ($autoSyncStatus['created'] ?? 0);
@@ -125,7 +131,10 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <p><strong>Stage 1:</strong> diagnostics and dry-run only. No Woo products/categories are changed and no sale/status updates are sent to Ovoko.</p>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:12px 0;">
             <div style="background:#f6f7f7;padding:10px;"><strong>Status</strong><br><code><?php echo esc_html($autoSyncStatusLabel); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Last successful sync</strong><br><code><?php echo esc_html($autoSyncLastSuccessfulAt); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Delta sync confirmed</strong><br><code><?php echo esc_html($autoSyncDeltaConfirmed ? 'yes' : 'no'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Delta filter used</strong><br><code><?php echo esc_html($autoSyncDeltaFilterUsed !== '' ? $autoSyncDeltaFilterUsed : 'not confirmed'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Last successful sync</strong><br><code><?php echo esc_html($autoSyncLastSuccessfulAt !== '' ? $autoSyncLastSuccessfulAt : 'not run yet'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Last attempted sync</strong><br><code><?php echo esc_html($autoSyncLastAttemptedAt); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Processed</strong><br><code><?php echo esc_html((string) $autoSyncProcessed); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Would create/update/skip</strong><br><code><?php echo esc_html($autoSyncCreated . ' / ' . $autoSyncUpdated . ' / ' . $autoSyncSkipped); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Warnings / errors</strong><br><code><?php echo esc_html(count($autoSyncWarnings) . ' / ' . count($autoSyncErrors)); ?></code></div>
@@ -138,6 +147,12 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <div style="background:#f6f7f7;padding:10px;"><strong>new_product_missing_price_in_internal_notes_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_missing_price_in_internal_notes_total'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>new_product_invalid_internal_notes_price_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_invalid_internal_notes_price_total'] ?? 0)); ?></code></div>
         </div>
+        <p><strong>Current delta window:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncCurrentDeltaWindow, JSON_UNESCAPED_UNICODE)); ?></code></p>
+        <p><strong>Returned records / updated_at min-max:</strong> <code><?php echo esc_html((string) $autoSyncReturnedRecordsCount); ?></code> / <code><?php echo esc_html((string) ($autoSyncUpdatedAtStats['min_updated_at'] ?? '')); ?> → <?php echo esc_html((string) ($autoSyncUpdatedAtStats['max_updated_at'] ?? '')); ?></code></p>
+        <p><strong>Older than delta_from in returned records:</strong> <code><?php echo !empty($autoSyncUpdatedAtStats['has_records_older_than_delta_from']) ? 'yes' : 'no'; ?></code></p>
+        <?php if (!$autoSyncDeltaConfirmed): ?>
+            <p style="color:#b32d2e;"><strong>Warning:</strong> <code>delta_sync_not_confirmed</code> — live cron is disabled; page-based runs are manual diagnostics only.</p>
+        <?php endif; ?>
         <p><strong>Last cursor:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncLastCursor, JSON_UNESCAPED_UNICODE)); ?></code></p>
         <?php if (!empty($autoSyncWarnings) || !empty($autoSyncErrors)): ?>
             <details><summary>Show latest sync warnings/errors</summary><pre><?php echo esc_html(wp_json_encode(['warnings' => $autoSyncWarnings, 'errors' => $autoSyncErrors], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
@@ -147,13 +162,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Cron settings and run controls</h3>
         <ul style="list-style:disc;margin-left:22px;">
-            <li><strong>Recommended schedule:</strong> every 10–15 minutes in dry-run/log mode; only reduce to 5 minutes after API latency/error rate is stable.</li>
-            <li><strong>Recommended batch size:</strong> 10–25 products per tick on shared hosting.</li>
-            <li><strong>Cursor:</strong> page-based now; <code>updated_after/from</code> can be enabled only after RRR/Ovoko confirms delta support.</li>
+            <li><strong>Recommended schedule:</strong> live cron disabled until a real Ovoko/RRR delta endpoint or date filter is confirmed.</li>
+            <li><strong>Recommended batch size:</strong> after confirmation, process only changed products returned for the delta window.</li>
+            <li><strong>Cursor:</strong> page/cursor may be used only inside the current delta window; never for full-dataset cron scans.</li>
             <li><strong>Lock:</strong> <code>gpswiss_ovoko_auto_sync_lock</code> will prevent parallel sync runs in the live phase.</li>
             <li><strong>Unavailable policy:</strong> recommended A) keep product and set stock to <code>0/outofstock</code>; no product deletion.</li>
         </ul>
-        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled until the dry-run output is approved.</p>
+        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled until date-based delta sync is confirmed. Full scans are allowed only as manual diagnostics or separately approved maintenance jobs.</p>
         <button type="button" class="button button-primary" disabled="disabled">Run sync now — disabled until approval</button>
         <button type="button" class="button" disabled="disabled">Enable WP-Cron — disabled until approval</button>
     </div>

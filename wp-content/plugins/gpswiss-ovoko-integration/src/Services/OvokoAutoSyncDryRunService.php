@@ -115,6 +115,8 @@ class OvokoAutoSyncDryRunService
         $page = max(1, (int) ($options['page'] ?? 1));
         $partId = trim((string) ($options['part_id'] ?? ''));
         $client = new RrrApiClient($this->integrationService->get_settings());
+        $storedStatus = (array) get_option(self::STATUS_OPTION, []);
+        $deltaWindow = $this->build_current_delta_window((string) ($storedStatus['last_successful_sync_at'] ?? ''), (string) ($options['updated_after'] ?? ''));
         $fetch = $partId !== '' ? $client->preview_fetch_single_part((int) $partId) : $client->preview_fetch_parts_sample($limit, $page);
         $records = [];
         if ($partId !== '') {
@@ -132,12 +134,22 @@ class OvokoAutoSyncDryRunService
         }
 
         $report = $this->empty_ovoko_to_woo_report($limit, $page);
+        $report['delta_sync_confirmed'] = false;
+        $report['delta_filter_used'] = '';
+        $report['current_delta_window'] = $deltaWindow;
+        $report['last_successful_sync_at'] = (string) ($storedStatus['last_successful_sync_at'] ?? '');
+        $report['last_attempted_sync_at'] = gmdate('c');
+        $report['live_cron_enabled'] = false;
+        $report['warnings']['delta_sync_not_confirmed'] = ($report['warnings']['delta_sync_not_confirmed'] ?? 0) + 1;
+        $report['warnings']['live_cron_disabled_until_delta_confirmed'] = ($report['warnings']['live_cron_disabled_until_delta_confirmed'] ?? 0) + 1;
         $report['source_fetch'] = [
             'ok' => !empty($fetch['ok']),
-            'mode' => $partId !== '' ? 'single_part' : 'parts_page',
+            'mode' => $partId !== '' ? 'manual_single_part_dry_run' : 'manual_page_based_dry_run_not_cron_delta',
             'part_id' => $partId,
             'status_code' => (string) ($fetch['status_code'] ?? ''),
             'pagination' => (array) ($fetch['pagination'] ?? []),
+            'delta_filter_applied' => false,
+            'delta_filter_warning' => 'delta_sync_not_confirmed',
         ];
 
         foreach ($records as $row) {
@@ -155,7 +167,10 @@ class OvokoAutoSyncDryRunService
         }
 
         $report['status'] = 'idle';
-        $report['last_cursor'] = ['page' => $page, 'next_page' => $page + 1, 'updated_after' => (string) ($options['updated_after'] ?? '')];
+        $report['processed_changed_products'] = $report['processed'];
+        $report['returned_records_count'] = count($records);
+        $report['updated_at_stats'] = $this->summarize_returned_updated_at_values($records, (string) ($deltaWindow['delta_from'] ?? ''));
+        $report['last_cursor'] = ['page' => $page, 'next_page' => $page + 1, 'delta_from' => (string) ($deltaWindow['delta_from'] ?? ''), 'delta_to' => (string) ($deltaWindow['delta_to'] ?? ''), 'scope' => 'manual_page_only_not_live_cron'];
         $report['dashboard_counters'] = $this->dashboard_price_counters((array) ($report['counts'] ?? []));
         $report['checked_at'] = gmdate('c');
         update_option(self::STATUS_OPTION, $this->summarize_status($report), false);
@@ -252,13 +267,15 @@ class OvokoAutoSyncDryRunService
             ],
             'near_realtime_assessment' => [
                 'updated_at_available_in_payload' => $hasUpdatedAt,
-                'from_or_updated_after_filter_confirmed' => false,
+                'from_or_updated_after_filter_confirmed' => !empty($deltaProbe['delta_sync_confirmed']),
+                'delta_sync_confirmed' => !empty($deltaProbe['delta_sync_confirmed']),
+                'delta_filter_used' => (string) ($deltaProbe['delta_filter_used'] ?? ''),
                 'delta_filter_probe' => $deltaProbe,
-                'recommendation' => $hasUpdatedAt
-                    ? 'Use page-based scans now and ask Ovoko/RRR to confirm updated_after/from filtering before enabling true delta sync.'
-                    : 'No delta field confirmed in sample; use full paginated scan with small batches until Ovoko/RRR confirms a change feed.',
-                'cron_frequency' => 'Start every 10–15 minutes in dry-run/log mode; reduce to 5 minutes only after API latency/error rate is stable.',
-                'batch_size' => '10–25 products per request on shared hosting; one batch per cron tick with lock.',
+                'recommendation' => !empty($deltaProbe['delta_sync_confirmed'])
+                    ? 'Delta candidate found in read-only probe; review returned records and Ovoko/RRR documentation before enabling live cron.'
+                    : 'Live cron must remain disabled. Manual page-based dry-run is allowed only for diagnostics; ask Ovoko/RRR for the official changed-products endpoint or date filter.',
+                'cron_frequency' => 'Live cron disabled until delta sync is confirmed; do not run page-based full scans every 10–15 minutes.',
+                'batch_size' => 'After delta confirmation, process only changed products in the delta window; never scan all pages per cron tick.',
             ],
             'unavailable_product_policy_recommendation' => $this->unavailable_policy(),
             'no_write_to_woo' => true,
@@ -308,10 +325,18 @@ class OvokoAutoSyncDryRunService
         if ($categoryId === '') {
             $warnings[] = 'missing_category_id';
         }
-        $categoryPath = (string) ($normalized['category_title_path'] ?? '');
-        if ($categoryPath === '' && $categoryId !== '') {
+        $categoryPathFromPayload = trim((string) (($record['category_title_path'] ?? '') ?: ($normalized['category_title_path'] ?? '')));
+        $categoryPathFromTree = '';
+        $categoryTreeEndpointUsed = '';
+        $categoryTreeResolutionOk = false;
+        if ($categoryId !== '') {
             $tree = $client->resolve_category_path_from_tree((int) $categoryId);
-            $categoryPath = (string) ($tree['category_tree_resolved_path'] ?? '');
+            $categoryPathFromTree = trim((string) ($tree['category_tree_resolved_path'] ?? ''));
+            $categoryTreeEndpointUsed = (string) ($tree['category_tree_endpoint_used'] ?? '');
+            $categoryTreeResolutionOk = !empty($tree['ok']) && $categoryPathFromTree !== '';
+            if (!$categoryTreeResolutionOk) {
+                $warnings[] = 'category_tree_resolution_failed';
+            }
         }
 
         $imageCount = count((array) ($normalized['part_photo_gallery'] ?? []));
@@ -327,6 +352,9 @@ class OvokoAutoSyncDryRunService
 
         $currentPrice = $product ? (string) $product->get_regular_price() : '';
         $currentStockStatus = $product ? (string) $product->get_stock_status() : '';
+        $currentWooCategoryPath = $productId > 0 ? $this->get_current_product_category_path($productId) : '';
+        $categoryAction = $isExistingProduct ? 'verify_only' : ($categoryTreeResolutionOk && !$newProductBlockedByPrice ? 'would_assign_from_tree' : 'skip');
+        $categoriesWouldUpdate = !$isExistingProduct && !$newProductBlockedByPrice && $categoryId !== '' && $categoryTreeResolutionOk;
         $incomingDetailsHash = $this->stable_hash($incomingDetails);
         $currentDetailsHash = $this->stable_hash($currentDetails);
         $changedFields = $this->changed_assoc_keys($currentDetails, $incomingDetails);
@@ -377,8 +405,29 @@ class OvokoAutoSyncDryRunService
             ],
             'details_fields_changed' => $changedFields !== [],
             'details_fields_sample' => array_slice($incomingDetails, 0, 5, true),
-            'categories_would_update' => $categoryId !== '',
-            'category' => ['category_id' => $categoryId, 'resolved_path_from_tree_or_payload' => $categoryPath, 'uses_old_csv' => false, 'uses_root_motoryzacja' => false, 'path_shortened' => false],
+            'categories_would_update' => $categoriesWouldUpdate,
+            'current_woo_category_path' => $currentWooCategoryPath,
+            'ovoko_category_id' => $categoryId,
+            'category_path_from_tree' => $categoryPathFromTree,
+            'category_path_from_payload' => $categoryPathFromPayload,
+            'category_action' => $categoryAction,
+            'category_tree_resolution_ok' => $categoryTreeResolutionOk,
+            'category' => [
+                'category_id' => $categoryId,
+                'ovoko_category_id' => $categoryId,
+                'current_woo_category_path' => $currentWooCategoryPath,
+                'category_path_from_tree' => $categoryPathFromTree,
+                'category_path_from_payload' => $categoryPathFromPayload,
+                'category_action' => $categoryAction,
+                'category_tree_resolution_ok' => $categoryTreeResolutionOk,
+                'category_tree_endpoint_used' => $categoryTreeEndpointUsed,
+                'path_source' => 'category_id_get_categories_tree',
+                'assignment_policy' => $isExistingProduct ? 'existing_product_verify_only_no_category_write' : 'new_product_assign_from_category_tree_only',
+                'uses_payload_breadcrumb_as_source_of_truth' => false,
+                'uses_old_csv' => false,
+                'uses_root_motoryzacja' => false,
+                'path_shortened' => false,
+            ],
             'existing_products_images_untouched' => $productId > 0,
             'new_products_images_would_import' => $productId <= 0 && $imageCount > 0,
             'existing_products_missing_images_warning' => $productId > 0 && $existingImageCount === 0,
@@ -415,7 +464,7 @@ class OvokoAutoSyncDryRunService
                 'new_products' => 'Price may come only from Ovoko internal_notes; safer default is skip create when missing or invalid.',
                 'fallback_to_other_ovoko_price_fields' => false,
             ],
-            'safety' => ['no_woo_product_create' => true, 'no_woo_product_update' => true, 'no_price_change' => true, 'no_stock_change' => true, 'no_description_change' => true, 'no_category_change' => true, 'no_existing_image_change' => true, 'no_ovoko_write' => true],
+            'safety' => ['no_woo_product_create' => true, 'no_woo_product_update' => true, 'no_price_change' => true, 'no_stock_change' => true, 'no_description_change' => true, 'no_category_change' => true, 'no_existing_image_change' => true, 'no_ovoko_write' => true, 'no_live_cron_without_confirmed_delta' => true],
         ];
     }
 
@@ -461,6 +510,47 @@ class OvokoAutoSyncDryRunService
         return $count;
     }
 
+    private function get_current_product_category_path(int $productId): string
+    {
+        if ($productId <= 0 || !function_exists('wp_get_post_terms')) {
+            return '';
+        }
+
+        $terms = wp_get_post_terms($productId, 'product_cat', ['fields' => 'all']);
+        if (is_wp_error($terms) || empty($terms)) {
+            return '';
+        }
+
+        $paths = [];
+        foreach ((array) $terms as $term) {
+            if (!is_object($term) || !isset($term->term_id)) {
+                continue;
+            }
+
+            $paths[] = $this->format_product_category_term_path($term);
+        }
+
+        $paths = array_values(array_unique(array_filter($paths, static fn($path) => trim((string) $path) !== '')));
+        return implode(' | ', $paths);
+    }
+
+    private function format_product_category_term_path(object $term): string
+    {
+        $names = [];
+        if (function_exists('get_ancestors')) {
+            $ancestorIds = array_reverse(array_map('intval', (array) get_ancestors((int) $term->term_id, 'product_cat')));
+            foreach ($ancestorIds as $ancestorId) {
+                $ancestor = get_term($ancestorId, 'product_cat');
+                if ($ancestor && !is_wp_error($ancestor)) {
+                    $names[] = (string) $ancestor->name;
+                }
+            }
+        }
+        $names[] = (string) ($term->name ?? '');
+
+        return implode(' / ', array_values(array_filter(array_map('trim', $names), static fn($name) => $name !== '')));
+    }
+
     private function stock_status_preview(string $status): array
     {
         $normalized = strtolower(trim($status));
@@ -502,6 +592,58 @@ class OvokoAutoSyncDryRunService
         return '';
     }
 
+    private function build_current_delta_window(string $lastSuccessfulSyncAt, string $requestedDeltaFrom = ''): array
+    {
+        $overlapSeconds = 5 * MINUTE_IN_SECONDS;
+        $delaySeconds = 2 * MINUTE_IN_SECONDS;
+        $requestedTimestamp = trim($requestedDeltaFrom) !== '' ? strtotime($requestedDeltaFrom) : false;
+        $lastSuccessfulTimestamp = trim($lastSuccessfulSyncAt) !== '' ? strtotime($lastSuccessfulSyncAt) : false;
+        $fromTimestamp = $requestedTimestamp ?: ($lastSuccessfulTimestamp ? ($lastSuccessfulTimestamp - $overlapSeconds) : (time() - DAY_IN_SECONDS));
+        $toTimestamp = time() - $delaySeconds;
+
+        return [
+            'delta_from' => gmdate('c', $fromTimestamp),
+            'delta_to' => gmdate('c', $toTimestamp),
+            'overlap_seconds' => $overlapSeconds,
+            'delay_seconds' => $delaySeconds,
+            'source' => $requestedTimestamp ? 'manual_requested_delta_from' : ($lastSuccessfulTimestamp ? 'last_successful_sync_at_with_overlap' : 'fallback_last_24h_for_diagnostics_only'),
+        ];
+    }
+
+    private function summarize_returned_updated_at_values(array $records, string $deltaFrom): array
+    {
+        $deltaFromTimestamp = trim($deltaFrom) !== '' ? strtotime($deltaFrom) : false;
+        $timestamps = [];
+        $older = [];
+        foreach ($records as $row) {
+            $record = (array) ($row['record'] ?? $row);
+            $updatedAt = trim((string) ($record['updated_at'] ?? ''));
+            if ($updatedAt === '') {
+                continue;
+            }
+            $timestamp = strtotime($updatedAt);
+            if (!$timestamp) {
+                continue;
+            }
+            $timestamps[] = $timestamp;
+            if ($deltaFromTimestamp && $timestamp < $deltaFromTimestamp) {
+                $older[] = [
+                    'id' => (string) ($record['id'] ?? $record['part_id'] ?? ''),
+                    'updated_at' => $updatedAt,
+                ];
+            }
+        }
+
+        return [
+            'updated_at_present' => $timestamps !== [],
+            'min_updated_at' => $timestamps !== [] ? gmdate('c', min($timestamps)) : '',
+            'max_updated_at' => $timestamps !== [] ? gmdate('c', max($timestamps)) : '',
+            'has_records_older_than_delta_from' => $older !== [],
+            'records_older_than_delta_from_count' => count($older),
+            'records_older_than_delta_from_sample' => array_slice($older, 0, 5),
+        ];
+    }
+
     private function dashboard_price_counters(array $counts): array
     {
         return [
@@ -519,8 +661,17 @@ class OvokoAutoSyncDryRunService
         $counts = (array) ($report['counts'] ?? []);
         return [
             'status' => 'idle',
-            'last_successful_sync_at' => gmdate('c'),
+            'delta_sync_confirmed' => !empty($report['delta_sync_confirmed']),
+            'delta_filter_used' => (string) ($report['delta_filter_used'] ?? ''),
+            'last_successful_sync_at' => !empty($report['delta_sync_confirmed']) ? (string) ($report['current_delta_window']['delta_to'] ?? '') : (string) ($report['last_successful_sync_at'] ?? ''),
+            'last_attempted_sync_at' => (string) ($report['last_attempted_sync_at'] ?? gmdate('c')),
+            'last_delta_from' => (string) ($report['current_delta_window']['delta_from'] ?? ''),
+            'last_delta_to' => (string) ($report['current_delta_window']['delta_to'] ?? ''),
+            'current_delta_window' => (array) ($report['current_delta_window'] ?? []),
             'last_cursor' => $report['last_cursor'] ?? [],
+            'processed_changed_products' => (int) ($report['processed_changed_products'] ?? $report['processed'] ?? 0),
+            'returned_records_count' => (int) ($report['returned_records_count'] ?? $report['processed'] ?? 0),
+            'updated_at_stats' => (array) ($report['updated_at_stats'] ?? []),
             'processed' => (int) ($report['processed'] ?? 0),
             'created' => (int) ($counts['products_would_create'] ?? 0),
             'updated' => (int) ($counts['products_would_update'] ?? 0),
@@ -559,12 +710,12 @@ class OvokoAutoSyncDryRunService
 
     private function sync_modes_design(): array
     {
-        return ['dry_run_sync' => 'Logs would-create/would-update/price/stock/description/details/category/image warnings only.', 'manual_run' => 'Admin Run sync now button, batched with lock and logs; live writes remain disabled in this stage.', 'wp_cron_server_cron' => 'Schedule dry-run/log first; enable live only after explicit approval.'];
+        return ['dry_run_sync' => 'Manual diagnostics only; page-based dry-run is not a cron strategy.', 'manual_run' => 'Admin Run sync now button remains disabled for live writes until delta sync is confirmed.', 'wp_cron_server_cron' => 'Do not schedule live page-based scans; enable cron only after official Ovoko/RRR delta endpoint or date filter is confirmed.'];
     }
 
     private function cron_design(): array
     {
-        return ['batch_size' => '10–25', 'cursor' => 'page now; updated_after/from only after Ovoko confirms support', 'lock' => self::LOCK_OPTION, 'status_fields' => ['running/idle/error','last_successful_sync_at','last_cursor','processed','created','updated','skipped','errors','warnings'], 'parallel_runs' => 'blocked by lock/transient before any work starts'];
+        return ['live_cron' => 'disabled_until_delta_sync_confirmed', 'delta_window' => 'delta_from = last_successful_sync_at - 5 minutes overlap; delta_to = now - 2 minutes delay', 'cursor' => 'last_cursor/page is only for the current delta window; never for full-dataset cron scans', 'lock' => self::LOCK_OPTION, 'status_fields' => ['running/idle/error','last_successful_sync_at','last_attempted_sync_at','last_delta_from','last_delta_to','last_cursor','processed_changed_products','created','updated','skipped','errors','warnings'], 'parallel_runs' => 'blocked by lock/transient before any work starts'];
     }
 
     private function unavailable_policy(): array
