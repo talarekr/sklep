@@ -753,3 +753,52 @@ No changes to:
   - power via `(\d+)\s*kw`,
   - capacity via `(\d+)\s*cm3|cm³`.
 - Known make dictionary is used for safe split (e.g. Mercedes-Benz, Volkswagen, VW, Audi, BMW, Peugeot, Citroen/Citroën, Renault, Opel, Ford, Toyota, Nissan, Hyundai, Kia, Fiat, Volvo, Skoda/Škoda, Seat).
+
+## Dry-run backfill: Woo price to Ovoko internal notes
+
+Admin action: **Dry-run backfill Ovoko internal_notes prices from Woo**.
+
+Purpose:
+- one-time planning for copying Woo product prices into Ovoko/RRR `internal_notes`,
+- proposed marker format: `woo_price=350.00 PLN`,
+- append-only policy: preserve existing notes and append the marker on a new line only when no supported price marker is already present.
+
+API capability analysis:
+- Official RRR OpenAPI (`https://api.rrr.lt/openapi/swagger.yaml`, checked 2026-05-29) lists `POST /crm/updatePart` for part updates.
+- Transport: `application/x-www-form-urlencoded` form data.
+- Required fields in `updatePartRequest`: `username`, `password`, `user_token`, `part_id`.
+- `internal_notes` is an optional update field described as notes accessible only by internal users.
+- The schema does not require a full part payload for updates, so a minimal body of auth fields + `part_id` + `internal_notes` appears supported.
+- Safety caveat: the public spec does not explicitly state whether omitted optional fields are ignored or nulled server-side. Therefore this plugin currently implements **analysis and dry-run only** and intentionally has no live write path for the backfill.
+
+Dry-run report includes:
+- `woo_products_total`,
+- `woo_products_with_ovoko_id`,
+- `woo_products_missing_ovoko_id`,
+- `woo_products_with_price`,
+- `woo_products_missing_price`,
+- `ovoko_internal_notes_empty`,
+- `ovoko_internal_notes_has_price`,
+- `ovoko_internal_notes_would_append_price`,
+- `conflicts_existing_different_price`,
+- `api_fetch_errors`,
+- sample rows capped at 50 with product ID, Ovoko ID, Woo price, current/proposed notes excerpts, detected notes price and action.
+
+Supported existing price detection:
+- new marker line: `woo_price=350.00 PLN`,
+- legacy plain numeric internal notes value: `350`, `350.00`, `350,00`, optionally followed by `PLN` or `zł`.
+
+Safety guarantees at this stage:
+- no writes to Ovoko,
+- no writes to Woo,
+- no product, stock, description, category or image changes,
+- no `/crm/updatePart` call is executed by the dry-run.
+
+Future live design, not implemented:
+- batch processing with `batch_size`, `after_product_id` cursor, persisted status option and transient lock,
+- read-before-write and immediate re-fetch before appending,
+- retry with backoff for transient API/network errors,
+- `stop_on_error` defaulting to true for first run,
+- idempotency by skipping any record that already contains a supported price marker,
+- live write scope limited to `POST /crm/updatePart` with only auth fields, `part_id` and `internal_notes`,
+- mandatory controlled single-part live probe before enabling batch writes, to confirm omitted optional fields are not overwritten.

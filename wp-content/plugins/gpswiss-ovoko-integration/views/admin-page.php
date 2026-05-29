@@ -173,6 +173,28 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </form>
     </div>
 
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
+        <h3>Dry-run backfill Ovoko internal_notes prices from Woo</h3>
+        <p><strong>Safety:</strong> read-only analysis. This tool fetches current Ovoko <code>internal_notes</code> and Woo prices, then reports what would be appended as <code>woo_price=350.00 PLN</code>. It does not write to Ovoko or Woo.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li>Existing notes are preserved; if no supported price marker exists, the proposed line is appended at the end.</li>
+            <li>If <code>internal_notes</code> already contains <code>woo_price=...</code> or a legacy plain numeric price, dry-run skips automatic overwrite and reports conflicts when it differs from Woo.</li>
+            <li>Live batch backfill is intentionally not implemented here until a controlled <code>/crm/updatePart</code> probe confirms omitted fields are never overwritten.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin:0 12px 12px 0;">
+            <?php wp_nonce_field('gpswiss_ovoko_analyze_internal_notes_backfill_api'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_analyze_internal_notes_backfill_api" />
+            <?php submit_button('Analyze internal_notes update API', 'secondary', 'submit', false); ?>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
+            <?php wp_nonce_field('gpswiss_ovoko_dry_run_internal_notes_price_backfill'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_internal_notes_price_backfill" />
+            <label>after_product_id: <input type="number" min="0" name="after_product_id" value="0" style="width:100px;" /></label>
+            <label>max_products: <input type="number" min="1" max="500" name="max_products" value="100" style="width:90px;" /></label>
+            <?php submit_button('Dry-run backfill Ovoko internal_notes prices from Woo', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Woo → Ovoko sale/stock sync status</h3>
         <p>Sale/stock outbound sync is design/dry-run only until Ovoko/RRR confirms the sale/reserve/status endpoint.</p>
