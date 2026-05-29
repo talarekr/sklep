@@ -570,6 +570,17 @@ body {
   border-radius: 8px;
   font-weight: 600;
 }
+.gp-all-cat-dropdown__list > li > ul {
+  margin: 2px 0 6px;
+}
+.gp-all-cat-dropdown__list > li > ul a {
+  display: block;
+  padding: 6px 12px;
+  color: #5b667a;
+  font-size: 13px;
+  text-decoration: none;
+  border-radius: 8px;
+}
 .gp-all-cat-dropdown__list a:hover,
 .gp-all-cat-dropdown__list a:focus-visible {
   background: #f5f7fb;

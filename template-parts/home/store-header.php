@@ -60,101 +60,16 @@ $resolve_category_url = static function (array $candidate_slugs, string $label) 
     return $shop_url;
 };
 
-$all_product_categories = [];
-if (taxonomy_exists('product_cat')) {
-    $motoryzacja_term = get_term_by('slug', sanitize_title('motoryzacja'), 'product_cat');
-
-    if (!$motoryzacja_term instanceof WP_Term) {
-        $motoryzacja_term = get_term_by('name', 'Motoryzacja', 'product_cat');
-    }
-
-    if ($motoryzacja_term instanceof WP_Term) {
-        $is_technical_category = static function (WP_Term $term): bool {
-            $technical_slugs = [
-                'motoryzacja',
-                'czesci-samochodowe',
-            ];
-            $technical_names = [
-                'motoryzacja',
-                'części samochodowe',
-            ];
-
-            if (in_array(sanitize_title($term->slug), $technical_slugs, true)) {
-                return true;
-            }
-
-            return in_array(mb_strtolower(wp_strip_all_tags((string) $term->name)), $technical_names, true);
-        };
-
-        $terms_by_parent = [];
-        $all_terms = get_terms([
-            'taxonomy' => 'product_cat',
-            'hide_empty' => false,
-            'orderby' => 'name',
-            'order' => 'ASC',
-            'fields' => 'all',
-        ]);
-
-        if (is_array($all_terms)) {
-            foreach ($all_terms as $term) {
-                if (!$term instanceof WP_Term) {
-                    continue;
-                }
-
-                $parent_id = (int) $term->parent;
-                if (!isset($terms_by_parent[$parent_id])) {
-                    $terms_by_parent[$parent_id] = [];
-                }
-
-                $terms_by_parent[$parent_id][] = $term;
-            }
-        }
-
-        $queue = [(int) $motoryzacja_term->term_id];
-        $visited = [];
-        $resolved_ids = [];
-
-        while ($queue !== []) {
-            $parent_id = array_shift($queue);
-            if (isset($visited[$parent_id])) {
-                continue;
-            }
-
-            $visited[$parent_id] = true;
-            $children = $terms_by_parent[$parent_id] ?? [];
-
-            foreach ($children as $child) {
-                if (!$child instanceof WP_Term) {
-                    continue;
-                }
-
-                if ($is_technical_category($child)) {
-                    $queue[] = (int) $child->term_id;
-                    continue;
-                }
-
-                if ((int) $child->count > 0) {
-                    $resolved_ids[] = (int) $child->term_id;
-                }
-            }
-        }
-
-        $resolved_ids = array_values(array_unique($resolved_ids));
-
-        if ($resolved_ids !== []) {
-            $all_product_categories = get_terms([
-                'taxonomy' => 'product_cat',
-                'include' => $resolved_ids,
-                'hide_empty' => true,
-                'orderby' => 'name',
-                'order' => 'ASC',
-            ]);
-        }
-    }
-
-    if (is_wp_error($all_product_categories) || !is_array($all_product_categories)) {
-        $all_product_categories = [];
-    }
+$all_product_categories = function_exists('gp_get_menu_product_categories') ? gp_get_menu_product_categories() : [];
+if (!is_array($all_product_categories) || is_wp_error($all_product_categories)) {
+    $all_product_categories = [];
+}
+$all_product_categories = array_values(array_filter($all_product_categories, static fn($term): bool => $term instanceof WP_Term));
+if (function_exists('gp_log_product_category_display_debug')) {
+    gp_log_product_category_display_debug('header_menu', [
+        'header_menu_category_ids' => array_map(static fn(WP_Term $term): int => (int) $term->term_id, $all_product_categories),
+        'header_menu_category_names' => array_map(static fn(WP_Term $term): string => (string) $term->name, $all_product_categories),
+    ]);
 }
 ?>
 <header class="gp-main-header">
@@ -279,11 +194,25 @@ if (taxonomy_exists('product_cat')) {
                                 if (is_wp_error($category_link)) {
                                     continue;
                                 }
+                                $child_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children((int) $category->term_id) : [];
                                 ?>
                                 <li>
                                     <a href="<?php echo esc_url($category_link); ?>">
                                         <?php echo esc_html($category->name); ?>
                                     </a>
+                                    <?php if (!empty($child_categories)) : ?>
+                                        <ul>
+                                            <?php foreach ($child_categories as $child_category) : ?>
+                                                <?php
+                                                $child_category_link = get_term_link($child_category);
+                                                if (is_wp_error($child_category_link)) {
+                                                    continue;
+                                                }
+                                                ?>
+                                                <li><a href="<?php echo esc_url($child_category_link); ?>"><?php echo esc_html($child_category->name); ?></a></li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
                                 </li>
                             <?php endforeach; ?>
                         <?php else : ?>
