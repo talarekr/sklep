@@ -17,6 +17,8 @@ class OvokoIntegrationService
     public const GEARBOX_COUNT_OPTION_KEY = 'gpswiss_ovoko_gearbox_exclusion_count';
     private const CATEGORY_REBUILD_AUTORUN_STATUS_OPTION = 'gpswiss_ovoko_category_rebuild_autorun_status';
     private const CATEGORY_REBUILD_AUTORUN_LOCK_OPTION = 'gpswiss_ovoko_category_rebuild_autorun_lock';
+    public const CATEGORY_REBUILD_AUTORUN_STATUS_OPTION_NAME = self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION;
+    public const CATEGORY_REBUILD_AUTORUN_LOCK_OPTION_NAME = self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION;
 
     private const PART_ID_META_KEYS = [
         '_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id',
@@ -374,6 +376,7 @@ class OvokoIntegrationService
             'sync_preview_match' => ['mode' => 'manual_only', 'note' => 'match preview moved to manual actions only to keep admin page lightweight'],
             'csv_mapping_status' => (array) ($settings['ovoko_csv_mapping_status'] ?? []),
             'category_rebuild_autorun_status' => $this->get_category_rebuild_autorun_status(),
+            'category_rebuild_autorun_debug' => $this->get_category_rebuild_autorun_debug(),
             'excluded_from_ovoko_sync' => [
                 'enabled' => $excludeEnabled,
                 'detected_products_count' => (int) ($cachedExclusionCount['count'] ?? 0),
@@ -2894,8 +2897,80 @@ class OvokoIntegrationService
 
     public function get_category_rebuild_autorun_status(): array
     {
-        $stored = get_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, []);
-        return wp_parse_args(is_array($stored) ? $stored : [], $this->default_category_rebuild_autorun_status());
+        $stored = get_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, null);
+        return $this->normalize_category_rebuild_autorun_status($stored);
+    }
+
+    public function get_category_rebuild_autorun_debug(): array
+    {
+        $stored = get_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, null);
+        $status = $this->normalize_category_rebuild_autorun_status($stored);
+        $rawJson = wp_json_encode($stored, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        if ($rawJson === false) {
+            $rawJson = 'json_encode_failed';
+        }
+
+        return [
+            'option_name' => self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION,
+            'lock_option_name' => self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION,
+            'raw' => $stored,
+            'raw_json' => $rawJson,
+            'summary' => $this->summarize_category_rebuild_autorun_status($status),
+            'invalid' => !empty($status['autorun_status_invalid']),
+            'invalid_reason' => (string) ($status['autorun_status_invalid_reason'] ?? ''),
+            'last_ajax_response' => get_option('gpswiss_ovoko_category_rebuild_autorun_last_ajax', []),
+        ];
+    }
+
+    private function normalize_category_rebuild_autorun_status($stored): array
+    {
+        $default = $this->default_category_rebuild_autorun_status();
+        $invalidReason = '';
+        $required = ['status','current_after_product_id','next_after_product_id','last_safe_next_after_product_id','processed_total','errors_total'];
+
+        if ($stored === false || $stored === null) {
+            $status = $default;
+        } elseif (!is_array($stored)) {
+            $status = $default;
+            $invalidReason = 'stored status is not an array';
+        } else {
+            $missing = [];
+            foreach ($required as $key) {
+                if (!array_key_exists($key, $stored)) {
+                    $missing[] = $key;
+                }
+            }
+            if ($missing !== []) {
+                $invalidReason = 'stored status missing fields: ' . implode(', ', $missing);
+            }
+            $status = wp_parse_args($stored, $default);
+        }
+
+        $allowedStatuses = ['idle','running','paused','error','done'];
+        if (!in_array((string) ($status['status'] ?? ''), $allowedStatuses, true)) {
+            $invalidReason = trim($invalidReason . '; unknown status: ' . (string) ($status['status'] ?? ''));
+            $status['status'] = 'invalid';
+        }
+
+        $status['autorun_status_invalid'] = $invalidReason !== '';
+        $status['autorun_status_invalid_reason'] = $invalidReason;
+        return $status;
+    }
+
+    private function summarize_category_rebuild_autorun_status(array $status): array
+    {
+        return [
+            'status' => (string) ($status['status'] ?? 'idle'),
+            'invalid' => !empty($status['autorun_status_invalid']),
+            'invalid_reason' => (string) ($status['autorun_status_invalid_reason'] ?? ''),
+            'current_after_product_id' => (int) ($status['current_after_product_id'] ?? 0),
+            'next_after_product_id' => (int) ($status['next_after_product_id'] ?? 0),
+            'last_safe_next_after_product_id' => (int) ($status['last_safe_next_after_product_id'] ?? 0),
+            'processed_total' => (int) ($status['processed_total'] ?? 0),
+            'errors_total' => (int) ($status['errors_total'] ?? 0),
+            'last_error' => (string) ($status['last_error'] ?? ''),
+            'updated_at' => (string) ($status['updated_at'] ?? ''),
+        ];
     }
 
     private function default_category_rebuild_autorun_status(): array
@@ -2956,33 +3031,33 @@ class OvokoIntegrationService
     {
         $status = $this->get_category_rebuild_autorun_status();
         if ($command === 'status') {
-            return ['ok' => true, 'status' => $status];
+            return $this->category_rebuild_autorun_response(true, $command, $status, 'status_loaded');
         }
         if ($command === 'reset') {
-            return ['ok' => true, 'status' => $this->reset_category_rebuild_autorun_status()];
+            return $this->category_rebuild_autorun_response(true, $command, $this->reset_category_rebuild_autorun_status(), 'autorun_status_reset');
         }
         if ($command === 'pause') {
             if (($status['status'] ?? '') === 'running') { $status['status'] = 'paused'; }
-            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(true, $command, $this->save_category_rebuild_autorun_status($status), $command . '_accepted');
         }
         if ($command === 'stop') {
             if (in_array((string) ($status['status'] ?? ''), ['running','paused','error'], true)) { $status['status'] = 'idle'; }
             delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
-            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(true, $command, $this->save_category_rebuild_autorun_status($status), $command . '_accepted');
         }
         if ($command === 'resume') {
             $status['current_after_product_id'] = max(0, (int) ($status['last_safe_next_after_product_id'] ?? 0));
             $status['next_after_product_id'] = (int) $status['current_after_product_id'];
             $status['status'] = 'running';
             $status['last_error'] = '';
-            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(true, $command, $this->save_category_rebuild_autorun_status($status), $command . '_accepted');
         }
         if ($command === 'start') {
             if ((string) ($options['confirmation'] ?? '') !== 'REBUILD WOO CATEGORIES FROM OVOKO') {
-                return ['ok' => false, 'error' => 'confirmation_required', 'required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO', 'status' => $status];
+                return $this->category_rebuild_autorun_response(false, $command, $status, 'confirmation_required', 'confirmation_required') + ['required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO'];
             }
-            if (($status['status'] ?? '') === 'running') {
-                return ['ok' => false, 'error' => 'autorun_already_running', 'status' => $status];
+            if (($status['status'] ?? '') === 'running' && empty($status['autorun_status_invalid'])) {
+                return $this->category_rebuild_autorun_response(false, $command, $status, 'autorun_already_running', 'autorun_already_running');
             }
             $lastSafe = max(0, (int) ($status['last_safe_next_after_product_id'] ?? 0));
             $startAfter = array_key_exists('start_after_product_id', $options) ? max(0, (int) $options['start_after_product_id']) : $lastSafe;
@@ -2997,22 +3072,34 @@ class OvokoIntegrationService
             $status['status'] = 'running';
             $status['started_at'] = gmdate('c');
             $status['last_error'] = '';
-            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(true, $command, $this->save_category_rebuild_autorun_status($status), $command . '_accepted');
         }
         if ($command === 'tick') {
             return $this->run_category_rebuild_autorun_tick($status);
         }
-        return ['ok' => false, 'error' => 'unknown_command', 'status' => $status];
+        return $this->category_rebuild_autorun_response(false, $command, $status, 'unknown_command', 'unknown_command');
+    }
+
+    private function category_rebuild_autorun_response(bool $ok, string $command, array $status, string $message = '', string $error = ''): array
+    {
+        return [
+            'ok' => $ok,
+            'command' => $command,
+            'status' => $status,
+            'message' => $message,
+            'error' => $error,
+            'status_summary' => $this->summarize_category_rebuild_autorun_status($status),
+        ];
     }
 
     private function run_category_rebuild_autorun_tick(array $status): array
     {
         if (($status['status'] ?? '') !== 'running') {
-            return ['ok' => true, 'done' => true, 'status' => $status];
+            return $this->category_rebuild_autorun_response(true, 'tick', $status, 'autorun_not_running') + ['done' => true];
         }
         $lock = get_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION, []);
         if (is_array($lock) && (int) ($lock['expires_at'] ?? 0) > time()) {
-            return ['ok' => false, 'error' => 'autorun_batch_already_running', 'status' => $status];
+            return $this->category_rebuild_autorun_response(false, 'tick', $status, 'autorun_batch_already_running', 'autorun_batch_already_running');
         }
         delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
         add_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION, ['started_at' => gmdate('c'), 'expires_at' => time() + 600], '', 'no');
@@ -3060,12 +3147,12 @@ class OvokoIntegrationService
             } elseif (!empty($batch['done'])) {
                 $status['status'] = 'done';
             }
-            return ['ok' => !empty($batch['ok']), 'done' => in_array((string) $status['status'], ['done','paused','idle','error'], true), 'batch' => $batch, 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(!empty($batch['ok']), 'tick', $this->save_category_rebuild_autorun_status($status), !empty($batch['ok']) ? 'tick_completed' : 'tick_failed', empty($batch['ok']) ? (string) ($batch['error'] ?? 'batch_failed') : '') + ['done' => in_array((string) $status['status'], ['done','paused','idle','error'], true), 'batch' => $batch];
         } catch (\Throwable $e) {
             $status['status'] = 'error';
             $status['api_errors_total'] = (int) ($status['api_errors_total'] ?? 0) + 1;
             $status['last_error'] = $e->getMessage();
-            return ['ok' => false, 'error' => $e->getMessage(), 'status' => $this->save_category_rebuild_autorun_status($status)];
+            return $this->category_rebuild_autorun_response(false, 'tick', $this->save_category_rebuild_autorun_status($status), 'tick_exception', $e->getMessage());
         } finally {
             delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
         }

@@ -354,7 +354,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const catForm = $('gpswiss_ovoko_categories_update_form');
   const catStatusEl = $('gpswiss_cat_autorun_status');
   const catLogsEl = $('gpswiss_cat_autorun_logs');
-  if (!catForm || !catStatusEl || !catLogsEl) { return; }
+  if (catForm && catStatusEl && catLogsEl) {
   const catState = { running: false, status: 'stopped', started_at: '', duration_seconds: 0, start_after_product_id: 0, request_after_product_id: 0, response_next_after_product_id: 0, current_after_product_id: 0, last_safe_next_after_product_id: 0, total_scanned: 0, with_ovoko_id: 0, missing_ovoko_id: 0, ovoko_category_found: 0, ovoko_category_missing: 0, categories_created: 0, categories_existing: 0, products_categories_updated: 0, products_categories_verified: 0, products_skipped: 0, errors: 0, category_after_product_id_element_found: false, category_after_product_id_raw_value: '""', parsed_start_after_product_id: 0, js_asset_version: '', admin_autorun_js_url: '', admin_autorun_js_version: '', categoryAction: '', categoryNonce_present: false };
   let catTimer = null; let catInFlight = false; const catLogRows = [];
   const catRender = function () {
@@ -440,11 +440,13 @@ document.addEventListener('DOMContentLoaded', function () {
     catLogRows.length = 0; catRender(); catTick();
   });
   $('gpswiss_cat_autorun_stop')?.addEventListener('click', function (e) { e.preventDefault(); catStop('stopped'); });
+  }
 
   const rebuildBox = $('gpswiss_category_rebuild_autorun_box');
   const rebuildStatusEl = $('gpswiss_rebuild_autorun_status');
   const rebuildLogsEl = $('gpswiss_rebuild_autorun_logs');
   if (rebuildBox && rebuildStatusEl && rebuildLogsEl) {
+    rebuildBox.style.display = 'block';
     let rebuildTimer = null;
     let rebuildInFlight = false;
     const rebuildLogs = [];
@@ -452,10 +454,22 @@ document.addEventListener('DOMContentLoaded', function () {
       const n = rebuildStatusEl.querySelector('[data-k="' + k + '"]');
       if (n) { n.textContent = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v == null ? '' : v); }
     };
-    const rebuildRender = function (status) {
+    const rebuildRender = function (status, response) {
       status = status || {};
+      response = response || {};
       ['status','current_after_product_id','next_after_product_id','last_safe_next_after_product_id','processed_total','fixed_total','skipped_total','errors_total','missing_ovoko_id_total','missing_category_id_total','missing_category_path_total','api_errors_total','categories_created_total','categories_existing_total','category_assignments_changed_total','menu_cache_rebuild','menu_cache_category_count','menu_cache_build_duration','batches_done_since_cache_rebuild','started_at','updated_at','duration','last_error'].forEach(function (k) { rebuildSetK(k, status[k] || 0); });
+      rebuildSetK('category_rebuild_autorun_js_loaded', 'yes');
+      rebuildSetK('category_rebuild_autorun_nonce_present', (config.categoryRebuildAutorunNonce && String(config.categoryRebuildAutorunNonce).length > 0) ? 'yes' : 'no');
+      rebuildSetK('category_rebuild_autorun_ajax_action', config.categoryRebuildAutorunAction || 'gpswiss_ovoko_category_rebuild_autorun');
+      rebuildSetK('last_autorun_command', response.command || '');
+      rebuildSetK('last_autorun_error', response.error || status.last_error || '');
+      rebuildSetK('category_rebuild_autorun_status_summary', response.status_summary || { status: status.status || '', invalid: !!status.autorun_status_invalid, invalid_reason: status.autorun_status_invalid_reason || '' });
+      rebuildSetK('category_rebuild_autorun_status_raw', status);
+      rebuildSetK('last_ajax_response', response);
       rebuildSetK('last_batch_result', status.last_batch_result || null);
+      if (status.autorun_status_invalid) {
+        rebuildLogs.push({ timestamp: nowIso(), type: 'warning', message: 'autorun status invalid, reset recommended', reason: status.autorun_status_invalid_reason || '' });
+      }
       rebuildLogsEl.textContent = rebuildLogs.slice(-40).map(function (x) { return JSON.stringify(x); }).join('\n');
     };
     const rebuildField = function (id, fallback) { const el = $(id); return Math.max(0, parseInt((el && el.value) || String(fallback || 0), 10) || 0); };
@@ -475,8 +489,9 @@ document.addEventListener('DOMContentLoaded', function () {
       const r = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: rebuildBody(command).toString() });
       const text = await r.text();
       let res;
-      try { res = JSON.parse(text); } catch (e) { res = { ok: false, error: 'invalid_json_response', raw: text }; }
+      try { res = JSON.parse(text); } catch (e) { res = { ok: false, command: command, status: {}, message: 'invalid_json_response', error: 'invalid_json_response', raw: text }; }
       if (!r.ok && !res.error) { res.error = 'ajax_http_' + r.status; }
+      if (!res.command) { res.command = command; }
       return res;
     };
     const rebuildTick = async function () {
@@ -485,18 +500,20 @@ document.addEventListener('DOMContentLoaded', function () {
       let res;
       try { res = await rebuildRequest('tick'); } catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
       rebuildInFlight = false;
-      rebuildLogs.push({ timestamp: nowIso(), command: 'tick', ok: !!res.ok, error: res.error || '', status: (res.status || {}).status || '', batch: res.batch ? { after_product_id: res.batch.after_product_id, next_after_product_id: res.batch.next_after_product_id, counts: res.batch.counts, menu_cache_rebuild: res.batch.menu_cache_rebuild } : null });
-      rebuildRender(res.status || {});
+      rebuildLogs.push({ timestamp: nowIso(), command: 'tick', ok: !!res.ok, message: res.message || '', error: res.error || '', status: (res.status || {}).status || '', batch: res.batch ? { after_product_id: res.batch.after_product_id, next_after_product_id: res.batch.next_after_product_id, counts: res.batch.counts, menu_cache_rebuild: res.batch.menu_cache_rebuild } : null });
+      rebuildRender(res.status || {}, res);
       if ((res.status || {}).status === 'running' && !res.done) { rebuildTimer = setTimeout(rebuildTick, 1200); }
     };
     const rebuildCommand = async function (command) {
       if (rebuildTimer) clearTimeout(rebuildTimer);
       let res;
       try { res = await rebuildRequest(command); } catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
-      rebuildLogs.push({ timestamp: nowIso(), command: command, ok: !!res.ok, error: res.error || '', status: (res.status || {}).status || '' });
-      rebuildRender(res.status || {});
+      rebuildLogs.push({ timestamp: nowIso(), command: command, ok: !!res.ok, message: res.message || '', error: res.error || '', status: (res.status || {}).status || '', response: res });
+      rebuildRender(res.status || {}, res);
       if ((res.status || {}).status === 'running' && (command === 'start' || command === 'resume')) { rebuildTick(); }
     };
+    rebuildRender({}, { command: 'init', ok: true, message: 'category_rebuild_autorun_js_loaded' });
+    rebuildCommand('status');
     $('gpswiss_rebuild_autorun_start')?.addEventListener('click', function (e) { e.preventDefault(); rebuildCommand('start'); });
     $('gpswiss_rebuild_autorun_pause')?.addEventListener('click', function (e) { e.preventDefault(); rebuildCommand('pause'); });
     $('gpswiss_rebuild_autorun_resume')?.addEventListener('click', function (e) { e.preventDefault(); rebuildCommand('resume'); });
