@@ -189,6 +189,15 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <?php submit_button('Analyze Ovoko/RRR endpoints for safe cron', 'secondary', 'submit', false); ?>
         </form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_updated_from_delta'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_updated_from_delta" />
+            <label>updated_from delta: <input type="text" name="updated_from" placeholder="YYYY-MM-DD HH:MM:SS" /></label>
+            <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
+            <label>limit: <input type="number" min="1" max="25" name="limit" value="5" style="width:80px;" /></label>
+            <p class="description">Read-only precise probe compares unfiltered <code>/v2/get/parts</code>, URL-encoded <code>updated_from=YYYY-MM-DD HH:MM:SS</code>, and confirmed <code>date_from=YYYY-MM-DD</code>.</p>
+            <?php submit_button('Probe updated_from delta filter', 'secondary', 'submit', false); ?>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_auto_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_auto_sync" />
             <label>part_id (optional single product): <input type="number" min="1" name="part_id" placeholder="e.g. 10994" /></label>

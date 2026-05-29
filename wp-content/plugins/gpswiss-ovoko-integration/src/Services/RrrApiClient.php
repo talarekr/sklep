@@ -173,6 +173,7 @@ class RrrApiClient
         $baselineSummary = $this->summarize_parts_delta_probe_result($baseline, $fromTimestamp);
         $baselineIds = $this->extract_probe_record_ids((array) ($baseline['records'] ?? []));
         $baselineTotal = (int) ($baseline['pagination']['total_count'] ?? 0);
+        $preciseProbe = $this->probe_precise_parts_delta_filters($fromIso, 5, 1);
         $endpointParamCandidates = [
             '/v2/get/parts' => ['updated_after', 'from', 'date_from', 'updated_from', 'modified_after', 'changed_after'],
             '/v2/get/parts/categories' => ['updated_after', 'from', 'date_from', 'updated_from'],
@@ -215,8 +216,89 @@ class RrrApiClient
             'delta_filter_used' => $best['filter_signature'] ?? '',
             'best_confirmed_filter' => $best,
             'filter_likely_ignored_count' => count($ignoredRows),
+            'precise_updated_from_probe' => $preciseProbe,
+            'recommended_confirmed_filter' => (string) ($preciseProbe['delta_filter_used'] ?? ($best['filter_signature'] ?? '')),
             'warning' => $best === null ? 'delta_sync_not_confirmed' : '',
             'results' => $results,
+        ];
+    }
+
+    public function probe_precise_parts_delta_filters(string $fromIso = '', int $limit = 5, int $page = 1): array
+    {
+        $limit = max(1, min(25, $limit));
+        $page = max(1, $page);
+        $fromIso = trim($fromIso) !== '' ? trim($fromIso) : gmdate('c', time() - DAY_IN_SECONDS);
+        $fromTimestamp = strtotime($fromIso) ?: (time() - DAY_IN_SECONDS);
+        $updatedFromValue = gmdate('Y-m-d H:i:s', $fromTimestamp);
+        $dateFromValue = gmdate('Y-m-d', $fromTimestamp);
+
+        $baselinePath = '/v2/get/parts?limit=' . $limit . '&page=' . $page;
+        $baseline = $this->post_form($baselinePath, [], true);
+        $baselineSummary = $this->summarize_parts_delta_probe_result($baseline, $fromTimestamp);
+        $baselineIds = $this->extract_probe_record_ids((array) ($baseline['records'] ?? []));
+        $baselineTotal = (int) ($baseline['pagination']['total_count'] ?? 0);
+
+        $updatedFromPath = $baselinePath . '&updated_from=' . rawurlencode($updatedFromValue);
+        $dateFromPath = $baselinePath . '&date_from=' . rawurlencode($dateFromValue);
+        $updatedFrom = $this->post_form($updatedFromPath, [], true);
+        $dateFrom = $this->post_form($dateFromPath, [], true);
+
+        $updatedFromRow = $this->build_delta_probe_row($updatedFromPath, $updatedFrom, $fromTimestamp, $baselineTotal, $baselineIds, 'updated_from', 'YYYY-MM-DD HH:MM:SS', $updatedFromValue);
+        $dateFromRow = $this->build_delta_probe_row($dateFromPath, $dateFrom, strtotime($dateFromValue . ' 00:00:00 UTC') ?: $fromTimestamp, $baselineTotal, $baselineIds, 'date_from', 'YYYY-MM-DD', $dateFromValue);
+        $baselineRow = $baselineSummary + [
+            'path' => $baselinePath,
+            'param_name' => '',
+            'date_format' => '',
+            'date_value' => '',
+            'total_count' => $baselineTotal,
+            'record_ids' => $baselineIds,
+            'same_total_count_as_unfiltered' => true,
+            'same_first_record_ids_as_unfiltered' => true,
+            'filter_likely_ignored' => false,
+            'delta_filter_confirmed' => false,
+            'full_payload_omitted' => true,
+        ];
+
+        $deltaFilterUsed = '';
+        if (!empty($updatedFromRow['delta_filter_confirmed'])) {
+            $deltaFilterUsed = 'updated_from';
+        } elseif (!empty($dateFromRow['delta_filter_confirmed'])) {
+            $deltaFilterUsed = 'date_from';
+        }
+
+        return [
+            'ok' => true,
+            'probe_type' => 'read_only_precise_updated_from_vs_date_from_probe',
+            'endpoint' => '/v2/get/parts',
+            'limit' => $limit,
+            'page' => $page,
+            'delta_from_input' => $fromIso,
+            'delta_from_timestamp' => $fromTimestamp,
+            'updated_from_value' => $updatedFromValue,
+            'updated_from_url_encoded_value' => rawurlencode($updatedFromValue),
+            'date_from_value' => $dateFromValue,
+            'delta_sync_confirmed' => $deltaFilterUsed !== '',
+            'delta_filter_used' => $deltaFilterUsed,
+            'cron_policy' => $deltaFilterUsed === 'updated_from'
+                ? 'Use updated_from with exact time windows. Page only inside the delta result set.'
+                : ($deltaFilterUsed === 'date_from'
+                    ? 'Use date_from=YYYY-MM-DD only with idempotency/dedup by part_id + updated_at + payload hash. Page only inside the date delta result set.'
+                    : 'Do not enable live cron. No confirmed delta filter.'),
+            'baseline' => $baselineRow,
+            'updated_from' => $updatedFromRow,
+            'date_from' => $dateFromRow,
+            'comparison' => [
+                'updated_from_same_total_count_as_unfiltered' => !empty($updatedFromRow['same_total_count_as_unfiltered']),
+                'updated_from_same_first_record_ids_as_unfiltered' => !empty($updatedFromRow['same_first_record_ids_as_unfiltered']),
+                'date_from_same_total_count_as_unfiltered' => !empty($dateFromRow['same_total_count_as_unfiltered']),
+                'date_from_same_first_record_ids_as_unfiltered' => !empty($dateFromRow['same_first_record_ids_as_unfiltered']),
+            ],
+            'safety' => [
+                'read_only' => true,
+                'no_woo_write' => true,
+                'no_ovoko_write' => true,
+                'no_stock_or_status_change' => true,
+            ],
         ];
     }
 
@@ -297,6 +379,7 @@ class RrrApiClient
             'http_code' => $result['http_code'] ?? null,
             'records_count' => (int) ($result['records_count'] ?? 0),
             'pagination' => (array) ($result['pagination'] ?? []),
+            'total_count' => (int) ($result['pagination']['total_count'] ?? 0),
             'returned_records_count' => (int) ($result['records_count'] ?? count($records)),
             'updated_at_present' => $updatedTimestamps !== [],
             'min_updated_at' => $updatedTimestamps !== [] ? gmdate('c', min($updatedTimestamps)) : '',

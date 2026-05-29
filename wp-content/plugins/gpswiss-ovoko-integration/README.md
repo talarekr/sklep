@@ -826,3 +826,49 @@ Future live design, not implemented:
 - idempotency by skipping any record that already contains a supported price marker,
 - live write scope limited to `POST /crm/updatePart` with only auth fields, `part_id` and `internal_notes`,
 - single-part live probe remains an advanced/dev-only tool; batch writes should stay disabled unless the business decision changes and omitted optional fields are proven safe.
+
+## Read-only delta probe for `updated_from` before live cron
+
+A dedicated read-only admin probe is available in **Tools → GPSwiss Ovoko Integration → Dry-run sync** as **Probe updated_from delta filter**.
+
+Safety guarantees:
+
+- endpoint: `POST /v2/get/parts` with auth form fields only,
+- no Woo product/category writes,
+- no Ovoko writes,
+- no stock/status changes,
+- no sale sync.
+
+The probe compares exactly:
+
+1. baseline: `/v2/get/parts?limit={n}&page={p}`,
+2. precise time delta: `/v2/get/parts?limit={n}&page={p}&updated_from=YYYY-MM-DD%20HH%3AMM%3ASS`,
+3. confirmed date delta: `/v2/get/parts?limit={n}&page={p}&date_from=YYYY-MM-DD`.
+
+Each row reports `total_count`, `returned_records_count`, `record_ids`, `min_updated_at`, `max_updated_at`, `records_older_than_delta_from_count`, `same_total_count_as_unfiltered`, `same_first_record_ids_as_unfiltered`, `filter_likely_ignored`, and `delta_filter_confirmed`.
+
+Decision policy for live cron preparation:
+
+- If `updated_from` is confirmed, set `delta_filter_used=updated_from` and use exact time windows.
+- If `updated_from` is ignored but `date_from` is confirmed, set `delta_filter_used=date_from` and use date windows only.
+- If only `date_from=YYYY-MM-DD` is confirmed, cron must deduplicate idempotently per product using `_gpswiss_ovoko_last_synced_updated_at` and `_gpswiss_ovoko_last_synced_hash`; unchanged `part_id + updated_at + hash` is skipped/no-op.
+- If no delta filter is confirmed, live cron remains disabled.
+
+Cron design constraints:
+
+- no full scan,
+- no page-based scan of the entire catalog,
+- page/cursor only inside the confirmed delta result set,
+- anti-parallel lock: `gpswiss_ovoko_auto_sync_lock`,
+- status/log fields include `delta_sync_confirmed`, `delta_filter_used`, `last_successful_sync_at`, `last_successful_sync_date`, `last_delta_from`, `last_delta_to`, `last_cursor/page`, `processed_changed_products`, `skipped_already_synced`, `created_from_delta`, `updated_from_delta`, `errors`, and `warnings`.
+
+Live sync scope after delta confirmation:
+
+- Existing Woo products: sync stock/status, description, and technical details; categories are verify-only; price and images are not changed.
+- New Ovoko products: create only with a valid `internal_notes` price; price source is `internal_notes` only; categories come from `category_id + /get/categories/tree`; images may be imported from Ovoko for new products; missing/invalid price means skip or draft, never publish.
+
+## Woo → Ovoko sale/stock endpoint status
+
+Woo → Ovoko sale/stock sync remains dry-run/design-only. The current client has confirmed write probes only for `/crm/updatePart` with limited fields (`place` and `internal_notes`). It does not implement or confirm Gemini-suggested `/v2/update/part` or `/v2/parts/{id}/status`, and no payload such as `status=sold` or `stock=0` is approved.
+
+Until Ovoko/RRR confirms the endpoint contract, payload, permissions, and idempotency behavior, the plugin must not send sales, stock changes, sold/reserved statuses, or order events to Ovoko.
