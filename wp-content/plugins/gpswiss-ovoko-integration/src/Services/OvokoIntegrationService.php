@@ -719,6 +719,36 @@ class OvokoIntegrationService
         return $missing;
     }
 
+
+    private function count_vehicle_detail_fields_from_attributes(array $attributes): int
+    {
+        $count = 0;
+        foreach ($this->expected_vehicle_detail_fields() as $field) {
+            if (trim((string) ($attributes[$field] ?? '')) !== '') {
+                $count++;
+            }
+        }
+        foreach (['Rok produkcji samochodu', 'Pojemność silnika', 'Moc silnika', 'Kod silnika', 'Typ sylwetki', 'Pozycja kierownicy', 'Przebieg'] as $field) {
+            if (trim((string) ($attributes[$field] ?? '')) !== '') {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    private function title_source_fields_from_preview(array $titlePreview): array
+    {
+        return array_values(array_filter([
+            trim((string) ($titlePreview['vehicle_title_prefix'] ?? '')) !== '' ? 'vehicle_prefix' : '',
+            trim((string) ($titlePreview['vehicle_model'] ?? '')) !== '' ? 'vehicle_model' : '',
+            trim((string) ($titlePreview['vehicle_generation'] ?? '')) !== '' ? 'vehicle_generation' : '',
+            trim((string) ($titlePreview['vehicle_year'] ?? '')) !== '' ? 'vehicle_year' : '',
+            trim((string) ($titlePreview['vehicle_engine_capacity_title'] ?? '')) !== '' ? 'vehicle_engine_capacity' : '',
+            trim((string) ($titlePreview['part_name'] ?? '')) !== '' ? 'part_name' : '',
+            trim((string) ($titlePreview['manufacturer_code'] ?? '')) !== '' ? 'manufacturer_code' : '',
+        ], static fn($field) => $field !== ''));
+    }
+
     public function preview_woo_product_create_from_rrr_part(int $partId): array
     {
         $partId = max(1, $partId);
@@ -1085,8 +1115,29 @@ class OvokoIntegrationService
                 $fullPartFetchUsed = true;
             }
         }
-        $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
-        $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+        $attributesBeforeVehicleFetch = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+        $missingBeforeVehicleFetch = $this->missing_expected_vehicle_fields_from_attributes($attributesBeforeVehicleFetch);
+        $vehicleFetchAttempted = false;
+        $vehicleFetchOk = false;
+        $vehicleDataSource = $missingBeforeVehicleFetch === [] ? 'full_part_payload' : 'missing';
+        $vehicleDebug = [
+            'vehicle_fetch_attempted' => false,
+            'vehicle_fetch_success' => false,
+            'vehicle_endpoint_used' => '',
+            'vehicle_raw_car_id' => (string) ($normalized['car_id'] ?? ''),
+        ];
+        if ($missingBeforeVehicleFetch !== []) {
+            $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
+            $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+            $vehicleDebug = (array) ($vehicleEnriched['vehicle_debug'] ?? $vehicleDebug);
+            $vehicleFetchAttempted = !empty($vehicleDebug['vehicle_fetch_attempted']);
+            $vehicleFetchOk = !empty($vehicleDebug['vehicle_fetch_success']);
+            $attributesAfterVehicleFetch = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+            $missingAfterVehicleFetch = $this->missing_expected_vehicle_fields_from_attributes($attributesAfterVehicleFetch);
+            if ($vehicleFetchOk && count($missingAfterVehicleFetch) < count($missingBeforeVehicleFetch)) {
+                $vehicleDataSource = 'vehicle_fetch';
+            }
+        }
         $updatedAt = trim((string) (($options['updated_at'] ?? '') ?: ($record['updated_at'] ?? $normalized['updated_at'] ?? '')));
         $syncHash = trim((string) ($options['sync_hash'] ?? ''));
         $price = (array) ($options['price'] ?? []);
@@ -1098,6 +1149,10 @@ class OvokoIntegrationService
         $description = trim((string) (($normalized['notes'] ?? '') ?: ($record['notes'] ?? '')));
         $attributes = $this->build_ovoko_technical_attributes_from_normalized($normalized);
         $missingExpectedVehicleFields = $this->missing_expected_vehicle_fields_from_attributes($attributes);
+        $vehicleFieldsCount = $this->count_vehicle_detail_fields_from_attributes($attributes);
+        if ($vehicleDataSource === 'missing' && $missingExpectedVehicleFields === []) {
+            $vehicleDataSource = $vehicleFetchOk ? 'vehicle_fetch' : 'full_part_payload';
+        }
         $detailsFieldsCount = count($attributes);
         $categoryId = trim((string) (($record['category_id'] ?? '') ?: ($normalized['category_id'] ?? '')));
         $categoryResolution = ['ok' => false, 'category_tree_resolved_path' => '', 'category_tree_endpoint_used' => ''];
@@ -1110,11 +1165,14 @@ class OvokoIntegrationService
             return ['ok' => false, 'reason' => 'missing_part_id', 'product_id' => $productId, 'created' => false, 'updated' => false];
         }
 
+        $titlePreview = [];
+        $titleFallbackWarning = '';
         if ($productId <= 0) {
             if (empty($price['ok']) || (float) $priceValue <= 0) {
                 return ['ok' => false, 'reason' => 'new_product_missing_price_in_internal_notes', 'part_id' => $partId, 'created' => false, 'updated' => false, 'published' => false];
             }
             $titlePreview = $this->build_woo_product_title_from_ovoko_part($normalized);
+            $titleFallbackWarning = empty($titlePreview['title_builder_used_vehicle_data']) && array_intersect(['vehicle_make', 'vehicle_model', 'vehicle_generation'], (array) ($titlePreview['missing_vehicle_fields'] ?? [])) !== [] ? 'vehicle_data_missing_title_fallback_used' : '';
             $productId = wp_insert_post([
                 'post_type' => 'product',
                 'post_status' => 'publish',
@@ -1142,6 +1200,8 @@ class OvokoIntegrationService
             $created = true;
             $updated = false;
         } else {
+            $titlePreview = $this->build_woo_product_title_from_ovoko_part($normalized);
+            $titleFallbackWarning = empty($titlePreview['title_builder_used_vehicle_data']) && array_intersect(['vehicle_make', 'vehicle_model', 'vehicle_generation'], (array) ($titlePreview['missing_vehicle_fields'] ?? [])) !== [] ? 'vehicle_data_missing_title_fallback_used' : '';
             wp_update_post(['ID' => $productId, 'post_content' => $description, 'post_excerpt' => $description]);
             $imageImportResult = ['images_import_attempted' => false, 'images_count' => 0, 'imported_attachment_ids' => [], 'reused_attachment_ids' => [], 'failed_urls' => []];
             $created = false;
@@ -1201,6 +1261,14 @@ class OvokoIntegrationService
             'details_mapper' => 'existing_mapper',
             'details_fields_count' => $detailsFieldsCount,
             'missing_expected_vehicle_fields' => $missingExpectedVehicleFields,
+            'vehicle_data_source' => $vehicleDataSource,
+            'vehicle_fetch_attempted' => $vehicleFetchAttempted,
+            'vehicle_fetch_ok' => $vehicleFetchOk,
+            'vehicle_fetch_debug' => $vehicleDebug,
+            'vehicle_fields_count' => $vehicleFieldsCount,
+            'title_source_fields' => $this->title_source_fields_from_preview($titlePreview),
+            'title_builder_used_vehicle_data' => !empty($titlePreview['title_builder_used_vehicle_data']),
+            'title_warning' => $titleFallbackWarning,
             'whether_full_part_fetch_was_used' => $fullPartFetchUsed,
             'full_part_fetch' => $fullPartFetchReport,
             'category_tree_resolution_ok' => !empty($categoryResolution['ok']) && $categoryPath !== '',
@@ -1550,7 +1618,11 @@ class OvokoIntegrationService
             'vehicle_prefix_before_dedupe' => $vehiclePrefixBeforeDedupe,
             'vehicle_prefix_after_dedupe' => $vehiclePrefix,
             'title_review_required' => !$hasFullVehicleData,
+            'title_builder_used_vehicle_data' => $hasFullVehicleData,
+            'part_name' => $partName,
+            'manufacturer_code' => $manufacturerCode,
             'missing_vehicle_fields' => $missing,
+            'warning' => !$hasFullVehicleData && array_intersect(['vehicle_make', 'vehicle_generation'], $missing) !== [] ? 'vehicle_data_missing_title_fallback_used' : '',
             '_ovoko_title_source' => $hasFullVehicleData ? 'existing_mapper_full_vehicle_data' : 'fallback_missing_vehicle_data',
             '_ovoko_title_review_required' => $hasFullVehicleData ? 'no' : 'yes',
             '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
