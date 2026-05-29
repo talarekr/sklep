@@ -204,13 +204,25 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input type="hidden" name="action" value="gpswiss_ovoko_auto_sync_endpoint_analysis" />
             <?php submit_button('Analyze Ovoko/RRR endpoints for safe cron', 'secondary', 'submit', false); ?>
         </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:14px;">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_auto_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_auto_sync" />
             <label>date_from: <input type="date" name="date_from" placeholder="YYYY-MM-DD" /></label>
             <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
             <label>batch_size: <input type="number" min="1" max="25" name="batch_size" value="5" style="width:80px;" /></label>
             <?php submit_button('Dry-run date_from Ovoko → Woo delta', 'secondary', 'submit', false); ?>
+        </form>
+        <hr style="margin:16px 0;" />
+        <h4>Manual live date_from Ovoko → Woo sync</h4>
+        <p><strong>Live Woo write, manual only.</strong> Creates new Woo products only when the product is missing and a valid PLN price is present in <code>internal_notes</code>. Existing products may update stock/status, description and details only; price, images and categories stay untouched. Automatic cron and the Woo → Ovoko worker remain disabled.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
+            <?php wp_nonce_field('gpswiss_ovoko_manual_live_date_from_sync'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_manual_live_date_from_sync" />
+            <label>date_from: <input type="date" name="date_from" required placeholder="YYYY-MM-DD" /></label>
+            <label>page: <input type="number" min="1" name="page" value="1" required style="width:80px;" /></label>
+            <label>batch_size: <input type="number" min="1" max="5" name="batch_size" value="1" required style="width:80px;" /></label>
+            <label style="display:block; margin-top:8px;">confirmation: <input type="text" name="confirmation" required placeholder="RUN OVOKO DATE_FROM LIVE SYNC" style="width:360px;" /></label>
+            <?php submit_button('Run manual live date_from Ovoko → Woo sync', 'delete', 'submit', false); ?>
         </form>
     </div>
 

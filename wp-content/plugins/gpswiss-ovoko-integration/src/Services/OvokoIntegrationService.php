@@ -1015,6 +1015,167 @@ class OvokoIntegrationService
         ];
     }
 
+    public function apply_manual_live_date_from_part(array $record, array $payload, array $options): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $partId = trim((string) (($record['id'] ?? $record['part_id'] ?? '') ?: ($normalized['part_id'] ?? '')));
+        if ($partId !== '') {
+            $normalized['part_id'] = $partId;
+        }
+        $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
+        $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+        $productId = max(0, (int) ($options['product_id'] ?? 0));
+        $updatedAt = trim((string) (($options['updated_at'] ?? '') ?: ($record['updated_at'] ?? $normalized['updated_at'] ?? '')));
+        $syncHash = trim((string) ($options['sync_hash'] ?? ''));
+        $price = (array) ($options['price'] ?? []);
+        $priceValue = (string) ($price['price'] ?? '');
+        $status = strtolower(trim((string) (($record['status'] ?? '') ?: ($normalized['status'] ?? ''))));
+        $unavailable = in_array($status, ['sold', 'deleted', 'removed', 'inactive', 'unavailable', 'reserved'], true);
+        $stockQty = $unavailable ? 0 : 1;
+        $stockStatus = $unavailable ? 'outofstock' : 'instock';
+        $description = trim((string) (($record['notes'] ?? '') ?: ($normalized['notes'] ?? '')));
+        $attributes = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+        $categoryId = trim((string) (($record['category_id'] ?? '') ?: ($normalized['category_id'] ?? '')));
+        $categoryResolution = ['ok' => false, 'category_tree_resolved_path' => '', 'category_tree_endpoint_used' => ''];
+        if ($categoryId !== '') {
+            $categoryResolution = $client->resolve_category_path_from_tree((int) $categoryId);
+        }
+        $categoryPath = trim((string) ($categoryResolution['category_tree_resolved_path'] ?? ''));
+
+        if ($partId === '') {
+            return ['ok' => false, 'reason' => 'missing_part_id', 'product_id' => $productId, 'created' => false, 'updated' => false];
+        }
+
+        if ($productId <= 0) {
+            if (empty($price['ok']) || (float) $priceValue <= 0) {
+                return ['ok' => false, 'reason' => 'new_product_missing_price_in_internal_notes', 'part_id' => $partId, 'created' => false, 'updated' => false, 'published' => false];
+            }
+            $titlePreview = $this->build_woo_product_title_from_rrr_part($normalized);
+            $productId = wp_insert_post([
+                'post_type' => 'product',
+                'post_status' => 'publish',
+                'post_title' => (string) (($titlePreview['proposed_title'] ?? '') ?: ($record['name'] ?? $normalized['title'] ?? ('Ovoko part ' . $partId))),
+                'post_content' => $description,
+                'post_excerpt' => $description,
+            ], true);
+            if (is_wp_error($productId)) {
+                return ['ok' => false, 'reason' => 'product_create_failed', 'part_id' => $partId, 'error' => $productId->get_error_message(), 'created' => false, 'updated' => false];
+            }
+            $productId = (int) $productId;
+            update_post_meta($productId, '_sku', 'GPSW-OVK-' . $partId);
+            update_post_meta($productId, '_regular_price', $priceValue);
+            update_post_meta($productId, '_price', $priceValue);
+            if ($categoryPath !== '') {
+                $termId = $this->ensure_manual_live_product_category_path($categoryPath, $categoryId);
+                if ($termId > 0) {
+                    wp_set_post_terms($productId, [$termId], 'product_cat', false);
+                    $this->set_primary_product_category($productId, $termId);
+                    update_post_meta($productId, '_gpswiss_ovoko_assigned_category_path', $categoryPath);
+                    update_post_meta($productId, '_gpswiss_ovoko_assigned_category_id', $categoryId);
+                }
+            }
+            $imageImportResult = $this->import_ovoko_images_for_product($productId, $normalized, (int) $partId);
+            $created = true;
+            $updated = false;
+        } else {
+            wp_update_post(['ID' => $productId, 'post_content' => $description, 'post_excerpt' => $description]);
+            $imageImportResult = ['images_import_attempted' => false, 'images_count' => 0, 'imported_attachment_ids' => [], 'reused_attachment_ids' => [], 'failed_urls' => []];
+            $created = false;
+            $updated = true;
+        }
+
+        wp_set_object_terms($productId, 'simple', 'product_type');
+        update_post_meta($productId, '_manage_stock', 'yes');
+        update_post_meta($productId, '_stock', (string) $stockQty);
+        update_post_meta($productId, '_stock_status', $stockStatus);
+        update_post_meta($productId, '_ovoko_part_id', $partId);
+        update_post_meta($productId, '_ovoko_status', (string) (($record['status'] ?? '') ?: ($normalized['status'] ?? '')));
+        update_post_meta($productId, '_ovoko_updated_at', $updatedAt);
+        update_post_meta($productId, '_ovoko_category_id', $categoryId);
+        update_post_meta($productId, '_ovoko_category', $categoryPath);
+        update_post_meta($productId, '_ovoko_source_url', (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')));
+        update_post_meta($productId, '_ovoko_images', (array) ($normalized['part_photo_gallery'] ?? []));
+        update_post_meta($productId, '_ovoko_internal_notes_price_source', !empty($price['ok']) ? 'internal_notes' : '');
+        update_post_meta($productId, '_ovoko_woo_target_currency', 'PLN');
+        update_post_meta($productId, '_ovoko_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
+        update_post_meta($productId, '_mpn', (string) ($normalized['manufacturer_code'] ?? ''));
+        update_post_meta($productId, 'mpn', (string) ($normalized['manufacturer_code'] ?? ''));
+        update_post_meta($productId, '_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
+        update_post_meta($productId, '_gpswiss_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
+        update_post_meta($productId, '_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
+        $this->upsert_custom_product_attributes($productId, $attributes);
+        $this->write_ovoko_table_meta_from_attributes($productId, $attributes);
+        if ($updatedAt !== '') {
+            update_post_meta($productId, '_gpswiss_ovoko_last_synced_updated_at', $updatedAt);
+        }
+        if ($syncHash !== '') {
+            update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
+        }
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if ($product && method_exists($product, 'save')) {
+                $product->save();
+            }
+        }
+
+        return [
+            'ok' => true,
+            'part_id' => $partId,
+            'product_id' => $productId,
+            'created_product_id' => $created ? $productId : 0,
+            'created' => $created,
+            'updated' => $updated,
+            'price_written' => $created,
+            'price_untouched' => !$created,
+            'stock_status' => $stockStatus,
+            'stock_quantity' => $stockQty,
+            'description_updated' => $description !== '',
+            'details_updated' => $attributes !== [],
+            'category_tree_resolution_ok' => !empty($categoryResolution['ok']) && $categoryPath !== '',
+            'category_path_from_tree' => $categoryPath,
+            'category_policy' => $created ? 'assigned_from_category_id_tree' : 'verify_only_no_category_write',
+            'images_policy' => $created ? 'imported_for_new_product' : 'untouched_existing_product',
+            'images_import_result' => $imageImportResult,
+            'idempotency_meta_written' => ['_gpswiss_ovoko_last_synced_updated_at' => $updatedAt, '_gpswiss_ovoko_last_synced_hash' => $syncHash],
+            'published' => $created,
+        ];
+    }
+
+    private function ensure_manual_live_product_category_path(string $path, string $ovokoCategoryId = ''): int
+    {
+        if (!taxonomy_exists('product_cat')) {
+            return 0;
+        }
+        $segments = preg_split('/\s*(?:>|\/|»|→)\s*/u', $path) ?: [];
+        $segments = array_values(array_filter(array_map(static fn($segment) => trim(wp_strip_all_tags((string) $segment)), $segments), static fn($segment) => $segment !== ''));
+        $parent = 0;
+        $termId = 0;
+        foreach ($segments as $index => $segment) {
+            $existing = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'name' => $segment, 'parent' => $parent, 'number' => 1]);
+            $term = !is_wp_error($existing) && !empty($existing[0]) ? $existing[0] : null;
+            if (!$term) {
+                $created = wp_insert_term($segment, 'product_cat', ['parent' => $parent]);
+                if (is_wp_error($created)) {
+                    return 0;
+                }
+                $term = get_term((int) $created['term_id'], 'product_cat');
+            }
+            if (!$term || is_wp_error($term)) {
+                return 0;
+            }
+            $termId = (int) $term->term_id;
+            update_term_meta($termId, '_gpswiss_ovoko_category_path', $path);
+            update_term_meta($termId, '_gpswiss_ovoko_category_level_index', (string) $index);
+            if ($ovokoCategoryId !== '' && $index === count($segments) - 1) {
+                update_term_meta($termId, '_gpswiss_ovoko_category_id', $ovokoCategoryId);
+            }
+            $parent = $termId;
+        }
+        return $termId;
+    }
+
+
     public function preview_listing_image_status(int $productId): array
     {
         $productId = max(1, $productId);
