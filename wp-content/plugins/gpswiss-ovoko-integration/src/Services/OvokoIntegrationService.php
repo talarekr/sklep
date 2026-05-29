@@ -2685,40 +2685,169 @@ class OvokoIntegrationService
         ];
     }
 
-    public function dry_run_delete_all_product_categories(): array
+    public function dry_run_delete_all_product_categories(bool $ultraLight = true): array
     {
         global $wpdb;
-        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
-        $total = is_wp_error($terms) ? 0 : count((array) $terms);
-        $categoriesWithProducts = 0;
-        $emptyCategories = 0;
-        foreach ((array) $terms as $term) {
-            if (!($term instanceof \WP_Term)) { continue; }
-            if ((int) $term->count > 0) { $categoriesWithProducts++; } else { $emptyCategories++; }
-        }
-        $relationshipCount = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy = %s",
-            'product_cat'
-        ));
-        $affectedProducts = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(DISTINCT tr.object_id) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$wpdb->posts} p ON p.ID = tr.object_id WHERE tt.taxonomy = %s AND p.post_type = %s",
-            'product_cat', 'product'
-        ));
-        $withOvoko = $this->count_products_with_ovoko_id(true);
-        $missingOvoko = $this->count_products_with_ovoko_id(false);
-        return [
-            'ok' => true,
-            'action_name' => 'Dry-run delete all Woo product categories',
-            'dry_run' => true,
-            'total_product_categories' => $total,
-            'categories_with_products' => $categoriesWithProducts,
-            'empty_categories' => $emptyCategories,
-            'product_category_relationships' => $relationshipCount,
-            'affected_products' => $affectedProducts,
-            'products_with_ovoko_id' => $withOvoko,
-            'products_missing_ovoko_id' => $missingOvoko,
-            'warnings' => ['Dry-run only: no product_cat terms or relationships were deleted. Products, media, descriptions, prices, stock, eBay, Allegro, and Ovoko are not touched.'],
+        $started = microtime(true);
+        $counts = [
+            'total_product_categories' => 0,
+            'categories_with_products' => 0,
+            'empty_categories' => 0,
+            'product_category_relationships' => 0,
+            'affected_products' => 0,
+            'total_published_private_products' => 0,
+            'products_with_ovoko_id' => 0,
+            'products_missing_ovoko_id' => 0,
         ];
+        $samples = [
+            'categories' => [],
+            'affected_products' => [],
+        ];
+        $warnings = ['Dry-run only: no product_cat terms or relationships were deleted. Products, media, descriptions, prices, stock, eBay, Allegro, and Ovoko are not touched.'];
+        $logs = [];
+        $logStage = function (string $stage, array $context = []) use ($started, &$logs): void {
+            $entry = [
+                'stage' => $stage,
+                'duration' => round(microtime(true) - $started, 3),
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true),
+            ] + $context;
+            $logs[] = $entry;
+            $this->log('dry_run_delete_all_product_categories_' . $stage, $entry);
+        };
+        $runCount = function (string $key, string $sql) use ($wpdb, &$counts, $logStage): int {
+            $value = (int) $wpdb->get_var($sql);
+            $counts[$key] = $value;
+            $logStage('each_count_query_done', ['count_key' => $key, 'value' => $value]);
+            return $value;
+        };
+
+        $logStage('action_start', ['ultra_light' => $ultraLight]);
+
+        try {
+            $totalCategories = $runCount(
+                'total_product_categories',
+                $wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->term_taxonomy} WHERE taxonomy = %s", 'product_cat')
+            );
+            $runCount(
+                'product_category_relationships',
+                $wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy = %s", 'product_cat')
+            );
+            $runCount(
+                'affected_products',
+                $wpdb->prepare("SELECT COUNT(DISTINCT tr.object_id) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy = %s", 'product_cat')
+            );
+            $categoriesWithProducts = $runCount(
+                'categories_with_products',
+                $wpdb->prepare("SELECT COUNT(DISTINCT tr.term_taxonomy_id) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy = %s", 'product_cat')
+            );
+            $counts['empty_categories'] = max(0, $totalCategories - $categoriesWithProducts);
+            $logStage('each_count_query_done', ['count_key' => 'empty_categories', 'value' => $counts['empty_categories'], 'calculated_from' => ['total_product_categories', 'categories_with_products']]);
+            $totalPublishedPrivateProducts = $runCount(
+                'total_published_private_products',
+                $wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = %s AND post_status IN ('publish','private')", 'product')
+            );
+            $ovokoMetaKeys = $this->ovoko_product_id_meta_keys();
+            $metaPlaceholders = implode(',', array_fill(0, count($ovokoMetaKeys), '%s'));
+            $productsWithOvoko = $runCount(
+                'products_with_ovoko_id',
+                $wpdb->prepare(
+                    "SELECT COUNT(DISTINCT pm.post_id) FROM {$wpdb->postmeta} pm INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id WHERE p.post_type = %s AND p.post_status IN ('publish','private') AND pm.meta_key IN ({$metaPlaceholders}) AND pm.meta_value IS NOT NULL AND pm.meta_value <> ''",
+                    array_merge(['product'], $ovokoMetaKeys)
+                )
+            );
+            $counts['products_missing_ovoko_id'] = max(0, $totalPublishedPrivateProducts - $productsWithOvoko);
+            $logStage('each_count_query_done', ['count_key' => 'products_missing_ovoko_id', 'value' => $counts['products_missing_ovoko_id'], 'calculated_from' => ['total_published_private_products', 'products_with_ovoko_id']]);
+
+            $categoryRows = (array) $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT t.term_id, t.name, t.slug, tt.term_taxonomy_id, tt.parent, tt.count FROM {$wpdb->terms} t INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id WHERE tt.taxonomy = %s ORDER BY t.term_id ASC LIMIT 20",
+                    'product_cat'
+                ),
+                ARRAY_A
+            );
+            foreach ($categoryRows as $row) {
+                $termId = (int) ($row['term_id'] ?? 0);
+                $samples['categories'][] = [
+                    'term_id' => $termId,
+                    'term_taxonomy_id' => (int) ($row['term_taxonomy_id'] ?? 0),
+                    'name' => (string) ($row['name'] ?? ''),
+                    'slug' => (string) ($row['slug'] ?? ''),
+                    'parent' => (int) ($row['parent'] ?? 0),
+                    'count' => (int) ($row['count'] ?? 0),
+                    'path' => $termId > 0 ? $this->get_product_cat_path($termId) : '',
+                ];
+            }
+            $logStage('sample_query_done', ['sample_key' => 'categories', 'rows' => count($samples['categories']), 'limit' => 20]);
+
+            $productRows = (array) $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT DISTINCT p.ID, p.post_title, p.post_status FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$wpdb->posts} p ON p.ID = tr.object_id WHERE tt.taxonomy = %s AND p.post_type = %s ORDER BY p.ID ASC LIMIT 20",
+                    'product_cat',
+                    'product'
+                ),
+                ARRAY_A
+            );
+            foreach ($productRows as $row) {
+                $samples['affected_products'][] = [
+                    'product_id' => (int) ($row['ID'] ?? 0),
+                    'post_title' => (string) ($row['post_title'] ?? ''),
+                    'post_status' => (string) ($row['post_status'] ?? ''),
+                ];
+            }
+            $logStage('sample_query_done', ['sample_key' => 'affected_products', 'rows' => count($samples['affected_products']), 'limit' => 20]);
+
+            $duration = round(microtime(true) - $started, 3);
+            $logStage('action_end', ['duration' => $duration]);
+
+            return [
+                'ok' => true,
+                'action_name' => 'Ultra-light dry-run delete all Woo product categories',
+                'dry_run' => true,
+                'ultra_light' => $ultraLight,
+                'sample_limit' => 20,
+                'total_product_categories' => $counts['total_product_categories'],
+                'categories_with_products' => $counts['categories_with_products'],
+                'empty_categories' => $counts['empty_categories'],
+                'product_category_relationships' => $counts['product_category_relationships'],
+                'affected_products' => $counts['affected_products'],
+                'total_published_private_products' => $counts['total_published_private_products'],
+                'products_with_ovoko_id' => $counts['products_with_ovoko_id'],
+                'products_missing_ovoko_id' => $counts['products_missing_ovoko_id'],
+                'samples' => $samples,
+                'warnings' => $warnings,
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true),
+                'memory_usage_mb' => round(memory_get_usage(true) / 1048576, 2),
+                'peak_memory_mb' => round(memory_get_peak_usage(true) / 1048576, 2),
+                'duration' => $duration,
+                'logs' => $logs,
+            ];
+        } catch (\Throwable $e) {
+            $warnings[] = 'Dry-run delete failed before all checks completed. Partial counts are shown; no products or categories were changed.';
+            $duration = round(microtime(true) - $started, 3);
+            $logStage('action_end', ['duration' => $duration, 'error' => $e->getMessage()]);
+
+            return [
+                'ok' => false,
+                'action_name' => 'Ultra-light dry-run delete all Woo product categories',
+                'dry_run' => true,
+                'ultra_light' => $ultraLight,
+                'partial' => true,
+                'sample_limit' => 20,
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'counts' => $counts,
+                'samples' => $samples,
+                'warnings' => $warnings,
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true),
+                'memory_usage_mb' => round(memory_get_usage(true) / 1048576, 2),
+                'peak_memory_mb' => round(memory_get_peak_usage(true) / 1048576, 2),
+                'duration' => $duration,
+                'logs' => $logs,
+            ] + $counts;
+        }
     }
 
     public function delete_all_product_categories(string $confirmation): array
@@ -3006,6 +3135,16 @@ class OvokoIntegrationService
         if ($ovokoId === '') { $ovokoId = trim((string) get_post_meta($productId, 'ovoko_id', true)); }
         if ($ovokoId === '') { $ovokoId = trim((string) get_post_meta($productId, '_ovoko_id', true)); }
         return $ovokoId;
+    }
+
+    private function ovoko_product_id_meta_keys(): array
+    {
+        return array_values(array_unique(array_merge(self::PART_ID_META_KEYS, [
+            '_ovoko_id',
+            'ovoko_id',
+            '_ovoko_part_id',
+            'ovoko_part_id',
+        ])));
     }
 
     private function count_products_with_ovoko_id(bool $with): int

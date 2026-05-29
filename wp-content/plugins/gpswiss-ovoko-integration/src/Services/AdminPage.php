@@ -437,7 +437,23 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_dry_run_delete_all_product_categories');
-        $result = $this->service->dry_run_delete_all_product_categories();
+        try {
+            $ultraLight = !isset($_POST['ultra_light_dry_run']) || (string) wp_unslash($_POST['ultra_light_dry_run']) === '1';
+            $result = $this->service->dry_run_delete_all_product_categories($ultraLight);
+        } catch (\Throwable $e) {
+            $result = [
+                'ok' => false,
+                'action_name' => 'Ultra-light dry-run delete all Woo product categories',
+                'dry_run' => true,
+                'partial' => true,
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'warnings' => ['Dry-run delete failed before all checks completed. No products or categories were changed.'],
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true),
+                'duration' => 0,
+            ];
+        }
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 180);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;

@@ -388,10 +388,12 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <label>Max rows <input type="number" name="max_rows" value="0" min="0" style="width:90px;" /></label>
                 <?php submit_button('Export current product category assignments CSV', 'secondary', 'submit', false); ?>
             </form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                 <?php wp_nonce_field('gpswiss_ovoko_dry_run_delete_all_product_categories'); ?>
                 <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_delete_all_product_categories" />
-                <?php submit_button('Dry-run delete all Woo product categories', 'secondary', 'submit', false); ?>
+                <input type="hidden" name="ultra_light_dry_run" value="1" />
+                <span class="description">Ultra-light dry-run: counters only + samples limited to 20.</span>
+                <?php submit_button('Ultra-light dry-run delete all Woo product categories', 'secondary', 'submit', false); ?>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_post_rebuild_category_audit'); ?>
