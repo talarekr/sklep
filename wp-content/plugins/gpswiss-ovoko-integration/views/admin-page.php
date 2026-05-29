@@ -380,9 +380,12 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <p><strong>Scope:</strong> only WooCommerce <code>product_cat</code> terms and product category assignments. Products, images, descriptions, prices, stock, eBay, Allegro, and Ovoko data are not changed by dry-runs.</p>
         <p><strong>New rebuild mode:</strong> uses fresh Ovoko part data by <code>ovoko_id/_ovoko_part_id</code> and full category path resolved from <code>/get/categories/tree</code>. It does not use the old CSV mapping, does not add the old “Motoryzacja” root, does not shorten paths, does not append old categories, and does not keep previous assignments.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                 <?php wp_nonce_field('gpswiss_ovoko_export_product_category_assignments'); ?>
                 <input type="hidden" name="action" value="gpswiss_ovoko_export_product_category_assignments" />
+                <label>Batch size <input type="number" name="batch_size" value="100" min="1" max="200" style="width:80px;" /></label>
+                <label>After product ID <input type="number" name="after_product_id" value="0" min="0" style="width:110px;" /></label>
+                <label>Max rows <input type="number" name="max_rows" value="0" min="0" style="width:90px;" /></label>
                 <?php submit_button('Export current product category assignments CSV', 'secondary', 'submit', false); ?>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
