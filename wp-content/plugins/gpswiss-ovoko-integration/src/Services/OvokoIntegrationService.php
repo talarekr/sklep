@@ -2168,6 +2168,12 @@ class OvokoIntegrationService
         return $client->probe_ovoko_dictionary_value($dictionaryType, $id);
     }
 
+    public function probe_ovoko_car_brands_models_raw(): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        return $client->probe_ovoko_car_brands_models_raw();
+    }
+
     public function probe_rrr_vehicle_endpoints(int $carId = 458): array
     {
         $client = new RrrApiClient($this->get_settings());
