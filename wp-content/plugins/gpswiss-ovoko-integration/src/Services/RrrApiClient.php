@@ -1706,6 +1706,87 @@ class RrrApiClient
     }
 
 
+
+    public function change_part_status(string $partId, string|int $status): array
+    {
+        $partId = trim((string) $partId);
+        $status = trim((string) $status);
+        $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? 'https://api.rrr.lt'));
+        $endpointPath = '/crm/changePartStatus';
+
+        if ($baseUrl === '') {
+            return ['ok' => false, 'http_status' => null, 'status_code' => '', 'message' => 'Missing RRR base URL', 'endpoint_path' => $endpointPath];
+        }
+
+        if ($partId === '' || !preg_match('/^\d+$/', $partId)) {
+            return ['ok' => false, 'http_status' => null, 'status_code' => '', 'message' => 'Invalid part_id', 'endpoint_path' => $endpointPath];
+        }
+
+        if (!in_array($status, ['0', '1', '2', '3', '4'], true)) {
+            return ['ok' => false, 'http_status' => null, 'status_code' => '', 'message' => 'Invalid status. Allowed values: 0, 1, 2, 3, 4.', 'endpoint_path' => $endpointPath];
+        }
+
+        $endpoint = $baseUrl . $endpointPath;
+        $requestParams = [
+            'part_id' => $partId,
+            'status' => $status,
+        ] + $this->get_auth_form_fields();
+
+        $sentFields = [
+            'username' => '[redacted]',
+            'password' => '[redacted]',
+            'user_token' => '[redacted]',
+            'part_id' => $partId,
+            'status' => $status,
+        ];
+
+        $response = wp_remote_post($endpoint, [
+            'timeout' => 20,
+            'body' => $requestParams,
+            'headers' => [
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
+        ]);
+
+        if (is_wp_error($response)) {
+            return [
+                'ok' => false,
+                'endpoint' => $endpoint,
+                'endpoint_path' => $endpointPath,
+                'method' => 'POST',
+                'content_type' => 'application/x-www-form-urlencoded',
+                'http_status' => null,
+                'raw_response_body' => '',
+                'parsed_json' => null,
+                'status_code' => '',
+                'message' => 'RRR request failed: ' . $response->get_error_code() . ' ' . $response->get_error_message(),
+                'sent_fields' => $sentFields,
+            ];
+        }
+
+        $httpStatus = (int) wp_remote_retrieve_response_code($response);
+        $rawBody = (string) wp_remote_retrieve_body($response);
+        $parsed = json_decode($rawBody, true);
+        $jsonStatus = is_array($parsed) ? sanitize_text_field((string) ($parsed['status_code'] ?? '')) : '';
+        $apiMessage = is_array($parsed)
+            ? sanitize_text_field((string) ($parsed['message'] ?? $parsed['msg'] ?? $parsed['error'] ?? ''))
+            : 'Non-JSON response';
+
+        return [
+            'ok' => $httpStatus === 200 && $jsonStatus === 'R200',
+            'endpoint' => $endpoint,
+            'endpoint_path' => $endpointPath,
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'http_status' => $httpStatus,
+            'raw_response_body' => $rawBody,
+            'parsed_json' => is_array($parsed) ? $parsed : null,
+            'status_code' => $jsonStatus,
+            'message' => $apiMessage,
+            'sent_fields' => $sentFields,
+        ];
+    }
+
     public function update_part_internal_notes_only(string $partId, string $internalNotes): array
     {
         $partId = trim($partId);

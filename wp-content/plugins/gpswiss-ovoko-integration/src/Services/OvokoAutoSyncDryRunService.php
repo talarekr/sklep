@@ -208,10 +208,10 @@ class OvokoAutoSyncDryRunService
             'mode' => 'dry_run_no_ovoko_write_no_woo_write',
             'order_id' => $orderId,
             'order_status' => '',
-            'endpoint_confirmed' => false,
-            'proposed_endpoint' => (string) ($endpointAnalysis['confirmed_endpoint'] ?? ''),
+            'endpoint_confirmed' => true,
+            'proposed_endpoint' => (string) ($endpointAnalysis['confirmed_endpoint'] ?? '/crm/changePartStatus'),
             'proposed_method' => (string) ($endpointAnalysis['method'] ?? ''),
-            'recommended_endpoint_policy' => 'Do not send Woo sales to Ovoko until Ovoko/RRR confirms a sale/reserve/status/stock contract for this account. Current client support is read-only plus limited /crm/updatePart probes for non-sale fields only.',
+            'recommended_endpoint_policy' => 'Use only the confirmed dedicated endpoint POST /crm/changePartStatus with status=2 for Woo sale sync. Dry-run remains read-only; automatic live workers and checkout hooks remain disabled.',
             'candidate_endpoints_to_confirm_with_ovoko' => array_keys((array) ($endpointAnalysis['endpoint_candidates'] ?? [])),
             'endpoint_contract_analysis' => $endpointAnalysis,
             'idempotency_meta_keys' => $this->sale_sync_meta_keys(),
@@ -223,6 +223,8 @@ class OvokoAutoSyncDryRunService
             'errors' => [],
             'status_panel' => $status,
             'live_write_enabled' => false,
+            'manual_single_order_live_probe_enabled' => true,
+            'automatic_live_worker_enabled' => false,
             'no_ovoko_write' => true,
             'no_woo_write' => true,
             'checked_at' => gmdate('c'),
@@ -265,16 +267,9 @@ class OvokoAutoSyncDryRunService
             }
 
             $proposedPayload = [
-                'username' => '[redacted]',
-                'password' => '[redacted]',
-                'user_token' => '[redacted]',
                 'part_id' => $ovokoId,
-                'order_id' => $orderId,
-                'order_item_id' => (int) $itemId,
-                'quantity' => $qty,
-                'request_id' => $requestId,
-                'sale_price' => method_exists($item, 'get_total') ? (string) $item->get_total() : '',
-                'buyer_order_reference' => method_exists($order, 'get_order_number') ? (string) $order->get_order_number() : (string) $orderId,
+                'status' => 2,
+                'request_id' => $requestId . ' (local only; not sent to Ovoko)',
             ];
 
             $row = [
@@ -294,7 +289,7 @@ class OvokoAutoSyncDryRunService
                 'already_synced' => $alreadySynced,
                 'would_enqueue' => $ovokoId !== '' && !$alreadySynced,
                 'would_send' => false,
-                'skip_live_send_reason' => $alreadySynced ? 'order_item_already_successfully_synced' : 'live_write_disabled_pending_confirmed_ovoko_endpoint',
+                'skip_live_send_reason' => $alreadySynced ? 'order_item_already_successfully_synced' : 'dry_run_only_automatic_live_worker_disabled_use_manual_single_order_probe',
                 'proposed_endpoint' => (string) ($endpointAnalysis['confirmed_endpoint'] ?? ''),
                 'proposed_method' => (string) ($endpointAnalysis['method'] ?? ''),
                 'proposed_payload' => $proposedPayload,
@@ -934,98 +929,63 @@ class OvokoAutoSyncDryRunService
     private function sale_stock_endpoint_analysis(): array
     {
         return [
-            'mode' => 'read_only_no_write_documentation_and_client_contract_analysis',
+            'mode' => 'confirmed_change_part_status_endpoint_but_automatic_worker_disabled',
             'endpoint_candidates' => [
-                '/v2/update/part' => [
-                    'exists_in_current_client' => false,
-                    'confirmed_in_docs_for_this_account' => false,
-                    'payload_confirmed' => false,
-                    'safe_to_use' => false,
-                    'evidence' => 'No implementation or confirmed Ovoko/RRR contract found in this codebase.',
-                ],
-                '/v2/parts/{id}/status' => [
-                    'exists_in_current_client' => false,
-                    'confirmed_in_docs_for_this_account' => false,
-                    'payload_confirmed' => false,
-                    'safe_to_use' => false,
-                    'evidence' => 'No implementation or confirmed Ovoko/RRR contract found in this codebase.',
+                '/crm/changePartStatus' => [
+                    'exists_in_current_client' => true,
+                    'confirmed_in_docs_for_this_account' => true,
+                    'payload_confirmed' => true,
+                    'safe_to_use_for_manual_single_order_probe' => true,
+                    'safe_to_use_for_automatic_worker' => false,
+                    'evidence' => 'Official Ovoko/RRR OpenAPI confirmation: POST form-urlencoded auth + part_id + status. Success requires HTTP 200 and JSON status_code=R200.',
                 ],
                 '/crm/updatePart' => [
                     'exists_in_current_client' => true,
-                    'confirmed_in_docs_for_this_account' => false,
+                    'confirmed_in_docs_for_this_account' => true,
                     'payload_confirmed_for_sale_stock_status' => false,
                     'safe_to_use_for_sale_stock_status' => false,
                     'implemented_payloads' => [
                         'part_id + internal_notes',
                         'part_id + place',
                     ],
-                    'evidence' => 'RrrApiClient contains live probes for internal_notes/place only; those probes do not prove that omitted fields are preserved for status/stock/sale updates.',
-                ],
-                '/crm/create/order' => [
-                    'exists_in_current_client' => false,
-                    'confirmed_in_docs_for_this_account' => false,
-                    'payload_confirmed' => false,
-                    'safe_to_use' => false,
-                ],
-                '/crm/sellPart' => [
-                    'exists_in_current_client' => false,
-                    'confirmed_in_docs_for_this_account' => false,
-                    'payload_confirmed' => false,
-                    'safe_to_use' => false,
-                ],
-                '/crm/reservePart' => [
-                    'exists_in_current_client' => false,
-                    'confirmed_in_docs_for_this_account' => false,
-                    'payload_confirmed' => false,
-                    'safe_to_use' => false,
+                    'evidence' => 'Not used for Woo sale sync start because /crm/changePartStatus is dedicated to status-only changes.',
                 ],
             ],
-            'confirmed_endpoint' => '',
-            'method' => '',
+            'confirmed_endpoint' => '/crm/changePartStatus',
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
             'required_fields' => [
                 'auth' => ['username', 'password', 'user_token'],
-                'part_identifier' => 'not_confirmed: likely part_id/ovoko_id, but Ovoko/RRR must confirm for outbound sale sync',
-            ],
-            'optional_fields' => [
-                'order_id' => 'not_confirmed',
-                'order_item_id' => 'local idempotency only until remote contract exists',
-                'sale_price' => 'not_confirmed',
-                'buyer_order_reference' => 'not_confirmed',
-                'quantity' => 'not_confirmed',
-                'idempotency/request_id' => 'not_confirmed by Ovoko; used locally only',
+                'part_identifier' => 'part_id',
+                'status' => '2 for Sold out / Sprzedano',
             ],
             'supported_status_values' => [
-                'sold' => false,
-                'reserved' => false,
-                'unavailable' => false,
-                'stock_0' => false,
-                'quantity_decrement' => false,
-                'order_creation' => false,
-                'undo_cancel_refund_restore' => false,
+                '0' => 'In stock / Na stanie',
+                '1' => 'Reserved / Zarezerwowano',
+                '2' => 'Sold out / Sprzedano',
+                '3' => 'Returned / Zwrot',
+                '4' => 'Written off / Wycofany',
             ],
-            'can_mark_sold' => false,
-            'can_reserve' => false,
+            'can_mark_sold' => true,
+            'can_reserve' => true,
             'can_set_stock_zero' => false,
             'can_decrement_quantity' => false,
             'can_restore_on_cancel' => false,
-            'risk_level' => 'high_until_ovoko_rrr_confirms_endpoint_and_payload',
+            'risk_level' => 'low_for_manual_single_order_probe_with_confirmation_high_for_automation_until_probe_success',
             'docs_evidence' => [
-                'public_rrr_docs_probe' => 'Attempted public discovery for api.rrr.lt docs/swagger/openapi endpoints from this environment returned 403 via proxy, so no public OpenAPI contract was confirmed.',
-                'repo_rrr_auth_note' => 'RRR_API_AUTH_TEST.md confirms read-only POST https://api.rrr.lt/v2/get/parts?limit=1&page=1 with username/password/user_token, not sale/stock writes.',
-                'repo_readme_supply_connector_note' => 'Plugin README says public Supply Connector surface is integration/webhook oriented and undocumented product endpoints must not be assumed.',
-                'client_code_evidence' => 'RrrApiClient has preview/read endpoints and update_part_internal_notes_only()/test_update_part_place_once(); no sell/reserve/status/stock decrement client exists.',
+                'official_rrr_openapi_confirmation' => 'POST /crm/changePartStatus, form-urlencoded, required username/password/user_token/part_id/status, success HTTP 200 + JSON status_code=R200.',
+                'status_endpoint_decision' => 'Use status=2 for Woo sale. Do not use /crm/updatePart for initial sale sync.',
             ],
             'current_client_support' => [
                 'read_parts' => ['/v2/get/parts?limit={limit}&page={page}', '/v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD', '/crm/export/part', '/get/part/{part_id}'],
                 'write_probes' => ['/crm/updatePart internal_notes only', '/crm/updatePart place only'],
-                'sale_stock_write' => false,
-                'reservation_write' => false,
-                'order_write' => false,
+                'sale_status_write' => '/crm/changePartStatus status=2',
+                'automatic_worker' => false,
+                'checkout_hook_live' => false,
             ],
             'crm_update_part_assessment' => [
                 'can_be_safely_used_for_status_stock_sale' => false,
-                'reason' => 'Only place/internal_notes writes are implemented/probed. Sending guessed status=sold, reserved, stock=0, quantity=0, or sale fields could overwrite unknown fields or be ignored; not safe without official account-specific confirmation.',
-                'minimum_confirmation_needed' => ['endpoint path', 'HTTP method', 'content type', 'required auth fields', 'part identifier field', 'status/stock/sale field names', 'allowed values', 'idempotency behavior', 'cancel/refund restore flow'],
+                'reason' => '/crm/changePartStatus is the dedicated and safer endpoint for changing status only. /crm/updatePart sale fields stay out of scope for this first step.',
             ],
             'idempotency' => [
                 'remote_idempotency_key_confirmed' => false,
@@ -1033,10 +993,173 @@ class OvokoAutoSyncDryRunService
                 'meta_keys' => $this->sale_sync_meta_keys(),
             ],
             'trigger_design' => $this->sale_queue_design(),
+            'cancel_refund_design' => 'Status 0 (In stock) and 3 (Returned) exist, but no automatic restore/return action is implemented until a business decision is made.',
+            'manual_single_order_live_probe_enabled' => true,
             'live_write_enabled' => false,
-            'no_ovoko_write' => true,
+            'automatic_live_worker_enabled' => false,
             'no_woo_write' => true,
-            'decision' => 'Woo → Ovoko sale/stock sync remains disabled. Only analysis and dry-run are allowed until Ovoko/RRR confirms the endpoint and payload.',
+            'decision' => 'Dry-run and admin-only single-order live probe are available. No automatic Woo → Ovoko worker, cron, or checkout hook is enabled yet.',
+        ];
+    }
+
+    public function single_order_live_probe_mark_sold(int $orderId, string $confirmation): array
+    {
+        $confirmation = trim($confirmation);
+        $client = new RrrApiClient($this->integrationService->get_settings());
+        $result = [
+            'ok' => false,
+            'action_name' => 'Single-order live probe: mark Ovoko part sold from Woo order',
+            'mode' => 'admin_manual_single_order_live_probe',
+            'order_id' => $orderId,
+            'required_confirmation' => 'MARK OVOKO PART SOLD',
+            'confirmed_endpoint' => '/crm/changePartStatus',
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'sent_status' => 2,
+            'no_woo_product_stock_change' => true,
+            'automatic_worker_enabled' => false,
+            'checkout_hook_live_enabled' => false,
+            'warnings' => [],
+            'errors' => [],
+            'item' => null,
+            'before_part' => null,
+            'api_response' => null,
+            'after_part' => null,
+            'checked_at' => gmdate('c'),
+        ];
+
+        if ($orderId <= 0) {
+            $result['errors'][] = 'missing_order_id';
+            return $result;
+        }
+
+        if ($confirmation !== 'MARK OVOKO PART SOLD') {
+            $result['errors'][] = 'confirmation_phrase_mismatch';
+            return $result;
+        }
+
+        if (!function_exists('wc_get_order')) {
+            $result['errors'][] = 'woocommerce_unavailable';
+            return $result;
+        }
+
+        $order = wc_get_order($orderId);
+        if (!$order) {
+            $result['errors'][] = 'order_not_found';
+            return $result;
+        }
+
+        $items = $order->get_items();
+        if (count($items) !== 1) {
+            $result['errors'][] = 'single_order_item_required';
+            $result['item_count'] = count($items);
+            return $result;
+        }
+
+        $itemId = (int) array_key_first($items);
+        $item = $items[$itemId];
+        $product = method_exists($item, 'get_product') ? $item->get_product() : null;
+        $productId = $product ? (int) $product->get_id() : (method_exists($item, 'get_product_id') ? (int) $item->get_product_id() : 0);
+        $parentProductId = $product && method_exists($product, 'get_parent_id') ? (int) $product->get_parent_id() : 0;
+        $ovokoId = $productId > 0 ? $this->get_first_product_meta($productId, ['_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id', 'external_part_id']) : '';
+        if ($ovokoId === '' && $parentProductId > 0) {
+            $ovokoId = $this->get_first_product_meta($parentProductId, ['_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id', 'external_part_id']);
+        }
+
+        $syncMeta = $this->get_order_item_sale_sync_meta($itemId);
+        $requestId = (string) ($syncMeta['ovoko_sale_sync_request_id'] ?? '');
+        if ($requestId === '') {
+            $requestId = 'woo-' . $orderId . '-item-' . $itemId . '-part-' . ($ovokoId !== '' ? $ovokoId : 'missing');
+        }
+
+        $result['item'] = [
+            'order_item_id' => $itemId,
+            'order_id' => $orderId,
+            'product_id' => $productId,
+            'parent_product_id' => $parentProductId,
+            'sku' => $product ? (string) $product->get_sku() : '',
+            'name' => method_exists($item, 'get_name') ? (string) $item->get_name() : '',
+            'quantity' => method_exists($item, 'get_quantity') ? (int) $item->get_quantity() : null,
+            'ovoko_id' => $ovokoId,
+            'part_id' => $ovokoId,
+            'request_id' => $requestId,
+            'sync_meta_before' => $syncMeta,
+        ];
+
+        if ((string) ($syncMeta['ovoko_sale_sync_status'] ?? '') === 'success') {
+            $result['ok'] = true;
+            $result['skipped'] = true;
+            $result['warnings'][] = 'already_successfully_synced_no_second_send';
+            return $result;
+        }
+
+        if ($productId <= 0 || $ovokoId === '' || !preg_match('/^\d+$/', $ovokoId)) {
+            $result['errors'][] = $productId <= 0 ? 'missing_product_id' : 'missing_or_invalid_ovoko_part_id_product_meta';
+            return $result;
+        }
+
+        $beforeFetch = $client->preview_fetch_single_part((int) $ovokoId);
+        $result['before_part'] = $this->summarize_ovoko_part_fetch($client, $beforeFetch);
+
+        $attemptedAt = gmdate('c');
+        $apiResponse = $client->change_part_status($ovokoId, 2);
+        $result['api_response'] = $apiResponse;
+
+        $afterFetch = !empty($apiResponse['ok']) ? $client->preview_fetch_single_part((int) $ovokoId) : ['ok' => false, 'message' => 'Skipped read-after because changePartStatus did not succeed.'];
+        $result['after_part'] = $this->summarize_ovoko_part_fetch($client, $afterFetch);
+        $afterStatus = (string) ($result['after_part']['status'] ?? '');
+        $success = !empty($apiResponse['ok']) && $afterStatus === '2';
+        $error = '';
+
+        if (empty($apiResponse['ok'])) {
+            $error = (string) ($apiResponse['message'] ?? 'changePartStatus failed');
+        } elseif ($afterStatus !== '2') {
+            $error = 'read_after_status_mismatch_expected_2_got_' . ($afterStatus !== '' ? $afterStatus : 'missing');
+        }
+
+        if (function_exists('wc_update_order_item_meta')) {
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_status', $success ? 'success' : 'failed');
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_attempted_at', $attemptedAt);
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_success_at', $success ? gmdate('c') : '');
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_error', $error);
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_request_id', $requestId);
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_part_id', $ovokoId);
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_order_id', (string) $orderId);
+        } else {
+            $result['warnings'][] = 'wc_update_order_item_meta_unavailable_meta_not_written';
+        }
+
+        $result['ok'] = $success;
+        $result['meta_written'] = function_exists('wc_update_order_item_meta');
+        $result['sync_meta_after'] = $this->get_order_item_sale_sync_meta($itemId);
+        if (!$success && $error !== '') {
+            $result['errors'][] = $error;
+        }
+
+        return $result;
+    }
+
+    private function summarize_ovoko_part_fetch(RrrApiClient $client, array $fetch): array
+    {
+        $payload = is_array($fetch['payload'] ?? null) ? (array) $fetch['payload'] : [];
+        $record = $payload !== [] ? $client->extract_single_part_record($payload) : [];
+        if ($record === [] && is_array($fetch['raw_records'][0] ?? null)) {
+            $record = (array) $fetch['raw_records'][0];
+        }
+        if ($record === [] && is_array($fetch['first_record'] ?? null)) {
+            $record = (array) $fetch['first_record'];
+        }
+
+        return [
+            'ok' => !empty($fetch['ok']) || !empty($fetch['success']),
+            'http_code' => $fetch['http_code'] ?? null,
+            'status_code' => (string) ($fetch['status_code'] ?? ''),
+            'message' => (string) ($fetch['msg'] ?? $fetch['message'] ?? ''),
+            'part_id' => sanitize_text_field((string) ($record['id'] ?? $record['part_id'] ?? '')),
+            'status' => sanitize_text_field((string) ($record['status'] ?? '')),
+            'updated_at' => sanitize_text_field((string) ($record['updated_at'] ?? '')),
+            'name' => sanitize_text_field((string) ($record['name'] ?? '')),
+            'record_found' => $record !== [],
         ];
     }
 
