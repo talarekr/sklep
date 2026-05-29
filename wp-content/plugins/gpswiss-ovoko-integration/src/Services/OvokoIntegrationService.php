@@ -2992,6 +2992,9 @@ class OvokoIntegrationService
             'missing_ovoko_id_total' => 0,
             'missing_category_id_total' => 0,
             'missing_category_path_total' => 0,
+            'skipped_missing_ovoko_id_total' => 0,
+            'skipped_missing_category_id_total' => 0,
+            'skipped_missing_category_path_total' => 0,
             'api_errors_total' => 0,
             'categories_created_total' => 0,
             'categories_existing_total' => 0,
@@ -3122,7 +3125,7 @@ class OvokoIntegrationService
             $status['current_after_product_id'] = (int) ($batch['next_after_product_id'] ?? $status['current_after_product_id']);
             $status['next_after_product_id'] = (int) ($batch['next_after_product_id'] ?? $status['next_after_product_id']);
             $status['last_safe_next_after_product_id'] = max((int) ($status['last_safe_next_after_product_id'] ?? 0), (int) ($batch['last_safe_next_after_product_id'] ?? 0));
-            foreach (['processed','fixed','skipped','errors','missing_ovoko_id','missing_category_id','missing_category_path','api_errors','categories_created','categories_existing','category_assignments_changed'] as $key) {
+            foreach (['processed','fixed','skipped','errors','missing_ovoko_id','missing_category_id','missing_category_path','skipped_missing_ovoko_id','skipped_missing_category_id','skipped_missing_category_path','api_errors','categories_created','categories_existing','category_assignments_changed'] as $key) {
                 $target = $key . '_total';
                 $status[$target] = (int) ($status[$target] ?? 0) + (int) ($counts[$key] ?? $batch[$key] ?? 0);
             }
@@ -3174,7 +3177,7 @@ class OvokoIntegrationService
 
         $ids = $productId > 0 ? [$productId] : $this->get_product_ids_after($afterProductId, $batchSize);
         $categorySnapshot = $this->load_ovoko_category_tree_snapshot_for_batch();
-        $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0,'category_assignments_changed'=>0];
+        $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'skipped_missing_ovoko_id'=>0,'skipped_missing_category_id'=>0,'skipped_missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0,'category_assignments_changed'=>0];
         $legacyCounts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0,'category_assignments_changed'=>0];
         $results = [];
         $lastSafe = $afterProductId;
@@ -3187,20 +3190,41 @@ class OvokoIntegrationService
             $single['would_assign_terms'] = (array) ($single['planned_category_hierarchy'] ?? []);
             $single['would_set_primary_category'] = (string) ($single['planned_final_category']['name'] ?? '') !== '' ? ($single['planned_final_category'] ?? null) : null;
             $single['expected_ovoko_category_path'] = (string) ($single['resolved_full_ovoko_category_path'] ?? $single['ovoko_category_title_path'] ?? '');
-            $results[] = $this->summarize_category_rebuild_product_result($single);
-            if (empty($single['ok']) || !empty($single['error'])) { $counts['errors']++; }
-            if (($single['reason'] ?? '') === 'missing_ovoko_id') { $counts['missing_ovoko_id']++; }
-            if (trim((string) ($single['category_id'] ?? '')) === '' && ($single['reason'] ?? '') !== 'missing_ovoko_id') { $counts['missing_category_id']++; }
-            if (trim((string) ($single['expected_ovoko_category_path'] ?? '')) === '') { $counts['missing_category_path']++; }
-            if (in_array(($single['reason'] ?? ''), ['ovoko_fetch_failed','rrr_api_client_not_initialized'], true)) { $counts['api_errors']++; }
+            $reason = (string) ($single['reason'] ?? '');
+            $warnings = array_values(array_unique(array_map('strval', (array) ($single['warnings'] ?? []))));
+            if ($reason === 'missing_ovoko_id') {
+                $single['ok'] = true;
+                $single['skipped'] = true;
+                $single['errors'] = [];
+                $single['error'] = '';
+                $warnings[] = 'missing_ovoko_id';
+                $counts['missing_ovoko_id']++;
+                $counts['skipped_missing_ovoko_id']++;
+            } elseif (trim((string) ($single['ovoko_id'] ?? '')) !== '') {
+                if (trim((string) ($single['category_id'] ?? '')) === '') {
+                    $warnings[] = 'missing_category_id';
+                    $counts['missing_category_id']++;
+                    $counts['skipped_missing_category_id']++;
+                }
+                if (trim((string) ($single['expected_ovoko_category_path'] ?? '')) === '') {
+                    $warnings[] = 'missing_category_path';
+                    $counts['missing_category_path']++;
+                    $counts['skipped_missing_category_path']++;
+                }
+            }
+            $single['warnings'] = array_values(array_unique($warnings));
+            $isRealError = $this->is_category_rebuild_real_product_error($single);
+            if ($isRealError) { $counts['errors']++; }
+            if (in_array($reason, ['ovoko_fetch_failed','rrr_api_client_not_initialized'], true)) { $counts['api_errors']++; }
             if (!empty($single['category_assignment_changed'])) { $counts['category_assignments_changed']++; }
-            if (!empty($single['category_update_verified']) || ($dryRun && empty($single['reason']))) { $counts['fixed']++; } else { $counts['skipped']++; }
+            if (!empty($single['category_update_verified']) || ($dryRun && empty($reason))) { $counts['fixed']++; } else { $counts['skipped']++; }
+            $results[] = $this->summarize_category_rebuild_product_result($single);
             $lastSafe = max($lastSafe, (int) $pid);
             if (!$dryRun && !empty($single['category_update_verified']) && (int) ($single['assigned_term_ids_after'][0] ?? 0) > 0) {
                 $deepest = (int) end($single['assigned_term_ids_after']);
                 $this->set_primary_product_category($pid, $deepest);
             }
-            if (!$dryRun && !empty($options['stop_on_error']) && empty($single['ok'])) { break; }
+            if (!$dryRun && !empty($options['stop_on_error']) && $isRealError) { break; }
         }
         $counts['categories_created'] = (int) $legacyCounts['categories_created'];
         $counts['categories_existing'] = (int) $legacyCounts['categories_existing'];
@@ -3230,6 +3254,9 @@ class OvokoIntegrationService
             'missing_category_id' => $counts['missing_category_id'],
             'missing_category_path' => $counts['missing_category_path'],
             'api_errors' => $counts['api_errors'],
+            'skipped_missing_ovoko_id' => $counts['skipped_missing_ovoko_id'],
+            'skipped_missing_category_id' => $counts['skipped_missing_category_id'],
+            'skipped_missing_category_path' => $counts['skipped_missing_category_path'],
             'duration' => round(microtime(true) - $started, 3),
             'counts' => $counts,
             'legacy_counts' => $legacyCounts,
@@ -3586,7 +3613,19 @@ class OvokoIntegrationService
             'warnings' => (array) ($single['warnings'] ?? []),
             'errors' => (array) ($single['errors'] ?? []),
             'reason' => (string) ($single['reason'] ?? ''),
+            'skipped' => !empty($single['skipped']),
+            'planned_action' => (string) ($single['planned_action'] ?? ''),
+            'category_assignment_attempted' => !empty($single['category_assignment_attempted']),
         ];
+    }
+
+    private function is_category_rebuild_real_product_error(array $single): bool
+    {
+        $reason = (string) ($single['reason'] ?? '');
+        if (in_array($reason, ['missing_ovoko_id','ovoko_category_missing','ovoko_category_tree_resolution_failed'], true)) {
+            return false;
+        }
+        return empty($single['ok']) || !empty($single['error']) || (is_array($single['errors'] ?? null) && (array) $single['errors'] !== []);
     }
 
     private function format_current_product_category_path(array $currentCategories): string
@@ -3613,7 +3652,7 @@ class OvokoIntegrationService
         if(!$product){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'reason'=>'product_not_found'];}
         $ovokoId=trim((string)get_post_meta($productId,'_ovoko_part_id',true));
         if($ovokoId===''){$ovokoId=trim((string)get_post_meta($productId,'ovoko_id',true));}
-        if($ovokoId===''){ $counts['missing_ovoko_id']++; $counts['products_skipped']++; return ['ok'=>false,'product_id'=>$productId,'reason'=>'missing_ovoko_id']; }
+        if($ovokoId===''){ $counts['missing_ovoko_id']++; $counts['products_skipped']++; return ['ok'=>true,'skipped'=>true,'product_id'=>$productId,'ovoko_id'=>'','reason'=>'missing_ovoko_id','planned_action'=>'skip','errors'=>[],'warnings'=>['missing_ovoko_id'],'category_update_verified'=>false,'category_assignment_changed'=>false]; }
         $counts['with_ovoko_id']++;
         $client=$this->build_rrr_api_client();
         if($client===null){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'reason'=>'rrr_api_client_not_initialized'];}
@@ -3725,6 +3764,7 @@ class OvokoIntegrationService
         sort($sortedSetIds);
         $result['category_assignment_changed'] = $currentIds !== $sortedSetIds;
         if (!empty($result['category_assignment_changed'])) { $counts['category_assignments_changed'] = (int) ($counts['category_assignments_changed'] ?? 0) + 1; }
+        $result['category_assignment_attempted']=true;
         $set=wp_set_post_terms($productId,$setIds,'product_cat',false);
         if(is_wp_error($set)){$counts['errors']++;$result['ok']=false;$result['reason']='product_category_assign_failed';$result['error']=$set->get_error_message();return $result;}
         $counts['products_categories_updated']++;
