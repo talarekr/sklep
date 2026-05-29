@@ -754,12 +754,36 @@ No changes to:
   - capacity via `(\d+)\s*cm3|cm³`.
 - Known make dictionary is used for safe split (e.g. Mercedes-Benz, Volkswagen, VW, Audi, BMW, Peugeot, Citroen/Citroën, Renault, Opel, Ford, Toyota, Nissan, Hyundai, Kia, Fiat, Volvo, Skoda/Škoda, Seat).
 
+## Ovoko → Woo dry-run price policy
+
+Existing Woo products:
+- Woo price is never updated from Ovoko.
+- `internal_notes` price is ignored for existing products.
+- Dry-run reports `existing_product_price_untouched`, plus either `existing_product_internal_notes_price_ignored` or `existing_product_internal_notes_missing_ignored`.
+
+New Woo products from Ovoko:
+- Price may come only from Ovoko `internal_notes`; no other Ovoko price field is a fallback.
+- Valid `internal_notes` price reports `new_product_price_from_internal_notes_ok`.
+- Missing price reports `new_product_missing_price_in_internal_notes` and the safer default `new_product_would_create_as_draft_or_skip_due_to_missing_price`.
+- Invalid price reports `new_product_invalid_internal_notes_price` and the safer default `new_product_would_create_as_draft_or_skip_due_to_missing_price`.
+- The safer default is to skip create instead of publishing or creating an incomplete product when `internal_notes` lacks a valid price.
+
+Dashboard totals:
+- `existing_product_price_untouched_total`
+- `existing_product_internal_notes_price_ignored_total`
+- `existing_product_internal_notes_missing_ignored_total`
+- `new_product_price_from_internal_notes_ok_total`
+- `new_product_missing_price_in_internal_notes_total`
+- `new_product_invalid_internal_notes_price_total`
+
 ## Dry-run backfill: Woo price to Ovoko internal notes
 
-Admin action: **Dry-run backfill Ovoko internal_notes prices from Woo**.
+Status: **advanced/dev diagnostic only; removed from the main Ovoko → Woo sync flow** after the decision not to mass-update Ovoko `internal_notes`.
+
+Admin action under Advanced Settings: **Dry-run backfill Ovoko internal_notes prices from Woo**.
 
 Purpose:
-- one-time planning for copying Woo product prices into Ovoko/RRR `internal_notes`,
+- historical/advanced diagnostics for the abandoned backfill path,
 - proposed marker format: `woo_price=350.00 PLN`,
 - append-only policy: preserve existing notes and append the marker on a new line only when no supported price marker is already present.
 
@@ -801,4 +825,4 @@ Future live design, not implemented:
 - `stop_on_error` defaulting to true for first run,
 - idempotency by skipping any record that already contains a supported price marker,
 - live write scope limited to `POST /crm/updatePart` with only auth fields, `part_id` and `internal_notes`,
-- mandatory controlled single-part live probe before enabling batch writes, to confirm omitted optional fields are not overwritten.
+- single-part live probe remains an advanced/dev-only tool; batch writes should stay disabled unless the business decision changes and omitted optional fields are proven safe.
