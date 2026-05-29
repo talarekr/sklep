@@ -1170,8 +1170,148 @@ class RrrApiClient
         return $out;
     }
 
+
+    private function dictionary_payload_records(array $payload): array
+    {
+        $records = [];
+        $collect = function ($node) use (&$collect, &$records): void {
+            if (!is_array($node)) { return; }
+            if (!$this->is_list_array($node)) { $records[] = $node; }
+            foreach ($node as $child) { if (is_array($child)) { $collect($child); } }
+        };
+        foreach ($payload as $child) {
+            if (is_array($child)) { $collect($child); }
+        }
+        return $records;
+    }
+
+    private function dictionary_records_sample(array $records, int $limit = 5): array
+    {
+        $sample = [];
+        foreach (array_slice($records, 0, $limit) as $record) {
+            $sample[] = $this->safe_sample((array) $record);
+        }
+        return $sample;
+    }
+
+    private function raw_keys_sample(array $payload, array $records = []): array
+    {
+        return [
+            'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'first_record_keys' => isset($records[0]) && is_array($records[0]) ? array_values(array_map('strval', array_keys($records[0]))) : [],
+        ];
+    }
+
+    private function inspect_dictionary_payload_for_id(array $payload, string $id): array
+    {
+        $records = $this->dictionary_payload_records($payload);
+        foreach ($this->flatten_payload_paths($payload) as $path => $value) {
+            if (!is_scalar($value)) { continue; }
+            $pathParts = explode('.', (string) $path);
+            $lastPathPart = (string) end($pathParts);
+            if ($lastPathPart !== $id) { continue; }
+            $label = $this->readable_vehicle_text($value);
+            if ($label !== '') {
+                return [
+                    'found_record_with_id' => true,
+                    'matched_record' => ['payload_path' => (string) $path, 'value' => sanitize_text_field((string) $value)],
+                    'label_extraction_path' => (string) $path,
+                    'resolved_label' => $label,
+                ];
+            }
+        }
+        foreach ($records as $record) {
+            $record = (array) $record;
+            $candidateId = $this->first_non_empty_value($record, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','car_model_id','car_model_category','car_body_type_id']);
+            if ($candidateId === '' || (string) $candidateId !== $id) { continue; }
+            foreach (['name','title','label','value_text','text','manufacturer','brand','model','type','color','pl','en','lt'] as $labelKey) {
+                if (!array_key_exists($labelKey, $record)) { continue; }
+                $label = $this->readable_vehicle_text($record[$labelKey]);
+                if ($label === '') { continue; }
+                return [
+                    'found_record_with_id' => true,
+                    'matched_record' => $this->safe_sample($record),
+                    'label_extraction_path' => $labelKey,
+                    'resolved_label' => $label,
+                ];
+            }
+            return [
+                'found_record_with_id' => true,
+                'matched_record' => $this->safe_sample($record),
+                'label_extraction_path' => '',
+                'resolved_label' => '',
+            ];
+        }
+        return [
+            'found_record_with_id' => false,
+            'matched_record' => [],
+            'label_extraction_path' => '',
+            'resolved_label' => '',
+        ];
+    }
+
+    private function probe_dictionary_endpoint(string $path, string $id): array
+    {
+        $raw = $this->post_form($path, [], true);
+        $payload = (array) ($raw['payload'] ?? []);
+        $records = $this->dictionary_payload_records($payload);
+        $inspection = $this->inspect_dictionary_payload_for_id($payload, $id);
+        return array_merge([
+            'endpoint' => $path,
+            'http_code' => $raw['http_code'] ?? null,
+            'status_code' => (string) ($raw['status_code'] ?? ''),
+            'success' => !empty($raw['success']),
+            'msg' => (string) ($raw['msg'] ?? ''),
+            'records_count' => count($records),
+            'first_records_sample' => $this->dictionary_records_sample($records),
+            'raw_keys_sample' => $this->raw_keys_sample($payload, $records),
+        ], $inspection);
+    }
+
+    private function scan_car_model_dictionary_by_id_debug(string $id): array
+    {
+        $cacheKey = 'gpswiss_ovoko_car_model_debug_scan_' . md5($id);
+        $cached = get_transient($cacheKey);
+        if (is_array($cached)) { return $cached; }
+
+        $brandPath = '/get/car_brands';
+        $brandEndpoint = $this->probe_dictionary_endpoint($brandPath, '');
+        $brands = $this->post_form($brandPath, [], true);
+        $brandPayload = (array) ($brands['payload'] ?? []);
+        $brandIds = !empty($brands['success']) ? array_slice($this->extract_car_brand_ids_from_payload($brandPayload), 0, 500) : [];
+        $modelEndpoints = [];
+        $found = null;
+        foreach ($brandIds as $brandId) {
+            $path = '/get/car_models/' . rawurlencode($brandId);
+            $endpoint = $this->probe_dictionary_endpoint($path, $id);
+            $endpoint['brand_id'] = (string) $brandId;
+            $modelEndpoints[] = $endpoint;
+            if (!empty($endpoint['found_record_with_id']) && $found === null) {
+                $found = [
+                    'brand_id' => (string) $brandId,
+                    'endpoint_used' => $path,
+                    'matched_record' => (array) ($endpoint['matched_record'] ?? []),
+                    'label_extraction_path' => (string) ($endpoint['label_extraction_path'] ?? ''),
+                    'resolved_label' => (string) ($endpoint['resolved_label'] ?? ''),
+                ];
+            }
+        }
+        $result = [
+            'brand_endpoint' => $brandEndpoint,
+            'brand_ids_count' => count($brandIds),
+            'brand_ids_sample' => array_slice($brandIds, 0, 20),
+            'model_endpoint_checks_count' => count($modelEndpoints),
+            'model_endpoints_checked' => $modelEndpoints,
+            'found' => $found !== null,
+            'found_at' => $found ?: [],
+        ];
+        set_transient($cacheKey, $result, HOUR_IN_SECONDS);
+        return $result;
+    }
+
     public function probe_ovoko_dictionary_value(string $dictionaryType, string $id): array
     {
+        $requestedDictionaryType = strtolower(trim(str_replace(['-', ' '], '_', $dictionaryType)));
         $dictionaryType = $this->normalize_vehicle_dictionary_type($dictionaryType);
         $id = trim($id);
         if ($dictionaryType === '' || $id === '') {
@@ -1179,6 +1319,7 @@ class RrrApiClient
                 'ok' => false,
                 'mode' => 'read_only',
                 'action_name' => 'Probe Ovoko dictionary value',
+                'requested_dictionary_type' => $requestedDictionaryType,
                 'dictionary_type' => $dictionaryType,
                 'id' => $id,
                 'reason' => 'missing_dictionary_type_or_id',
@@ -1186,24 +1327,149 @@ class RrrApiClient
             ];
         }
 
+        $paths = $this->official_vehicle_dictionary_paths($dictionaryType);
+        $endpointReports = [];
+        $endpointUsed = '';
+        $matchedRecord = [];
+        $labelExtractionPath = '';
+        $resolvedLabel = '';
+        foreach ($paths as $path) {
+            $report = $this->probe_dictionary_endpoint($path, $id);
+            $endpointReports[] = $report;
+            if (!empty($report['found_record_with_id']) && $endpointUsed === '') {
+                $endpointUsed = $path;
+                $matchedRecord = (array) ($report['matched_record'] ?? []);
+                $labelExtractionPath = (string) ($report['label_extraction_path'] ?? '');
+                $resolvedLabel = (string) ($report['resolved_label'] ?? '');
+            }
+        }
+
+        $allBrandModelScan = [];
+        if ($dictionaryType === 'model') {
+            $allBrandModelScan = $this->scan_car_model_dictionary_by_id_debug($id);
+            if ($endpointUsed === '' && !empty($allBrandModelScan['found_at'])) {
+                $foundAt = (array) $allBrandModelScan['found_at'];
+                $endpointUsed = (string) ($foundAt['endpoint_used'] ?? '');
+                $matchedRecord = (array) ($foundAt['matched_record'] ?? []);
+                $labelExtractionPath = (string) ($foundAt['label_extraction_path'] ?? '');
+                $resolvedLabel = (string) ($foundAt['resolved_label'] ?? '');
+            }
+        }
+
         $resolution = $this->resolve_vehicle_dictionary_value_with_source($dictionaryType, $id, []);
+        if ($resolvedLabel === '' && (string) ($resolution['label'] ?? '') !== '') {
+            $resolvedLabel = (string) $resolution['label'];
+        }
+        $source = $resolvedLabel !== '' ? (string) (($resolution['source'] ?? '') ?: 'dictionary_api_debug') : 'unresolved';
+        if ($source !== 'unresolved' && $endpointUsed === '' && (string) ($resolution['endpoint_used'] ?? '') !== '') {
+            $endpointUsed = (string) $resolution['endpoint_used'];
+        }
+
         return [
-            'ok' => $resolution['source'] !== 'unresolved',
+            'ok' => $resolvedLabel !== '',
             'mode' => 'read_only',
             'action_name' => 'Probe Ovoko dictionary value',
+            'requested_dictionary_type' => $requestedDictionaryType,
             'dictionary_type' => $dictionaryType,
             'id' => $id,
-            'endpoints_checked' => (array) ($resolution['endpoints_checked'] ?? $this->official_vehicle_dictionary_paths($dictionaryType)),
-            'endpoint_used' => (string) ($resolution['endpoint_used'] ?? ''),
-            'raw_keys' => (array) ($resolution['raw_keys'] ?? []),
-            'resolved_label' => (string) ($resolution['label'] ?? ''),
-            'resolved_make' => $dictionaryType === 'make' ? (string) ($resolution['label'] ?? '') : '',
-            'resolved_model' => $dictionaryType === 'model' ? (string) ($resolution['label'] ?? '') : '',
-            'resolved_generation' => $dictionaryType === 'generation' ? (string) ($resolution['label'] ?? '') : ($dictionaryType === 'model' ? (string) ($resolution['label'] ?? '') : ''),
-            'source' => (string) ($resolution['source'] ?? 'unresolved'),
+            'endpoints_checked' => array_values(array_unique(array_merge($paths, (array) ($resolution['endpoints_checked'] ?? [])))),
+            'endpoint_reports' => $endpointReports,
+            'endpoint_used' => $endpointUsed,
+            'http_status_by_endpoint' => array_map(static fn(array $row): array => [
+                'endpoint' => (string) ($row['endpoint'] ?? ''),
+                'http_code' => $row['http_code'] ?? null,
+                'status_code' => (string) ($row['status_code'] ?? ''),
+                'success' => !empty($row['success']),
+            ], $endpointReports),
+            'records_count' => array_sum(array_map(static fn(array $row): int => (int) ($row['records_count'] ?? 0), $endpointReports)),
+            'first_records_sample' => array_map(static fn(array $row): array => [
+                'endpoint' => (string) ($row['endpoint'] ?? ''),
+                'sample' => (array) ($row['first_records_sample'] ?? []),
+            ], $endpointReports),
+            'raw_keys_sample' => array_map(static fn(array $row): array => [
+                'endpoint' => (string) ($row['endpoint'] ?? ''),
+                'keys' => (array) ($row['raw_keys_sample'] ?? []),
+            ], $endpointReports),
+            'found_record_with_id' => $matchedRecord !== [],
+            'matched_record' => $matchedRecord,
+            'label_extraction_path' => $labelExtractionPath,
+            'resolved_label' => $resolvedLabel,
+            'resolved_make' => $dictionaryType === 'make' ? $resolvedLabel : '',
+            'resolved_model' => $dictionaryType === 'model' ? $resolvedLabel : '',
+            'resolved_generation' => $dictionaryType === 'generation' ? $resolvedLabel : ($dictionaryType === 'model' ? $resolvedLabel : ''),
+            'source' => $source,
+            'all_brands_model_scan' => $allBrandModelScan,
             'official_endpoints_checked' => $this->official_vehicle_dictionary_paths($dictionaryType),
             'model_record' => (array) ($resolution['model_record'] ?? []),
-            'status' => $resolution['source'] !== 'unresolved' ? 'resolved' : 'unresolved',
+            'status' => $resolvedLabel !== '' ? 'resolved' : 'unresolved',
+            'no_write_to_woo' => true,
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
+    public function probe_ovoko_car_brands_models_raw(): array
+    {
+        $brandReport = $this->probe_dictionary_endpoint('/get/car_brands', '');
+        $brand936Report = $this->probe_dictionary_endpoint('/get/car_brands', '936');
+        $brand4Report = $this->probe_dictionary_endpoint('/get/car_brands', '4');
+        $models936 = $this->probe_dictionary_endpoint('/get/car_models/936', '1585');
+        $models936For22 = $this->probe_dictionary_endpoint('/get/car_models/936', '22');
+        $models4 = $this->probe_dictionary_endpoint('/get/car_models/4', '22');
+        $models4For1585 = $this->probe_dictionary_endpoint('/get/car_models/4', '1585');
+        $scan1585 = $this->scan_car_model_dictionary_by_id_debug('1585');
+        $scan22 = $this->scan_car_model_dictionary_by_id_debug('22');
+
+        return [
+            'ok' => true,
+            'mode' => 'read_only',
+            'action_name' => 'Probe Ovoko car brands/models raw',
+            'car_brands' => [
+                'endpoint' => '/get/car_brands',
+                'http_code' => $brandReport['http_code'] ?? null,
+                'status_code' => (string) ($brandReport['status_code'] ?? ''),
+                'success' => !empty($brandReport['success']),
+                'count' => (int) ($brandReport['records_count'] ?? 0),
+                'sample_records' => (array) ($brandReport['first_records_sample'] ?? []),
+                'raw_keys_sample' => (array) ($brandReport['raw_keys_sample'] ?? []),
+                'contains_id_936' => !empty($brand936Report['found_record_with_id']),
+                'id_936_record' => (array) ($brand936Report['matched_record'] ?? []),
+                'id_936_resolved_label' => (string) ($brand936Report['resolved_label'] ?? ''),
+                'contains_id_4' => !empty($brand4Report['found_record_with_id']),
+                'id_4_record' => (array) ($brand4Report['matched_record'] ?? []),
+                'id_4_resolved_label' => (string) ($brand4Report['resolved_label'] ?? ''),
+            ],
+            'car_models_936' => [
+                'endpoint' => '/get/car_models/936',
+                'http_code' => $models936['http_code'] ?? null,
+                'status_code' => (string) ($models936['status_code'] ?? ''),
+                'success' => !empty($models936['success']),
+                'count' => (int) ($models936['records_count'] ?? 0),
+                'sample_records' => (array) ($models936['first_records_sample'] ?? []),
+                'raw_keys_sample' => (array) ($models936['raw_keys_sample'] ?? []),
+                'contains_model_1585' => !empty($models936['found_record_with_id']),
+                'model_1585_record' => (array) ($models936['matched_record'] ?? []),
+                'model_1585_resolved_label' => (string) ($models936['resolved_label'] ?? ''),
+                'contains_model_22' => !empty($models936For22['found_record_with_id']),
+                'model_22_record' => (array) ($models936For22['matched_record'] ?? []),
+                'model_22_resolved_label' => (string) ($models936For22['resolved_label'] ?? ''),
+            ],
+            'car_models_4' => [
+                'endpoint' => '/get/car_models/4',
+                'http_code' => $models4['http_code'] ?? null,
+                'status_code' => (string) ($models4['status_code'] ?? ''),
+                'success' => !empty($models4['success']),
+                'count' => (int) ($models4['records_count'] ?? 0),
+                'sample_records' => (array) ($models4['first_records_sample'] ?? []),
+                'raw_keys_sample' => (array) ($models4['raw_keys_sample'] ?? []),
+                'contains_model_22' => !empty($models4['found_record_with_id']),
+                'model_22_record' => (array) ($models4['matched_record'] ?? []),
+                'model_22_resolved_label' => (string) ($models4['resolved_label'] ?? ''),
+                'contains_model_1585' => !empty($models4For1585['found_record_with_id']),
+                'model_1585_record' => (array) ($models4For1585['matched_record'] ?? []),
+                'model_1585_resolved_label' => (string) ($models4For1585['resolved_label'] ?? ''),
+            ],
+            'all_brand_scan_model_1585' => $scan1585,
+            'all_brand_scan_model_22' => $scan22,
             'no_write_to_woo' => true,
             'checked_at' => gmdate('c'),
         ];

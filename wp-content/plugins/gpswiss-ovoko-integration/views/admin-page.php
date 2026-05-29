@@ -349,6 +349,11 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input id="probe_dictionary_id" type="text" name="id" value="1" style="width:80px;" />
             <?php submit_button('Probe Ovoko dictionary value', 'secondary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_car_brands_models_raw'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_car_brands_models_raw" />
+            <?php submit_button('Probe Ovoko car brands/models raw', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
