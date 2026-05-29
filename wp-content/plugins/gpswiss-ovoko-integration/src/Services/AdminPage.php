@@ -59,6 +59,14 @@ class AdminPage
         add_action('wp_ajax_gpswiss_ovoko_update_categories_from_ovoko', [$this, 'handle_update_categories_from_ovoko_ajax']);
         add_action('admin_post_gpswiss_ovoko_audit_old_categories', [$this, 'handle_audit_old_categories']);
         add_action('admin_post_gpswiss_ovoko_download_category_cleanup_csv', [$this, 'handle_download_category_cleanup_csv']);
+        add_action('admin_post_gpswiss_ovoko_export_product_category_assignments', [$this, 'handle_export_product_category_assignments']);
+        add_action('admin_post_gpswiss_ovoko_dry_run_delete_all_product_categories', [$this, 'handle_dry_run_delete_all_product_categories']);
+        add_action('admin_post_gpswiss_ovoko_delete_all_product_categories', [$this, 'handle_delete_all_product_categories']);
+        add_action('admin_post_gpswiss_ovoko_rebuild_categories_from_scratch', [$this, 'handle_rebuild_categories_from_scratch']);
+        add_action('wp_ajax_gpswiss_ovoko_rebuild_categories_from_scratch', [$this, 'handle_rebuild_categories_from_scratch_ajax']);
+        add_action('admin_post_gpswiss_ovoko_pause_category_rebuild', [$this, 'handle_pause_category_rebuild']);
+        add_action('admin_post_gpswiss_ovoko_resume_category_rebuild', [$this, 'handle_resume_category_rebuild']);
+        add_action('admin_post_gpswiss_ovoko_post_rebuild_category_audit', [$this, 'handle_post_rebuild_category_audit']);
         add_action('admin_post_gpswiss_ovoko_preview_homepage_menu_changes', [$this, 'handle_preview_homepage_menu_changes']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
@@ -321,6 +329,12 @@ class AdminPage
         if ($submittedButton !== 'apply' && $submittedButton !== 'dry_run') {
             $resolvedDryRun = !isset($_POST['dry_run']) || !empty($_POST['dry_run']);
         }
+        if (!$resolvedDryRun && (string) ($_POST['confirmation'] ?? '') !== 'REBUILD WOO CATEGORIES FROM OVOKO') {
+            $result = ['ok' => false, 'error' => 'confirmation_required', 'required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO'];
+            set_transient('gpswiss_ovoko_notice', ['type' => 'error', 'text' => wp_json_encode($result)], 120);
+            wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+            exit;
+        }
         $options = [
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
@@ -341,12 +355,16 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403); }
         check_ajax_referer('gpswiss_ovoko_update_categories_from_ovoko');
+        $resolvedDryRun = !array_key_exists('dry_run', $_POST) || !empty($_POST['dry_run']);
+        if (!$resolvedDryRun && (string) ($_POST['confirmation'] ?? '') !== 'REBUILD WOO CATEGORIES FROM OVOKO') {
+            wp_send_json(['ok' => false, 'error' => 'confirmation_required', 'required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO'], 400);
+        }
         $options = [
             'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
             'limit' => isset($_POST['limit']) ? (int) $_POST['limit'] : 1,
             'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 1,
-            'dry_run' => !array_key_exists('dry_run', $_POST) || !empty($_POST['dry_run']),
+            'dry_run' => $resolvedDryRun,
             'create_missing_categories' => !array_key_exists('create_missing_categories', $_POST) || !empty($_POST['create_missing_categories']),
             'replace_existing_categories' => !array_key_exists('replace_existing_categories', $_POST) || !empty($_POST['replace_existing_categories']),
             'stop_on_error' => !empty($_POST['stop_on_error']),
@@ -375,6 +393,111 @@ class AdminPage
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="category-cleanup-audit-' . gmdate('Ymd-His') . '.csv"');
         echo $csv; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        exit;
+    }
+
+
+
+    public function handle_export_product_category_assignments(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_export_product_category_assignments');
+        $csv = $this->service->export_current_product_category_assignments_csv();
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="woo-product-category-assignments-' . gmdate('Ymd-His') . '.csv"');
+        echo $csv; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        exit;
+    }
+
+    public function handle_dry_run_delete_all_product_categories(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_dry_run_delete_all_product_categories');
+        $result = $this->service->dry_run_delete_all_product_categories();
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 180);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_delete_all_product_categories(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_delete_all_product_categories');
+        $confirmation = (string) ($_POST['confirmation'] ?? '');
+        $result = $this->service->delete_all_product_categories($confirmation);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'error', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 300);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_rebuild_categories_from_scratch(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_rebuild_categories_from_scratch');
+        $submittedButton = sanitize_key((string) ($_POST['submit_action'] ?? 'dry_run'));
+        $dryRun = $submittedButton !== 'apply';
+        $options = [
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
+            'dry_run' => $dryRun,
+            'confirmation' => (string) ($_POST['confirmation'] ?? ''),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
+            'rebuild_menu_cache_when_done' => !empty($_POST['rebuild_menu_cache_when_done']),
+        ];
+        $result = $this->service->rebuild_woo_categories_from_ovoko_from_scratch($options);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 300);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_rebuild_categories_from_scratch_ajax(): void
+    {
+        if (!current_user_can('manage_options')) { wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403); }
+        check_ajax_referer('gpswiss_ovoko_rebuild_categories_from_scratch');
+        $dryRun = !array_key_exists('dry_run', $_POST) || !empty($_POST['dry_run']);
+        $options = [
+            'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
+            'after_product_id' => isset($_POST['after_product_id']) ? (int) $_POST['after_product_id'] : 0,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
+            'dry_run' => $dryRun,
+            'confirmation' => (string) ($_POST['confirmation'] ?? ''),
+            'stop_on_error' => !empty($_POST['stop_on_error']),
+            'rebuild_menu_cache_when_done' => !empty($_POST['rebuild_menu_cache_when_done']),
+        ];
+        $result = $this->service->rebuild_woo_categories_from_ovoko_from_scratch($options);
+        $result['done'] = !empty($result['paused']) || empty($result['next_after_product_id']) || ((int) ($result['next_after_product_id'] ?? 0) <= (int) ($result['after_product_id'] ?? 0)) || empty($result['results']);
+        wp_send_json($result);
+    }
+
+    public function handle_pause_category_rebuild(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_pause_category_rebuild');
+        $this->service->set_category_rebuild_paused(true);
+        set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'Category rebuild paused.'], 60);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_resume_category_rebuild(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_resume_category_rebuild');
+        $this->service->set_category_rebuild_paused(false);
+        set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'Category rebuild resumed.'], 60);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_post_rebuild_category_audit(): void
+    {
+        if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
+        check_admin_referer('gpswiss_ovoko_post_rebuild_category_audit');
+        $result = $this->service->post_rebuild_category_audit();
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 300);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
 

@@ -331,6 +331,9 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label><input type="checkbox" name="replace_existing_categories" value="1" checked="checked" /> replace_existing_categories (default true)</label>
             <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
             <br><br>
+            <p style="color:#b32d2e;"><strong>Apply requires exact confirmation:</strong> <code>REBUILD WOO CATEGORIES FROM OVOKO</code></p>
+            <input type="text" name="confirmation" class="regular-text" placeholder="REBUILD WOO CATEGORIES FROM OVOKO" />
+            <br><br>
             <button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry run categories update</button>
             <button class="button button-primary" type="submit" name="submit_action" value="apply">Apply categories update</button>
             <button class="button button-primary" type="button" id="gpswiss_cat_autorun_start">Start auto-run categories</button>
@@ -369,6 +372,64 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     </div>
 
 
+
+
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #b32d2e;">
+        <h3>Controlled Woo <code>product_cat</code> rebuild from Ovoko — tools only</h3>
+        <p><strong>Scope:</strong> only WooCommerce <code>product_cat</code> terms and product category assignments. Products, images, descriptions, prices, stock, eBay, Allegro, and Ovoko data are not changed by dry-runs.</p>
+        <p><strong>New rebuild mode:</strong> uses fresh Ovoko part data by <code>ovoko_id/_ovoko_part_id</code> and full category path resolved from <code>/get/categories/tree</code>. It does not use the old CSV mapping, does not add the old “Motoryzacja” root, does not shorten paths, does not append old categories, and does not keep previous assignments.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_export_product_category_assignments'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_export_product_category_assignments" />
+                <?php submit_button('Export current product category assignments CSV', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_dry_run_delete_all_product_categories'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_delete_all_product_categories" />
+                <?php submit_button('Dry-run delete all Woo product categories', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_post_rebuild_category_audit'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_post_rebuild_category_audit" />
+                <?php submit_button('Post-rebuild category audit', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_pause_category_rebuild'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_pause_category_rebuild" />
+                <?php submit_button('Pause rebuild', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_resume_category_rebuild'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_resume_category_rebuild" />
+                <?php submit_button('Resume rebuild', 'secondary', 'submit', false); ?>
+            </form>
+        </div>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="padding:12px;background:#f6f7f7;margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_rebuild_categories_from_scratch'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_rebuild_categories_from_scratch" />
+            <h4>Dry-run / batch rebuild from Ovoko</h4>
+            <label>product_id sample (optional): <input type="number" min="0" name="product_id" value="0" /></label>
+            <label>after_product_id: <input type="number" min="0" name="after_product_id" value="0" /></label>
+            <label>batch_size: <input type="number" min="1" max="100" name="batch_size" value="10" /></label>
+            <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
+            <label><input type="checkbox" name="rebuild_menu_cache_when_done" value="1" /> rebuild <code>gp_product_cat_display_data_v2</code> cache when final real batch is done</label>
+            <p><button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry-run rebuild Woo categories from Ovoko</button></p>
+            <p style="margin-top:12px;color:#b32d2e;"><strong>Real rebuild requires exact confirmation:</strong> <code>REBUILD WOO CATEGORIES FROM OVOKO</code></p>
+            <input type="text" name="confirmation" class="regular-text" placeholder="REBUILD WOO CATEGORIES FROM OVOKO" />
+            <button class="button button-primary" type="submit" name="submit_action" value="apply" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Rebuild Woo categories from Ovoko from scratch</button>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="padding:12px;background:#fff5f5;border:1px solid #d63638;">
+            <?php wp_nonce_field('gpswiss_ovoko_delete_all_product_categories'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_delete_all_product_categories" />
+            <h4>Danger zone: delete all Woo product categories</h4>
+            <p>This deletes all <code>product_cat</code> terms and detaches product/category relationships only. It does not delete products, media, tags, attributes, prices, stock, descriptions, eBay, Allegro, or Ovoko data.</p>
+            <p><strong>Requires exact confirmation:</strong> <code>DELETE ALL PRODUCT CATEGORIES</code></p>
+            <input type="text" name="confirmation" class="regular-text" placeholder="DELETE ALL PRODUCT CATEGORIES" />
+            <button class="button" type="submit" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Delete all Woo product categories</button>
+        </form>
+    </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Safe cleanup old Woo categories + homepage menu preview</h3>

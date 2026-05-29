@@ -2614,6 +2614,288 @@ class OvokoIntegrationService
 
 
 
+
+
+    public function export_current_product_category_assignments_csv(): string
+    {
+        $fh = fopen('php://temp', 'r+');
+        fputcsv($fh, ['product_id','SKU','title','ovoko_id','current_category_ids','current_category_paths','current_primary_category_id','current_primary_category_path']);
+        foreach ($this->get_product_ids_after(0, 0) as $productId) {
+            $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
+            $terms = wp_get_post_terms($productId, 'product_cat', ['fields' => 'all']);
+            $ids = [];
+            $paths = [];
+            foreach ((array) $terms as $term) {
+                if (!$term || is_wp_error($term)) { continue; }
+                $ids[] = (int) $term->term_id;
+                $paths[] = $this->get_product_cat_path((int) $term->term_id);
+            }
+            $primaryId = $this->get_primary_product_category_id($productId);
+            fputcsv($fh, [
+                $productId,
+                $product ? (string) $product->get_sku() : '',
+                (string) get_the_title($productId),
+                $this->get_product_ovoko_id($productId),
+                implode('|', $ids),
+                implode('|', array_filter($paths)),
+                $primaryId > 0 ? (string) $primaryId : '',
+                $primaryId > 0 ? $this->get_product_cat_path($primaryId) : '',
+            ]);
+        }
+        rewind($fh);
+        return (string) stream_get_contents($fh);
+    }
+
+    public function dry_run_delete_all_product_categories(): array
+    {
+        global $wpdb;
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        $total = is_wp_error($terms) ? 0 : count((array) $terms);
+        $categoriesWithProducts = 0;
+        $emptyCategories = 0;
+        foreach ((array) $terms as $term) {
+            if (!($term instanceof \WP_Term)) { continue; }
+            if ((int) $term->count > 0) { $categoriesWithProducts++; } else { $emptyCategories++; }
+        }
+        $relationshipCount = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy = %s",
+            'product_cat'
+        ));
+        $affectedProducts = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT tr.object_id) FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$wpdb->posts} p ON p.ID = tr.object_id WHERE tt.taxonomy = %s AND p.post_type = %s",
+            'product_cat', 'product'
+        ));
+        $withOvoko = $this->count_products_with_ovoko_id(true);
+        $missingOvoko = $this->count_products_with_ovoko_id(false);
+        return [
+            'ok' => true,
+            'action_name' => 'Dry-run delete all Woo product categories',
+            'dry_run' => true,
+            'total_product_categories' => $total,
+            'categories_with_products' => $categoriesWithProducts,
+            'empty_categories' => $emptyCategories,
+            'product_category_relationships' => $relationshipCount,
+            'affected_products' => $affectedProducts,
+            'products_with_ovoko_id' => $withOvoko,
+            'products_missing_ovoko_id' => $missingOvoko,
+            'warnings' => ['Dry-run only: no product_cat terms or relationships were deleted. Products, media, descriptions, prices, stock, eBay, Allegro, and Ovoko are not touched.'],
+        ];
+    }
+
+    public function delete_all_product_categories(string $confirmation): array
+    {
+        if ($confirmation !== 'DELETE ALL PRODUCT CATEGORIES') {
+            return ['ok' => false, 'action_name' => 'Delete all Woo product categories', 'error' => 'confirmation_required', 'required_confirmation' => 'DELETE ALL PRODUCT CATEGORIES'];
+        }
+        global $wpdb;
+        $dry = $this->dry_run_delete_all_product_categories();
+        $affectedProductIds = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT tr.object_id FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$wpdb->posts} p ON p.ID = tr.object_id WHERE tt.taxonomy = %s AND p.post_type = %s",
+            'product_cat', 'product'
+        ));
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'orderby' => 'term_id', 'order' => 'DESC']);
+        $deleted = 0;
+        $errors = [];
+        foreach ((array) $terms as $term) {
+            if (!($term instanceof \WP_Term)) { continue; }
+            $deletedResult = wp_delete_term((int) $term->term_id, 'product_cat');
+            if (is_wp_error($deletedResult)) {
+                $errors[] = ['term_id' => (int) $term->term_id, 'error' => $deletedResult->get_error_message()];
+            } elseif ($deletedResult) {
+                $deleted++;
+            }
+        }
+        foreach (array_map('intval', (array) $affectedProductIds) as $pid) {
+            $this->clear_product_primary_category($pid);
+            clean_post_cache($pid);
+        }
+        if (function_exists('gp_clear_product_category_display_cache')) { gp_clear_product_category_display_cache(); }
+        return [
+            'ok' => $errors === [],
+            'action_name' => 'Delete all Woo product categories',
+            'deleted_categories' => $deleted,
+            'detached_relationships' => (int) ($dry['product_category_relationships'] ?? 0),
+            'affected_products' => count((array) $affectedProductIds),
+            'errors' => $errors,
+        ];
+    }
+
+    public function rebuild_woo_categories_from_ovoko_from_scratch(array $options = []): array
+    {
+        $started = microtime(true);
+        $productId = max(0, (int) ($options['product_id'] ?? 0));
+        $afterProductId = max(0, (int) ($options['after_product_id'] ?? 0));
+        $batchSize = max(1, min(100, (int) ($options['batch_size'] ?? 10)));
+        $dryRun = !array_key_exists('dry_run', $options) || !empty($options['dry_run']);
+        if (!$dryRun && (string) ($options['confirmation'] ?? '') !== 'REBUILD WOO CATEGORIES FROM OVOKO') {
+            return ['ok' => false, 'action_name' => 'Rebuild Woo categories from Ovoko from scratch', 'dry_run' => false, 'error' => 'confirmation_required', 'required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO'];
+        }
+        if (!$dryRun && $this->is_category_rebuild_paused()) {
+            return ['ok' => true, 'paused' => true, 'action_name' => 'Rebuild Woo categories from Ovoko from scratch', 'dry_run' => false, 'after_product_id' => $afterProductId, 'next_after_product_id' => $afterProductId, 'last_safe_next_after_product_id' => $afterProductId, 'results' => [], 'counts' => []];
+        }
+
+        $ids = $productId > 0 ? [$productId] : $this->get_product_ids_after($afterProductId, $batchSize);
+        $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0];
+        $legacyCounts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0];
+        $results = [];
+        $lastSafe = $afterProductId;
+        foreach ($ids as $pid) {
+            $legacyCounts['total_scanned']++;
+            $counts['processed']++;
+            $single = $this->update_single_woo_category_from_ovoko((int) $pid, $dryRun, true, true, $legacyCounts);
+            $single['would_remove_old_categories'] = (array) ($single['categories_to_be_replaced'] ?? []);
+            $single['would_create_terms'] = (array) ($single['categories_that_would_be_created'] ?? []);
+            $single['would_assign_terms'] = (array) ($single['planned_category_hierarchy'] ?? []);
+            $single['would_set_primary_category'] = (string) ($single['planned_final_category']['name'] ?? '') !== '' ? ($single['planned_final_category'] ?? null) : null;
+            $single['expected_ovoko_category_path'] = (string) ($single['resolved_full_ovoko_category_path'] ?? $single['ovoko_category_title_path'] ?? '');
+            $results[] = $single;
+            if (empty($single['ok']) || !empty($single['error'])) { $counts['errors']++; }
+            if (($single['reason'] ?? '') === 'missing_ovoko_id') { $counts['missing_ovoko_id']++; }
+            if (trim((string) ($single['category_id'] ?? '')) === '' && ($single['reason'] ?? '') !== 'missing_ovoko_id') { $counts['missing_category_id']++; }
+            if (trim((string) ($single['expected_ovoko_category_path'] ?? '')) === '') { $counts['missing_category_path']++; }
+            if (in_array(($single['reason'] ?? ''), ['ovoko_fetch_failed','rrr_api_client_not_initialized'], true)) { $counts['api_errors']++; }
+            if (!empty($single['category_update_verified']) || ($dryRun && empty($single['reason']))) { $counts['fixed']++; } else { $counts['skipped']++; }
+            $lastSafe = max($lastSafe, (int) $pid);
+            if (!$dryRun && !empty($single['category_update_verified']) && (int) ($single['assigned_term_ids_after'][0] ?? 0) > 0) {
+                $deepest = (int) end($single['assigned_term_ids_after']);
+                $this->set_primary_product_category($pid, $deepest);
+            }
+            if (!$dryRun && !empty($options['stop_on_error']) && empty($single['ok'])) { break; }
+        }
+        $counts['categories_created'] = (int) $legacyCounts['categories_created'];
+        $counts['categories_existing'] = (int) $legacyCounts['categories_existing'];
+        $next = $ids === [] ? $afterProductId : max($afterProductId, (int) end($ids));
+        $done = $productId > 0 || $ids === [] || count($ids) < $batchSize;
+        $cacheResult = null;
+        if (!$dryRun && $done && !empty($options['rebuild_menu_cache_when_done']) && function_exists('gp_rebuild_product_category_display_cache')) {
+            $cacheResult = gp_rebuild_product_category_display_cache();
+        }
+        $result = [
+            'ok' => $counts['errors'] === 0,
+            'action_name' => $dryRun ? 'Dry-run rebuild Woo categories from Ovoko' : 'Rebuild Woo categories from Ovoko from scratch',
+            'dry_run' => $dryRun,
+            'batch_size' => $batchSize,
+            'after_product_id' => $afterProductId,
+            'next_after_product_id' => $next,
+            'last_safe_next_after_product_id' => $lastSafe,
+            'processed' => $counts['processed'],
+            'fixed' => $counts['fixed'],
+            'skipped' => $counts['skipped'],
+            'errors' => $counts['errors'],
+            'missing_ovoko_id' => $counts['missing_ovoko_id'],
+            'missing_category_id' => $counts['missing_category_id'],
+            'missing_category_path' => $counts['missing_category_path'],
+            'api_errors' => $counts['api_errors'],
+            'duration' => round(microtime(true) - $started, 3),
+            'counts' => $counts,
+            'legacy_counts' => $legacyCounts,
+            'results' => $results,
+            'done' => $done,
+            'menu_cache_rebuild' => $cacheResult,
+            'rules' => ['no_csv_mapping','no_motoryzacja_root','no_shortened_paths','replace_existing_product_cat_assignments','product_data_not_touched','no_ebay_or_allegro_changes','no_ovoko_writes'],
+        ];
+        update_option('gpswiss_ovoko_last_category_rebuild_batch', $result, false);
+        return $result;
+    }
+
+    public function set_category_rebuild_paused(bool $paused): void
+    {
+        update_option('gpswiss_ovoko_category_rebuild_paused', $paused ? '1' : '0', false);
+    }
+
+    private function is_category_rebuild_paused(): bool
+    {
+        return get_option('gpswiss_ovoko_category_rebuild_paused', '0') === '1';
+    }
+
+    public function post_rebuild_category_audit(): array
+    {
+        global $wpdb;
+        $totalProducts = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = %s AND post_status NOT IN ('trash','auto-draft')", 'product'));
+        $withOvoko = $this->count_products_with_ovoko_id(true);
+        $missingOvoko = $this->count_products_with_ovoko_id(false);
+        $withCategory = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id WHERE p.post_type = %s AND p.post_status NOT IN ('trash','auto-draft') AND tt.taxonomy = %s", 'product', 'product_cat'));
+        $withoutCategory = max(0, $totalProducts - $withCategory);
+        $withFullPath = (int) $wpdb->get_var("SELECT COUNT(DISTINCT post_id) FROM {$wpdb->postmeta} WHERE meta_key = '_gpswiss_ovoko_assigned_category_path' AND meta_value <> ''");
+        $failed = [];
+        $idsWithout = $wpdb->get_col($wpdb->prepare("SELECT p.ID FROM {$wpdb->posts} p LEFT JOIN (SELECT DISTINCT tr.object_id FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id WHERE tt.taxonomy = %s) c ON c.object_id = p.ID WHERE p.post_type = %s AND p.post_status NOT IN ('trash','auto-draft') AND c.object_id IS NULL ORDER BY p.ID ASC LIMIT 20", 'product_cat', 'product'));
+        foreach ((array) $idsWithout as $pid) { $failed[] = ['product_id' => (int) $pid, 'title' => (string) get_the_title((int) $pid), 'ovoko_id' => $this->get_product_ovoko_id((int) $pid)]; }
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        $maxDepth = 0;
+        $top = [];
+        foreach ((array) $terms as $term) {
+            if (!($term instanceof \WP_Term)) { continue; }
+            $depth = count(get_ancestors((int) $term->term_id, 'product_cat', 'taxonomy')) + 1;
+            $maxDepth = max($maxDepth, $depth);
+            if ((int) $term->parent === 0) { $top[] = (string) $term->name; }
+        }
+        return ['ok' => true, 'action_name' => 'Post-rebuild category audit', 'total_products' => $totalProducts, 'products_with_ovoko_id' => $withOvoko, 'products_missing_ovoko_id' => $missingOvoko, 'products_with_category' => $withCategory, 'products_without_category' => $withoutCategory, 'products_with_full_ovoko_path' => $withFullPath, 'products_failed_category_assignment' => $withoutCategory, 'sample_failures' => $failed, 'total_product_categories_after_rebuild' => is_wp_error($terms) ? 0 : count((array) $terms), 'max_category_depth' => $maxDepth, 'top_level_categories_created' => array_values(array_unique($top)), 'menu_cache_status' => function_exists('gp_get_product_category_display_cache_status') ? gp_get_product_category_display_cache_status() : null];
+    }
+
+    private function get_product_ids_after(int $afterProductId, int $limit): array
+    {
+        global $wpdb;
+        $limitSql = $limit > 0 ? $wpdb->prepare('LIMIT %d', $limit) : '';
+        $sql = $wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_status NOT IN ('trash','auto-draft') AND ID > %d ORDER BY ID ASC {$limitSql}", 'product', $afterProductId);
+        return array_map('intval', (array) $wpdb->get_col($sql));
+    }
+
+    private function get_product_ovoko_id(int $productId): string
+    {
+        $ovokoId = trim((string) get_post_meta($productId, '_ovoko_part_id', true));
+        if ($ovokoId === '') { $ovokoId = trim((string) get_post_meta($productId, 'ovoko_id', true)); }
+        if ($ovokoId === '') { $ovokoId = trim((string) get_post_meta($productId, '_ovoko_id', true)); }
+        return $ovokoId;
+    }
+
+    private function count_products_with_ovoko_id(bool $with): int
+    {
+        global $wpdb;
+        $ids = $wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_status NOT IN ('trash','auto-draft')", 'product'));
+        $count = 0;
+        foreach (array_map('intval', (array) $ids) as $pid) {
+            $has = $this->get_product_ovoko_id($pid) !== '';
+            if (($with && $has) || (!$with && !$has)) { $count++; }
+        }
+        return $count;
+    }
+
+    private function get_product_cat_path(int $termId): string
+    {
+        $term = get_term($termId, 'product_cat');
+        if (!$term || is_wp_error($term)) { return ''; }
+        $ancestors = array_reverse(get_ancestors($termId, 'product_cat', 'taxonomy'));
+        $names = [];
+        foreach ($ancestors as $ancestorId) {
+            $ancestor = get_term((int) $ancestorId, 'product_cat');
+            if ($ancestor && !is_wp_error($ancestor)) { $names[] = (string) $ancestor->name; }
+        }
+        $names[] = (string) $term->name;
+        return implode(' / ', $names);
+    }
+
+    private function get_primary_product_category_id(int $productId): int
+    {
+        foreach (['_yoast_wpseo_primary_product_cat', 'rank_math_primary_product_cat', '_gpswiss_primary_product_cat'] as $key) {
+            $value = (int) get_post_meta($productId, $key, true);
+            if ($value > 0) { return $value; }
+        }
+        return 0;
+    }
+
+    private function set_primary_product_category(int $productId, int $termId): void
+    {
+        if ($termId <= 0) { return; }
+        update_post_meta($productId, '_yoast_wpseo_primary_product_cat', (string) $termId);
+        update_post_meta($productId, 'rank_math_primary_product_cat', (string) $termId);
+        update_post_meta($productId, '_gpswiss_primary_product_cat', (string) $termId);
+    }
+
+    private function clear_product_primary_category(int $productId): void
+    {
+        foreach (['_yoast_wpseo_primary_product_cat', 'rank_math_primary_product_cat', '_gpswiss_primary_product_cat'] as $key) { delete_post_meta($productId, $key); }
+    }
+
     public function update_woo_categories_from_ovoko(array $options = []): array
     {
         $productId = max(0, (int) ($options['product_id'] ?? 0));
@@ -2765,7 +3047,12 @@ class OvokoIntegrationService
                 'assigned_category_grandparent_name'=>$grandParentTerm && !is_wp_error($grandParentTerm) ? (string) $grandParentTerm->name : '',
             ];
         }
-        if($verified){$counts['products_categories_verified']++;} else {$counts['errors']++;}
+        if($verified){
+            $this->set_primary_product_category($productId, $finalId);
+            update_post_meta($productId, '_gpswiss_ovoko_assigned_category_path', (string) $path);
+            update_post_meta($productId, '_gpswiss_ovoko_assigned_category_id', (string) ($categoryResolve['category_id'] ?? ''));
+            $counts['products_categories_verified']++;
+        } else {$counts['errors']++;}
         return $result;
     }
 
@@ -2787,11 +3074,30 @@ class OvokoIntegrationService
         }
         if ($levels === []) {
             $flat = array_values(array_filter(array_map('trim', explode('/', $fallbackPath)), fn($v) => $v !== ''));
+            $flat = $this->normalize_ovoko_part_category_path_segments($flat);
             foreach ($flat as $i => $name) {
                 $levels[] = ['name' => (string) $name, 'ovoko_category_id' => 0, 'parent_ovoko_category_id' => 0, 'level_index' => $i + 1];
             }
         }
         return $levels;
+    }
+
+    private function normalize_ovoko_part_category_path_segments(array $segments): array
+    {
+        $segments = array_values(array_filter(array_map(static fn($v) => trim((string) $v), $segments), static fn($v) => $v !== ''));
+        if ($segments !== [] && in_array(mb_strtolower((string) end($segments)), ['produkt', 'product'], true)) {
+            array_pop($segments);
+        }
+        if ($segments !== [] && mb_strtolower((string) $segments[0]) === 'motoryzacja') {
+            array_shift($segments);
+        }
+        $knownPartRoots = ['szyby','drzwi','silnik','skrzynia biegów','karoseria','zawieszenie','układ hamulcowy','elektryka','oświetlenie','wnętrze','koła','opony','wydech','chłodzenie','paliwo','klimatyzacja'];
+        foreach ($segments as $index => $segment) {
+            if (in_array(mb_strtolower($segment), $knownPartRoots, true)) {
+                return array_values(array_slice($segments, $index));
+            }
+        }
+        return $segments;
     }
 
     private function build_ovoko_category_diagnostics(array $payload, array $record, array $normalized): array
