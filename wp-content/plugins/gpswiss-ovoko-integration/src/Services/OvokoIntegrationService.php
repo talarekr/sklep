@@ -763,7 +763,7 @@ class OvokoIntegrationService
             'title_builder_preview' => $titlePreview,
             'woo_meta_preview' => [
                 '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
-                '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
+                '_ovoko_car_id' => $this->get_ovoko_vehicle_id_from_normalized($normalized),
                 '_ovoko_status' => (string) ($normalized['status'] ?? ''),
                 '_ovoko_updated_at' => (string) ($normalized['updated_at'] ?? ''),
                 '_ovoko_category' => (string) ($normalized['category_title_path'] ?? ''),
@@ -900,7 +900,7 @@ class OvokoIntegrationService
 
         $meta = [
             '_ovoko_part_id' => (string) ($normalized['part_id'] ?? ''),
-            '_ovoko_car_id' => (string) ($normalized['car_id'] ?? ''),
+            '_ovoko_car_id' => $this->get_ovoko_vehicle_id_from_normalized($normalized),
             '_ovoko_status' => (string) ($normalized['status'] ?? ''),
             '_ovoko_updated_at' => (string) ($normalized['updated_at'] ?? ''),
             '_ovoko_category' => (string) ($normalized['category_title_path'] ?? ''),
@@ -947,6 +947,7 @@ class OvokoIntegrationService
             'source' => 'ovoko_master',
         ];
         foreach ($meta as $k=>$v) update_post_meta($productId,$k,$v);
+        $sameVehicleMeta = $this->write_same_vehicle_meta_for_ovoko_product($productId, $normalized);
         $this->upsert_custom_product_attributes($productId, $this->build_ovoko_technical_attributes_from_normalized($normalized));
         wp_set_object_terms($productId, 'simple', 'product_type');
         $imageImportResult = $this->import_ovoko_images_for_product($productId, $normalized, $partId);
@@ -977,6 +978,9 @@ class OvokoIntegrationService
             'listing_image_strategy' => (string) ($listingImageResult['listing_image_strategy'] ?? 'thumbnail_fallback'),
             'listing_image_meta_written' => (array) ($listingImageResult['listing_image_meta_written'] ?? []),
             'listing_image_errors' => (array) ($listingImageResult['errors'] ?? []),
+            'same_vehicle_meta_written' => $sameVehicleMeta['written_meta_keys'],
+            'same_vehicle_car_id' => $sameVehicleMeta['car_id'],
+            'same_vehicle_url' => $sameVehicleMeta['vehicle_parts_url'],
             'create_flow_debug' => [
                 'vehicle_fetch_attempted' => (bool) ($vehicleDebug['vehicle_fetch_attempted'] ?? false),
                 'vehicle_fetch_success' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
@@ -1090,6 +1094,7 @@ class OvokoIntegrationService
         update_post_meta($productId, '_stock', (string) $stockQty);
         update_post_meta($productId, '_stock_status', $stockStatus);
         update_post_meta($productId, '_ovoko_part_id', $partId);
+        $sameVehicleMeta = $this->write_same_vehicle_meta_for_ovoko_product($productId, $normalized);
         update_post_meta($productId, '_ovoko_status', (string) (($record['status'] ?? '') ?: ($normalized['status'] ?? '')));
         update_post_meta($productId, '_ovoko_updated_at', $updatedAt);
         update_post_meta($productId, '_ovoko_category_id', $categoryId);
@@ -1112,6 +1117,7 @@ class OvokoIntegrationService
         if ($syncHash !== '') {
             update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
         }
+        $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
         if (function_exists('wc_get_product')) {
             $product = wc_get_product($productId);
             if ($product && method_exists($product, 'save')) {
@@ -1137,6 +1143,15 @@ class OvokoIntegrationService
             'category_policy' => $created ? 'assigned_from_category_id_tree' : 'verify_only_no_category_write',
             'images_policy' => $created ? 'imported_for_new_product' : 'untouched_existing_product',
             'images_import_result' => $imageImportResult,
+            'listing_image_attempted' => (bool) ($listingImageResult['listing_image_attempted'] ?? false),
+            'listing_image_generated' => (bool) ($listingImageResult['listing_image_generated'] ?? false),
+            'listing_image_id' => (int) ($listingImageResult['listing_image_id'] ?? 0),
+            'listing_image_source_id' => (int) ($listingImageResult['listing_image_source_id'] ?? 0),
+            'listing_image_strategy' => (string) ($listingImageResult['listing_image_strategy'] ?? 'thumbnail_fallback'),
+            'listing_image_errors' => (array) ($listingImageResult['errors'] ?? []),
+            'same_vehicle_meta_written' => $sameVehicleMeta['written_meta_keys'],
+            'same_vehicle_car_id' => $sameVehicleMeta['car_id'],
+            'same_vehicle_url' => $sameVehicleMeta['vehicle_parts_url'],
             'idempotency_meta_written' => ['_gpswiss_ovoko_last_synced_updated_at' => $updatedAt, '_gpswiss_ovoko_last_synced_hash' => $syncHash],
             'published' => $created,
         ];
@@ -1189,11 +1204,17 @@ class OvokoIntegrationService
         $thumbnailDimensions = $thumbnailId > 0 ? wp_get_attachment_metadata($thumbnailId) : [];
         $listingDimensions = $listingImageId > 0 ? wp_get_attachment_metadata($listingImageId) : [];
         $listingSameAsThumbnail = ($listingImageId > 0 && $thumbnailId > 0 && $listingImageId === $thumbnailId);
-        $selection = $this->select_best_listing_source_image($productId);
-        $selectedSourceId = (int) ($selection['selected_source_image_id'] ?? 0);
-        $selectedMetrics = $selectedSourceId > 0 ? $this->get_attachment_trim_metrics_for_listing_selection($selectedSourceId) : null;
-        $selectedScore = is_array($selectedMetrics) ? $this->calculate_listing_source_quality_score($selectedMetrics) : 0.0;
-        $selectedTier = is_array($selectedMetrics) ? $this->determine_listing_source_quality_tier($selectedMetrics) : 'unknown';
+        $diagnostics = [];
+        $selection = [];
+        if (class_exists('\\AWI\\Plugin') && method_exists('\\AWI\\Plugin', 'get_listing_image_diagnostics')) {
+            $diagnostics = \AWI\Plugin::get_listing_image_diagnostics($productId);
+        }
+        if (class_exists('\\AWI\\Plugin') && method_exists('\\AWI\\Plugin', 'select_best_listing_source_image')) {
+            $selection = \AWI\Plugin::select_best_listing_source_image($productId);
+        }
+        $selectedSourceId = (int) (($selection['selected_source_image_id'] ?? null) ?: ($diagnostics['selected_source_image_id'] ?? 0));
+        $selectedTier = (string) (($diagnostics['best_available_source_quality_tier'] ?? '') ?: ($diagnostics['listing_quality_tier'] ?? 'unknown'));
+        $selectedScore = (float) ($diagnostics['listing_quality_score'] ?? 0.0);
         $reason = 'missing_thumbnail';
         if ($listingImageId > 0 && !$listingSameAsThumbnail) {
             $reason = 'real_generated_listing_image_present';
@@ -1218,28 +1239,19 @@ class OvokoIntegrationService
             'listing_image_is_same_as_thumbnail' => $listingSameAsThumbnail,
             'thumbnail_dimensions' => ['width' => (int) ($thumbnailDimensions['width'] ?? 0), 'height' => (int) ($thumbnailDimensions['height'] ?? 0)],
             'listing_image_dimensions' => ['width' => (int) ($listingDimensions['width'] ?? 0), 'height' => (int) ($listingDimensions['height'] ?? 0)],
-            'strategy' => $listingImageId > 0 && !$listingSameAsThumbnail ? 'ovoko_copied_allegro_generator' : 'real_generator_required',
-            'needs_real_generated_listing_image' => $listingImageId <= 0 || $listingSameAsThumbnail,
-            'needs_listing_image_generation' => $listingImageId <= 0 || $listingSameAsThumbnail,
-            'reason' => $reason,
-            'candidate_source_image_ids' => (array) ($selection['candidate_source_image_ids'] ?? []),
+            'candidate_source_image_ids' => (array) ($selection['candidate_source_image_ids'] ?? ($diagnostics['candidate_source_image_ids'] ?? array_values(array_unique(array_filter(array_merge([$thumbnailId], $galleryIds)))))),
             'selected_source_image_id' => $selectedSourceId,
-            'selected_source_aspect_ratio' => (float) ($selection['selected_source_aspect_ratio'] ?? 0.0),
+            'selected_source_aspect_ratio' => (float) ($selection['selected_source_aspect_ratio'] ?? ($diagnostics['selected_source_aspect_ratio'] ?? 0.0)),
             'selected_source_square_fill_ratio' => (float) ($selection['selected_source_square_fill_ratio'] ?? 0.0),
-            'selected_source_selection_reason' => (string) ($selection['selected_source_selection_reason'] ?? 'no_valid_image_candidates'),
-            'listing_quality_tier' => $selectedTier,
-            'listing_quality_score' => round((float) $selectedScore, 6),
-            'standard_quality_tier_before_boost' => $selectedTier,
-            'standard_quality_score_before_boost' => round((float) $selectedScore, 6),
-            'target_fill_ratio' => (float) get_post_meta($listingImageId, '_awi_listing_target_fill_ratio', true),
-            'image_width' => (int) get_post_meta($listingImageId, '_awi_listing_source_width', true),
-            'image_height' => (int) get_post_meta($listingImageId, '_awi_listing_source_height', true),
-            'object_width' => (int) get_post_meta($listingImageId, '_awi_listing_object_width', true),
-            'object_height' => (int) get_post_meta($listingImageId, '_awi_listing_object_height', true),
-            'crop_width' => (int) get_post_meta($listingImageId, '_awi_listing_crop_width', true),
-            'crop_height' => (int) get_post_meta($listingImageId, '_awi_listing_crop_height', true),
-            'final_rendered_width' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_width', true),
-            'final_rendered_height' => (int) get_post_meta($listingImageId, '_awi_listing_rendered_height', true),
+            'selected_source_selection_reason' => (string) ($selection['selected_source_selection_reason'] ?? ($diagnostics['selected_source_selection_reason'] ?? '')),
+            'selected_source_quality_tier' => $selectedTier,
+            'selected_source_quality_score' => $selectedScore,
+            'status_reason' => $reason,
+            'listing_attachment_source_id' => (int) ($diagnostics['listing_attachment_source_id'] ?? get_post_meta($listingImageId, '_awi_listing_source_id', true)),
+            'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? get_post_meta($listingImageId, '_awi_listing_target_fill_ratio', true)),
+            'listing_attachment_fill_ratio' => (float) ($diagnostics['listing_attachment_fill_ratio'] ?? get_post_meta($listingImageId, '_awi_listing_fill_ratio', true)),
+            'listing_attachment_render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? get_post_meta($listingImageId, '_awi_listing_render_profile', true)),
+            'awi_diagnostics' => $diagnostics,
         ];
     }
 
@@ -1385,137 +1397,48 @@ class OvokoIntegrationService
 
     public function generate_listing_image_for_ovoko_product(int $productId): array
     {
-        $status = $this->preview_listing_image_status($productId);
-        $selection = $this->select_best_listing_source_image($productId);
-        $selectedSourceId = (int) ($selection['selected_source_image_id'] ?? 0);
         $result = [
-            'ok' => true,
+            'ok' => false,
             'product_id' => $productId,
             'listing_image_attempted' => true,
             'listing_image_generated' => false,
             'listing_image_id' => 0,
             'listing_image_source_id' => 0,
-            'listing_image_strategy' => 'ovoko_copied_allegro_generator_exact',
+            'listing_image_strategy' => 'allegro_product_mapper_reused',
             'listing_image_meta_written' => [],
             'errors' => [],
         ];
 
-        if ($selectedSourceId <= 0) {
-            $result['errors'][] = 'missing_source_image';
+        $sameVehicleMeta = $this->backfill_same_vehicle_meta_for_existing_product($productId);
+
+        if (!class_exists('\AWI\Plugin') || !method_exists('\AWI\Plugin', 'ensure_listing_image_for_product')) {
+            $result['reason'] = 'allegro_listing_image_helper_unavailable';
+            $result['errors'][] = 'AWI\\Plugin::ensure_listing_image_for_product is unavailable.';
             return $result;
         }
 
-        $createdListingId = $this->create_ovoko_listing_image_attachment_from_source($selectedSourceId, $productId);
-        if (is_wp_error($createdListingId)) {
-            $result['reason'] = 'real_generator_unavailable';
-            $result['errors'][] = $createdListingId->get_error_code() . ': ' . $createdListingId->get_error_message();
-            return $result;
-        }
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, false);
+        $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
+        $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
+        $status = (string) ($awiResult['status'] ?? 'unknown');
+        $ok = in_array($status, ['created', 'skipped'], true) && $listingImageId > 0;
 
-        update_post_meta($productId, '_awi_listing_image_id', (int) $createdListingId);
-        update_post_meta($productId, '_awi_listing_image_source_id', $selectedSourceId);
-        update_post_meta($productId, '_awi_listing_image_generated_at', gmdate('Y-m-d H:i:s'));
-        update_post_meta($productId, '_awi_listing_selected_source_image_id', $selectedSourceId);
-        update_post_meta($productId, '_awi_listing_selected_source_aspect_ratio', (float) ($selection['selected_source_aspect_ratio'] ?? 0.0));
-        update_post_meta($productId, '_awi_listing_source_selection_reason', (string) ($selection['selected_source_selection_reason'] ?? ''));
-        $result['listing_image_id'] = (int) $createdListingId;
-        $result['listing_image_source_id'] = $selectedSourceId;
-        $result['listing_image_generated'] = ((int) $createdListingId > 0 && (int) $createdListingId !== $selectedSourceId);
-        $result['listing_image_strategy'] = 'ovoko_copied_allegro_generator_exact';
-        $result['listing_image_meta_written'] = ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at', '_awi_listing_variant', '_awi_listing_source_id', '_awi_listing_selected_source_image_id', '_awi_listing_selected_source_aspect_ratio', '_awi_listing_source_selection_reason'];
-        $result = array_merge($result, $this->preview_listing_image_status($productId));
+        $result = array_merge($result, $awiResult, [
+            'ok' => $ok,
+            'listing_image_attempted' => true,
+            'listing_image_generated' => $status === 'created' && $listingImageId > 0,
+            'listing_image_id' => $listingImageId,
+            'listing_image_source_id' => $sourceImageId,
+            'listing_image_strategy' => 'allegro_product_mapper_reused',
+            'listing_image_meta_written' => ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at'],
+            'same_vehicle_meta_written' => $sameVehicleMeta['written_meta_keys'],
+            'same_vehicle_car_id' => $sameVehicleMeta['car_id'],
+            'same_vehicle_url' => $sameVehicleMeta['vehicle_parts_url'],
+            'errors' => $status === 'error' ? [(string) ($awiResult['error_message'] ?? $awiResult['reason'] ?? 'listing_image_generation_failed')] : [],
+        ]);
 
-        return $result;
+        return array_merge($result, $this->preview_listing_image_status($productId));
     }
-
-    private function create_ovoko_listing_image_attachment_from_source(int $sourceAttachmentId, int $productId)
-    {
-        if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
-            return new \WP_Error('gd_missing', 'Brak biblioteki GD wymaganej do generowania obrazu listingowego.');
-        }
-        $sourcePath = get_attached_file($sourceAttachmentId);
-        if (!is_string($sourcePath) || $sourcePath === '' || !file_exists($sourcePath)) {
-            return new \WP_Error('missing_source_file', 'Brak pliku źródłowego dla zdjęcia listingowego.');
-        }
-        $sourceBlob = file_get_contents($sourcePath);
-        $sourceImage = is_string($sourceBlob) ? @imagecreatefromstring($sourceBlob) : false;
-        if (!$sourceImage) {
-            return new \WP_Error('source_decode_failed', 'Nie udało się odczytać obrazu źródłowego.');
-        }
-        $sourceWidth = imagesx($sourceImage); $sourceHeight = imagesy($sourceImage);
-        $canvasSize = 900;
-        $bbox = $this->detect_non_white_bbox($sourceImage, $sourceWidth, $sourceHeight);
-        $objectX = 0; $objectY = 0; $objectWidth = $sourceWidth; $objectHeight = $sourceHeight;
-        if (is_array($bbox)) { $objectX = (int) $bbox['x']; $objectY = (int) $bbox['y']; $objectWidth = (int) $bbox['width']; $objectHeight = (int) $bbox['height']; }
-        $objectAspectRatio = $objectWidth / max(1, $objectHeight);
-        $renderProfile = ($objectAspectRatio < 0.55 || $objectAspectRatio > 2.0) ? 'boost_generic' : 'standard';
-        $targetRatio = $renderProfile === 'standard' ? 0.96 : 0.995;
-        $cropPaddingRatio = $renderProfile === 'standard' ? 0.08 : 0.02;
-        $desiredSide = (int) round(max($objectWidth, $objectHeight) * (1 + $cropPaddingRatio));
-        $cropSide = max(1, min($desiredSide, min($sourceWidth, $sourceHeight)));
-        $objectCenterX = $objectX + ($objectWidth / 2); $objectCenterY = $objectY + ($objectHeight / 2);
-        $cropX = max(0, min((int) round($objectCenterX - ($cropSide / 2)), $sourceWidth - $cropSide));
-        $cropY = max(0, min((int) round($objectCenterY - ($cropSide / 2)), $sourceHeight - $cropSide));
-        $cropWidth = $cropSide; $cropHeight = $cropSide;
-        $targetObjectSize = (int) round($canvasSize * $targetRatio);
-        $scale = $targetObjectSize / max(1, max($cropWidth, $cropHeight));
-        $targetWidth = max(1, (int) round($cropWidth * $scale));
-        $targetHeight = max(1, (int) round($cropHeight * $scale));
-        $dstX = (int) floor(($canvasSize - $targetWidth) / 2);
-        $dstY = (int) floor(($canvasSize - $targetHeight) / 2);
-        $canvas = imagecreatetruecolor($canvasSize, $canvasSize);
-        $white = imagecolorallocate($canvas, 255, 255, 255);
-        imagefill($canvas, 0, 0, $white);
-        imagecopyresampled($canvas, $sourceImage, $dstX, $dstY, $cropX, $cropY, $targetWidth, $targetHeight, $cropWidth, $cropHeight);
-        $uploadDir = wp_upload_dir();
-        $targetFilename = wp_unique_filename((string) $uploadDir['path'], sanitize_file_name(pathinfo((string) basename($sourcePath), PATHINFO_FILENAME) . '-awi-listing.jpg'));
-        $targetPath = trailingslashit((string) $uploadDir['path']) . $targetFilename;
-        $saved = imagejpeg($canvas, $targetPath, 90);
-        imagedestroy($sourceImage); imagedestroy($canvas);
-        if (!$saved) {
-            return new \WP_Error('listing_image_save_failed', 'Nie udało się zapisać obrazu listingowego.');
-        }
-        $attachmentId = wp_insert_attachment(['post_mime_type' => 'image/jpeg', 'post_title' => sanitize_text_field((string) get_the_title($sourceAttachmentId)) . ' listing', 'post_status' => 'inherit', 'post_parent' => $productId], $targetPath, $productId);
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        $meta = wp_generate_attachment_metadata((int) $attachmentId, $targetPath);
-        if (is_array($meta)) { wp_update_attachment_metadata((int) $attachmentId, $meta); }
-        update_post_meta((int) $attachmentId, '_awi_listing_variant', 1);
-        update_post_meta((int) $attachmentId, '_awi_listing_source_id', $sourceAttachmentId);
-        update_post_meta((int) $attachmentId, '_awi_listing_target_fill_ratio', $targetRatio);
-        update_post_meta((int) $attachmentId, '_awi_listing_source_width', $sourceWidth);
-        update_post_meta((int) $attachmentId, '_awi_listing_source_height', $sourceHeight);
-        update_post_meta((int) $attachmentId, '_awi_listing_object_width', $objectWidth);
-        update_post_meta((int) $attachmentId, '_awi_listing_object_height', $objectHeight);
-        update_post_meta((int) $attachmentId, '_awi_listing_crop_width', $cropWidth);
-        update_post_meta((int) $attachmentId, '_awi_listing_crop_height', $cropHeight);
-        update_post_meta((int) $attachmentId, '_awi_listing_rendered_width', $targetWidth);
-        update_post_meta((int) $attachmentId, '_awi_listing_rendered_height', $targetHeight);
-        update_post_meta((int) $attachmentId, '_awi_listing_render_profile', $renderProfile);
-        return (int) $attachmentId;
-    }
-
-    private function select_best_listing_source_image(int $productId): array
-    {
-        $thumbnailId = (int) get_post_thumbnail_id($productId);
-        $galleryIds = array_values(array_filter(array_map('intval', array_map('trim', explode(',', (string) get_post_meta($productId, '_product_image_gallery', true))))));
-        $candidateIds = array_values(array_unique(array_filter(array_merge([$thumbnailId], $galleryIds))));
-        $best = null; $bestScore = null;
-        foreach ($candidateIds as $candidateId) {
-            $metrics = $this->get_attachment_trim_metrics_for_listing_selection((int) $candidateId);
-            if (!is_array($metrics)) { continue; }
-            $score = $this->calculate_listing_source_quality_score($metrics);
-            if ($best === null || $score > (float) $bestScore) { $best = $metrics; $bestScore = $score; }
-        }
-        if (!is_array($best)) { return ['candidate_source_image_ids' => $candidateIds, 'selected_source_image_id' => 0, 'selected_source_aspect_ratio' => 0.0, 'selected_source_square_fill_ratio' => 0.0, 'selected_source_selection_reason' => 'no_valid_image_candidates']; }
-        $tier = $this->determine_listing_source_quality_tier($best);
-        $reason = sprintf('listing_first_quality_score:score=%.6f;tier=%s;aspect_ratio=%.6f;aspect_distance=%.6f;object_area_ratio=%.6f;square_fill_ratio=%.6f', (float) $bestScore, $tier, (float) $best['aspect_ratio'], (float) $best['aspect_distance_from_square'], (float) $best['object_area_ratio'], (float) $best['square_fill_ratio']);
-        return ['candidate_source_image_ids' => $candidateIds, 'selected_source_image_id' => (int) $best['attachment_id'], 'selected_source_aspect_ratio' => round((float) $best['aspect_ratio'], 6), 'selected_source_square_fill_ratio' => round((float) $best['square_fill_ratio'], 6), 'selected_source_selection_reason' => $reason];
-    }
-
-    private function determine_listing_source_quality_tier(array $metrics): string { $s = (float) ($metrics['square_fill_ratio'] ?? 0.0); $a = (float) ($metrics['aspect_ratio'] ?? 0.0); if ($s >= 0.60 && $a >= 0.55 && $a <= 1.80) { return 'preferred'; } if ($s < 0.50 || $a < 0.55 || $a > 1.80) { return 'degraded'; } return 'acceptable'; }
-    private function calculate_listing_source_quality_score(array $metrics): float { $s = max(0.0, min(1.0, (float) ($metrics['square_fill_ratio'] ?? 0.0))); $a = max(0.000001, (float) ($metrics['aspect_ratio'] ?? 1.0)); $d = abs(1.0 - $a); $o = max(0.0, min(1.0, (float) ($metrics['object_area_ratio'] ?? 0.0))); $score = ($s * 1000.0) + ($o * 150.0) - ($d * 110.0); if ($s >= 0.60) { $score += 120.0; } elseif ($s < 0.50) { $score -= 260.0; } if ($s < 0.40) { $score -= 220.0; } if ($a < 0.55 || $a > 1.80) { $score -= 220.0; } if ($a < 0.40 || $a > 2.50) { $score -= 420.0; } return $score; }
-    private function get_attachment_trim_metrics_for_listing_selection(int $attachmentId): ?array { $path = get_attached_file($attachmentId); if (!is_string($path) || $path === '' || !file_exists($path)) { return null; } $blob = file_get_contents($path); $img = is_string($blob) ? @imagecreatefromstring($blob) : false; if (!$img) { return null; } $w = imagesx($img); $h = imagesy($img); if ($w <= 0 || $h <= 0) { imagedestroy($img); return null; } $bbox = $this->detect_non_white_bbox($img, $w, $h); imagedestroy($img); $ow = is_array($bbox) ? (int) $bbox['width'] : $w; $oh = is_array($bbox) ? (int) $bbox['height'] : $h; $ratio = $ow / max(1, $oh); $long = max($ow, $oh); $short = min($ow, $oh); return ['attachment_id' => $attachmentId, 'aspect_ratio' => $ratio, 'aspect_distance_from_square' => abs(1.0 - $ratio), 'square_fill_ratio' => $short / max(1, $long), 'object_area_ratio' => ($ow * $oh) / max(1, ($w * $h))]; }
-    private function detect_non_white_bbox($img, int $w, int $h): ?array { $minX = $w; $minY = $h; $maxX = -1; $maxY = -1; for ($y = 0; $y < $h; $y += 2) { for ($x = 0; $x < $w; $x += 2) { $rgb = imagecolorat($img, $x, $y); $r = ($rgb >> 16) & 0xFF; $g = ($rgb >> 8) & 0xFF; $b = $rgb & 0xFF; if ($r < 245 || $g < 245 || $b < 245) { $minX = min($minX, $x); $minY = min($minY, $y); $maxX = max($maxX, $x); $maxY = max($maxY, $y); } } } if ($maxX < 0 || $maxY < 0) { return null; } return ['x' => $minX, 'y' => $minY, 'width' => max(1, $maxX - $minX + 1), 'height' => max(1, $maxY - $minY + 1)]; }
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
     {
@@ -1785,6 +1708,120 @@ class OvokoIntegrationService
                 '_ovoko_vehicle_color_code' => (string) ($normalized['vehicle_color_code'] ?? ''),
                 '_ovoko_vehicle_period' => (string) ($normalized['vehicle_period'] ?? ''),
             ],
+        ];
+    }
+
+    private function get_ovoko_vehicle_id_from_product(int $productId): string
+    {
+        foreach (['_ovoko_car_id', '_ovoko_vehicle_id', '_vehicle_id', '_car_id'] as $metaKey) {
+            $value = trim((string) get_post_meta($productId, $metaKey, true));
+            if ($value !== '') {
+                return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+            }
+        }
+
+        $attributes = (array) get_post_meta($productId, '_product_attributes', true);
+        foreach ($attributes as $attribute) {
+            $name = trim((string) ($attribute['name'] ?? ''));
+            $value = trim((string) ($attribute['value'] ?? ''));
+            $normalizedName = function_exists('mb_strtolower') ? mb_strtolower($name, 'UTF-8') : strtolower($name);
+            if ($value !== '' && in_array($normalizedName, ['id pojazdu ovoko', 'ovoko vehicle id', 'vehicle_id', 'car_id'], true)) {
+                return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+            }
+        }
+
+        return '';
+    }
+
+    private function backfill_same_vehicle_meta_for_existing_product(int $productId): array
+    {
+        $carId = $this->get_ovoko_vehicle_id_from_product($productId);
+        $written = [];
+        if ($carId !== '') {
+            update_post_meta($productId, '_ovoko_car_id', $carId);
+            update_post_meta($productId, '_ovoko_vehicle_id', $carId);
+            $written[] = '_ovoko_car_id';
+            $written[] = '_ovoko_vehicle_id';
+        }
+
+        $attrs = $this->get_product_details_table_rows($productId);
+        $vehicleLabel = $this->build_vehicle_label_from_attributes($attrs);
+        if ($vehicleLabel !== '') {
+            update_post_meta($productId, '_gpswiss_vehicle_label', $vehicleLabel);
+            $written[] = '_gpswiss_vehicle_label';
+        }
+
+        $vehicleSlug = sanitize_title((string) get_post_meta($productId, '_gpswiss_vehicle_slug', true));
+        if ($vehicleSlug === '' && ($carId !== '' || $vehicleLabel !== '')) {
+            $vehicleSlug = $this->build_unique_vehicle_slug($productId, $carId, $vehicleLabel, (string) ($attrs['Rok produkcji samochodu'] ?? ''));
+            if ($vehicleSlug !== '') {
+                update_post_meta($productId, '_gpswiss_vehicle_slug', $vehicleSlug);
+                $written[] = '_gpswiss_vehicle_slug';
+            }
+        }
+
+        return [
+            'car_id' => $carId,
+            'vehicle_label' => $vehicleLabel,
+            'vehicle_slug' => $vehicleSlug,
+            'vehicle_parts_url' => $vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : ($carId !== '' ? add_query_arg('ovoko_car_id', rawurlencode($carId), get_post_type_archive_link('product')) : ''),
+            'written_meta_keys' => array_values(array_unique($written)),
+        ];
+    }
+
+    private function get_ovoko_vehicle_id_from_normalized(array $normalized): string
+    {
+        foreach (['car_id', 'vehicle_id', 'ovoko_car_id', 'ovoko_vehicle_id'] as $key) {
+            $value = trim((string) ($normalized[$key] ?? ''));
+            if ($value !== '') {
+                return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+            }
+        }
+
+        $details = (array) ($normalized['incoming_details_summary'] ?? $normalized['details'] ?? []);
+        foreach (['ID pojazdu Ovoko', 'id pojazdu ovoko', 'vehicle_id', 'car_id'] as $key) {
+            $value = trim((string) ($details[$key] ?? ''));
+            if ($value !== '') {
+                return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+            }
+        }
+
+        return '';
+    }
+
+    private function write_same_vehicle_meta_for_ovoko_product(int $productId, array $normalized): array
+    {
+        $carId = $this->get_ovoko_vehicle_id_from_normalized($normalized);
+        $written = [];
+        if ($carId !== '') {
+            update_post_meta($productId, '_ovoko_car_id', $carId);
+            update_post_meta($productId, '_ovoko_vehicle_id', $carId);
+            $written[] = '_ovoko_car_id';
+            $written[] = '_ovoko_vehicle_id';
+        }
+
+        $attrs = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+        $vehicleLabel = $this->build_vehicle_label_from_attributes($attrs);
+        if ($vehicleLabel !== '') {
+            update_post_meta($productId, '_gpswiss_vehicle_label', $vehicleLabel);
+            $written[] = '_gpswiss_vehicle_label';
+        }
+
+        $vehicleSlug = '';
+        if ($carId !== '' || $vehicleLabel !== '') {
+            $vehicleSlug = $this->build_unique_vehicle_slug($productId, $carId, $vehicleLabel, (string) ($attrs['Rok produkcji samochodu'] ?? ''));
+            if ($vehicleSlug !== '') {
+                update_post_meta($productId, '_gpswiss_vehicle_slug', $vehicleSlug);
+                $written[] = '_gpswiss_vehicle_slug';
+            }
+        }
+
+        return [
+            'car_id' => $carId,
+            'vehicle_label' => $vehicleLabel,
+            'vehicle_slug' => $vehicleSlug,
+            'vehicle_parts_url' => $vehicleSlug !== '' ? home_url('/czesci-z-pojazdu/' . $vehicleSlug . '/') : ($carId !== '' ? add_query_arg('ovoko_car_id', rawurlencode($carId), get_post_type_archive_link('product')) : ''),
+            'written_meta_keys' => array_values(array_unique($written)),
         ];
     }
 

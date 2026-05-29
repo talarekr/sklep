@@ -20,7 +20,7 @@ $part_number = function_exists('gp_get_product_part_number') ? gp_get_product_pa
 $delivery_window = gp_get_delivery_text();
 $returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
 $is_ovoko_product = function_exists('gp_is_ovoko_product') ? gp_is_ovoko_product($product) : false;
-$ovoko_car_id = trim((string) get_post_meta($product->get_id(), '_ovoko_car_id', true));
+$ovoko_car_id = function_exists('gp_get_ovoko_car_id_for_product') ? gp_get_ovoko_car_id_for_product($product->get_id()) : trim((string) get_post_meta($product->get_id(), '_ovoko_car_id', true));
 $same_vehicle_url = function_exists('gp_get_vehicle_parts_url_for_product') ? gp_get_vehicle_parts_url_for_product($product->get_id()) : '';
 if ($same_vehicle_url === '' && $ovoko_car_id !== '') {
     $same_vehicle_url = add_query_arg('ovoko_car_id', rawurlencode($ovoko_car_id), get_post_type_archive_link('product'));

@@ -7,22 +7,15 @@ Standalone plugin for Ovoko→Woo callback ingestion and Supply Connector readin
 - Frontend product card uses `_awi_listing_image_id` / Allegro helper preference. `_awi_listing_image_id` must point to a **processed listing attachment**, not just `_thumbnail_id`.
 - Ovoko draft-create flow now runs a listing-image compatibility step after image import.
 - Strategy:
-  - `ovoko_copied_allegro_generator_exact`: Ovoko runs Allegro-style source selection + render processing and creates a **new** attachment.
-  - source selection candidates = featured (`_thumbnail_id`) + gallery (`_product_image_gallery`), not only first image.
-  - source scoring mirrors Allegro `listing_first_quality_score` inputs:
-    - `aspect_ratio`, `aspect_distance_from_square`,
-    - `object_area_ratio`,
-    - `square_fill_ratio`,
-    - quality tier: `degraded` / `acceptable` / `preferred`.
-  - renderer crops to square (`crop_width = crop_height`) around detected non-white object bounding box, centers object, draws on white background, output JPEG.
-  - target fill ratio matches Allegro profile behavior (`0.96` standard / boost profiles up to `0.995` when needed for extreme aspect cases).
-  - metrics persisted and reported in diagnostics:
+  - `allegro_product_mapper_reused`: Ovoko calls `AWI\Plugin::ensure_listing_image_for_product()` after image import.
+  - source selection, source scoring, render/crop behavior, quality boost, and listing attachment creation stay in Allegro Woo Importer instead of being duplicated in this plugin.
+  - diagnostics read Allegro listing-image metadata and report:
     - candidate/selected source image fields,
     - quality score/tier fields,
     - render metrics (`target_fill_ratio`, image/object/crop/final dimensions),
     - listing attachment linkage fields (`listing_image_id`, `listing_image_source_id`, `listing_image_is_same_as_thumbnail`).
   - `_awi_listing_image_id` must be different from `_thumbnail_id` when generation succeeds.
-  - If real generation is unavailable, action returns `listing_image_generated=false`, `reason=real_generator_unavailable`, with explicit `errors[]` (no silent success fallback).
+  - If the Allegro helper is unavailable, action returns `listing_image_generated=false`, `reason=allegro_listing_image_helper_unavailable`, with explicit `errors[]` (no silent success fallback).
 - Added admin diagnostics and repair actions:
   - **Preview listing image status**
   - **Generate listing image for Ovoko product**
