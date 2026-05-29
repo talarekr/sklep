@@ -167,32 +167,159 @@ class RrrApiClient
     public function probe_parts_delta_filter_support(string $fromIso = ''): array
     {
         $fromIso = trim($fromIso) !== '' ? trim($fromIso) : gmdate('c', time() - DAY_IN_SECONDS);
-        $paths = [
-            '/v2/get/parts?limit=1&page=1&updated_after=' . rawurlencode($fromIso),
-            '/v2/get/parts?limit=1&page=1&from=' . rawurlencode($fromIso),
-            '/v2/get/parts?limit=1&page=1&date_from=' . rawurlencode($fromIso),
-            '/v2/get/parts/categories?limit=1&page=1&updated_after=' . rawurlencode($fromIso),
-            '/v2/get/parts/categories?limit=1&page=1&from=' . rawurlencode($fromIso),
-            '/crm/export/parts-v2',
+        $fromTimestamp = strtotime($fromIso) ?: (time() - DAY_IN_SECONDS);
+        $dateFormats = $this->build_delta_probe_date_formats($fromTimestamp);
+        $baseline = $this->post_form('/v2/get/parts?limit=5&page=1', [], true);
+        $baselineSummary = $this->summarize_parts_delta_probe_result($baseline, $fromTimestamp);
+        $baselineIds = $this->extract_probe_record_ids((array) ($baseline['records'] ?? []));
+        $baselineTotal = (int) ($baseline['pagination']['total_count'] ?? 0);
+        $endpointParamCandidates = [
+            '/v2/get/parts' => ['updated_after', 'from', 'date_from', 'updated_from', 'modified_after', 'changed_after'],
+            '/v2/get/parts/categories' => ['updated_after', 'from', 'date_from', 'updated_from'],
         ];
+
         $results = [];
-        foreach ($paths as $path) {
-            $body = str_starts_with($path, '/crm/export/parts-v2') ? ['limit' => 1, 'from' => $fromIso] : [];
-            $result = $this->post_form($path, $body, true);
-            $payload = (array) ($result['payload'] ?? []);
-            $results[] = [
-                'path' => $path,
-                'ok' => !empty($result['ok']),
-                'success' => !empty($result['success']),
-                'status_code' => (string) ($result['status_code'] ?? ''),
-                'http_code' => $result['http_code'] ?? null,
-                'records_count' => (int) ($result['records_count'] ?? 0),
-                'pagination' => (array) ($result['pagination'] ?? []),
-                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
-                'full_payload_omitted' => true,
-            ];
+        foreach ($endpointParamCandidates as $endpoint => $params) {
+            foreach ($params as $param) {
+                foreach ($dateFormats as $formatName => $dateValue) {
+                    $path = $endpoint . '?limit=5&page=1&' . rawurlencode($param) . '=' . rawurlencode($dateValue);
+                    $result = $this->post_form($path, [], true);
+                    $results[] = $this->build_delta_probe_row($path, $result, $fromTimestamp, $baselineTotal, $baselineIds, $param, $formatName, $dateValue);
+                }
+            }
         }
-        return ['ok' => true, 'from' => $fromIso, 'probe_type' => 'read_only_delta_filter_probe', 'results' => $results];
+
+        foreach (['from', 'date_from', 'updated_after'] as $param) {
+            foreach ($dateFormats as $formatName => $dateValue) {
+                $result = $this->post_form('/crm/export/parts-v2', ['limit' => 5, $param => $dateValue], true);
+                $results[] = $this->build_delta_probe_row('/crm/export/parts-v2', $result, $fromTimestamp, $baselineTotal, $baselineIds, $param, $formatName, $dateValue, 'body');
+            }
+        }
+
+        $confirmedRows = array_values(array_filter($results, static fn(array $row): bool => !empty($row['delta_filter_confirmed'])));
+        $ignoredRows = array_values(array_filter($results, static fn(array $row): bool => !empty($row['filter_likely_ignored'])));
+        $best = $confirmedRows[0] ?? null;
+
+        return [
+            'ok' => true,
+            'from' => $fromIso,
+            'from_timestamp' => $fromTimestamp,
+            'probe_type' => 'read_only_delta_filter_probe',
+            'baseline' => $baselineSummary + [
+                'path' => '/v2/get/parts?limit=5&page=1',
+                'record_ids' => $baselineIds,
+            ],
+            'date_formats_checked' => $dateFormats,
+            'parameter_names_checked' => array_values(array_unique(array_merge($endpointParamCandidates['/v2/get/parts'], $endpointParamCandidates['/v2/get/parts/categories'], ['from', 'date_from', 'updated_after']))),
+            'delta_sync_confirmed' => $best !== null,
+            'delta_filter_used' => $best['filter_signature'] ?? '',
+            'best_confirmed_filter' => $best,
+            'filter_likely_ignored_count' => count($ignoredRows),
+            'warning' => $best === null ? 'delta_sync_not_confirmed' : '',
+            'results' => $results,
+        ];
+    }
+
+    private function build_delta_probe_date_formats(int $fromTimestamp): array
+    {
+        return [
+            'YYYY-MM-DD' => gmdate('Y-m-d', $fromTimestamp),
+            'YYYY-MM-DD HH:MM:SS' => gmdate('Y-m-d H:i:s', $fromTimestamp),
+            'ISO_8601_no_timezone' => gmdate('Y-m-d\TH:i:s', $fromTimestamp),
+            'ISO_8601_UTC' => gmdate('c', $fromTimestamp),
+            'unix_timestamp' => (string) $fromTimestamp,
+        ];
+    }
+
+    private function build_delta_probe_row(string $path, array $result, int $fromTimestamp, int $baselineTotal, array $baselineIds, string $param, string $formatName, string $dateValue, string $paramLocation = 'query'): array
+    {
+        $summary = $this->summarize_parts_delta_probe_result($result, $fromTimestamp);
+        $recordIds = $this->extract_probe_record_ids((array) ($result['records'] ?? []));
+        $total = (int) ($result['pagination']['total_count'] ?? 0);
+        $sameTotalAsBaseline = $baselineTotal > 0 && $total === $baselineTotal;
+        $sameFirstIdsAsBaseline = $baselineIds !== [] && $recordIds !== [] && $recordIds === array_slice($baselineIds, 0, count($recordIds));
+        $hasUpdatedAt = !empty($summary['updated_at_present']);
+        $hasOlderThanFrom = !empty($summary['has_records_older_than_delta_from']);
+        $resultSetChanged = ($baselineTotal > 0 && $total > 0 && $total < $baselineTotal) || ($recordIds !== [] && $baselineIds !== [] && $recordIds !== array_slice($baselineIds, 0, count($recordIds)));
+        $confirmed = !empty($result['ok']) && $hasUpdatedAt && !$hasOlderThanFrom && $resultSetChanged;
+        $likelyIgnored = !empty($result['ok']) && ($hasOlderThanFrom || ($sameTotalAsBaseline && $sameFirstIdsAsBaseline));
+
+        return $summary + [
+            'path' => $path,
+            'param_name' => $param,
+            'param_location' => $paramLocation,
+            'date_format' => $formatName,
+            'date_value' => $dateValue,
+            'filter_signature' => $paramLocation . ':' . $path . ':' . $param . ':' . $formatName,
+            'record_ids' => $recordIds,
+            'same_total_count_as_unfiltered' => $sameTotalAsBaseline,
+            'same_first_record_ids_as_unfiltered' => $sameFirstIdsAsBaseline,
+            'filter_result_set_changed' => $resultSetChanged,
+            'filter_likely_ignored' => $likelyIgnored,
+            'delta_filter_confirmed' => $confirmed,
+            'reason' => $confirmed
+                ? 'Returned records are within the requested updated_at window and differ from the unfiltered baseline.'
+                : ($likelyIgnored ? 'Filter appears ignored or returned records older than delta_from.' : 'No conclusive delta filtering effect detected.'),
+            'full_payload_omitted' => true,
+        ];
+    }
+
+    private function summarize_parts_delta_probe_result(array $result, int $fromTimestamp): array
+    {
+        $records = (array) ($result['records'] ?? []);
+        $updatedTimestamps = [];
+        $older = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $updatedAt = trim((string) ($record['updated_at'] ?? ''));
+            if ($updatedAt === '') {
+                continue;
+            }
+            $timestamp = strtotime($updatedAt);
+            if (!$timestamp) {
+                continue;
+            }
+            $updatedTimestamps[] = $timestamp;
+            if ($timestamp < $fromTimestamp) {
+                $older[] = [
+                    'id' => sanitize_text_field((string) ($record['id'] ?? '')),
+                    'updated_at' => sanitize_text_field($updatedAt),
+                ];
+            }
+        }
+
+        return [
+            'ok' => !empty($result['ok']),
+            'success' => !empty($result['success']),
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'http_code' => $result['http_code'] ?? null,
+            'records_count' => (int) ($result['records_count'] ?? 0),
+            'pagination' => (array) ($result['pagination'] ?? []),
+            'returned_records_count' => (int) ($result['records_count'] ?? count($records)),
+            'updated_at_present' => $updatedTimestamps !== [],
+            'min_updated_at' => $updatedTimestamps !== [] ? gmdate('c', min($updatedTimestamps)) : '',
+            'max_updated_at' => $updatedTimestamps !== [] ? gmdate('c', max($updatedTimestamps)) : '',
+            'records_older_than_delta_from_count' => count($older),
+            'has_records_older_than_delta_from' => $older !== [],
+            'records_older_than_delta_from_sample' => array_slice($older, 0, 5),
+        ];
+    }
+
+    private function extract_probe_record_ids(array $records): array
+    {
+        $ids = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $id = trim((string) ($record['id'] ?? ''));
+            if ($id !== '') {
+                $ids[] = sanitize_text_field($id);
+            }
+        }
+        return $ids;
     }
 
     public function probe_part_search_by_code(string $partNumber): array
