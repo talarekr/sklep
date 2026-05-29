@@ -2903,6 +2903,7 @@ class OvokoIntegrationService
         }
 
         $ids = $productId > 0 ? [$productId] : $this->get_product_ids_after($afterProductId, $batchSize);
+        $categorySnapshot = $this->load_ovoko_category_tree_snapshot_for_batch();
         $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0];
         $legacyCounts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0];
         $results = [];
@@ -2910,13 +2911,13 @@ class OvokoIntegrationService
         foreach ($ids as $pid) {
             $legacyCounts['total_scanned']++;
             $counts['processed']++;
-            $single = $this->update_single_woo_category_from_ovoko((int) $pid, $dryRun, true, true, $legacyCounts);
+            $single = $this->update_single_woo_category_from_ovoko((int) $pid, $dryRun, true, true, $legacyCounts, $categorySnapshot, false);
             $single['would_remove_old_categories'] = (array) ($single['categories_to_be_replaced'] ?? []);
             $single['would_create_terms'] = (array) ($single['categories_that_would_be_created'] ?? []);
             $single['would_assign_terms'] = (array) ($single['planned_category_hierarchy'] ?? []);
             $single['would_set_primary_category'] = (string) ($single['planned_final_category']['name'] ?? '') !== '' ? ($single['planned_final_category'] ?? null) : null;
             $single['expected_ovoko_category_path'] = (string) ($single['resolved_full_ovoko_category_path'] ?? $single['ovoko_category_title_path'] ?? '');
-            $results[] = $single;
+            $results[] = $this->summarize_category_rebuild_product_result($single);
             if (empty($single['ok']) || !empty($single['error'])) { $counts['errors']++; }
             if (($single['reason'] ?? '') === 'missing_ovoko_id') { $counts['missing_ovoko_id']++; }
             if (trim((string) ($single['category_id'] ?? '')) === '' && ($single['reason'] ?? '') !== 'missing_ovoko_id') { $counts['missing_category_id']++; }
@@ -2957,6 +2958,13 @@ class OvokoIntegrationService
             'duration' => round(microtime(true) - $started, 3),
             'counts' => $counts,
             'legacy_counts' => $legacyCounts,
+            'category_tree_snapshot' => [
+                'ok' => !empty($categorySnapshot['ok']),
+                'endpoint' => (string) ($categorySnapshot['endpoint'] ?? ''),
+                'categories_total_loaded' => count((array) ($categorySnapshot['map'] ?? [])),
+                'fetched_at' => (string) ($categorySnapshot['fetched_at'] ?? ''),
+                'error' => (string) ($categorySnapshot['error'] ?? ''),
+            ],
             'results' => $results,
             'done' => $done,
             'menu_cache_rebuild' => $cacheResult,
@@ -3224,7 +3232,57 @@ class OvokoIntegrationService
         return ['ok'=>$counts['errors']===0,'action_name'=>'Update Woo categories from Ovoko','dry_run'=>$dryRun,'create_missing_categories'=>$createMissing,'replace_existing_categories'=>$replaceExisting,'after_product_id'=>$afterProductId,'next_after_product_id'=>max($afterProductId,(int) end($productIds)),'limit'=>$limit,'batch_size'=>$batchSize,'results'=>$results,'counts'=>$counts];
     }
 
-    private function update_single_woo_category_from_ovoko(int $productId, bool $dryRun, bool $createMissing, bool $replaceExisting, array &$counts): array
+    private function load_ovoko_category_tree_snapshot_for_batch(): array
+    {
+        $client = $this->build_rrr_api_client();
+        if ($client === null) {
+            return ['ok' => false, 'error' => 'rrr_api_client_not_initialized', 'map' => []];
+        }
+
+        $snapshot = $client->fetch_categories_tree_snapshot();
+        $nodes = (array) ($snapshot['nodes'] ?? []);
+        $snapshot['map'] = $client->build_category_path_map_from_nodes($nodes);
+        unset($snapshot['nodes']);
+
+        return $snapshot;
+    }
+
+    private function summarize_category_rebuild_product_result(array $single): array
+    {
+        return [
+            'ok' => !empty($single['ok']),
+            'product_id' => (int) ($single['product_id'] ?? 0),
+            'ovoko_id' => (string) ($single['ovoko_id'] ?? ''),
+            'category_id' => (string) ($single['category_id'] ?? ''),
+            'expected_path' => (string) ($single['expected_ovoko_category_path'] ?? $single['resolved_full_ovoko_category_path'] ?? $single['ovoko_category_title_path'] ?? ''),
+            'current_path' => $this->format_current_product_category_path((array) ($single['current_woo_categories'] ?? [])),
+            'would_create_terms' => (array) ($single['would_create_terms'] ?? []),
+            'would_assign_final_term' => $single['would_set_primary_category'] ?? null,
+            'warnings' => (array) ($single['warnings'] ?? []),
+            'errors' => (array) ($single['errors'] ?? []),
+            'reason' => (string) ($single['reason'] ?? ''),
+        ];
+    }
+
+    private function format_current_product_category_path(array $currentCategories): string
+    {
+        if ($currentCategories === []) {
+            return '';
+        }
+        $names = [];
+        foreach ($currentCategories as $category) {
+            if (!is_array($category)) {
+                continue;
+            }
+            $name = trim((string) ($category['name'] ?? ''));
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        return implode(' / ', $names);
+    }
+
+    private function update_single_woo_category_from_ovoko(int $productId, bool $dryRun, bool $createMissing, bool $replaceExisting, array &$counts, ?array $categorySnapshot = null, bool $includeDebug = true): array
     {
         $product=wc_get_product($productId);
         if(!$product){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'reason'=>'product_not_found'];}
@@ -3239,10 +3297,10 @@ class OvokoIntegrationService
         $payload=(array)($single['payload']??[]);
         $record = $client->extract_single_part_record($payload);
         $normalized = $client->normalize_rrr_single_part_payload($payload);
-        $categoryDiagnostics = $this->build_ovoko_category_diagnostics($payload, $record, $normalized);
+        $categoryDiagnostics = $this->build_ovoko_category_diagnostics($payload, $record, $normalized, $categorySnapshot, $includeDebug);
         $categoryResolve = $categoryDiagnostics['resolution'];
         $path = (string) ($categoryResolve['resolved_full_ovoko_category_path'] ?? '');
-        $debug = [
+        $debug = $includeDebug ? [
             'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
             'nested_keys_depth_4' => $this->collect_nested_keys_to_depth($payload, 4),
             'category_candidate_paths_checked' => $categoryResolve['checked_paths'] ?? [],
@@ -3262,7 +3320,7 @@ class OvokoIntegrationService
             'category_322_node' => $categoryResolve['category_322_node'] ?? null,
             'category_322_parent_chain' => $categoryResolve['category_322_parent_chain'] ?? [],
             'category_322_resolved_path' => $categoryResolve['category_322_resolved_path'] ?? '',
-        ];
+        ] : [];
         if($path===''){
             $counts['ovoko_category_missing']++;$counts['products_skipped']++;
             $debug['fields_matching_category_title_path'] = $this->collect_matching_nested_fields($payload, ['category', 'title', 'path']);
@@ -3278,13 +3336,19 @@ class OvokoIntegrationService
         $currentTerms=wp_get_post_terms($productId,'product_cat',['fields'=>'all']);
         $currentCats=[];$currentIds=[];
         foreach((array)$currentTerms as $t){$currentCats[]=['term_id'=>(int)$t->term_id,'name'=>(string)$t->name,'parent'=>(int)$t->parent];$currentIds[]=(int)$t->term_id;}
-        $hier=[];$missing=[];$parent=0;$finalId=0;$chainOk=true;$levelIndex=0;$pendingByOvokoId=[];
+        $hier=[];$missing=[];$parent=0;$finalId=0;$chainOk=true;$levelIndex=0;$pendingByOvokoId=[];$pendingByLevel=[];
         foreach($levels as $level){
             $levelIndex++;
             $name=(string) ($level['name'] ?? '');
             $ovokoCategoryId=(int) ($level['ovoko_category_id'] ?? 0);
             $parentOvokoCategoryId=(int) ($level['parent_ovoko_category_id'] ?? 0);
             $parentPendingCreate = $parentOvokoCategoryId > 0 && !empty($pendingByOvokoId[$parentOvokoCategoryId]);
+            if (!$parentPendingCreate && $levelIndex > 1 && !empty($pendingByLevel[$levelIndex - 1])) {
+                $parentPendingCreate = true;
+                $parentOvokoCategoryId = (int) ($pendingByLevel[$levelIndex - 1]['ovoko_category_id'] ?? 0);
+            }
+            $pendingParent = $parentPendingCreate ? (array) (($pendingByOvokoId[$parentOvokoCategoryId] ?? []) ?: ($pendingByLevel[$levelIndex - 1] ?? [])) : [];
+            $plannedParentId = $parentPendingCreate ? 0 : $parent;
 
             $term=null;
             if(!$parentPendingCreate){
@@ -3294,26 +3358,32 @@ class OvokoIntegrationService
 
             if($term){$counts['categories_existing']++;}
             else {
-                $missingItem=['name'=>$name,'parent_id'=>$parent,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
+                $missingItem=['name'=>$name,'parent_id'=>$plannedParentId,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
                 if($parentPendingCreate){
                     $missingItem['parent_pending_create']=true;
-                    $missingItem['parent_name']=(string) ($pendingByOvokoId[$parentOvokoCategoryId]['name'] ?? '');
+                    $missingItem['parent_pending_ref']=(string) ($pendingParent['pending_ref'] ?? 'pending:level_' . max(1, $levelIndex - 1));
+                    $missingItem['parent_name']=(string) ($pendingParent['name'] ?? '');
                     $missingItem['parent_ovoko_category_id']=$parentOvokoCategoryId;
-                    $missingItem['parent_level_index']=(int) ($pendingByOvokoId[$parentOvokoCategoryId]['level_index'] ?? 0);
+                    $missingItem['parent_level_index']=(int) ($pendingParent['level_index'] ?? 0);
                 } else {
                     $missingItem['parent_pending_create']=false;
                 }
                 $missing[]=$missingItem;
                 if(!$dryRun && $createMissing){$created=wp_insert_term($name,'product_cat',['parent'=>$parent]); if(is_wp_error($created)){$counts['errors']++;return ['ok'=>false,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'error'=>$created->get_error_message(),'reason'=>'category_create_failed'];} $term=get_term((int)$created['term_id'],'product_cat'); $counts['categories_created']++; }
-                if($ovokoCategoryId > 0){$pendingByOvokoId[$ovokoCategoryId]=['name'=>$name,'level_index'=>$levelIndex];}
+                if(!$term){
+                    $pending=['name'=>$name,'level_index'=>$levelIndex,'ovoko_category_id'=>$ovokoCategoryId,'pending_ref'=>'pending:level_'.$levelIndex];
+                    if($ovokoCategoryId > 0){$pendingByOvokoId[$ovokoCategoryId]=$pending;}
+                    $pendingByLevel[$levelIndex]=$pending;
+                }
             }
 
-            $hierItem=['name'=>$name,'parent_id'=>$parent,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
+            $hierItem=['name'=>$name,'parent_id'=>$plannedParentId,'exists'=>$term?true:false,'term_id'=>$term?(int)$term->term_id:0,'ovoko_category_id'=>$ovokoCategoryId,'level_index'=>$levelIndex];
             if($parentPendingCreate){
                 $hierItem['parent_pending_create']=true;
-                $hierItem['parent_name']=(string) ($pendingByOvokoId[$parentOvokoCategoryId]['name'] ?? '');
+                $hierItem['parent_pending_ref']=(string) ($pendingParent['pending_ref'] ?? 'pending:level_' . max(1, $levelIndex - 1));
+                $hierItem['parent_name']=(string) ($pendingParent['name'] ?? '');
                 $hierItem['parent_ovoko_category_id']=$parentOvokoCategoryId;
-                $hierItem['parent_level_index']=(int) ($pendingByOvokoId[$parentOvokoCategoryId]['level_index'] ?? 0);
+                $hierItem['parent_level_index']=(int) ($pendingParent['level_index'] ?? 0);
             }
             $hier[]=$hierItem;
 
@@ -3399,7 +3469,7 @@ class OvokoIntegrationService
         return $segments;
     }
 
-    private function build_ovoko_category_diagnostics(array $payload, array $record, array $normalized): array
+    private function build_ovoko_category_diagnostics(array $payload, array $record, array $normalized, ?array $categorySnapshot = null, bool $includeEndpointProbe = true): array
     {
         $allCategoryRelatedFields = $this->collect_matching_nested_fields_any($payload, ['category', 'path', 'breadcrumb']);
         $fragment = [];
@@ -3413,8 +3483,14 @@ class OvokoIntegrationService
         $resolved['category_resolution_method'] = $resolved['category_title_path_source_key'] !== '' ? 'payload_field_direct' : 'not_resolved';
         $resolved['category_resolution_confidence'] = $resolved['resolved_full_ovoko_category_path'] !== '' ? 'medium' : 'low';
         $client = $this->build_rrr_api_client();
-        $endpointProbe = $client?->probe_category_endpoints((int) $categoryId);
-        $treeResolution = $client?->resolve_category_path_from_tree((int) $categoryId);
+        $endpointProbe = null;
+        $treeResolution = null;
+        if ($categorySnapshot !== null && !empty($categorySnapshot['map']) && $client !== null) {
+            $treeResolution = $client->resolve_category_path_from_map((int) $categoryId, (array) $categorySnapshot['map']);
+        } elseif ($includeEndpointProbe && $client !== null) {
+            $endpointProbe = $client->probe_category_endpoints((int) $categoryId);
+            $treeResolution = $client->resolve_category_path_from_tree((int) $categoryId);
+        }
         $partsCategoriesResolution = null;
         if (is_array($treeResolution)) {
             $resolved['category_tree_endpoint_used'] = (string) ($treeResolution['category_tree_endpoint_used'] ?? '');

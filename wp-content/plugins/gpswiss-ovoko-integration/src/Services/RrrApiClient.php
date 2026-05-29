@@ -922,6 +922,112 @@ class RrrApiClient
         return ['ok' => true, 'category_id' => $categoryId, 'endpoints' => $rows];
     }
 
+    public function fetch_categories_tree_snapshot(): array
+    {
+        $path = '/get/categories/tree';
+        $raw = $this->post_form($path, [], true);
+        $payload = (array) ($raw['payload'] ?? []);
+        $nodes = (!empty($raw['success']) && !empty($payload)) ? $this->extract_category_nodes($payload) : [];
+
+        return [
+            'ok' => !empty($raw['success']) && $nodes !== [],
+            'endpoint' => $path,
+            'http_code' => $raw['http_code'] ?? null,
+            'status_code' => (string) ($raw['status_code'] ?? ''),
+            'msg' => (string) ($raw['msg'] ?? ''),
+            'payload_shape' => $this->describe_categories_payload_shape($payload),
+            'nodes' => $nodes,
+            'fetched_at' => gmdate('c'),
+        ];
+    }
+
+    public function build_category_path_map_from_nodes(array $nodes): array
+    {
+        $byId = [];
+        foreach ($nodes as $node) {
+            if (!is_array($node)) {
+                continue;
+            }
+            $id = (string) ($node['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $byId[$id] = $node;
+        }
+
+        $map = [];
+        foreach ($byId as $id => $node) {
+            $chain = [];
+            $visited = [];
+            $cursor = $node;
+            for ($i = 0; $i < 20; $i++) {
+                $cursorId = (string) ($cursor['id'] ?? '');
+                if ($cursorId === '' || isset($visited[$cursorId])) {
+                    break;
+                }
+                $visited[$cursorId] = true;
+                $chain[] = $cursor;
+                $parentId = (string) ($cursor['parent_id'] ?? '');
+                if ($parentId === '' || $parentId === '0' || !isset($byId[$parentId])) {
+                    break;
+                }
+                $cursor = $byId[$parentId];
+            }
+            $chain = array_reverse($chain);
+            $segments = array_values(array_filter(array_map(function ($n): string {
+                return trim((string) ($n['pl'] ?? $n['title'] ?? $n['en'] ?? $n['name'] ?? $n['label'] ?? ''));
+            }, $chain), static fn($v) => $v !== ''));
+            $map[$id] = [
+                'id' => $id,
+                'node' => $node,
+                'parent_chain' => $chain,
+                'path' => implode(' / ', $segments),
+            ];
+        }
+
+        return $map;
+    }
+
+    public function resolve_category_path_from_map(int $categoryId, array $categoryPathMap): array
+    {
+        $categoryId = max(1, $categoryId);
+        $entry = $categoryPathMap[(string) $categoryId] ?? null;
+        if (!is_array($entry)) {
+            return [
+                'ok' => false,
+                'category_tree_endpoint_used' => 'snapshot:/get/categories/tree',
+                'category_tree_node_found' => false,
+                'category_tree_node' => null,
+                'category_tree_parent_chain' => [],
+                'category_tree_resolved_path' => '',
+                'category_target_id' => $categoryId,
+                'category_target_found' => false,
+                'categories_total_loaded' => count($categoryPathMap),
+            ];
+        }
+
+        return [
+            'ok' => trim((string) ($entry['path'] ?? '')) !== '',
+            'category_tree_endpoint_used' => 'snapshot:/get/categories/tree',
+            'category_tree_node_found' => true,
+            'category_tree_node' => $entry['node'] ?? null,
+            'category_tree_parent_chain' => $entry['parent_chain'] ?? [],
+            'category_tree_resolved_path' => (string) ($entry['path'] ?? ''),
+            'category_tree_payload_fragment' => [],
+            'categories_payload_shape' => [],
+            'categories_sample_records' => [],
+            'categories_sample_keys' => [],
+            'category_target_id' => $categoryId,
+            'categories_total_loaded' => count($categoryPathMap),
+            'category_target_search_performed' => true,
+            'category_target_found' => true,
+            'category_target_node_if_found' => $entry['node'] ?? null,
+            'category_target_nearby_records' => [],
+            'category_target_parent_chain' => $entry['parent_chain'] ?? [],
+            'category_target_resolved_path' => (string) ($entry['path'] ?? ''),
+        ];
+    }
+
     public function resolve_category_path_from_tree(int $categoryId): array
     {
         $categoryId = max(1, $categoryId);
