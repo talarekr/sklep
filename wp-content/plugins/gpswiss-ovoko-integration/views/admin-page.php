@@ -325,6 +325,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input id="create_draft_part_id" type="number" min="1" name="part_id" value="10994" />
             <?php submit_button('Create draft product', 'primary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_vehicle_data_for_car_id'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_vehicle_data_for_car_id" />
+            <label for="probe_vehicle_car_id">car_id:</label>
+            <input id="probe_vehicle_car_id" type="number" min="1" name="car_id" value="458" />
+            <?php submit_button('Probe Ovoko vehicle data for car_id', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
