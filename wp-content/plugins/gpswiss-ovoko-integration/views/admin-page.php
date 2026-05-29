@@ -134,25 +134,29 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Ovoko ↔ Woo automatic sync</h3>
-        <p><strong>One daily dashboard.</strong> The target flow is one orchestrator, <code>gpswiss_ovoko_bidirectional_sync</code>, which will run <code>Ovoko → Woo date_from delta</code> first and then <code>Woo → Ovoko sale queue</code>. Automatic live cron is still blocked until your explicit approval.</p>
+        <p><strong>Production orchestrator.</strong> The hook <code>gpswiss_ovoko_bidirectional_sync</code> runs <code>Ovoko → Woo date_from delta</code> first and then <code>Woo → Ovoko sale queue</code>. Live writes require both the panel setting and <code>GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON</code>.</p>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0;">
             <div style="background:#f6f7f7;padding:10px;"><strong>sync_enabled</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['sync_enabled']) ? 'true' : 'false'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>woo_to_ovoko_sale_sync_enabled</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['woo_to_ovoko_sale_sync_enabled']) ? 'true' : 'false'); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['status'] ?? 'idle')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>last_successful_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_successful_sync_at'] ?? '') ?: 'not run yet')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>next_scheduled_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['next_scheduled_sync_at'] ?? '') ?: 'not scheduled')); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>delta_filter_used</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['delta_filter_used'] ?? 'date_from')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>date_from_used</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['date_from_used'] ?? '') ?: 'not run yet')); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>processed_total</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['processed_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>current page/cursor</strong><br><code><?php echo esc_html(wp_json_encode($bidirectionalStatus['current_cursor'] ?? ['page' => ($bidirectionalStatus['current_page'] ?? 1)])); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>lock status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['lock_status'] ?? 'unlocked')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>processed_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['processed_from_ovoko'] ?? $bidirectionalStatus['processed_total'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>created_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['created_from_ovoko'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>updated_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['updated_from_ovoko'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>skipped_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['skipped_from_ovoko'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>skipped_missing_price</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['skipped_missing_price'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>skipped_already_synced</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['skipped_already_synced'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>pending_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['pending_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>successful_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['successful_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>failed_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['failed_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>last_error</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_error'] ?? '') ?: 'none')); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>lock status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['lock_status'] ?? 'unlocked')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>last_warning</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_warning'] ?? '') ?: 'none')); ?></code></div>
         </div>
-        <p><strong>Guard:</strong> <code><?php echo esc_html((string) ($bidirectionalStatus['automation_guard'] ?? 'live_cron_requires_explicit_code_confirmation')); ?></code>. Buttons below are wired to safe handlers; enabling/running live automation will return a warning instead of scheduling live cron until <code>GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON</code> is explicitly set after approval.</p>
+        <p><strong>Guard:</strong> <code><?php echo esc_html((string) ($bidirectionalStatus['automation_guard'] ?? 'live_cron_requires_explicit_code_confirmation')); ?></code>. After deploy the default options are false, so auto sync stays paused until you enable the panel setting and the code guard.</p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_bidirectional_enable'); ?>

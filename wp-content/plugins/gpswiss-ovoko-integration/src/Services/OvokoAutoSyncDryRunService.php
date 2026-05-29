@@ -1197,6 +1197,60 @@ class OvokoAutoSyncDryRunService
         }
 
         $itemId = (int) array_key_first($items);
+        return $this->mark_order_item_sold_in_ovoko($orderId, $itemId, [
+            'mode' => 'admin_manual_single_order_live_probe',
+            'read_before_after' => true,
+            'require_confirmation_already_checked' => true,
+        ]);
+    }
+
+    public function mark_order_item_sold_in_ovoko(int $orderId, int $itemId, array $options = []): array
+    {
+        $client = new RrrApiClient($this->integrationService->get_settings());
+        $readBeforeAfter = !empty($options['read_before_after']);
+        $mode = (string) (($options['mode'] ?? '') ?: 'automatic_sale_queue_worker');
+        $result = [
+            'ok' => false,
+            'action_name' => 'Mark Ovoko part sold from Woo order item',
+            'mode' => $mode,
+            'order_id' => $orderId,
+            'order_item_id' => $itemId,
+            'confirmed_endpoint' => '/crm/changePartStatus',
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'sent_status' => 2,
+            'success_contract' => 'HTTP 200 and status_code=R200',
+            'warnings' => [],
+            'errors' => [],
+            'item' => null,
+            'before_part' => null,
+            'api_response' => null,
+            'after_part' => null,
+            'checked_at' => gmdate('c'),
+        ];
+
+        if ($orderId <= 0 || $itemId <= 0) {
+            $result['errors'][] = $orderId <= 0 ? 'missing_order_id' : 'missing_order_item_id';
+            return $result;
+        }
+
+        if (!function_exists('wc_get_order')) {
+            $result['errors'][] = 'woocommerce_unavailable';
+            return $result;
+        }
+
+        $order = wc_get_order($orderId);
+        if (!$order) {
+            $result['errors'][] = 'order_not_found';
+            return $result;
+        }
+
+        $items = $order->get_items();
+        if (!isset($items[$itemId])) {
+            $result['errors'][] = 'invalid_order_item';
+            return $result;
+        }
+
         $item = $items[$itemId];
         $product = method_exists($item, 'get_product') ? $item->get_product() : null;
         $productId = $product ? (int) $product->get_id() : (method_exists($item, 'get_product_id') ? (int) $item->get_product_id() : 0);
@@ -1238,23 +1292,25 @@ class OvokoAutoSyncDryRunService
             return $result;
         }
 
-        $beforeFetch = $client->preview_fetch_single_part((int) $ovokoId);
-        $result['before_part'] = $this->summarize_ovoko_part_fetch($client, $beforeFetch);
+        if ($readBeforeAfter) {
+            $beforeFetch = $client->preview_fetch_single_part((int) $ovokoId);
+            $result['before_part'] = $this->summarize_ovoko_part_fetch($client, $beforeFetch);
+        }
 
         $attemptedAt = gmdate('c');
         $apiResponse = $client->change_part_status($ovokoId, 2);
         $result['api_response'] = $apiResponse;
 
-        $afterFetch = !empty($apiResponse['ok']) ? $client->preview_fetch_single_part((int) $ovokoId) : ['ok' => false, 'message' => 'Skipped read-after because changePartStatus did not succeed.'];
-        $result['after_part'] = $this->summarize_ovoko_part_fetch($client, $afterFetch);
-        $afterStatus = (string) ($result['after_part']['status'] ?? '');
-        $success = !empty($apiResponse['ok']) && $afterStatus === '2';
-        $error = '';
+        $success = !empty($apiResponse['ok']) && (int) ($apiResponse['http_status'] ?? 0) === 200 && (string) ($apiResponse['status_code'] ?? '') === 'R200';
+        $error = $success ? '' : (string) ($apiResponse['message'] ?? 'changePartStatus failed');
 
-        if (empty($apiResponse['ok'])) {
-            $error = (string) ($apiResponse['message'] ?? 'changePartStatus failed');
-        } elseif ($afterStatus !== '2') {
-            $error = 'read_after_status_mismatch_expected_2_got_' . ($afterStatus !== '' ? $afterStatus : 'missing');
+        if ($readBeforeAfter) {
+            $afterFetch = $success ? $client->preview_fetch_single_part((int) $ovokoId) : ['ok' => false, 'message' => 'Skipped read-after because changePartStatus did not succeed.'];
+            $result['after_part'] = $this->summarize_ovoko_part_fetch($client, $afterFetch);
+            $afterStatus = (string) ($result['after_part']['status'] ?? '');
+            if ($success && $afterStatus !== '' && $afterStatus !== '2') {
+                $result['warnings'][] = 'read_after_status_mismatch_expected_2_got_' . $afterStatus;
+            }
         }
 
         if (function_exists('wc_update_order_item_meta')) {

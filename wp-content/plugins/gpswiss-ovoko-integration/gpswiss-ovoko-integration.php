@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('GPSWISS_OVOKO_BUILD_MARKER')) {
-    define('GPSWISS_OVOKO_BUILD_MARKER', '0.1.0-bidirectional-sync-orchestrator-ui');
+    define('GPSWISS_OVOKO_BUILD_MARKER', '0.1.0-production-bidirectional-cron-safe');
 }
 
 require_once __DIR__ . '/src/Contracts/OvokoConnectorInterface.php';
