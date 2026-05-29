@@ -248,6 +248,23 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <?php endif; ?>
     </div>
 
+    <div class="postbox" style="padding:16px; margin:18px 0 14px; border-left:4px solid #2271b1;">
+        <h3>Ovoko listing image single-product probe</h3>
+        <p><strong>Safe manual action for one product only.</strong> Use this to test a specific Ovoko-created Woo product (for example <code>60634</code>) without mass reimporting photos, changing prices, changing categories, or touching Woo → Ovoko sync.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin:0 12px 12px 0;">
+            <?php wp_nonce_field('gpswiss_ovoko_preview_listing_image_status'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_preview_listing_image_status" />
+            <label>product_id: <input type="number" min="1" name="product_id" placeholder="60634" style="width:110px;" /></label>
+            <?php submit_button('Preview listing image status', 'secondary', 'submit', false); ?>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin:0;">
+            <?php wp_nonce_field('gpswiss_ovoko_generate_listing_image'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_generate_listing_image" />
+            <label>product_id: <input type="number" min="1" name="product_id" placeholder="60634" style="width:110px;" /></label>
+            <?php submit_button('Regenerate listing image for product', 'primary', 'submit', false); ?>
+        </form>
+    </div>
+
     <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
         <summary><strong>Advanced Settings</strong></summary>
         <div class="notice notice-warning inline" style="margin:12px 0;">
