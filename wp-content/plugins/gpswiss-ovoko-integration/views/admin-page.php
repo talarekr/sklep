@@ -332,6 +332,23 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input id="probe_vehicle_car_id" type="number" min="1" name="car_id" value="458" />
             <?php submit_button('Probe Ovoko vehicle data for car_id', 'secondary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_dictionary_value'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_dictionary_value" />
+            <label for="probe_dictionary_type">dictionary_type:</label>
+            <select id="probe_dictionary_type" name="dictionary_type">
+                <option value="car_model">car_model</option>
+                <option value="car_model_category">car_model_category</option>
+                <option value="car_fuel">car_fuel</option>
+                <option value="car_gearbox_type">car_gearbox_type</option>
+                <option value="car_wheel_drive">car_wheel_drive</option>
+                <option value="car_color">car_color</option>
+                <option value="car_body_type">car_body_type</option>
+            </select>
+            <label for="probe_dictionary_id">id:</label>
+            <input id="probe_dictionary_id" type="text" name="id" value="1" style="width:80px;" />
+            <?php submit_button('Probe Ovoko dictionary value', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">

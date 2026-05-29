@@ -871,3 +871,17 @@ Until Ovoko/RRR confirms the endpoint contract, payload, permissions, and idempo
 - New product create vehicle enrichment now preserves readable vehicle data from the existing Ovoko CSV mapping and merges `/get/car/{id}` only with non-empty values, so sparse vehicle endpoint responses do not overwrite previously parsed make/model fields with blanks.
 - Vehicle normalization rejects bare numeric dictionary IDs as readable make/model/fuel/gearbox/color labels and attempts cached Ovoko/RRR dictionary resolution for make/model/modification/generation/fuel/gearbox/wheel-drive/color/body-type IDs.
 - Same-vehicle slugs are no longer built from unresolved numeric fragments; if no readable make + model label is available but `car_id` exists, the fallback slug is `vehicle-{car_id}`.
+
+## Ovoko/RRR vehicle dictionary resolver update
+
+The vehicle resolver now uses the official CRM Info dictionary endpoints documented in `https://api.rrr.lt/openapi/swagger.yaml` for readable dictionary values:
+
+- `car_model`: `/get/car_models/{brand_id}` when a brand/manufacturer ID is available from the vehicle payload.
+- `car_model_category`: no dedicated public OpenAPI endpoint is documented; the resolver leaves generation/modification empty unless the payload/API/CSV/local confirmed fallback provides a readable value.
+- `car_fuel`: `/get/fuel`.
+- `car_gearbox_type`: `/get/gearbox_type`.
+- `car_wheel_drive`: `/get/wheel_drive`.
+- `car_color`: `/get/color`.
+- `car_body_type`: `/get/car_body_type`.
+
+A read-only admin diagnostic action, **Probe Ovoko dictionary value**, can probe a single `dictionary_type` + `id` and reports whether the value came from `dictionary_api`, `csv_mapping`, `local_fallback`, or remains `unresolved` in vehicle-data diagnostics. Numeric dictionary IDs are never copied into public vehicle fields as names; unresolved values stay empty so title and same-vehicle slug builders can use safe fallbacks such as `vehicle-{car_id}`.
