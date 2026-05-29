@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('GPSWISS_OVOKO_BUILD_MARKER')) {
-    define('GPSWISS_OVOKO_BUILD_MARKER', '0.1.0-safe-sync-ui-advanced');
+    define('GPSWISS_OVOKO_BUILD_MARKER', '0.1.0-bidirectional-sync-orchestrator-ui');
 }
 
 require_once __DIR__ . '/src/Contracts/OvokoConnectorInterface.php';
@@ -22,6 +22,8 @@ require_once __DIR__ . '/src/Services/OvokoProductSyncService.php';
 require_once __DIR__ . '/src/Services/OvokoImageImportPlan.php';
 require_once __DIR__ . '/src/Services/OvokoIntegrationService.php';
 require_once __DIR__ . '/src/Services/OvokoAutoSyncDryRunService.php';
+require_once __DIR__ . '/src/Services/OvokoWooSaleSyncQueue.php';
+require_once __DIR__ . '/src/Services/OvokoBidirectionalSyncOrchestrator.php';
 require_once __DIR__ . '/src/Services/OvokoInternalNotesPriceBackfillService.php';
 require_once __DIR__ . '/src/Services/AdminPage.php';
 require_once __DIR__ . '/src/Plugin.php';

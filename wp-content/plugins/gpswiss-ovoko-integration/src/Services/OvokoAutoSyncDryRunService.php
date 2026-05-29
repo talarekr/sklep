@@ -1125,6 +1125,7 @@ class OvokoAutoSyncDryRunService
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_request_id', $requestId);
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_part_id', $ovokoId);
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_order_id', (string) $orderId);
+            wc_update_order_item_meta($itemId, 'retry_count', (string) ($success ? (int) ($syncMeta['retry_count'] ?? 0) : ((int) ($syncMeta['retry_count'] ?? 0) + 1)));
         } else {
             $result['warnings'][] = 'wc_update_order_item_meta_unavailable_meta_not_written';
         }
@@ -1165,7 +1166,7 @@ class OvokoAutoSyncDryRunService
 
     private function sale_sync_meta_keys(): array
     {
-        return ['ovoko_sale_sync_status','ovoko_sale_sync_attempted_at','ovoko_sale_sync_success_at','ovoko_sale_sync_error','ovoko_sale_sync_request_id','ovoko_sale_sync_part_id','ovoko_sale_sync_order_id'];
+        return ['ovoko_sale_sync_status','ovoko_sale_sync_attempted_at','ovoko_sale_sync_success_at','ovoko_sale_sync_error','ovoko_sale_sync_request_id','ovoko_sale_sync_part_id','ovoko_sale_sync_order_id','retry_count'];
     }
 
     private function get_order_item_sale_sync_meta(int $itemId): array

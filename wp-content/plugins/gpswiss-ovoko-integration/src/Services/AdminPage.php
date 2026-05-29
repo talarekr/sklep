@@ -29,6 +29,10 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_probe_updated_from_delta', [$this, 'handle_probe_updated_from_delta']);
         add_action('admin_post_gpswiss_ovoko_dry_run_auto_sync', [$this, 'handle_dry_run_auto_sync']);
         add_action('admin_post_gpswiss_ovoko_dry_run_sale_sync', [$this, 'handle_dry_run_sale_sync']);
+        add_action('admin_post_gpswiss_ovoko_bidirectional_enable', [$this, 'handle_bidirectional_enable']);
+        add_action('admin_post_gpswiss_ovoko_bidirectional_pause', [$this, 'handle_bidirectional_pause']);
+        add_action('admin_post_gpswiss_ovoko_bidirectional_run_now', [$this, 'handle_bidirectional_run_now']);
+        add_action('admin_post_gpswiss_ovoko_bidirectional_retry_failed_sales', [$this, 'handle_bidirectional_retry_failed_sales']);
         add_action('admin_post_gpswiss_ovoko_single_order_mark_sold_live_probe', [$this, 'handle_single_order_mark_sold_live_probe']);
         add_action('admin_post_gpswiss_ovoko_analyze_sale_stock_endpoint', [$this, 'handle_analyze_sale_stock_endpoint']);
         add_action('admin_post_gpswiss_ovoko_analyze_internal_notes_backfill_api', [$this, 'handle_analyze_internal_notes_backfill_api']);
@@ -139,8 +143,9 @@ class AdminPage
 
         try {
             $data = $this->service->get_dashboard_data();
+            $data['bidirectional_sync_status'] = (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->dashboard_status();
         } catch (\Throwable $e) {
-            $data = ['settings' => $this->service->get_settings()];
+            $data = ['settings' => $this->service->get_settings(), 'bidirectional_sync_status' => (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->dashboard_status()];
             $notice = ['type' => 'error', 'text' => 'Dashboard diagnostics temporarily unavailable: ' . $e->getMessage()];
             include dirname(__DIR__, 2) . '/views/admin-page.php';
             return;
@@ -245,6 +250,55 @@ class AdminPage
             'date_from' => isset($_POST['date_from']) ? sanitize_text_field((string) $_POST['date_from']) : '',
         ]);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 90);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_bidirectional_enable(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_bidirectional_enable');
+        $result = (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->request_enable_automatic_sync();
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 120);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_bidirectional_pause(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_bidirectional_pause');
+        $result = (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->pause_sync();
+        set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 120);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_bidirectional_run_now(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_bidirectional_run_now');
+        $result = (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->run_now();
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 120);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_bidirectional_retry_failed_sales(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_bidirectional_retry_failed_sales');
+        $result = (new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service))->retry_failed_sales();
+        set_transient('gpswiss_ovoko_notice', ['type' => 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 120);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }

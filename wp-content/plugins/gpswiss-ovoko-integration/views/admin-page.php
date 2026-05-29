@@ -37,6 +37,7 @@ $autoSyncErrors = (array) ($autoSyncStatus['errors'] ?? []);
 $autoSyncCounts = (array) ($autoSyncStatus['counts'] ?? []);
 $autoSyncDashboardCounters = (array) ($autoSyncStatus['dashboard_counters'] ?? []);
 $buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
+$bidirectionalStatus = (array) ($data['bidirectional_sync_status'] ?? []);
 
 $noticePayload = null;
 if (!empty($notice['text']) && is_string($notice['text'])) {
@@ -129,95 +130,93 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </div>
     <?php endif; ?>
 
-    <h2>Ovoko ↔ Woo realtime sync</h2>
+    <h2>Ovoko ↔ Woo Sync</h2>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Sync status / logs</h3>
-        <p><strong>Stage 1:</strong> diagnostics and dry-run only. No Woo products/categories are changed and no sale/status updates are sent to Ovoko.</p>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:12px 0;">
-            <div style="background:#f6f7f7;padding:10px;"><strong>Status</strong><br><code><?php echo esc_html($autoSyncStatusLabel); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Delta sync confirmed</strong><br><code><?php echo esc_html($autoSyncDeltaConfirmed ? 'yes' : 'no'); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Delta filter used</strong><br><code><?php echo esc_html($autoSyncDeltaFilterUsed !== '' ? $autoSyncDeltaFilterUsed : 'not confirmed'); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Last successful sync</strong><br><code><?php echo esc_html($autoSyncLastSuccessfulAt !== '' ? $autoSyncLastSuccessfulAt : 'not run yet'); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Last attempted sync</strong><br><code><?php echo esc_html($autoSyncLastAttemptedAt); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Processed</strong><br><code><?php echo esc_html((string) $autoSyncProcessed); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Would create/update/skip</strong><br><code><?php echo esc_html($autoSyncCreated . ' / ' . $autoSyncUpdated . ' / ' . $autoSyncSkipped); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Warnings / errors</strong><br><code><?php echo esc_html(count($autoSyncWarnings) . ' / ' . count($autoSyncErrors)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>date_from used</strong><br><code><?php echo esc_html($autoSyncDateFromUsed !== '' ? $autoSyncDateFromUsed : 'not run yet'); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Returned records count</strong><br><code><?php echo esc_html((string) $autoSyncReturnedRecordsCount); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Pages processed for date window</strong><br><code><?php echo esc_html((string) $autoSyncPagesProcessedForDateWindow); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Skipped already synced</strong><br><code><?php echo esc_html((string) $autoSyncSkippedAlreadySynced); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>Updated / created from delta</strong><br><code><?php echo esc_html($autoSyncUpdatedFromDelta . ' / ' . $autoSyncCreatedFromDelta); ?></code></div>
+        <h3>Ovoko ↔ Woo automatic sync</h3>
+        <p><strong>One daily dashboard.</strong> The target flow is one orchestrator, <code>gpswiss_ovoko_bidirectional_sync</code>, which will run <code>Ovoko → Woo date_from delta</code> first and then <code>Woo → Ovoko sale queue</code>. Automatic live cron is still blocked until your explicit approval.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0;">
+            <div style="background:#f6f7f7;padding:10px;"><strong>sync_enabled</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['sync_enabled']) ? 'true' : 'false'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['status'] ?? 'idle')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>last_successful_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_successful_sync_at'] ?? '') ?: 'not run yet')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>next_scheduled_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['next_scheduled_sync_at'] ?? '') ?: 'not scheduled')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>delta_filter_used</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['delta_filter_used'] ?? 'date_from')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>date_from_used</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['date_from_used'] ?? '') ?: 'not run yet')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>processed_total</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['processed_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>created_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['created_from_ovoko'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>updated_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['updated_from_ovoko'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>skipped_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['skipped_from_ovoko'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>pending_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['pending_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>successful_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['successful_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>failed_woo_to_ovoko_sales</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['failed_woo_to_ovoko_sales'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>last_error</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_error'] ?? '') ?: 'none')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>lock status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['lock_status'] ?? 'unlocked')); ?></code></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:12px 0;">
-            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_price_untouched_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_price_untouched_total'] ?? 0)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_internal_notes_price_ignored_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_internal_notes_price_ignored_total'] ?? 0)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_internal_notes_missing_ignored_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_internal_notes_missing_ignored_total'] ?? 0)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_price_from_internal_notes_ok_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_price_from_internal_notes_ok_total'] ?? 0)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_missing_price_in_internal_notes_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_missing_price_in_internal_notes_total'] ?? 0)); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_invalid_internal_notes_price_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_invalid_internal_notes_price_total'] ?? 0)); ?></code></div>
+        <p><strong>Guard:</strong> <code><?php echo esc_html((string) ($bidirectionalStatus['automation_guard'] ?? 'live_cron_requires_explicit_code_confirmation')); ?></code>. Buttons below are wired to safe handlers; enabling/running live automation will return a warning instead of scheduling live cron until <code>GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON</code> is explicitly set after approval.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_bidirectional_enable'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_enable" />
+                <?php submit_button('Enable automatic Ovoko ↔ Woo sync', 'primary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_bidirectional_pause'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_pause" />
+                <?php submit_button('Disable / Pause sync', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_bidirectional_run_now'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_run_now" />
+                <?php submit_button('Run sync now', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_bidirectional_retry_failed_sales'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_retry_failed_sales" />
+                <?php submit_button('Retry failed Woo → Ovoko sale sync', 'secondary', 'submit', false); ?>
+            </form>
         </div>
-        <p><strong>Current delta window:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncCurrentDeltaWindow, JSON_UNESCAPED_UNICODE)); ?></code></p>
-        <p><strong>Returned records / updated_at min-max:</strong> <code><?php echo esc_html((string) $autoSyncReturnedRecordsCount); ?></code> / <code><?php echo esc_html((string) ($autoSyncUpdatedAtStats['min_updated_at'] ?? '')); ?> → <?php echo esc_html((string) ($autoSyncUpdatedAtStats['max_updated_at'] ?? '')); ?></code></p>
-        <p><strong>Older than delta_from in returned records:</strong> <code><?php echo !empty($autoSyncUpdatedAtStats['has_records_older_than_delta_from']) ? 'yes' : 'no'; ?></code></p>
-        <?php if (!$autoSyncDeltaConfirmed): ?>
-            <p style="color:#b32d2e;"><strong>Warning:</strong> <code>delta_sync_not_confirmed</code> — live cron is disabled; page-based runs are manual diagnostics only.</p>
-        <?php endif; ?>
-        <p><strong>Last cursor:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncLastCursor, JSON_UNESCAPED_UNICODE)); ?></code></p>
-        <?php if (!empty($autoSyncWarnings) || !empty($autoSyncErrors)): ?>
-            <details><summary>Show latest sync warnings/errors</summary><pre><?php echo esc_html(wp_json_encode(['warnings' => $autoSyncWarnings, 'errors' => $autoSyncErrors], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
-        <?php endif; ?>
     </div>
 
-    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Cron settings and run controls</h3>
-        <ul style="list-style:disc;margin-left:22px;">
-            <li><strong>Recommended schedule:</strong> live cron remains disabled until the manual <code>date_from</code> dry-run is reviewed and approved.</li>
-            <li><strong>Recommended batch size:</strong> process only products returned by <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>.</li>
-            <li><strong>Cursor:</strong> page/cursor may be used only inside the current delta window; never for full-dataset cron scans.</li>
-            <li><strong>Lock:</strong> <code>gpswiss_ovoko_auto_sync_lock</code> will prevent parallel sync runs in the live phase.</li>
-            <li><strong>Unavailable policy:</strong> recommended A) keep product and set stock to <code>0/outofstock</code>; no product deletion.</li>
-        </ul>
-        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled. The only prepared cron path is the read-only <code>date_from=YYYY-MM-DD</code> dry-run; page/cursor is scoped to that date window and is not a full scan.</p>
-        <button type="button" class="button button-primary" disabled="disabled">Run sync now — disabled until approval</button>
-        <button type="button" class="button" disabled="disabled">Enable WP-Cron — disabled until approval</button>
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #46b450;">
+        <h3>Refactor plan / architecture</h3>
+        <ol style="margin-left:22px;">
+            <li><strong>Ovoko → Woo:</strong> use only <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>; page/cursor stays inside that date window, never a full cron scan.</li>
+            <li><strong>Existing Woo products:</strong> sync stock/status, description and details; verify categories only; leave price and images untouched.</li>
+            <li><strong>New Woo products:</strong> create only with a valid <code>internal_notes</code> price, map categories from <code>category_id + /get/categories/tree</code>, and skip/draft instead of publishing when price is missing.</li>
+            <li><strong>Woo → Ovoko:</strong> queue order items after safe Woo statuses, then worker sends <code>POST /crm/changePartStatus</code> with <code>status=2</code>; checkout does not call Ovoko directly.</li>
+            <li><strong>Retry/idempotency:</strong> skip already-success order items, retry only network/5xx/rate-limit failures, keep failed items visible on this dashboard.</li>
+        </ol>
     </div>
 
-    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Dry-run sync</h3>
-        <p><strong>Safety:</strong> these tools do not create Woo products, do not update prices/stock/descriptions/categories, do not touch existing images, and do not send sales/status changes to Ovoko.</p>
-        <ul style="list-style:disc;margin-left:22px;">
-            <li>Existing Woo product prices are reported as <code>existing_product_price_untouched</code> and are never updated from Ovoko or <code>internal_notes</code>.</li>
-            <li>New Woo product prices may come only from Ovoko <code>internal_notes</code>; missing/invalid prices default to safer <code>skip create</code> reporting instead of publishing.</li>
-            <li>Existing Woo product images are reported but never overwritten, removed or refreshed.</li>
-            <li>New products are reported as <code>new_products_images_would_import</code> when Ovoko images are present, but are not created in this stage.</li>
-            <li>Technical details use the same normalized Ovoko/RRR product fields as the existing details enrichment mapper.</li>
-        </ul>
+    <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
+        <summary><strong>Advanced Settings</strong></summary>
+        <div class="notice notice-warning inline" style="margin:12px 0;">
+            <p><strong>Advanced tools — use only for maintenance/debug. These actions can modify categories/products.</strong></p>
+        </div>
+        <p>Legacy category rebuild/delete tools, CSV helpers, debug probes, old dry-runs and maintenance actions were moved here to keep the daily sync dashboard clean. Existing confirmations and safeguards are unchanged.</p>
+
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
+        <h3>Advanced/dev: date_from Ovoko → Woo manual test</h3>
+        <p><strong>Manual diagnostics only.</strong> Uses exactly <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>; it does not use <code>updated_from</code>, <code>updated_after</code>, <code>from</code>, timestamps, ISO datetimes, or full scans without <code>date_from</code>.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_auto_sync_endpoint_analysis'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_auto_sync_endpoint_analysis" />
             <?php submit_button('Analyze Ovoko/RRR endpoints for safe cron', 'secondary', 'submit', false); ?>
         </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_auto_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_auto_sync" />
             <label>date_from: <input type="date" name="date_from" placeholder="YYYY-MM-DD" /></label>
             <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
             <label>batch_size: <input type="number" min="1" max="25" name="batch_size" value="5" style="width:80px;" /></label>
-            <p class="description">Dry-run only. Uses exactly <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>; it does not use <code>updated_from</code>, <code>updated_after</code>, <code>from</code>, timestamps, or ISO datetimes.</p>
             <?php submit_button('Dry-run date_from Ovoko → Woo delta', 'secondary', 'submit', false); ?>
         </form>
     </div>
 
-    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Woo → Ovoko sale/stock sync status</h3>
-        <p>Sale/stock outbound sync uses the confirmed dedicated endpoint <code>POST /crm/changePartStatus</code> with <code>status=2</code> for Sold out / Sprzedano. Automation remains disabled; only dry-run and the manual single-order live probe are available.</p>
-        <ul style="list-style:disc;margin-left:22px;">
-            <li><strong>Queue:</strong> order-status hook will enqueue work; a separate cron/worker will send to Ovoko later.</li>
-            <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
-            <li><strong>Current status:</strong> <code>manual_probe_only_no_automatic_worker</code>.</li>
-            <li><strong>Cancel/refund:</strong> design only; statuses <code>0</code> and <code>3</code> exist, but no automatic restore/return is implemented yet.</li>
-        </ul>
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
+        <h3>Advanced/dev: Woo → Ovoko sale probes</h3>
+        <p>Sale probes use the confirmed dedicated endpoint <code>POST /crm/changePartStatus</code> with <code>status=2</code>. Queue/worker automation remains disabled until approval.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_analyze_sale_stock_endpoint'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_analyze_sale_stock_endpoint" />
@@ -228,17 +227,10 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
             <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
             <?php submit_button('Dry-run Woo order → Ovoko sale sync', 'secondary', 'submit', false); ?>
-            <p class="description">Dry-run only. Proposed endpoint: <code>/crm/changePartStatus</code>; proposed payload: <code>part_id</code>, <code>status=2</code>, and local-only <code>request_id</code>. Nothing is sent to Ovoko.</p>
         </form>
         <hr style="margin:16px 0;" />
         <h4>Single-order live probe: mark Ovoko part sold from Woo order</h4>
-        <p><strong>Live write for one order item only.</strong> Admin-only manual probe reads the Woo order item, finds the product Ovoko <code>part_id</code>, skips if item meta already says success, reads Ovoko before/after, and sends only auth + <code>part_id</code> + <code>status=2</code> to <code>/crm/changePartStatus</code>.</p>
-        <ul style="list-style:disc;margin-left:22px;">
-            <li>Requires exactly one Woo order item in the order.</li>
-            <li>Required confirmation phrase: <code>MARK OVOKO PART SOLD</code>.</li>
-            <li>Does not change Woo product stock; Woo handles local sale stock separately.</li>
-            <li>No automatic retries, worker, cron, or checkout live hook are enabled by this probe.</li>
-        </ul>
+        <p><strong>Live write for one order item only.</strong> Requires exactly one Woo order item and confirmation phrase <code>MARK OVOKO PART SOLD</code>. Does not enable retries, worker, cron, or checkout live hook.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
             <?php wp_nonce_field('gpswiss_ovoko_single_order_mark_sold_live_probe'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_single_order_mark_sold_live_probe" />
@@ -247,13 +239,6 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <?php submit_button('Run single-order live probe: mark Ovoko part sold', 'delete', 'submit', false); ?>
         </form>
     </div>
-
-    <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
-        <summary><strong>Advanced Settings</strong></summary>
-        <div class="notice notice-warning inline" style="margin:12px 0;">
-            <p><strong>Advanced tools — use only for maintenance/debug. These actions can modify categories/products.</strong></p>
-        </div>
-        <p>Legacy category rebuild/delete tools, CSV helpers, debug probes, old dry-runs and maintenance actions were moved here to keep the daily sync dashboard clean. Existing confirmations and safeguards are unchanged.</p>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
         <h3>Advanced/dev: internal_notes price backfill diagnostics</h3>
