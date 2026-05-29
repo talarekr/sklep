@@ -2879,13 +2879,18 @@ function gp_render_category_links_list(array $categories, int $active_term_id = 
     echo '</ul>';
 }
 
-function gp_render_category_tree(array $categories, array $lineage_ids, array $query_args = []): void
+function gp_render_category_tree(array $categories, array $lineage_ids, array $query_args = [], int $depth = 0): void
 {
     if ($categories === []) {
         return;
     }
 
-    echo '<ul class="gp-cat-filter__list gp-cat-filter__list--tree">';
+    $list_classes = ['gp-cat-filter__list', 'gp-cat-filter__list--tree'];
+    if ($depth > 0) {
+        $list_classes[] = 'gp-cat-filter__list--nested';
+    }
+
+    echo '<ul class="' . esc_attr(implode(' ', $list_classes)) . '" data-gp-category-tree-level="' . esc_attr((string) $depth) . '">';
     foreach ($categories as $category) {
         if (!$category instanceof WP_Term) {
             continue;
@@ -2900,22 +2905,49 @@ function gp_render_category_tree(array $categories, array $lineage_ids, array $q
         }
 
         $term_id = (int) $category->term_id;
+        $children = gp_get_display_product_cat_children($term_id);
+        $has_children = $children !== [];
         $is_active = !empty($lineage_ids) && $term_id === (int) end($lineage_ids);
         $is_in_lineage = in_array($term_id, $lineage_ids, true);
+        $is_expanded = $has_children && $is_in_lineage;
+        $children_id = 'gp-cat-filter-children-' . $term_id;
 
-        $classes = ['gp-cat-filter__link'];
+        $item_classes = ['gp-cat-filter__item'];
+        if ($has_children) {
+            $item_classes[] = 'has-children';
+        }
+        if ($is_expanded) {
+            $item_classes[] = 'is-expanded';
+        }
         if ($is_active) {
-            $classes[] = 'is-active';
+            $item_classes[] = 'is-active';
         } elseif ($is_in_lineage) {
-            $classes[] = 'is-parent-active';
+            $item_classes[] = 'is-parent-active';
         }
 
-        echo '<li>';
-        echo '<a class="' . esc_attr(implode(' ', $classes)) . '" href="' . esc_url($term_link) . '">' . esc_html($category->name) . '</a>';
+        $link_classes = ['gp-cat-filter__link'];
+        if ($is_active) {
+            $link_classes[] = 'is-active';
+        } elseif ($is_in_lineage) {
+            $link_classes[] = 'is-parent-active';
+        }
 
-        $children = gp_get_display_product_cat_children($term_id);
-        if ($children !== [] && $is_in_lineage) {
-            gp_render_category_tree($children, $lineage_ids, $query_args);
+        echo '<li class="' . esc_attr(implode(' ', $item_classes)) . '">';
+        echo '<div class="gp-cat-filter__item-row">';
+        echo '<a class="' . esc_attr(implode(' ', $link_classes)) . '" href="' . esc_url($term_link) . '">' . esc_html($category->name) . '</a>';
+
+        if ($has_children) {
+            echo '<button type="button" class="gp-cat-filter__toggle" data-gp-category-toggle aria-controls="' . esc_attr($children_id) . '" aria-expanded="' . esc_attr($is_expanded ? 'true' : 'false') . '" aria-label="' . esc_attr(sprintf(__('Pokaż lub ukryj podkategorie: %s', 'gp-clone'), $category->name)) . '">';
+            echo '<span class="gp-cat-filter__toggle-icon" aria-hidden="true">' . esc_html($is_expanded ? '−' : '+') . '</span>';
+            echo '</button>';
+        }
+
+        echo '</div>';
+
+        if ($has_children) {
+            echo '<div id="' . esc_attr($children_id) . '" class="gp-cat-filter__children"' . ($is_expanded ? '' : ' hidden') . '>';
+            gp_render_category_tree($children, $lineage_ids, $query_args, $depth + 1);
+            echo '</div>';
         }
 
         echo '</li>';
