@@ -240,8 +240,7 @@ class AdminPage
         $result = (new OvokoAutoSyncDryRunService($this->service))->dry_run_ovoko_to_woo([
             'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 5,
             'page' => isset($_POST['page']) ? (int) $_POST['page'] : 1,
-            'part_id' => isset($_POST['part_id']) ? sanitize_text_field((string) $_POST['part_id']) : '',
-            'updated_after' => isset($_POST['updated_after']) ? sanitize_text_field((string) $_POST['updated_after']) : '',
+            'date_from' => isset($_POST['date_from']) ? sanitize_text_field((string) $_POST['date_from']) : '',
         ]);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 90);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));

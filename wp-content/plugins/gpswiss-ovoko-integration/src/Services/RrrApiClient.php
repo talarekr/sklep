@@ -164,6 +164,15 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
 
+    public function preview_fetch_parts_by_date_from(string $dateFrom, int $limit = 50, int $page = 1): array
+    {
+        $limit = max(1, min(50, $limit));
+        $page = max(1, $page);
+        $dateFrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) ? $dateFrom : gmdate('Y-m-d');
+
+        return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page . '&date_from=' . rawurlencode($dateFrom), [], true);
+    }
+
     public function probe_parts_delta_filter_support(string $fromIso = ''): array
     {
         $fromIso = trim($fromIso) !== '' ? trim($fromIso) : gmdate('c', time() - DAY_IN_SECONDS);
@@ -1873,6 +1882,7 @@ class RrrApiClient
             'first_record' => $firstRecord,
             'records' => $records,
             'records_count' => count($records),
+            'raw_records' => $includeRawPayload && is_array($decoded['data'] ?? null) ? array_values(array_filter($decoded['data'], 'is_array')) : [],
             'payload' => $includeRawPayload && is_array($decoded) ? $decoded : [],
         ];
     }

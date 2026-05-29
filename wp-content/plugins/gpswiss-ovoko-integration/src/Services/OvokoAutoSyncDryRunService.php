@@ -113,43 +113,55 @@ class OvokoAutoSyncDryRunService
     {
         $limit = max(1, min(25, (int) ($options['batch_size'] ?? 5)));
         $page = max(1, (int) ($options['page'] ?? 1));
-        $partId = trim((string) ($options['part_id'] ?? ''));
         $client = new RrrApiClient($this->integrationService->get_settings());
         $storedStatus = (array) get_option(self::STATUS_OPTION, []);
-        $deltaWindow = $this->build_current_delta_window((string) ($storedStatus['last_successful_sync_at'] ?? ''), (string) ($options['updated_after'] ?? ''));
-        $fetch = $partId !== '' ? $client->preview_fetch_single_part((int) $partId) : $client->preview_fetch_parts_sample($limit, $page);
+        $dateWindow = $this->build_current_date_from_window((string) ($storedStatus['last_successful_sync_date'] ?? ''), (string) ($options['date_from'] ?? ''));
+        $dateFrom = (string) ($dateWindow['date_from'] ?? gmdate('Y-m-d'));
+        $fetch = $client->preview_fetch_parts_by_date_from($dateFrom, $limit, $page);
         $records = [];
-        if ($partId !== '') {
-            $payload = (array) ($fetch['payload'] ?? []);
-            $record = $client->extract_single_part_record($payload);
-            if ($record !== []) {
-                $records[] = ['record' => $record, 'payload' => $payload];
+        $rawRecords = (array) ($fetch['raw_records'] ?? []);
+        foreach ((array) ($fetch['records'] ?? []) as $index => $record) {
+            if (!is_array($record)) {
+                continue;
             }
-        } else {
-            foreach ((array) ($fetch['records'] ?? []) as $record) {
-                if (is_array($record)) {
-                    $records[] = ['record' => $record, 'payload' => $record];
-                }
-            }
+            $payload = is_array($rawRecords[$index] ?? null) ? (array) $rawRecords[$index] : $record;
+            $records[] = ['record' => $record + $payload, 'payload' => $payload];
         }
 
         $report = $this->empty_ovoko_to_woo_report($limit, $page);
-        $report['delta_sync_confirmed'] = false;
-        $report['delta_filter_used'] = '';
-        $report['current_delta_window'] = $deltaWindow;
+        $report['delta_sync_confirmed'] = true;
+        $report['delta_filter_used'] = 'date_from';
+        $report['date_from'] = $dateFrom;
+        $report['date_from_used'] = $dateFrom;
+        $report['pages_processed_for_date_window'] = 1;
+        $report['current_delta_window'] = $dateWindow;
         $report['last_successful_sync_at'] = (string) ($storedStatus['last_successful_sync_at'] ?? '');
+        $report['last_successful_sync_date'] = (string) ($storedStatus['last_successful_sync_date'] ?? '');
+        $report['last_successful_dry_run_at'] = gmdate('c');
+        $report['last_successful_dry_run_date'] = gmdate('Y-m-d');
         $report['last_attempted_sync_at'] = gmdate('c');
         $report['live_cron_enabled'] = false;
-        $report['warnings']['delta_sync_not_confirmed'] = ($report['warnings']['delta_sync_not_confirmed'] ?? 0) + 1;
-        $report['warnings']['live_cron_disabled_until_delta_confirmed'] = ($report['warnings']['live_cron_disabled_until_delta_confirmed'] ?? 0) + 1;
+        $report['warnings']['live_cron_disabled_until_manual_date_from_dry_run_is_approved'] = ($report['warnings']['live_cron_disabled_until_manual_date_from_dry_run_is_approved'] ?? 0) + 1;
+        if (empty($fetch['ok'])) {
+            $report['ok'] = false;
+            $report['errors'][] = [
+                'code' => 'date_from_fetch_failed',
+                'status_code' => (string) ($fetch['status_code'] ?? ''),
+                'message' => (string) ($fetch['msg'] ?? $fetch['message'] ?? ''),
+            ];
+        }
         $report['source_fetch'] = [
             'ok' => !empty($fetch['ok']),
-            'mode' => $partId !== '' ? 'manual_single_part_dry_run' : 'manual_page_based_dry_run_not_cron_delta',
-            'part_id' => $partId,
+            'mode' => 'manual_date_from_delta_dry_run',
             'status_code' => (string) ($fetch['status_code'] ?? ''),
             'pagination' => (array) ($fetch['pagination'] ?? []),
-            'delta_filter_applied' => false,
-            'delta_filter_warning' => 'delta_sync_not_confirmed',
+            'endpoint' => '/v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD',
+            'date_from' => $dateFrom,
+            'delta_filter_applied' => true,
+            'delta_filter_used' => 'date_from',
+            'disallowed_filters' => ['updated_from','updated_after','from','timestamps','ISO datetime'],
+            'no_woo_write' => true,
+            'no_ovoko_write' => true,
         ];
 
         foreach ($records as $row) {
@@ -169,8 +181,17 @@ class OvokoAutoSyncDryRunService
         $report['status'] = 'idle';
         $report['processed_changed_products'] = $report['processed'];
         $report['returned_records_count'] = count($records);
-        $report['updated_at_stats'] = $this->summarize_returned_updated_at_values($records, (string) ($deltaWindow['delta_from'] ?? ''));
-        $report['last_cursor'] = ['page' => $page, 'next_page' => $page + 1, 'delta_from' => (string) ($deltaWindow['delta_from'] ?? ''), 'delta_to' => (string) ($deltaWindow['delta_to'] ?? ''), 'scope' => 'manual_page_only_not_live_cron'];
+        $report['updated_at_stats'] = $this->summarize_returned_updated_at_values($records, $dateFrom . ' 00:00:00 UTC');
+        $report['last_cursor'] = [
+            'page' => $page,
+            'next_page' => $page + 1,
+            'date_from' => $dateFrom,
+            'scope' => 'date_from_delta_window_only',
+            'not_full_scan' => true,
+        ];
+        $report['created_from_delta'] = (int) ($report['counts']['products_would_create'] ?? 0);
+        $report['updated_from_delta'] = (int) ($report['counts']['products_would_update'] ?? 0);
+        $report['skipped_already_synced'] = (int) ($report['counts']['products_would_skip_already_synced'] ?? 0);
         $report['dashboard_counters'] = $this->dashboard_price_counters((array) ($report['counts'] ?? []));
         $report['checked_at'] = gmdate('c');
         update_option(self::STATUS_OPTION, $this->summarize_status($report), false);
@@ -358,6 +379,11 @@ class OvokoAutoSyncDryRunService
 
         $currentPrice = $product ? (string) $product->get_regular_price() : '';
         $currentStockStatus = $product ? (string) $product->get_stock_status() : '';
+        $updatedAt = trim((string) ($record['updated_at'] ?? $normalized['updated_at'] ?? ''));
+        $incomingSyncHash = $this->stable_hash($this->normalize_payload_for_idempotency($partId, $updatedAt, $payload));
+        $lastSyncedUpdatedAt = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_updated_at']) : '';
+        $lastSyncedHash = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']) : '';
+        $alreadySynced = $productId > 0 && $partId !== '' && $updatedAt !== '' && $lastSyncedUpdatedAt === $updatedAt && $lastSyncedHash !== '' && hash_equals($lastSyncedHash, $incomingSyncHash);
         $currentWooCategoryPath = $productId > 0 ? $this->get_current_product_category_path($productId) : '';
         $categoryAction = $isExistingProduct ? 'verify_only' : ($categoryTreeResolutionOk && !$newProductBlockedByPrice ? 'would_assign_from_tree' : 'skip');
         $categoriesWouldUpdate = !$isExistingProduct && !$newProductBlockedByPrice && $categoryId !== '' && $categoryTreeResolutionOk;
@@ -370,9 +396,22 @@ class OvokoAutoSyncDryRunService
             'product_id' => $productId,
             'product_exists' => $isExistingProduct,
             'products_would_create' => !$isExistingProduct && !$newProductBlockedByPrice,
-            'products_would_update' => $isExistingProduct,
-            'products_would_skip' => $newProductBlockedByPrice,
+            'products_would_update' => $isExistingProduct && !$alreadySynced,
+            'products_would_skip' => $newProductBlockedByPrice || $alreadySynced,
+            'products_would_skip_already_synced' => $alreadySynced,
+            'skipped_already_synced' => $alreadySynced,
             'title' => (string) ($record['name'] ?? $normalized['title'] ?? ''),
+            'updated_at' => $updatedAt,
+            'idempotency' => [
+                'meta_updated_at_key' => '_gpswiss_ovoko_last_synced_updated_at',
+                'meta_hash_key' => '_gpswiss_ovoko_last_synced_hash',
+                'incoming_updated_at' => $updatedAt,
+                'incoming_hash' => $incomingSyncHash,
+                'stored_updated_at' => $lastSyncedUpdatedAt,
+                'stored_hash' => $lastSyncedHash,
+                'skip_reason' => $alreadySynced ? 'skipped_already_synced' : '',
+                'dry_run_no_meta_write' => true,
+            ],
             'existing_product_price_untouched' => $isExistingProduct,
             'existing_product_internal_notes_price_ignored' => $isExistingProduct && $priceWarning !== 'missing_price_in_internal_notes',
             'existing_product_internal_notes_missing_ignored' => $isExistingProduct && $priceWarning === 'missing_price_in_internal_notes',
@@ -386,10 +425,10 @@ class OvokoAutoSyncDryRunService
                 'policy' => $isExistingProduct ? 'existing_woo_price_untouched_internal_notes_ignored' : 'new_product_price_from_internal_notes_only',
                 'safe_default_for_new_product_without_valid_internal_notes_price' => 'skip_create',
             ],
-            'stock_would_update' => $productId <= 0 || $currentStockStatus !== $stock['target_stock_status'],
+            'stock_would_update' => !$alreadySynced && ($productId <= 0 || $currentStockStatus !== $stock['target_stock_status']),
             'stock' => $stock + ['current_woo_stock_status' => $currentStockStatus],
             'products_unavailable_in_ovoko' => !empty($stock['products_unavailable_in_ovoko']),
-            'descriptions_would_update' => $incomingDescription !== '' && $this->stable_hash($currentDescription) !== $this->stable_hash($incomingDescription),
+            'descriptions_would_update' => !$alreadySynced && $incomingDescription !== '' && $this->stable_hash($currentDescription) !== $this->stable_hash($incomingDescription),
             'descriptions_empty_from_ovoko' => $incomingDescription === '',
             'description' => [
                 'current_length' => mb_strlen($currentDescription),
@@ -398,7 +437,7 @@ class OvokoAutoSyncDryRunService
                 'incoming_hash' => $this->stable_hash($incomingDescription),
                 'sample_excerpt' => mb_substr(wp_strip_all_tags($incomingDescription), 0, 180),
             ],
-            'details_would_update' => $incomingDetails !== [] && $currentDetailsHash !== $incomingDetailsHash,
+            'details_would_update' => !$alreadySynced && $incomingDetails !== [] && $currentDetailsHash !== $incomingDetailsHash,
             'details_missing_from_ovoko' => empty($record),
             'details_empty_from_ovoko' => $incomingDetails === [],
             'details' => [
@@ -411,7 +450,7 @@ class OvokoAutoSyncDryRunService
             ],
             'details_fields_changed' => $changedFields !== [],
             'details_fields_sample' => array_slice($incomingDetails, 0, 5, true),
-            'categories_would_update' => $categoriesWouldUpdate,
+            'categories_would_update' => !$alreadySynced && $categoriesWouldUpdate,
             'current_woo_category_path' => $currentWooCategoryPath,
             'ovoko_category_id' => $categoryId,
             'category_path_from_tree' => $categoryPathFromTree,
@@ -576,6 +615,16 @@ class OvokoAutoSyncDryRunService
         return hash('sha256', is_string($value) ? $value : wp_json_encode($value));
     }
 
+    private function normalize_payload_for_idempotency(string $partId, string $updatedAt, array $payload): array
+    {
+        ksort($payload);
+        return [
+            'part_id' => $partId,
+            'updated_at' => $updatedAt,
+            'payload' => $payload,
+        ];
+    }
+
     private function changed_assoc_keys(array $current, array $incoming): array
     {
         $changed = [];
@@ -596,6 +645,33 @@ class OvokoAutoSyncDryRunService
             }
         }
         return '';
+    }
+
+    private function build_current_date_from_window(string $lastSuccessfulSyncDate, string $requestedDateFrom = ''): array
+    {
+        $requestedDateFrom = trim($requestedDateFrom);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $requestedDateFrom)) {
+            $dateFrom = $requestedDateFrom;
+            $source = 'manual_requested_date_from';
+        } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($lastSuccessfulSyncDate))) {
+            $timestamp = strtotime(trim($lastSuccessfulSyncDate) . ' 00:00:00 UTC') ?: time();
+            $dateFrom = gmdate('Y-m-d', $timestamp - DAY_IN_SECONDS);
+            $source = 'last_successful_sync_date_minus_1_day_overlap';
+        } else {
+            $dateFrom = gmdate('Y-m-d');
+            $source = 'fallback_today';
+        }
+
+        return [
+            'date_from' => $dateFrom,
+            'delta_from' => $dateFrom,
+            'delta_to' => gmdate('Y-m-d'),
+            'overlap_days' => $source === 'last_successful_sync_date_minus_1_day_overlap' ? 1 : 0,
+            'filter_granularity' => 'date_only',
+            'source' => $source,
+            'idempotency_required' => true,
+            'idempotency_meta_keys' => ['_gpswiss_ovoko_last_synced_updated_at', '_gpswiss_ovoko_last_synced_hash'],
+        ];
     }
 
     private function build_current_delta_window(string $lastSuccessfulSyncAt, string $requestedDeltaFrom = ''): array
@@ -669,11 +745,16 @@ class OvokoAutoSyncDryRunService
             'status' => 'idle',
             'delta_sync_confirmed' => !empty($report['delta_sync_confirmed']),
             'delta_filter_used' => (string) ($report['delta_filter_used'] ?? ''),
-            'last_successful_sync_at' => !empty($report['delta_sync_confirmed']) ? (string) ($report['current_delta_window']['delta_to'] ?? '') : (string) ($report['last_successful_sync_at'] ?? ''),
-            'last_successful_sync_date' => !empty($report['delta_sync_confirmed']) ? gmdate('Y-m-d', strtotime((string) ($report['current_delta_window']['delta_to'] ?? 'now')) ?: time()) : (string) ($report['last_successful_sync_date'] ?? ''),
+            'last_successful_sync_at' => (string) ($report['last_successful_sync_at'] ?? ''),
+            'last_successful_sync_date' => (string) ($report['last_successful_sync_date'] ?? ''),
+            'last_successful_dry_run_at' => (string) ($report['last_successful_dry_run_at'] ?? ''),
+            'last_successful_dry_run_date' => (string) ($report['last_successful_dry_run_date'] ?? ''),
             'last_attempted_sync_at' => (string) ($report['last_attempted_sync_at'] ?? gmdate('c')),
             'last_delta_from' => (string) ($report['current_delta_window']['delta_from'] ?? ''),
             'last_delta_to' => (string) ($report['current_delta_window']['delta_to'] ?? ''),
+            'date_from' => (string) ($report['date_from'] ?? $report['date_from_used'] ?? ''),
+            'date_from_used' => (string) ($report['date_from_used'] ?? $report['date_from'] ?? ''),
+            'pages_processed_for_date_window' => (int) ($report['pages_processed_for_date_window'] ?? 0),
             'current_delta_window' => (array) ($report['current_delta_window'] ?? []),
             'last_cursor' => $report['last_cursor'] ?? [],
             'processed_changed_products' => (int) ($report['processed_changed_products'] ?? $report['processed'] ?? 0),

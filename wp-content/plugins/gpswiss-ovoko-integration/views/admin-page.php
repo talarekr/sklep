@@ -23,6 +23,11 @@ $autoSyncCurrentDeltaWindow = (array) ($autoSyncStatus['current_delta_window'] ?
 $autoSyncUpdatedAtStats = (array) ($autoSyncStatus['updated_at_stats'] ?? []);
 $autoSyncReturnedRecordsCount = (int) ($autoSyncStatus['returned_records_count'] ?? 0);
 $autoSyncLastCursor = (array) ($autoSyncStatus['last_cursor'] ?? []);
+$autoSyncDateFromUsed = (string) ($autoSyncStatus['date_from_used'] ?? $autoSyncStatus['date_from'] ?? '');
+$autoSyncPagesProcessedForDateWindow = (int) ($autoSyncStatus['pages_processed_for_date_window'] ?? 0);
+$autoSyncSkippedAlreadySynced = (int) ($autoSyncStatus['skipped_already_synced'] ?? 0);
+$autoSyncCreatedFromDelta = (int) ($autoSyncStatus['created_from_delta'] ?? 0);
+$autoSyncUpdatedFromDelta = (int) ($autoSyncStatus['updated_from_delta'] ?? 0);
 $autoSyncProcessed = (int) ($autoSyncStatus['processed'] ?? 0);
 $autoSyncCreated = (int) ($autoSyncStatus['created'] ?? 0);
 $autoSyncUpdated = (int) ($autoSyncStatus['updated'] ?? 0);
@@ -138,6 +143,11 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <div style="background:#f6f7f7;padding:10px;"><strong>Processed</strong><br><code><?php echo esc_html((string) $autoSyncProcessed); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Would create/update/skip</strong><br><code><?php echo esc_html($autoSyncCreated . ' / ' . $autoSyncUpdated . ' / ' . $autoSyncSkipped); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Warnings / errors</strong><br><code><?php echo esc_html(count($autoSyncWarnings) . ' / ' . count($autoSyncErrors)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>date_from used</strong><br><code><?php echo esc_html($autoSyncDateFromUsed !== '' ? $autoSyncDateFromUsed : 'not run yet'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Returned records count</strong><br><code><?php echo esc_html((string) $autoSyncReturnedRecordsCount); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Pages processed for date window</strong><br><code><?php echo esc_html((string) $autoSyncPagesProcessedForDateWindow); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Skipped already synced</strong><br><code><?php echo esc_html((string) $autoSyncSkippedAlreadySynced); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Updated / created from delta</strong><br><code><?php echo esc_html($autoSyncUpdatedFromDelta . ' / ' . $autoSyncCreatedFromDelta); ?></code></div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:12px 0;">
             <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_price_untouched_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_price_untouched_total'] ?? 0)); ?></code></div>
@@ -162,13 +172,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Cron settings and run controls</h3>
         <ul style="list-style:disc;margin-left:22px;">
-            <li><strong>Recommended schedule:</strong> live cron disabled until a real Ovoko/RRR delta endpoint or date filter is confirmed.</li>
-            <li><strong>Recommended batch size:</strong> after confirmation, process only changed products returned for the delta window.</li>
+            <li><strong>Recommended schedule:</strong> live cron remains disabled until the manual <code>date_from</code> dry-run is reviewed and approved.</li>
+            <li><strong>Recommended batch size:</strong> process only products returned by <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>.</li>
             <li><strong>Cursor:</strong> page/cursor may be used only inside the current delta window; never for full-dataset cron scans.</li>
             <li><strong>Lock:</strong> <code>gpswiss_ovoko_auto_sync_lock</code> will prevent parallel sync runs in the live phase.</li>
             <li><strong>Unavailable policy:</strong> recommended A) keep product and set stock to <code>0/outofstock</code>; no product deletion.</li>
         </ul>
-        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled until date-based delta sync is confirmed. Full scans are allowed only as manual diagnostics or separately approved maintenance jobs.</p>
+        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled. The only prepared cron path is the read-only <code>date_from=YYYY-MM-DD</code> dry-run; page/cursor is scoped to that date window and is not a full scan.</p>
         <button type="button" class="button button-primary" disabled="disabled">Run sync now — disabled until approval</button>
         <button type="button" class="button" disabled="disabled">Enable WP-Cron — disabled until approval</button>
     </div>
@@ -189,22 +199,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <?php submit_button('Analyze Ovoko/RRR endpoints for safe cron', 'secondary', 'submit', false); ?>
         </form>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
-            <?php wp_nonce_field('gpswiss_ovoko_probe_updated_from_delta'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_probe_updated_from_delta" />
-            <label>updated_from delta: <input type="text" name="updated_from" placeholder="YYYY-MM-DD HH:MM:SS" /></label>
-            <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
-            <label>limit: <input type="number" min="1" max="25" name="limit" value="5" style="width:80px;" /></label>
-            <p class="description">Read-only precise probe compares unfiltered <code>/v2/get/parts</code>, URL-encoded <code>updated_from=YYYY-MM-DD HH:MM:SS</code>, and confirmed <code>date_from=YYYY-MM-DD</code>.</p>
-            <?php submit_button('Probe updated_from delta filter', 'secondary', 'submit', false); ?>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_auto_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_auto_sync" />
-            <label>part_id (optional single product): <input type="number" min="1" name="part_id" placeholder="e.g. 10994" /></label>
+            <label>date_from: <input type="date" name="date_from" placeholder="YYYY-MM-DD" /></label>
             <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
             <label>batch_size: <input type="number" min="1" max="25" name="batch_size" value="5" style="width:80px;" /></label>
-            <label>updated_after (diagnostic only): <input type="text" name="updated_after" placeholder="YYYY-MM-DDTHH:MM:SSZ" /></label>
-            <?php submit_button('Dry-run Ovoko → Woo sync', 'secondary', 'submit', false); ?>
+            <p class="description">Dry-run only. Uses exactly <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>; it does not use <code>updated_from</code>, <code>updated_after</code>, <code>from</code>, timestamps, or ISO datetimes.</p>
+            <?php submit_button('Dry-run date_from Ovoko → Woo delta', 'secondary', 'submit', false); ?>
         </form>
     </div>
 
