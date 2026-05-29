@@ -419,12 +419,24 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>after_product_id: <input type="number" min="0" name="after_product_id" value="0" /></label>
             <label>batch_size: <input type="number" min="1" max="100" name="batch_size" value="10" /></label>
             <label><input type="checkbox" name="stop_on_error" value="1" /> stop_on_error</label>
-            <label><input type="checkbox" name="rebuild_menu_cache_when_done" value="1" /> rebuild <code>gp_product_cat_display_data_v2</code> cache when final real batch is done</label>
-            <p><button class="button button-secondary" type="submit" name="submit_action" value="dry_run">Dry-run rebuild Woo categories from Ovoko</button></p>
+            <label><input id="gpswiss_rebuild_menu_cache_after_batch" type="checkbox" name="rebuild_menu_cache_when_done" value="1" checked="checked" /> Rebuild frontend category menu cache after each batch</label>
+            <p class="description">Real batches rebuild <code>gp_product_cat_display_data_v2</code> once after the batch only when product/category data changed. Dry-runs always skip cache rebuild.</p>
+            <p><button class="button button-secondary" type="submit" name="submit_action" value="dry_run" data-menu-cache-default="0">Dry-run rebuild Woo categories from Ovoko</button></p>
             <p style="margin-top:12px;color:#b32d2e;"><strong>Real rebuild requires exact confirmation:</strong> <code>REBUILD WOO CATEGORIES FROM OVOKO</code></p>
             <input type="text" name="confirmation" class="regular-text" placeholder="REBUILD WOO CATEGORIES FROM OVOKO" />
-            <button class="button button-primary" type="submit" name="submit_action" value="apply" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Rebuild Woo categories from Ovoko from scratch</button>
+            <button class="button button-primary" type="submit" name="submit_action" value="apply" data-menu-cache-default="1" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Rebuild Woo categories from Ovoko from scratch</button>
         </form>
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var checkbox = document.getElementById('gpswiss_rebuild_menu_cache_after_batch');
+            if (!checkbox) { return; }
+            document.querySelectorAll('[data-menu-cache-default]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    checkbox.checked = button.getAttribute('data-menu-cache-default') === '1';
+                });
+            });
+        });
+        </script>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="padding:12px;background:#fff5f5;border:1px solid #d63638;">
             <?php wp_nonce_field('gpswiss_ovoko_delete_all_product_categories'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_delete_all_product_categories" />

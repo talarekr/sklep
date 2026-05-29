@@ -2904,8 +2904,8 @@ class OvokoIntegrationService
 
         $ids = $productId > 0 ? [$productId] : $this->get_product_ids_after($afterProductId, $batchSize);
         $categorySnapshot = $this->load_ovoko_category_tree_snapshot_for_batch();
-        $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0];
-        $legacyCounts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0];
+        $counts = ['processed'=>0,'fixed'=>0,'skipped'=>0,'errors'=>0,'missing_ovoko_id'=>0,'missing_category_id'=>0,'missing_category_path'=>0,'api_errors'=>0,'categories_created'=>0,'categories_existing'=>0,'category_assignments_changed'=>0];
+        $legacyCounts = ['total_scanned'=>0,'with_ovoko_id'=>0,'missing_ovoko_id'=>0,'ovoko_category_found'=>0,'ovoko_category_missing'=>0,'categories_created'=>0,'categories_existing'=>0,'products_categories_updated'=>0,'products_categories_verified'=>0,'products_skipped'=>0,'errors'=>0,'category_assignments_changed'=>0];
         $results = [];
         $lastSafe = $afterProductId;
         foreach ($ids as $pid) {
@@ -2923,6 +2923,7 @@ class OvokoIntegrationService
             if (trim((string) ($single['category_id'] ?? '')) === '' && ($single['reason'] ?? '') !== 'missing_ovoko_id') { $counts['missing_category_id']++; }
             if (trim((string) ($single['expected_ovoko_category_path'] ?? '')) === '') { $counts['missing_category_path']++; }
             if (in_array(($single['reason'] ?? ''), ['ovoko_fetch_failed','rrr_api_client_not_initialized'], true)) { $counts['api_errors']++; }
+            if (!empty($single['category_assignment_changed'])) { $counts['category_assignments_changed']++; }
             if (!empty($single['category_update_verified']) || ($dryRun && empty($single['reason']))) { $counts['fixed']++; } else { $counts['skipped']++; }
             $lastSafe = max($lastSafe, (int) $pid);
             if (!$dryRun && !empty($single['category_update_verified']) && (int) ($single['assigned_term_ids_after'][0] ?? 0) > 0) {
@@ -2933,11 +2934,14 @@ class OvokoIntegrationService
         }
         $counts['categories_created'] = (int) $legacyCounts['categories_created'];
         $counts['categories_existing'] = (int) $legacyCounts['categories_existing'];
+        $counts['category_assignments_changed'] = max((int) $counts['category_assignments_changed'], (int) ($legacyCounts['category_assignments_changed'] ?? 0));
         $next = $ids === [] ? $afterProductId : max($afterProductId, (int) end($ids));
         $done = $productId > 0 || $ids === [] || count($ids) < $batchSize;
-        $cacheResult = null;
-        if (!$dryRun && $done && !empty($options['rebuild_menu_cache_when_done']) && function_exists('gp_rebuild_product_category_display_cache')) {
-            $cacheResult = gp_rebuild_product_category_display_cache();
+        $hasRealChanges = !$dryRun && ((int) $counts['category_assignments_changed'] > 0 || (int) $counts['categories_created'] > 0);
+        $cacheReport = $this->rebuild_frontend_category_menu_cache_after_batch($dryRun, !empty($options['rebuild_menu_cache_when_done']), $hasRealChanges);
+        $warnings = [];
+        if ($cacheReport['menu_cache_rebuild'] === 'failed') {
+            $warnings[] = 'Frontend category menu cache rebuild failed after this batch; product category mapping continued.';
         }
         $result = [
             'ok' => $counts['errors'] === 0,
@@ -2967,11 +2971,59 @@ class OvokoIntegrationService
             ],
             'results' => $results,
             'done' => $done,
-            'menu_cache_rebuild' => $cacheResult,
+            'menu_cache_rebuild' => $cacheReport['menu_cache_rebuild'],
+            'menu_cache_category_count' => $cacheReport['menu_cache_category_count'],
+            'menu_cache_build_duration' => $cacheReport['menu_cache_build_duration'],
+            'menu_cache_error' => $cacheReport['menu_cache_error'],
+            'menu_cache_rebuild_error' => $cacheReport['menu_cache_rebuild_error'],
+            'menu_cache_rebuild_result' => $cacheReport['menu_cache_rebuild_result'],
+            'warnings' => $warnings,
             'rules' => ['no_csv_mapping','no_motoryzacja_root','no_shortened_paths','replace_existing_product_cat_assignments','product_data_not_touched','no_ebay_or_allegro_changes','no_ovoko_writes'],
         ];
         update_option('gpswiss_ovoko_last_category_rebuild_batch', $result, false);
         return $result;
+    }
+
+    private function rebuild_frontend_category_menu_cache_after_batch(bool $dryRun, bool $enabled, bool $hasRealChanges): array
+    {
+        $currentStatus = function_exists('gp_get_product_category_display_cache_status') ? gp_get_product_category_display_cache_status() : [];
+        $report = [
+            'menu_cache_rebuild' => 'skipped',
+            'menu_cache_category_count' => (int) ($currentStatus['category_count'] ?? 0),
+            'menu_cache_build_duration' => (float) ($currentStatus['build_duration'] ?? 0),
+            'menu_cache_error' => '',
+            'menu_cache_rebuild_error' => '',
+            'menu_cache_rebuild_result' => null,
+        ];
+
+        if ($dryRun || !$enabled || !$hasRealChanges) {
+            return $report;
+        }
+
+        if (!function_exists('gp_rebuild_product_category_display_cache')) {
+            $report['menu_cache_rebuild'] = 'failed';
+            $report['menu_cache_error'] = 'gp_rebuild_product_category_display_cache is unavailable.';
+            $report['menu_cache_rebuild_error'] = $report['menu_cache_error'];
+            return $report;
+        }
+
+        $cacheResult = gp_rebuild_product_category_display_cache();
+        $status = is_array($cacheResult) ? (array) ($cacheResult['status'] ?? []) : [];
+        $error = is_array($cacheResult) ? (string) ($cacheResult['message'] ?? ($status['last_error'] ?? '')) : 'Invalid cache rebuild response.';
+        if (!empty($cacheResult['ok'])) {
+            $report['menu_cache_rebuild'] = 'done';
+            $error = (string) ($status['last_error'] ?? '');
+        } else {
+            $report['menu_cache_rebuild'] = 'failed';
+        }
+
+        $report['menu_cache_category_count'] = (int) ($status['category_count'] ?? 0);
+        $report['menu_cache_build_duration'] = (float) ($status['build_duration'] ?? 0);
+        $report['menu_cache_error'] = $error;
+        $report['menu_cache_rebuild_error'] = $report['menu_cache_rebuild'] === 'failed' ? $error : '';
+        $report['menu_cache_rebuild_result'] = $cacheResult;
+
+        return $report;
     }
 
     public function set_category_rebuild_paused(bool $paused): void
@@ -3392,10 +3444,15 @@ class OvokoIntegrationService
             $parent=(int)$term->term_id;$finalId=$parent;
         }
         $creationSequence=$this->build_category_creation_sequence_preview($hier, $levels, $finalId);
-        $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'raw_category_title_path'=>$categoryResolve['raw_category_title_path'] ?? '','category_id'=>$categoryResolve['category_id'] ?? '','category_title_path_source_key'=>$categoryResolve['category_title_path_source_key'] ?? '','all_category_related_fields'=>$categoryDiagnostics['all_category_related_fields'],'resolved_full_ovoko_category_path'=>$categoryResolve['resolved_full_ovoko_category_path'] ?? '','category_resolution_method'=>$categoryResolve['category_resolution_method'] ?? '','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'simulated_category_creation_sequence'=>$creationSequence,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false,'debug'=>$debug];
+        $result=['ok'=>true,'product_id'=>$productId,'ovoko_id'=>$ovokoId,'current_woo_categories'=>$currentCats,'ovoko_category_title_path'=>$path,'raw_category_title_path'=>$categoryResolve['raw_category_title_path'] ?? '','category_id'=>$categoryResolve['category_id'] ?? '','category_title_path_source_key'=>$categoryResolve['category_title_path_source_key'] ?? '','all_category_related_fields'=>$categoryDiagnostics['all_category_related_fields'],'resolved_full_ovoko_category_path'=>$categoryResolve['resolved_full_ovoko_category_path'] ?? '','category_resolution_method'=>$categoryResolve['category_resolution_method'] ?? '','category_resolution_confidence'=>$categoryResolve['category_resolution_confidence'] ?? 'low','parsed_category_levels'=>$levels,'planned_category_hierarchy'=>$hier,'planned_final_category'=>end($levels)?:'','categories_existing_by_parent_chain'=>$chainOk,'categories_that_would_be_created'=>$missing,'simulated_category_creation_sequence'=>$creationSequence,'categories_to_be_replaced'=>array_values(array_diff($currentIds,[$finalId])),'planned_action'=>$dryRun?'dry_run':'apply','errors'=>[],'warnings'=>[],'category_update_verified'=>false,'category_assignment_changed'=>false,'debug'=>$debug];
         if($dryRun){return $result;}
         if(!$chainOk || $finalId<=0){$counts['products_skipped']++;$counts['errors']++;$result['ok']=false;$result['reason']='category_hierarchy_unresolved';return $result;}
         $setIds=$replaceExisting?[$finalId]:array_values(array_unique(array_merge($currentIds,[$finalId])));
+        sort($currentIds);
+        $sortedSetIds = $setIds;
+        sort($sortedSetIds);
+        $result['category_assignment_changed'] = $currentIds !== $sortedSetIds;
+        if (!empty($result['category_assignment_changed'])) { $counts['category_assignments_changed'] = (int) ($counts['category_assignments_changed'] ?? 0) + 1; }
         $set=wp_set_post_terms($productId,$setIds,'product_cat',false);
         if(is_wp_error($set)){$counts['errors']++;$result['ok']=false;$result['reason']='product_category_assign_failed';$result['error']=$set->get_error_message();return $result;}
         $counts['products_categories_updated']++;
