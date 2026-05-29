@@ -167,6 +167,24 @@ final class Plugin
         return $instance->mapper->get_preferred_listing_image_id($product_id);
     }
 
+    public static function ensure_listing_image_for_product(int $product_id, bool $force = false): array
+    {
+        $instance = self::instance();
+        return $instance->mapper->ensure_listing_image_for_product($product_id, $force);
+    }
+
+    public static function get_listing_image_diagnostics(int $product_id): array
+    {
+        $instance = self::instance();
+        return $instance->mapper->get_listing_image_diagnostics($product_id);
+    }
+
+    public static function select_best_listing_source_image(int $product_id): array
+    {
+        $instance = self::instance();
+        return $instance->mapper->select_best_listing_source_image($product_id);
+    }
+
     public static function is_safe_mode_enabled(): bool
     {
         $raw = get_option(self::SAFE_MODE_OPTION_KEY, null);

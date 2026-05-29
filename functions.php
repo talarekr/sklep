@@ -2071,6 +2071,30 @@ function gp_prepare_ovoko_listing_description_html(string $rawDescription): stri
     return '<div class="gp-ovoko-listing-description"><p>' . esc_html($normalizedText) . '</p></div>';
 }
 
+
+function gp_get_ovoko_car_id_for_product(int $productId): string
+{
+    $metaKeys = ['_ovoko_car_id', '_ovoko_vehicle_id', '_vehicle_id', '_car_id'];
+    foreach ($metaKeys as $metaKey) {
+        $value = trim((string) get_post_meta($productId, $metaKey, true));
+        if ($value !== '') {
+            return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+        }
+    }
+
+    $attributes = (array) get_post_meta($productId, '_product_attributes', true);
+    foreach ($attributes as $attribute) {
+        $name = trim((string) ($attribute['name'] ?? ''));
+        $value = trim((string) ($attribute['value'] ?? ''));
+        $normalizedName = function_exists('mb_strtolower') ? mb_strtolower($name, 'UTF-8') : strtolower($name);
+        if ($value !== '' && in_array($normalizedName, ['id pojazdu ovoko', 'ovoko vehicle id', 'vehicle_id', 'car_id'], true)) {
+            return preg_replace('/[^0-9A-Za-z_-]/', '', $value) ?? '';
+        }
+    }
+
+    return '';
+}
+
 add_action('pre_get_posts', function (WP_Query $query): void {
     if (is_admin() || !$query->is_main_query()) {
         return;
@@ -2099,9 +2123,11 @@ add_action('pre_get_posts', function (WP_Query $query): void {
 
     $metaQuery = (array) $query->get('meta_query');
     $metaQuery[] = [
-        'key' => '_ovoko_car_id',
-        'value' => $carId,
-        'compare' => '=',
+        'relation' => 'OR',
+        ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='],
+        ['key' => '_ovoko_vehicle_id', 'value' => $carId, 'compare' => '='],
+        ['key' => '_vehicle_id', 'value' => $carId, 'compare' => '='],
+        ['key' => '_car_id', 'value' => $carId, 'compare' => '='],
     ];
     $query->set('meta_query', $metaQuery);
 }, 20);
@@ -2121,6 +2147,11 @@ function gp_get_vehicle_parts_url_for_product(int $productId): string
     $slug = sanitize_title((string) get_post_meta($productId, '_gpswiss_vehicle_slug', true));
     if ($slug !== '') {
         return gp_build_vehicle_parts_url_by_slug($slug);
+    }
+
+    $carId = function_exists('gp_get_ovoko_car_id_for_product') ? gp_get_ovoko_car_id_for_product($productId) : trim((string) get_post_meta($productId, '_ovoko_car_id', true));
+    if ($carId !== '') {
+        return add_query_arg('ovoko_car_id', rawurlencode($carId), get_post_type_archive_link('product'));
     }
 
     return '';
@@ -2159,13 +2190,13 @@ add_action('pre_get_posts', function (WP_Query $query): void {
         ],
     ]);
     $productId = !empty($lookup[0]) ? (int) $lookup[0] : 0;
-    $carId = $productId > 0 ? trim((string) get_post_meta($productId, '_ovoko_car_id', true)) : '';
+    $carId = $productId > 0 && function_exists('gp_get_ovoko_car_id_for_product') ? gp_get_ovoko_car_id_for_product($productId) : '';
     if ($carId === '') {
         return;
     }
 
     $metaQuery = (array) $query->get('meta_query');
-    $metaQuery[] = ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='];
+    $metaQuery[] = ['relation' => 'OR', ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='], ['key' => '_ovoko_vehicle_id', 'value' => $carId, 'compare' => '='], ['key' => '_vehicle_id', 'value' => $carId, 'compare' => '='], ['key' => '_car_id', 'value' => $carId, 'compare' => '=']];
     $query->set('meta_query', $metaQuery);
     $query->set('post_type', 'product');
 }, 19);
@@ -2187,7 +2218,14 @@ add_action('template_redirect', function (): void {
         'posts_per_page' => 1,
         'fields' => 'ids',
         'meta_query' => [
-            ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='],
+            'relation' => 'AND',
+            [
+                'relation' => 'OR',
+                ['key' => '_ovoko_car_id', 'value' => $carId, 'compare' => '='],
+                ['key' => '_ovoko_vehicle_id', 'value' => $carId, 'compare' => '='],
+                ['key' => '_vehicle_id', 'value' => $carId, 'compare' => '='],
+                ['key' => '_car_id', 'value' => $carId, 'compare' => '='],
+            ],
             ['key' => '_gpswiss_vehicle_slug', 'value' => '', 'compare' => '!='],
         ],
     ]);
