@@ -13,6 +13,17 @@ $apiOk = !empty($apiConnection['ok']);
 $apiStatusText = $apiOk ? 'OK' : ('ERROR — ' . (string) ($apiConnection['error'] ?? $apiConnection['reason'] ?? 'not tested'));
 $csvLoaded = !empty($csvStatus['rows_total']);
 $lastSyncStatus = (string) ($data['settings']['ovoko_sync_mode'] ?? 'unknown');
+$autoSyncStatus = (array) get_option('gpswiss_ovoko_auto_sync_status', []);
+$autoSyncStatusLabel = (string) ($autoSyncStatus['status'] ?? 'idle');
+$autoSyncLastSuccessfulAt = (string) ($autoSyncStatus['last_successful_sync_at'] ?? 'not run yet');
+$autoSyncLastCursor = (array) ($autoSyncStatus['last_cursor'] ?? []);
+$autoSyncProcessed = (int) ($autoSyncStatus['processed'] ?? 0);
+$autoSyncCreated = (int) ($autoSyncStatus['created'] ?? 0);
+$autoSyncUpdated = (int) ($autoSyncStatus['updated'] ?? 0);
+$autoSyncSkipped = (int) ($autoSyncStatus['skipped'] ?? 0);
+$autoSyncWarnings = (array) ($autoSyncStatus['warnings'] ?? []);
+$autoSyncErrors = (array) ($autoSyncStatus['errors'] ?? []);
+$buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
 
 $noticePayload = null;
 if (!empty($notice['text']) && is_string($notice['text'])) {
@@ -50,25 +61,8 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     </p></div>
 
 
-    <div style="margin:8px 0 14px;">
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
-            <?php wp_nonce_field('gpswiss_ovoko_test_api_connection'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_test_api_connection" />
-            <?php submit_button('Test API connection', 'secondary', 'submit', false); ?>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
-            <?php wp_nonce_field('gpswiss_ovoko_test_updatepart_place_for_product_43302'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_test_updatepart_place_for_product_43302" />
-            <?php submit_button('Test updatePart place for product 43302', 'secondary', 'submit', false); ?>
-        </form>
-        <?php if (!empty($apiConnection)): ?>
-            <details style="display:inline-block; vertical-align:middle;"><summary>Show API test details</summary><pre><?php echo esc_html(wp_json_encode($apiConnection, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
-        <?php endif; ?>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-left:8px;">
-            <?php wp_nonce_field('gpswiss_ovoko_export_missing_ovoko_id'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_export_missing_ovoko_id" />
-            <?php submit_button('Export products missing Ovoko ID', 'secondary', 'submit', false); ?>
-        </form>
+    <div class="notice notice-info inline" style="margin:8px 0 14px;">
+        <p><strong>Build marker:</strong> <code><?php echo esc_html($buildMarker); ?></code> | Legacy/maintenance tools are now collapsed under <strong>Advanced Settings</strong>.</p>
     </div>
 
     <?php if (!empty($notice)): ?>
@@ -122,7 +116,109 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </div>
     <?php endif; ?>
 
-    <h2>Main actions</h2>
+    <h2>Ovoko ↔ Woo realtime sync</h2>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Sync status / logs</h3>
+        <p><strong>Stage 1:</strong> diagnostics and dry-run only. No Woo products/categories are changed and no sale/status updates are sent to Ovoko.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:12px 0;">
+            <div style="background:#f6f7f7;padding:10px;"><strong>Status</strong><br><code><?php echo esc_html($autoSyncStatusLabel); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Last successful sync</strong><br><code><?php echo esc_html($autoSyncLastSuccessfulAt); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Processed</strong><br><code><?php echo esc_html((string) $autoSyncProcessed); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Would create/update/skip</strong><br><code><?php echo esc_html($autoSyncCreated . ' / ' . $autoSyncUpdated . ' / ' . $autoSyncSkipped); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Warnings / errors</strong><br><code><?php echo esc_html(count($autoSyncWarnings) . ' / ' . count($autoSyncErrors)); ?></code></div>
+        </div>
+        <p><strong>Last cursor:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncLastCursor, JSON_UNESCAPED_UNICODE)); ?></code></p>
+        <?php if (!empty($autoSyncWarnings) || !empty($autoSyncErrors)): ?>
+            <details><summary>Show latest sync warnings/errors</summary><pre><?php echo esc_html(wp_json_encode(['warnings' => $autoSyncWarnings, 'errors' => $autoSyncErrors], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+        <?php endif; ?>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Cron settings and run controls</h3>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li><strong>Recommended schedule:</strong> every 10–15 minutes in dry-run/log mode; only reduce to 5 minutes after API latency/error rate is stable.</li>
+            <li><strong>Recommended batch size:</strong> 10–25 products per tick on shared hosting.</li>
+            <li><strong>Cursor:</strong> page-based now; <code>updated_after/from</code> can be enabled only after RRR/Ovoko confirms delta support.</li>
+            <li><strong>Lock:</strong> <code>gpswiss_ovoko_auto_sync_lock</code> will prevent parallel sync runs in the live phase.</li>
+            <li><strong>Unavailable policy:</strong> recommended A) keep product and set stock to <code>0/outofstock</code>; no product deletion.</li>
+        </ul>
+        <p>Manual live run and WP-Cron/server-cron live writes remain intentionally disabled until the dry-run output is approved.</p>
+        <button type="button" class="button button-primary" disabled="disabled">Run sync now — disabled until approval</button>
+        <button type="button" class="button" disabled="disabled">Enable WP-Cron — disabled until approval</button>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Dry-run sync</h3>
+        <p><strong>Safety:</strong> these tools do not create Woo products, do not update prices/stock/descriptions/categories, do not touch existing images, and do not send sales/status changes to Ovoko.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li>Woo prices are parsed only from Ovoko <code>internal_notes</code>; Ovoko price, marketplace price and Allegro price are intentionally ignored.</li>
+            <li>Existing Woo product images are reported but never overwritten, removed or refreshed.</li>
+            <li>New products are reported as <code>new_products_images_would_import</code> when Ovoko images are present, but are not created in this stage.</li>
+            <li>Technical details use the same normalized Ovoko/RRR product fields as the existing details enrichment mapper.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_auto_sync_endpoint_analysis'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_auto_sync_endpoint_analysis" />
+            <?php submit_button('Analyze Ovoko/RRR endpoints for safe cron', 'secondary', 'submit', false); ?>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_dry_run_auto_sync'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_auto_sync" />
+            <label>part_id (optional single product): <input type="number" min="1" name="part_id" placeholder="e.g. 10994" /></label>
+            <label>page: <input type="number" min="1" name="page" value="1" style="width:80px;" /></label>
+            <label>batch_size: <input type="number" min="1" max="25" name="batch_size" value="5" style="width:80px;" /></label>
+            <label>updated_after (diagnostic only): <input type="text" name="updated_after" placeholder="YYYY-MM-DDTHH:MM:SSZ" /></label>
+            <?php submit_button('Dry-run Ovoko → Woo sync', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Woo → Ovoko sale/stock sync status</h3>
+        <p>Sale/stock outbound sync is design/dry-run only until Ovoko/RRR confirms the sale/reserve/status endpoint.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li><strong>Queue:</strong> order-status hook will enqueue work; a separate cron/worker will send to Ovoko later.</li>
+            <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
+            <li><strong>Current status:</strong> <code>design_only_not_sending_to_ovoko</code>.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_dry_run_sale_sync'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
+            <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
+            <?php submit_button('Dry-run Woo → Ovoko sale/stock sync', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
+    <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
+        <summary><strong>Advanced Settings</strong></summary>
+        <div class="notice notice-warning inline" style="margin:12px 0;">
+            <p><strong>Advanced tools — use only for maintenance/debug. These actions can modify categories/products.</strong></p>
+        </div>
+        <p>Legacy category rebuild/delete tools, CSV helpers, debug probes, old dry-runs and maintenance actions were moved here to keep the daily sync dashboard clean. Existing confirmations and safeguards are unchanged.</p>
+
+        <div class="postbox" style="padding:16px; margin-bottom:14px;">
+            <h3>Legacy quick diagnostics</h3>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+                <?php wp_nonce_field('gpswiss_ovoko_test_api_connection'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_test_api_connection" />
+                <?php submit_button('Test API connection', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-right:8px;">
+                <?php wp_nonce_field('gpswiss_ovoko_test_updatepart_place_for_product_43302'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_test_updatepart_place_for_product_43302" />
+                <?php submit_button('Test updatePart place for product 43302', 'secondary', 'submit', false); ?>
+            </form>
+            <?php if (!empty($apiConnection)): ?>
+                <details style="display:inline-block; vertical-align:middle;"><summary>Show API test details</summary><pre><?php echo esc_html(wp_json_encode($apiConnection, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block; margin-left:8px;">
+                <?php wp_nonce_field('gpswiss_ovoko_export_missing_ovoko_id'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_export_missing_ovoko_id" />
+                <?php submit_button('Export products missing Ovoko ID', 'secondary', 'submit', false); ?>
+            </form>
+        </div>
+
+        <h2>Legacy / maintenance actions</h2>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">
         <h3>Create Woo draft product from RRR part</h3>
@@ -572,8 +668,8 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </ul>
     </div>
 
-    <?php if ($showAdvancedTools): ?>
-    <details style="margin-top:18px;"><summary><strong>Advanced / Diagnostics (developer tools)</strong></summary>
+        <?php if ($showAdvancedTools): ?>
+        <details style="margin-top:18px;"><summary><strong>Developer diagnostics</strong></summary>
         <div class="postbox" style="padding:16px; margin-top:10px;">
             <p>Technical and legacy tools moved here.</p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:10px;">
@@ -595,6 +691,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <?php submit_button('Legacy preview match', 'secondary', 'submit', false); ?>
             </form>
         </div>
+        </details>
+        <?php endif; ?>
     </details>
-    <?php endif; ?>
 </div>

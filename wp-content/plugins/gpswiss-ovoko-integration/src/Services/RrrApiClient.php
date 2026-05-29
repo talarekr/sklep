@@ -164,6 +164,37 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page, []);
     }
 
+    public function probe_parts_delta_filter_support(string $fromIso = ''): array
+    {
+        $fromIso = trim($fromIso) !== '' ? trim($fromIso) : gmdate('c', time() - DAY_IN_SECONDS);
+        $paths = [
+            '/v2/get/parts?limit=1&page=1&updated_after=' . rawurlencode($fromIso),
+            '/v2/get/parts?limit=1&page=1&from=' . rawurlencode($fromIso),
+            '/v2/get/parts?limit=1&page=1&date_from=' . rawurlencode($fromIso),
+            '/v2/get/parts/categories?limit=1&page=1&updated_after=' . rawurlencode($fromIso),
+            '/v2/get/parts/categories?limit=1&page=1&from=' . rawurlencode($fromIso),
+            '/crm/export/parts-v2',
+        ];
+        $results = [];
+        foreach ($paths as $path) {
+            $body = str_starts_with($path, '/crm/export/parts-v2') ? ['limit' => 1, 'from' => $fromIso] : [];
+            $result = $this->post_form($path, $body, true);
+            $payload = (array) ($result['payload'] ?? []);
+            $results[] = [
+                'path' => $path,
+                'ok' => !empty($result['ok']),
+                'success' => !empty($result['success']),
+                'status_code' => (string) ($result['status_code'] ?? ''),
+                'http_code' => $result['http_code'] ?? null,
+                'records_count' => (int) ($result['records_count'] ?? 0),
+                'pagination' => (array) ($result['pagination'] ?? []),
+                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'full_payload_omitted' => true,
+            ];
+        }
+        return ['ok' => true, 'from' => $fromIso, 'probe_type' => 'read_only_delta_filter_probe', 'results' => $results];
+    }
+
     public function probe_part_search_by_code(string $partNumber): array
     {
         $partNumber = trim($partNumber);
