@@ -14,18 +14,34 @@ $is_logged_in = is_user_logged_in();
 $shortcuts = [
     [
         'label' => 'Silniki',
-        'slugs' => ['silniki', 'silnik', 'silniki-i-osprzet', 'engines'],
-        'url' => 'https://gpswiss.pl/kategoria-produktu/motoryzacja/czesci-samochodowe/silniki-i-osprzet/silniki-kompletne/',
+        'slugs' => ['kompletne-silniki'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/silnik-i-osprzet/silniki-i-osprzet/kompletne-silniki/',
     ],
     [
         'label' => 'Skrzynia biegów',
-        'slugs' => ['skrzynia-biegow', 'skrzynie-biegow', 'transmission'],
-        'url' => 'https://gpswiss.pl/kategoria-produktu/motoryzacja/czesci-samochodowe/uklad-napedowy/skrzynie-biegow/kompletne-skrzynie/',
+        'slugs' => ['automatyczna-skrzynia-biegow'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/uklad-napedowy/skrzynie-biegow-i-inne-elementy/automatyczna-skrzynia-biegow/',
     ],
-    ['label' => 'Filtry DPF', 'slugs' => ['filtry-czastek-stalych-dpf-fap']],
-    ['label' => 'Felgi', 'slugs' => ['felgi', 'felga', 'wheels']],
-    ['label' => 'Fotele', 'slugs' => ['fotele', 'fotel', 'wyposazenie-wnetrza-samochodu', 'interior']],
-    ['label' => 'Zwrotnice', 'slugs' => ['zwrotnice', 'zwrotnica', 'suspension']],
+    [
+        'label' => 'Filtry DPF',
+        'slugs' => ['filtr-czastek-stalych-katalizator-fap-dpf'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/uklad-wydechowy-i-inne-elementy/elementy-systemu-kontroli-spalin/filtr-czastek-stalych-katalizator-fap-dpf/',
+    ],
+    [
+        'label' => 'Felgi',
+        'slugs' => ['felgi-aluminiowe'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/opony-felgi-kolpaki-i-inne-elementy/felgi-aluminiowe/',
+    ],
+    [
+        'label' => 'Fotele',
+        'slugs' => ['komplety-foteli-boczkow-podsufitki-dywanikow'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/wyposazenie-wnetrza-samochodu/komplety-foteli-boczkow-podsufitki-dywanikow/',
+    ],
+    [
+        'label' => 'Zwrotnice',
+        'slugs' => ['zwrotnica-kola-przedniego'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/os-przednia-i-inne-elementy/os-przednia/zwrotnica-kola-przedniego/',
+    ],
 ];
 
 $resolve_category_url = static function (array $candidate_slugs, string $label) use ($shop_url): string {
