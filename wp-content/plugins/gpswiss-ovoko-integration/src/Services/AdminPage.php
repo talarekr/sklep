@@ -64,6 +64,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_delete_all_product_categories', [$this, 'handle_delete_all_product_categories']);
         add_action('admin_post_gpswiss_ovoko_rebuild_categories_from_scratch', [$this, 'handle_rebuild_categories_from_scratch']);
         add_action('wp_ajax_gpswiss_ovoko_rebuild_categories_from_scratch', [$this, 'handle_rebuild_categories_from_scratch_ajax']);
+        add_action('wp_ajax_gpswiss_ovoko_category_rebuild_autorun', [$this, 'handle_category_rebuild_autorun_ajax']);
         add_action('admin_post_gpswiss_ovoko_pause_category_rebuild', [$this, 'handle_pause_category_rebuild']);
         add_action('admin_post_gpswiss_ovoko_resume_category_rebuild', [$this, 'handle_resume_category_rebuild']);
         add_action('admin_post_gpswiss_ovoko_post_rebuild_category_audit', [$this, 'handle_post_rebuild_category_audit']);
@@ -104,6 +105,8 @@ class AdminPage
             'categoryAction' => 'gpswiss_ovoko_update_categories_from_ovoko',
             'adminAutorunJsUrl' => $this->autorunScriptUrl,
             'adminAutorunJsVersion' => $this->autorunScriptVersion,
+            'categoryRebuildAutorunNonce' => wp_create_nonce('gpswiss_ovoko_category_rebuild_autorun'),
+            'categoryRebuildAutorunAction' => 'gpswiss_ovoko_category_rebuild_autorun',
         ]);
     }
 
@@ -509,6 +512,24 @@ class AdminPage
         $result = $this->service->rebuild_woo_categories_from_ovoko_from_scratch($options);
         $result['done'] = !empty($result['paused']) || empty($result['next_after_product_id']) || ((int) ($result['next_after_product_id'] ?? 0) <= (int) ($result['after_product_id'] ?? 0)) || empty($result['results']);
         wp_send_json($result);
+    }
+
+
+    public function handle_category_rebuild_autorun_ajax(): void
+    {
+        if (!current_user_can('manage_options')) { wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403); }
+        check_ajax_referer('gpswiss_ovoko_category_rebuild_autorun');
+        $command = sanitize_key((string) ($_POST['command'] ?? 'status'));
+        $options = [
+            'confirmation' => (string) ($_POST['confirmation'] ?? ''),
+            'start_after_product_id' => isset($_POST['start_after_product_id']) ? (int) $_POST['start_after_product_id'] : null,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 5,
+            'cache_rebuild_every_n_batches' => isset($_POST['cache_rebuild_every_n_batches']) ? (int) $_POST['cache_rebuild_every_n_batches'] : 5,
+            'stop_on_error' => !array_key_exists('stop_on_error', $_POST) || !empty($_POST['stop_on_error']),
+        ];
+        if ($options['start_after_product_id'] === null) { unset($options['start_after_product_id']); }
+        $result = $this->service->control_category_rebuild_autorun($command, $options);
+        wp_send_json($result, !empty($result['ok']) ? 200 : 400);
     }
 
     public function handle_pause_category_rebuild(): void

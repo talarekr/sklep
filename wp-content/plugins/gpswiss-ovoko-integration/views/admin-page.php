@@ -437,6 +437,53 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             });
         });
         </script>
+        <?php $categoryRebuildAutorunStatus = (array) ($data['category_rebuild_autorun_status'] ?? []); ?>
+        <div id="gpswiss_category_rebuild_autorun_box" style="padding:12px;background:#eef6ff;border:1px solid #72aee6;margin-bottom:12px;">
+            <h4>Autorun: Rebuild Woo categories from Ovoko from scratch</h4>
+            <p><strong>Safety:</strong> autorun changes only Woo <code>product_cat</code> assignments and primary category. It does not edit descriptions, prices, stock, images, eBay, Allegro, or Ovoko data.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+                <label>start_after_product_id <input id="gpswiss_rebuild_autorun_start_after" type="number" min="0" value="<?php echo esc_attr((string) ($categoryRebuildAutorunStatus['last_safe_next_after_product_id'] ?? 0)); ?>" style="width:110px;" /></label>
+                <label>batch_size <input id="gpswiss_rebuild_autorun_batch_size" type="number" min="1" max="100" value="5" style="width:80px;" /></label>
+                <label>Rebuild frontend category menu cache every N batches <input id="gpswiss_rebuild_autorun_cache_every" type="number" min="1" max="1000" value="5" style="width:80px;" /></label>
+                <label><input id="gpswiss_rebuild_autorun_stop_on_error" type="checkbox" checked="checked" /> stop_on_error</label>
+            </div>
+            <p><strong>Real autorun requires exact confirmation:</strong> <code>REBUILD WOO CATEGORIES FROM OVOKO</code></p>
+            <input id="gpswiss_rebuild_autorun_confirmation" type="text" class="regular-text" placeholder="REBUILD WOO CATEGORIES FROM OVOKO" />
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button class="button button-primary" type="button" id="gpswiss_rebuild_autorun_start" style="background:#b32d2e;border-color:#8f2223;color:#fff;">Start autorun rebuild categories from Ovoko</button>
+                <button class="button" type="button" id="gpswiss_rebuild_autorun_pause">Pause autorun</button>
+                <button class="button" type="button" id="gpswiss_rebuild_autorun_resume">Resume autorun</button>
+                <button class="button" type="button" id="gpswiss_rebuild_autorun_stop">Stop autorun</button>
+                <button class="button" type="button" id="gpswiss_rebuild_autorun_reset">Reset autorun status</button>
+            </div>
+            <div id="gpswiss_rebuild_autorun_status" style="margin-top:10px;padding:10px;background:#fff;">
+                status: <span data-k="status"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['status'] ?? 'idle')); ?></span> |
+                current_after_product_id: <span data-k="current_after_product_id"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['current_after_product_id'] ?? 0)); ?></span> |
+                next_after_product_id: <span data-k="next_after_product_id"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['next_after_product_id'] ?? 0)); ?></span> |
+                last_safe_next_after_product_id: <span data-k="last_safe_next_after_product_id"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['last_safe_next_after_product_id'] ?? 0)); ?></span><br>
+                processed_total: <span data-k="processed_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['processed_total'] ?? 0)); ?></span> |
+                fixed_total: <span data-k="fixed_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['fixed_total'] ?? 0)); ?></span> |
+                skipped_total: <span data-k="skipped_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['skipped_total'] ?? 0)); ?></span> |
+                errors_total: <span data-k="errors_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['errors_total'] ?? 0)); ?></span><br>
+                missing_ovoko_id_total: <span data-k="missing_ovoko_id_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['missing_ovoko_id_total'] ?? 0)); ?></span> |
+                missing_category_id_total: <span data-k="missing_category_id_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['missing_category_id_total'] ?? 0)); ?></span> |
+                missing_category_path_total: <span data-k="missing_category_path_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['missing_category_path_total'] ?? 0)); ?></span> |
+                api_errors_total: <span data-k="api_errors_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['api_errors_total'] ?? 0)); ?></span><br>
+                categories_created_total: <span data-k="categories_created_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['categories_created_total'] ?? 0)); ?></span> |
+                categories_existing_total: <span data-k="categories_existing_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['categories_existing_total'] ?? 0)); ?></span> |
+                category_assignments_changed_total: <span data-k="category_assignments_changed_total"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['category_assignments_changed_total'] ?? 0)); ?></span><br>
+                cache: <span data-k="menu_cache_rebuild"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['menu_cache_rebuild'] ?? 'skipped')); ?></span> |
+                menu_cache_category_count: <span data-k="menu_cache_category_count"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['menu_cache_category_count'] ?? 0)); ?></span> |
+                menu_cache_build_duration: <span data-k="menu_cache_build_duration"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['menu_cache_build_duration'] ?? 0)); ?></span> |
+                batches_since_last_cache_rebuild: <span data-k="batches_done_since_cache_rebuild"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['batches_done_since_cache_rebuild'] ?? 0)); ?></span><br>
+                started_at: <span data-k="started_at"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['started_at'] ?? '')); ?></span> |
+                updated_at: <span data-k="updated_at"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['updated_at'] ?? '')); ?></span> |
+                duration: <span data-k="duration"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['duration'] ?? 0)); ?></span><br>
+                last_error: <span data-k="last_error"><?php echo esc_html((string) ($categoryRebuildAutorunStatus['last_error'] ?? '')); ?></span>
+                <pre data-k="last_batch_result" style="white-space:pre-wrap;max-height:180px;overflow:auto;background:#f6f7f7;padding:8px;"><?php echo esc_html(wp_json_encode($categoryRebuildAutorunStatus['last_batch_result'] ?? null, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)); ?></pre>
+            </div>
+            <pre id="gpswiss_rebuild_autorun_logs" style="max-height:220px;overflow:auto;background:#111;color:#e6e6e6;padding:10px;"></pre>
+        </div>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="padding:12px;background:#fff5f5;border:1px solid #d63638;">
             <?php wp_nonce_field('gpswiss_ovoko_delete_all_product_categories'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_delete_all_product_categories" />

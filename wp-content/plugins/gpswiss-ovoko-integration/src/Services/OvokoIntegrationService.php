@@ -15,6 +15,8 @@ class OvokoIntegrationService
     public const COUNTERS_OPTION_KEY = 'gpswiss_ovoko_event_counters';
     public const DEDUP_OPTION_KEY = 'gpswiss_ovoko_processed_event_ids';
     public const GEARBOX_COUNT_OPTION_KEY = 'gpswiss_ovoko_gearbox_exclusion_count';
+    private const CATEGORY_REBUILD_AUTORUN_STATUS_OPTION = 'gpswiss_ovoko_category_rebuild_autorun_status';
+    private const CATEGORY_REBUILD_AUTORUN_LOCK_OPTION = 'gpswiss_ovoko_category_rebuild_autorun_lock';
 
     private const PART_ID_META_KEYS = [
         '_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id',
@@ -371,6 +373,7 @@ class OvokoIntegrationService
             'sync_preview_meta_mapping' => $syncService->map_to_woo_meta_preview($fixtureWithHash),
             'sync_preview_match' => ['mode' => 'manual_only', 'note' => 'match preview moved to manual actions only to keep admin page lightweight'],
             'csv_mapping_status' => (array) ($settings['ovoko_csv_mapping_status'] ?? []),
+            'category_rebuild_autorun_status' => $this->get_category_rebuild_autorun_status(),
             'excluded_from_ovoko_sync' => [
                 'enabled' => $excludeEnabled,
                 'detected_products_count' => (int) ($cachedExclusionCount['count'] ?? 0),
@@ -2888,6 +2891,186 @@ class OvokoIntegrationService
         ];
     }
 
+
+    public function get_category_rebuild_autorun_status(): array
+    {
+        $stored = get_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, []);
+        return wp_parse_args(is_array($stored) ? $stored : [], $this->default_category_rebuild_autorun_status());
+    }
+
+    private function default_category_rebuild_autorun_status(): array
+    {
+        return [
+            'start_after_product_id' => 0,
+            'current_after_product_id' => 0,
+            'next_after_product_id' => 0,
+            'last_safe_next_after_product_id' => 0,
+            'batch_size' => 5,
+            'cache_rebuild_every_n_batches' => 5,
+            'batches_done_since_cache_rebuild' => 0,
+            'status' => 'idle',
+            'stop_on_error' => true,
+            'processed_total' => 0,
+            'fixed_total' => 0,
+            'skipped_total' => 0,
+            'errors_total' => 0,
+            'missing_ovoko_id_total' => 0,
+            'missing_category_id_total' => 0,
+            'missing_category_path_total' => 0,
+            'api_errors_total' => 0,
+            'categories_created_total' => 0,
+            'categories_existing_total' => 0,
+            'category_assignments_changed_total' => 0,
+            'started_at' => '',
+            'updated_at' => '',
+            'duration' => 0,
+            'last_batch_result' => null,
+            'last_error' => '',
+            'menu_cache_rebuild' => 'skipped',
+            'menu_cache_category_count' => 0,
+            'menu_cache_build_duration' => 0,
+            'menu_cache_error' => '',
+            'batches_since_last_cache_rebuild' => 0,
+        ];
+    }
+
+    private function save_category_rebuild_autorun_status(array $status): array
+    {
+        $status = wp_parse_args($status, $this->default_category_rebuild_autorun_status());
+        $status['updated_at'] = gmdate('c');
+        if ((string) ($status['started_at'] ?? '') !== '') {
+            $status['duration'] = round(max(0, time() - strtotime((string) $status['started_at'])), 3);
+        }
+        update_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, $status, false);
+        return $status;
+    }
+
+    public function reset_category_rebuild_autorun_status(): array
+    {
+        delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
+        delete_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION);
+        return $this->get_category_rebuild_autorun_status();
+    }
+
+    public function control_category_rebuild_autorun(string $command, array $options = []): array
+    {
+        $status = $this->get_category_rebuild_autorun_status();
+        if ($command === 'status') {
+            return ['ok' => true, 'status' => $status];
+        }
+        if ($command === 'reset') {
+            return ['ok' => true, 'status' => $this->reset_category_rebuild_autorun_status()];
+        }
+        if ($command === 'pause') {
+            if (($status['status'] ?? '') === 'running') { $status['status'] = 'paused'; }
+            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+        }
+        if ($command === 'stop') {
+            if (in_array((string) ($status['status'] ?? ''), ['running','paused','error'], true)) { $status['status'] = 'idle'; }
+            delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
+            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+        }
+        if ($command === 'resume') {
+            $status['current_after_product_id'] = max(0, (int) ($status['last_safe_next_after_product_id'] ?? 0));
+            $status['next_after_product_id'] = (int) $status['current_after_product_id'];
+            $status['status'] = 'running';
+            $status['last_error'] = '';
+            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+        }
+        if ($command === 'start') {
+            if ((string) ($options['confirmation'] ?? '') !== 'REBUILD WOO CATEGORIES FROM OVOKO') {
+                return ['ok' => false, 'error' => 'confirmation_required', 'required_confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO', 'status' => $status];
+            }
+            if (($status['status'] ?? '') === 'running') {
+                return ['ok' => false, 'error' => 'autorun_already_running', 'status' => $status];
+            }
+            $lastSafe = max(0, (int) ($status['last_safe_next_after_product_id'] ?? 0));
+            $startAfter = array_key_exists('start_after_product_id', $options) ? max(0, (int) $options['start_after_product_id']) : $lastSafe;
+            $status = $this->default_category_rebuild_autorun_status();
+            $status['start_after_product_id'] = $startAfter;
+            $status['current_after_product_id'] = $startAfter;
+            $status['next_after_product_id'] = $startAfter;
+            $status['last_safe_next_after_product_id'] = $lastSafe;
+            $status['batch_size'] = max(1, min(100, (int) ($options['batch_size'] ?? 5)));
+            $status['cache_rebuild_every_n_batches'] = max(1, min(1000, (int) ($options['cache_rebuild_every_n_batches'] ?? 5)));
+            $status['stop_on_error'] = !array_key_exists('stop_on_error', $options) || !empty($options['stop_on_error']);
+            $status['status'] = 'running';
+            $status['started_at'] = gmdate('c');
+            $status['last_error'] = '';
+            return ['ok' => true, 'status' => $this->save_category_rebuild_autorun_status($status)];
+        }
+        if ($command === 'tick') {
+            return $this->run_category_rebuild_autorun_tick($status);
+        }
+        return ['ok' => false, 'error' => 'unknown_command', 'status' => $status];
+    }
+
+    private function run_category_rebuild_autorun_tick(array $status): array
+    {
+        if (($status['status'] ?? '') !== 'running') {
+            return ['ok' => true, 'done' => true, 'status' => $status];
+        }
+        $lock = get_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION, []);
+        if (is_array($lock) && (int) ($lock['expires_at'] ?? 0) > time()) {
+            return ['ok' => false, 'error' => 'autorun_batch_already_running', 'status' => $status];
+        }
+        delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
+        add_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION, ['started_at' => gmdate('c'), 'expires_at' => time() + 600], '', 'no');
+        try {
+            $batchesSince = max(0, (int) ($status['batches_done_since_cache_rebuild'] ?? 0));
+            $interval = max(1, (int) ($status['cache_rebuild_every_n_batches'] ?? 5));
+            $shouldRebuildCache = ($batchesSince + 1) >= $interval;
+            $batch = $this->rebuild_woo_categories_from_ovoko_from_scratch([
+                'after_product_id' => max(0, (int) ($status['current_after_product_id'] ?? 0)),
+                'batch_size' => max(1, (int) ($status['batch_size'] ?? 5)),
+                'dry_run' => false,
+                'confirmation' => 'REBUILD WOO CATEGORIES FROM OVOKO',
+                'stop_on_error' => !empty($status['stop_on_error']),
+                'rebuild_menu_cache_when_done' => $shouldRebuildCache,
+                'force_menu_cache_rebuild_when_done' => true,
+                'batches_since_last_cache_rebuild' => $batchesSince,
+            ]);
+            $counts = (array) ($batch['counts'] ?? []);
+            $status['last_batch_result'] = $batch;
+            $status['current_after_product_id'] = (int) ($batch['next_after_product_id'] ?? $status['current_after_product_id']);
+            $status['next_after_product_id'] = (int) ($batch['next_after_product_id'] ?? $status['next_after_product_id']);
+            $status['last_safe_next_after_product_id'] = max((int) ($status['last_safe_next_after_product_id'] ?? 0), (int) ($batch['last_safe_next_after_product_id'] ?? 0));
+            foreach (['processed','fixed','skipped','errors','missing_ovoko_id','missing_category_id','missing_category_path','api_errors','categories_created','categories_existing','category_assignments_changed'] as $key) {
+                $target = $key . '_total';
+                $status[$target] = (int) ($status[$target] ?? 0) + (int) ($counts[$key] ?? $batch[$key] ?? 0);
+            }
+            $status['menu_cache_rebuild'] = (string) ($batch['menu_cache_rebuild'] ?? 'skipped');
+            $status['menu_cache_category_count'] = (int) ($batch['menu_cache_category_count'] ?? 0);
+            $status['menu_cache_build_duration'] = (float) ($batch['menu_cache_build_duration'] ?? 0);
+            $status['menu_cache_error'] = (string) ($batch['menu_cache_error'] ?? '');
+            if (in_array($status['menu_cache_rebuild'], ['done','failed'], true)) { $batchesSince = 0; } else { $batchesSince++; }
+            $status['batches_done_since_cache_rebuild'] = $batchesSince;
+            $status['batches_since_last_cache_rebuild'] = $batchesSince;
+            if (!empty($batch['menu_cache_rebuild_error'])) { $status['last_error'] = (string) $batch['menu_cache_rebuild_error']; }
+            $latestStoredStatus = get_option(self::CATEGORY_REBUILD_AUTORUN_STATUS_OPTION, []);
+            $requestedStatus = is_array($latestStoredStatus) ? (string) ($latestStoredStatus['status'] ?? 'running') : 'running';
+            if (in_array($requestedStatus, ['paused','idle'], true)) {
+                $status['status'] = $requestedStatus;
+            }
+            $batchErrors = (int) ($counts['errors'] ?? $batch['errors'] ?? 0);
+            $apiErrors = (int) ($counts['api_errors'] ?? $batch['api_errors'] ?? 0);
+            if (($batchErrors > 0 || $apiErrors > 0 || empty($batch['ok'])) && !empty($status['stop_on_error'])) {
+                $status['status'] = 'error';
+                $status['last_error'] = (string) ($batch['error'] ?? ($apiErrors > 0 ? 'api_errors_in_batch' : 'errors_in_batch'));
+            } elseif (!empty($batch['done'])) {
+                $status['status'] = 'done';
+            }
+            return ['ok' => !empty($batch['ok']), 'done' => in_array((string) $status['status'], ['done','paused','idle','error'], true), 'batch' => $batch, 'status' => $this->save_category_rebuild_autorun_status($status)];
+        } catch (\Throwable $e) {
+            $status['status'] = 'error';
+            $status['api_errors_total'] = (int) ($status['api_errors_total'] ?? 0) + 1;
+            $status['last_error'] = $e->getMessage();
+            return ['ok' => false, 'error' => $e->getMessage(), 'status' => $this->save_category_rebuild_autorun_status($status)];
+        } finally {
+            delete_option(self::CATEGORY_REBUILD_AUTORUN_LOCK_OPTION);
+        }
+    }
+
     public function rebuild_woo_categories_from_ovoko_from_scratch(array $options = []): array
     {
         $started = microtime(true);
@@ -2938,7 +3121,8 @@ class OvokoIntegrationService
         $next = $ids === [] ? $afterProductId : max($afterProductId, (int) end($ids));
         $done = $productId > 0 || $ids === [] || count($ids) < $batchSize;
         $hasRealChanges = !$dryRun && ((int) $counts['category_assignments_changed'] > 0 || (int) $counts['categories_created'] > 0);
-        $cacheReport = $this->rebuild_frontend_category_menu_cache_after_batch($dryRun, !empty($options['rebuild_menu_cache_when_done']), $hasRealChanges);
+        $forceFinalCacheRebuild = !$dryRun && !empty($options['force_menu_cache_rebuild_when_done']) && $done;
+        $cacheReport = $this->rebuild_frontend_category_menu_cache_after_batch($dryRun, !empty($options['rebuild_menu_cache_when_done']) || $forceFinalCacheRebuild, $hasRealChanges || $forceFinalCacheRebuild);
         $warnings = [];
         if ($cacheReport['menu_cache_rebuild'] === 'failed') {
             $warnings[] = 'Frontend category menu cache rebuild failed after this batch; product category mapping continued.';
@@ -2977,6 +3161,7 @@ class OvokoIntegrationService
             'menu_cache_error' => $cacheReport['menu_cache_error'],
             'menu_cache_rebuild_error' => $cacheReport['menu_cache_rebuild_error'],
             'menu_cache_rebuild_result' => $cacheReport['menu_cache_rebuild_result'],
+            'batches_since_last_cache_rebuild' => (int) ($options['batches_since_last_cache_rebuild'] ?? 0),
             'warnings' => $warnings,
             'rules' => ['no_csv_mapping','no_motoryzacja_root','no_shortened_paths','replace_existing_product_cat_assignments','product_data_not_touched','no_ebay_or_allegro_changes','no_ovoko_writes'],
         ];
