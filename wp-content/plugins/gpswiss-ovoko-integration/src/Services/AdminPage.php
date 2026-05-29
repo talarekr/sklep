@@ -517,9 +517,13 @@ class AdminPage
 
     public function handle_category_rebuild_autorun_ajax(): void
     {
-        if (!current_user_can('manage_options')) { wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403); }
-        check_ajax_referer('gpswiss_ovoko_category_rebuild_autorun');
         $command = sanitize_key((string) ($_POST['command'] ?? 'status'));
+        if (!current_user_can('manage_options')) {
+            wp_send_json(['ok' => false, 'command' => $command, 'status' => null, 'message' => 'unauthorized', 'error' => 'unauthorized'], 403);
+        }
+        if (check_ajax_referer('gpswiss_ovoko_category_rebuild_autorun', '_ajax_nonce', false) === false) {
+            wp_send_json(['ok' => false, 'command' => $command, 'status' => $this->service->get_category_rebuild_autorun_status(), 'message' => 'nonce_check_failed', 'error' => 'nonce_check_failed'], 403);
+        }
         $options = [
             'confirmation' => (string) ($_POST['confirmation'] ?? ''),
             'start_after_product_id' => isset($_POST['start_after_product_id']) ? (int) $_POST['start_after_product_id'] : null,
@@ -529,7 +533,15 @@ class AdminPage
         ];
         if ($options['start_after_product_id'] === null) { unset($options['start_after_product_id']); }
         $result = $this->service->control_category_rebuild_autorun($command, $options);
-        wp_send_json($result, !empty($result['ok']) ? 200 : 400);
+        update_option('gpswiss_ovoko_category_rebuild_autorun_last_ajax', [
+            'at' => gmdate('c'),
+            'command' => $command,
+            'ok' => !empty($result['ok']),
+            'message' => (string) ($result['message'] ?? ''),
+            'error' => (string) ($result['error'] ?? ''),
+            'status_summary' => (array) ($result['status_summary'] ?? []),
+        ], false);
+        wp_send_json($result, 200);
     }
 
     public function handle_pause_category_rebuild(): void
