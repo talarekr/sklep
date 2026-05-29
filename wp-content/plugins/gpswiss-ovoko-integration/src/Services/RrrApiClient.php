@@ -553,11 +553,39 @@ class RrrApiClient
                     'endpoint_used' => (string) ($row['path'] ?? ''),
                     'car_id' => $carId,
                     'normalized' => $normalized,
+                    'raw_record' => $record,
+                    'raw_diagnostics' => $this->build_vehicle_raw_diagnostics($record, $normalized),
                 ];
             }
         }
 
         return ['ok'=>false,'endpoint_confirmed'=>false,'car_id'=>$carId,'probe'=>$probe,'message'=>'No confirmed read-only endpoint returned vehicle details for requested car_id.'];
+    }
+
+    public function probe_ovoko_vehicle_data_for_car_id(int $carId): array
+    {
+        $carId = max(1, $carId);
+        $preview = $this->preview_fetch_car_by_id((string) $carId);
+        $record = (array) ($preview['raw_record'] ?? []);
+        $normalized = (array) ($preview['normalized'] ?? []);
+
+        return [
+            'ok' => !empty($preview['ok']),
+            'mode' => 'read_only',
+            'action_name' => 'Probe Ovoko vehicle data for car_id',
+            'car_id' => $carId,
+            'endpoint_used' => (string) ($preview['endpoint_used'] ?? ''),
+            'vehicle_fetch_ok' => !empty($preview['ok']),
+            'vehicle_fields_count' => count(array_filter($normalized, static fn($value) => !is_array($value) && $value !== '' && $value !== null)),
+            'normalized_vehicle_data' => $normalized,
+            'raw_report' => $this->build_vehicle_raw_diagnostics($record, $normalized),
+            'dictionary_resolution' => [
+                'status' => (string) ($normalized['vehicle_dictionary_resolution_status'] ?? ''),
+                'source' => (string) ($normalized['vehicle_dictionary_resolution_source'] ?? ''),
+            ],
+            'no_write_to_woo' => true,
+            'checked_at' => gmdate('c'),
+        ];
     }
 
     public function probe_vehicle_endpoints(int $carId = 458): array
@@ -571,7 +599,7 @@ class RrrApiClient
             $candidate=$this->extract_candidate_record($payload, (string) $carId);
             $candidateKeys=array_values(array_map('strval',array_keys((array)$candidate)));
             $contains=(string)($this->first_non_empty_value((array)$candidate,['car_id','id','vehicle_id']))===(string)$carId;
-            $norm=$this->normalize_vehicle_record((array)$candidate,(string)$carId);
+            $norm=$this->normalize_vehicle_record((array)$candidate,(string)$carId,false);
             $results[]=['path'=>$path,'executed'=>!empty($raw['executed']),'http_code'=>$raw['http_code']??null,'status_code'=>(string)($raw['status_code']??''),'msg'=>(string)($raw['msg']??$raw['message']??''),'success'=>!empty($raw['success']),'response_top_level_keys'=>array_values(array_map('strval',array_keys($payload))),'candidate_record_keys'=>$candidateKeys,'contains_car_id_458'=>$carId===458?$contains:null,'contains_car_id_requested'=>$contains,'contains_vehicle_fields'=>$this->has_vehicle_fields($norm),'safe_sample'=>$this->safe_sample($candidate),'full_payload_omitted'=>true,'candidate_record'=>$candidate];
         }
         return ['ok'=>true,'car_id'=>$carId,'endpoints'=>$results];
@@ -1073,18 +1101,20 @@ class RrrApiClient
         return $value === [] || array_keys($value) === range(0, count($value) - 1);
     }
 
-    private function normalize_vehicle_record(array $record, string $fallbackCarId): array
+    private function normalize_vehicle_record(array $record, string $fallbackCarId, bool $resolveDictionaries = true): array
     {
         $carId = (string) ($this->first_non_empty_value($record, ['car_id', 'id', 'vehicle_id']) ?: $fallbackCarId);
         $capacityRaw = $this->first_non_empty_value($record, ['car_engine_cubic_capacity', 'engine_capacity_cc', 'engine_capacity', 'capacity_cc']);
         $capacityCc = is_numeric($capacityRaw) ? (int) $capacityRaw : 0;
         $capacityL = $capacityCc > 0 ? round($capacityCc / 1000, 1) : null;
         $mapped = $this->local_confirmed_dictionary_for_car($record, $carId);
+        $dictionaryResolved = $resolveDictionaries ? $this->resolve_vehicle_dictionaries($record) : [];
+        $mapped = array_merge($dictionaryResolved, $mapped);
         $engineCode = sanitize_text_field((string) ($this->first_non_empty_value($record, ['car_engine_code', 'engine_code', 'engine']) ?? ''));
-        $directMake = $this->first_non_empty_value($record, ['car_make_name','car_manufacturer_name','manufacturer_name','make_name','brand_name','make','manufacturer','brand','car_make']);
-        $directModel = $this->first_non_empty_value($record, ['car_model_name','model_name','model_title','car_model_title','model','car_model_text']);
-        $directGeneration = $this->first_non_empty_value($record, ['car_model_category_name','model_category_name','generation_name','generation','modification','car_generation','car_model_category_title']);
-        $fuel = (string) ($mapped['vehicle_fuel'] ?? $this->first_non_empty_value($record, ['car_fuel_name','fuel_name','fuel','car_fuel_text']));
+        $directMake = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_make_name','car_manufacturer_name','manufacturer_name','make_name','brand_name','make','manufacturer','brand','car_make']));
+        $directModel = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_model_name','model_name','model_title','car_model_title','model','car_model_text']));
+        $directGeneration = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_model_category_name','model_category_name','generation_name','generation','modification','car_generation','car_model_category_title']));
+        $fuel = (string) ($mapped['vehicle_fuel'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_fuel_name','fuel_name','fuel','car_fuel_text'])));
         $engineMarketing = $capacityL ? number_format($capacityL, 1) : '';
         $engineSource = 'derived_from_capacity_only';
         if ($carId === '458' && $fuel === 'Benzyna' && strtoupper($engineCode) === 'CZDA' && $engineMarketing !== '') { $engineMarketing .= ' TSI'; $engineSource = 'local_confirmed_from_ovoko_ui_for_car_458'; }
@@ -1104,15 +1134,15 @@ class RrrApiClient
             'vehicle_engine_capacity_l' => $capacityL,
             'vehicle_engine_power_kw' => sanitize_text_field((string) $this->first_non_empty_value($record, ['car_engine_power','engine_power_kw','power_kw'])),
             'vehicle_engine_code' => $engineCode,
-            'vehicle_gearbox_type' => sanitize_text_field((string) ($mapped['vehicle_gearbox_type'] ?? $this->first_non_empty_value($record, ['car_gearbox_type_name','gearbox_type_name','gearbox_type','transmission_type']))),
-            'vehicle_body_type' => sanitize_text_field((string) ($mapped['vehicle_body_type'] ?? $this->first_non_empty_value($record, ['car_body_type_name','body_type_name','body_type']))),
-            'vehicle_drive_wheels' => sanitize_text_field((string) ($mapped['vehicle_drive_wheels'] ?? $this->first_non_empty_value($record, ['car_wheel_drive_name','wheel_drive_name','drive_wheels','wheel_drive','drivetrain']))),
+            'vehicle_gearbox_type' => sanitize_text_field((string) ($mapped['vehicle_gearbox_type'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_gearbox_type_name','gearbox_type_name','gearbox_type','transmission_type'])))),
+            'vehicle_body_type' => sanitize_text_field((string) ($mapped['vehicle_body_type'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_body_type_name','body_type_name','body_type'])))),
+            'vehicle_drive_wheels' => sanitize_text_field((string) ($mapped['vehicle_drive_wheels'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_wheel_drive_name','wheel_drive_name','drive_wheels','wheel_drive','drivetrain'])))),
             'vehicle_steering_position' => sanitize_text_field((string) ($this->first_non_empty_value($record, ['steering_position','car_steering_position']) ?: 'Lewa strona')),
-            'vehicle_color' => sanitize_text_field((string) ($mapped['vehicle_color'] ?? $this->first_non_empty_value($record, ['car_color_name','color_name','color','car_color_text']))),
+            'vehicle_color' => sanitize_text_field((string) ($mapped['vehicle_color'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_color_name','color_name','color','car_color_text'])))),
             'vehicle_color_code' => sanitize_text_field((string) $this->first_non_empty_value($record, ['car_color_code','color_code','paint_code'])),
             'mileage_km' => (string) ($mapped['mileage_km'] ?? sanitize_text_field((string) $this->first_non_empty_value($record, ['car_mileage','mileage_km','mileage']))),
-            'vehicle_dictionary_resolution_status' => $mapped !== [] ? 'partial_local_confirmed' : 'direct_payload_fields',
-            'vehicle_dictionary_resolution_source' => $mapped !== [] ? 'local_confirmed_from_ovoko_ui' : 'vehicle_endpoint_payload',
+            'vehicle_dictionary_resolution_status' => $mapped !== [] ? ($dictionaryResolved !== [] ? 'dictionary_resolved' : 'partial_local_confirmed') : 'direct_payload_fields',
+            'vehicle_dictionary_resolution_source' => $mapped !== [] ? ($dictionaryResolved !== [] ? 'ovoko_dictionary_endpoints' : 'local_confirmed_from_ovoko_ui') : 'vehicle_endpoint_payload',
             'vehicle_data_status' => 'car_endpoint_confirmed',
             'raw_payload_summary' => ['keys' => array_values(array_map('strval', array_keys($record)))],
         ], []);
@@ -1678,6 +1708,204 @@ class RrrApiClient
             $node = $node[$part];
         }
         return $node;
+    }
+
+    private function build_vehicle_raw_diagnostics(array $record, array $normalized = []): array
+    {
+        $rawFields = [];
+        foreach ([
+            'make' => ['car_make','make','manufacturer','brand','car_manufacturer','car_model_category'],
+            'model' => ['car_model','model','model_id','car_model_id'],
+            'modification' => ['car_modification','modification','modification_id','car_modification_id','car_model_category','generation','generation_id'],
+            'generation' => ['car_model_category','model_category','model_category_id','generation','generation_id'],
+            'fuel' => ['car_fuel','fuel','fuel_id','car_fuel_id'],
+            'gearbox' => ['car_gearbox_type','gearbox_type','gearbox_type_id','transmission_type','car_gearbox_code'],
+            'color' => ['car_color','color','color_id','car_color_id','car_color_code','color_code'],
+            'wheel_drive' => ['car_wheel_drive','wheel_drive','wheel_drive_id','drive_wheels','drivetrain'],
+        ] as $group => $keys) {
+            $rawFields[$group] = [];
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $record) && (is_scalar($record[$key]) || $record[$key] === null)) {
+                    $rawFields[$group][$key] = is_string($record[$key]) ? sanitize_text_field($record[$key]) : $record[$key];
+                }
+            }
+        }
+
+        return [
+            'vehicle_raw_keys_sample' => array_slice(array_values(array_map('strval', array_keys($record))), 0, 80),
+            'vehicle_raw_preview_redacted' => $this->redacted_vehicle_preview($record),
+            'raw_vehicle_identity_fields' => $rawFields,
+            'dictionary_id_candidates' => $this->extract_vehicle_dictionary_id_candidates($record),
+            'normalized_readable_fields' => array_intersect_key($normalized, array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_fuel','vehicle_gearbox_type','vehicle_color','vehicle_color_code','vehicle_drive_wheels'])),
+            'full_payload_omitted' => true,
+        ];
+    }
+
+    private function redacted_vehicle_preview(array $record): array
+    {
+        $preview = [];
+        $sensitiveHints = ['vin', 'body_number', 'engine_number', 'registration', 'plate'];
+        foreach ($record as $key => $value) {
+            if (!is_scalar($value) && $value !== null) {
+                continue;
+            }
+            $keyString = (string) $key;
+            $lower = strtolower($keyString);
+            $valueString = is_string($value) ? sanitize_text_field($value) : $value;
+            foreach ($sensitiveHints as $hint) {
+                if (str_contains($lower, $hint)) {
+                    $valueString = $value === '' || $value === null ? '' : '[redacted]';
+                    break;
+                }
+            }
+            $preview[$keyString] = $valueString;
+            if (count($preview) >= 60) {
+                break;
+            }
+        }
+        return $preview;
+    }
+
+    private function extract_vehicle_dictionary_id_candidates(array $record): array
+    {
+        $map = [
+            'make_id' => ['make_id','manufacturer_id','brand_id','car_make','car_manufacturer','car_model_category'],
+            'model_id' => ['model_id','car_model_id','car_model','model'],
+            'modification_id' => ['modification_id','car_modification_id','car_modification','modification'],
+            'generation_id' => ['generation_id','model_category_id','car_model_category','model_category'],
+            'fuel_id' => ['fuel_id','car_fuel_id','car_fuel','fuel'],
+            'gearbox_id' => ['gearbox_type_id','car_gearbox_type_id','car_gearbox_type','gearbox_type','transmission_type'],
+            'wheel_drive_id' => ['wheel_drive_id','car_wheel_drive_id','car_wheel_drive','wheel_drive','drive_wheels'],
+            'color_id' => ['color_id','car_color_id','car_color','color'],
+            'body_type_id' => ['body_type_id','car_body_type_id','car_body_type','body_type'],
+        ];
+        $out = [];
+        foreach ($map as $label => $keys) {
+            foreach ($keys as $key) {
+                if (!array_key_exists($key, $record) || !is_scalar($record[$key])) {
+                    continue;
+                }
+                $value = trim((string) $record[$key]);
+                if ($value === '' || !$this->looks_like_dictionary_id($value)) {
+                    continue;
+                }
+                $out[$label][$key] = sanitize_text_field($value);
+            }
+        }
+        return $out;
+    }
+
+    private function looks_like_dictionary_id(string $value): bool
+    {
+        return preg_match('/^-?\d+$/', trim($value)) === 1;
+    }
+
+    private function readable_vehicle_text($value): string
+    {
+        $text = trim(sanitize_text_field((string) $value));
+        if ($text === '' || $this->looks_like_dictionary_id($text)) {
+            return '';
+        }
+        return $text;
+    }
+
+    private function resolve_vehicle_dictionary_value(string $type, string $id): string
+    {
+        $id = trim($id);
+        if ($id === '' || !$this->looks_like_dictionary_id($id)) {
+            return '';
+        }
+        $cacheKey = 'gpswiss_ovoko_vehicle_dict_' . md5($type . ':' . $id);
+        $cached = get_transient($cacheKey);
+        if (is_string($cached)) {
+            return $cached;
+        }
+
+        $pathsByType = [
+            'make' => ['/get/car/manufacturer/%s','/get/manufacturer/%s','/get/car/manufacturers','/get/manufacturers'],
+            'model' => ['/get/car/model/%s','/get/model/%s','/get/car/models','/get/models'],
+            'generation' => ['/get/car/model-category/%s','/get/model-category/%s','/get/car/model-categories','/get/model-categories'],
+            'modification' => ['/get/car/modification/%s','/get/modification/%s','/get/car/modifications','/get/modifications'],
+            'fuel' => ['/get/car/fuel/%s','/get/fuel/%s','/get/car/fuels','/get/fuels'],
+            'gearbox' => ['/get/car/gearbox-type/%s','/get/gearbox-type/%s','/get/car/gearbox-types','/get/gearbox-types'],
+            'wheel_drive' => ['/get/car/wheel-drive/%s','/get/wheel-drive/%s','/get/car/wheel-drives','/get/wheel-drives'],
+            'color' => ['/get/car/color/%s','/get/color/%s','/get/car/colors','/get/colors'],
+            'body_type' => ['/get/car/body-type/%s','/get/body-type/%s','/get/car/body-types','/get/body-types'],
+        ];
+        $paths = $pathsByType[$type] ?? [];
+        $paths = array_values(array_unique(array_merge($paths, array_map(static fn($path) => '/v2' . $path, $paths))));
+        foreach ($paths as $pathTemplate) {
+            $path = str_contains($pathTemplate, '%s') ? sprintf($pathTemplate, rawurlencode($id)) : $pathTemplate;
+            $raw = $this->post_form($path, [], true);
+            if (empty($raw['success'])) {
+                continue;
+            }
+            $label = $this->extract_dictionary_label_from_payload((array) ($raw['payload'] ?? []), $id);
+            if ($label !== '') {
+                set_transient($cacheKey, $label, DAY_IN_SECONDS);
+                return $label;
+            }
+        }
+
+        set_transient($cacheKey, '', HOUR_IN_SECONDS);
+        return '';
+    }
+
+    private function extract_dictionary_label_from_payload(array $payload, string $id): string
+    {
+        $candidates = [];
+        $collect = function ($node) use (&$collect, &$candidates): void {
+            if (!is_array($node)) {
+                return;
+            }
+            if (!$this->is_list_array($node)) {
+                $candidates[] = $node;
+            }
+            foreach ($node as $child) {
+                if (is_array($child)) {
+                    $collect($child);
+                }
+            }
+        };
+        $collect($payload);
+        foreach ($candidates as $candidate) {
+            $candidateId = $this->first_non_empty_value($candidate, ['id','value','key','model_id','manufacturer_id','category_id']);
+            if ($candidateId !== '' && (string) $candidateId !== $id) {
+                continue;
+            }
+            $label = $this->first_non_empty_value($candidate, ['name','title','label','value_text','text','manufacturer','model','type','color']);
+            $label = $this->readable_vehicle_text($label);
+            if ($label !== '') {
+                return $label;
+            }
+        }
+        return '';
+    }
+
+    private function resolve_vehicle_dictionaries(array $record): array
+    {
+        $ids = $this->extract_vehicle_dictionary_id_candidates($record);
+        $resolved = [];
+        $fields = [
+            'make' => ['vehicle_make', $ids['make_id'] ?? []],
+            'model' => ['vehicle_model', $ids['model_id'] ?? []],
+            'generation' => ['vehicle_generation', ($ids['modification_id'] ?? []) + ($ids['generation_id'] ?? [])],
+            'fuel' => ['vehicle_fuel', $ids['fuel_id'] ?? []],
+            'gearbox' => ['vehicle_gearbox_type', $ids['gearbox_id'] ?? []],
+            'wheel_drive' => ['vehicle_drive_wheels', $ids['wheel_drive_id'] ?? []],
+            'color' => ['vehicle_color', $ids['color_id'] ?? []],
+            'body_type' => ['vehicle_body_type', $ids['body_type_id'] ?? []],
+        ];
+        foreach ($fields as $type => [$target, $candidates]) {
+            foreach ($candidates as $id) {
+                $label = $this->resolve_vehicle_dictionary_value((string) $type, (string) $id);
+                if ($label !== '') {
+                    $resolved[$target] = $label;
+                    break;
+                }
+            }
+        }
+        return $resolved;
     }
 
     private function local_confirmed_dictionary_for_car(array $record, string $carId): array

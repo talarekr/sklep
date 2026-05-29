@@ -865,3 +865,9 @@ Live sync scope after delta confirmation:
 Woo → Ovoko sale/stock sync remains dry-run/design-only. The current client has confirmed write probes only for `/crm/updatePart` with limited fields (`place` and `internal_notes`). It does not implement or confirm Gemini-suggested `/v2/update/part` or `/v2/parts/{id}/status`, and no payload such as `status=sold` or `stock=0` is approved.
 
 Until Ovoko/RRR confirms the endpoint contract, payload, permissions, and idempotency behavior, the plugin must not send sales, stock changes, sold/reserved statuses, or order events to Ovoko.
+
+## Ovoko vehicle data probe and dictionary resolution
+- New read-only admin action: **Probe Ovoko vehicle data for car_id**. It fetches the vehicle by `car_id`, reports redacted raw keys/preview, raw make/model/modification/generation/fuel/gearbox/color fields, dictionary-ID candidates, normalized readable fields, and does not create or update Woo products.
+- New product create vehicle enrichment now preserves readable vehicle data from the existing Ovoko CSV mapping and merges `/get/car/{id}` only with non-empty values, so sparse vehicle endpoint responses do not overwrite previously parsed make/model fields with blanks.
+- Vehicle normalization rejects bare numeric dictionary IDs as readable make/model/fuel/gearbox/color labels and attempts cached Ovoko/RRR dictionary resolution for make/model/modification/generation/fuel/gearbox/wheel-drive/color/body-type IDs.
+- Same-vehicle slugs are no longer built from unresolved numeric fragments; if no readable make + model label is available but `car_id` exists, the fallback slug is `vehicle-{car_id}`.

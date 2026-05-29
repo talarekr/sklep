@@ -662,6 +662,7 @@ class OvokoIntegrationService
     {
         $carId = (string) ($normalized['car_id'] ?? '');
         $vehicleDebug = [
+            'vehicle_data_source' => '',
             'vehicle_fetch_attempted' => $carId !== '',
             'vehicle_fetch_success' => false,
             'vehicle_endpoint_used' => '',
@@ -669,14 +670,25 @@ class OvokoIntegrationService
             'vehicle_data_status' => (string) ($normalized['vehicle_data_status'] ?? ''),
             'vehicle_dictionary_resolution_status' => (string) ($normalized['vehicle_dictionary_resolution_status'] ?? ''),
             'vehicle_dictionary_resolution_source' => (string) ($normalized['vehicle_dictionary_resolution_source'] ?? ''),
+            'vehicle_raw_diagnostics' => [],
         ];
+
+        $csvVehicle = $this->vehicle_data_from_csv_mapping($normalized);
+        if ($csvVehicle !== []) {
+            $normalized = $this->merge_non_empty_normalized_values($normalized, $csvVehicle);
+            $vehicleDebug['vehicle_dictionary_resolution_status'] = 'csv_mapping_enrichment';
+            $vehicleDebug['vehicle_dictionary_resolution_source'] = 'ovoko_csv_mapping_vehicle_info';
+            $vehicleDebug['vehicle_data_source'] = 'ovoko_csv_mapping';
+        }
 
         if ($carId !== '') {
             $vehiclePreview = $client->preview_fetch_car_by_id($carId);
             if (!empty($vehiclePreview['ok'])) {
-                $normalized = array_merge($normalized, (array) ($vehiclePreview['normalized'] ?? []));
+                $normalized = $this->merge_non_empty_normalized_values($normalized, (array) ($vehiclePreview['normalized'] ?? []));
                 $vehicleDebug['vehicle_fetch_success'] = true;
                 $vehicleDebug['vehicle_endpoint_used'] = (string) ($vehiclePreview['endpoint_used'] ?? '');
+                $vehicleDebug['vehicle_data_source'] = $vehicleDebug['vehicle_data_source'] !== '' ? $vehicleDebug['vehicle_data_source'] . '+vehicle_fetch' : 'vehicle_fetch';
+                $vehicleDebug['vehicle_raw_diagnostics'] = (array) ($vehiclePreview['raw_diagnostics'] ?? []);
             }
             $vehicleDebug['vehicle_data_status'] = (string) ($normalized['vehicle_data_status'] ?? $vehicleDebug['vehicle_data_status']);
             $vehicleDebug['vehicle_dictionary_resolution_status'] = (string) ($normalized['vehicle_dictionary_resolution_status'] ?? $vehicleDebug['vehicle_dictionary_resolution_status']);
@@ -684,6 +696,27 @@ class OvokoIntegrationService
         }
 
         return ['normalized' => $normalized, 'vehicle_debug' => $vehicleDebug];
+    }
+
+    private function vehicle_data_from_csv_mapping(array $normalized): array
+    {
+        $csvMap = (array) ($this->get_settings()['ovoko_csv_mapping'] ?? []);
+        $code = $this->normalize_part_code((string) ($normalized['manufacturer_code'] ?? ''));
+        if ($code === '' || empty($csvMap[$code][0]) || !is_array($csvMap[$code][0])) {
+            return [];
+        }
+        $csvNormalized = $this->build_normalized_from_csv_row((array) $csvMap[$code][0]);
+        $vehicleOnly = [];
+        foreach ($csvNormalized as $key => $value) {
+            if (str_starts_with((string) $key, 'vehicle_') || in_array((string) $key, ['mileage_km'], true)) {
+                $vehicleOnly[$key] = $value;
+            }
+        }
+        if ($vehicleOnly !== []) {
+            $vehicleOnly['vehicle_dictionary_resolution_status'] = 'csv_mapping_enrichment';
+            $vehicleOnly['vehicle_dictionary_resolution_source'] = 'ovoko_csv_mapping_vehicle_info';
+        }
+        return $vehicleOnly;
     }
 
     private function merge_non_empty_normalized_values(array $base, array $override): array
@@ -854,13 +887,16 @@ class OvokoIntegrationService
                 'product_attributes_preview' => $this->build_ovoko_technical_attributes_from_normalized($normalized),
             ],
             'create_flow_debug' => [
+                'vehicle_data_source' => (string) ($vehicleDebug['vehicle_data_source'] ?? ''),
                 'vehicle_fetch_attempted' => (bool) ($vehicleDebug['vehicle_fetch_attempted'] ?? false),
                 'vehicle_fetch_success' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
+                'vehicle_fetch_ok' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
                 'vehicle_endpoint_used' => (string) ($vehicleDebug['vehicle_endpoint_used'] ?? ''),
                 'vehicle_raw_car_id' => (string) ($vehicleDebug['vehicle_raw_car_id'] ?? ''),
                 'vehicle_data_status' => (string) ($vehicleDebug['vehicle_data_status'] ?? ''),
                 'vehicle_dictionary_resolution_status' => (string) ($vehicleDebug['vehicle_dictionary_resolution_status'] ?? ''),
                 'vehicle_dictionary_resolution_source' => (string) ($vehicleDebug['vehicle_dictionary_resolution_source'] ?? ''),
+                'vehicle_raw_report' => (array) ($vehicleDebug['vehicle_raw_diagnostics'] ?? []),
                 'vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
                 'vehicle_make_short' => (string) ($normalized['vehicle_make_short'] ?? ''),
                 'vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
@@ -1045,13 +1081,16 @@ class OvokoIntegrationService
             'same_vehicle_car_id' => $sameVehicleMeta['car_id'],
             'same_vehicle_url' => $sameVehicleMeta['vehicle_parts_url'],
             'create_flow_debug' => [
+                'vehicle_data_source' => (string) ($vehicleDebug['vehicle_data_source'] ?? ''),
                 'vehicle_fetch_attempted' => (bool) ($vehicleDebug['vehicle_fetch_attempted'] ?? false),
                 'vehicle_fetch_success' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
+                'vehicle_fetch_ok' => (bool) ($vehicleDebug['vehicle_fetch_success'] ?? false),
                 'vehicle_endpoint_used' => (string) ($vehicleDebug['vehicle_endpoint_used'] ?? ''),
                 'vehicle_raw_car_id' => (string) ($vehicleDebug['vehicle_raw_car_id'] ?? ''),
                 'vehicle_data_status' => (string) ($vehicleDebug['vehicle_data_status'] ?? ''),
                 'vehicle_dictionary_resolution_status' => (string) ($vehicleDebug['vehicle_dictionary_resolution_status'] ?? ''),
                 'vehicle_dictionary_resolution_source' => (string) ($vehicleDebug['vehicle_dictionary_resolution_source'] ?? ''),
+                'vehicle_raw_report' => (array) ($vehicleDebug['vehicle_raw_diagnostics'] ?? []),
                 'vehicle_make' => (string) ($normalized['vehicle_make'] ?? ''),
                 'vehicle_make_short' => (string) ($normalized['vehicle_make_short'] ?? ''),
                 'vehicle_model' => (string) ($normalized['vehicle_model'] ?? ''),
@@ -1598,9 +1637,9 @@ class OvokoIntegrationService
         $vehiclePrefixBeforeDedupe = $this->join_title_parts([$make, $model, $generation, $year, $engine]);
         $vehiclePrefix = $this->join_title_parts([$make, $modification, $year, $engine]);
 
-        $required = ['vehicle_make' => $make, 'vehicle_generation' => $modification, 'vehicle_year' => $year, 'vehicle_engine_capacity' => $engine];
         $missing = [];
-        foreach ($required as $field => $value) { if ($value === '') { $missing[] = $field; } }
+        if ($make === '') { $missing[] = 'vehicle_make'; }
+        if ($modification === '') { $missing[] = 'vehicle_model_or_generation'; }
         $hasFullVehicleData = empty($missing);
         $fallbackTitle = $this->join_title_parts([$partName, $manufacturerCode]);
         if ($fallbackTitle === '') { $fallbackTitle = $this->join_title_parts([$name, $notes, $manufacturerCode]); }
@@ -1626,7 +1665,7 @@ class OvokoIntegrationService
             '_ovoko_title_source' => $hasFullVehicleData ? 'existing_mapper_full_vehicle_data' : 'fallback_missing_vehicle_data',
             '_ovoko_title_review_required' => $hasFullVehicleData ? 'no' : 'yes',
             '_ovoko_title_missing_vehicle_fields' => implode('/', $missing),
-            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'vehicle_make + vehicle_generation + vehicle_year + engine_capacity_l + part_name + manufacturer_code' : 'part_name+manufacturer_code_fallback',
+            '_ovoko_title_generated_from' => $hasFullVehicleData ? 'vehicle_make + vehicle_model/generation + optional_year + optional_engine_capacity + part_name + manufacturer_code' : 'part_name+manufacturer_code_fallback',
         ];
     }
 
@@ -2129,6 +2168,12 @@ class OvokoIntegrationService
         $vehicleProbe = $client->probe_vehicle_endpoints($carId);
         $dictProbe = $client->probe_vehicle_dictionary_endpoints($carId);
         return ['ok'=>true,'mode'=>'preview_only','action_name'=>'Probe RRR vehicle endpoints','vehicle_probe'=>$vehicleProbe,'dictionary_probe'=>$dictProbe];
+    }
+
+    public function probe_ovoko_vehicle_data_for_car_id(int $carId = 458): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        return $client->probe_ovoko_vehicle_data_for_car_id($carId);
     }
 
     public function probe_rrr_part_search_by_code(string $partNumber): array
@@ -4685,13 +4730,24 @@ class OvokoIntegrationService
 
     private function build_vehicle_label_from_attributes(array $attrs): string
     {
-        $parts = [];
-        foreach (['Producent', 'Model'] as $k) { if (!empty($attrs[$k])) { $parts[] = trim((string) $attrs[$k]); } }
-        if (!empty($attrs['Pojemność silnika'])) {
-            $parts[] = $this->normalize_vehicle_engine_for_slug((string) $attrs['Pojemność silnika'], false);
+        $make = trim((string) ($attrs['Producent'] ?? ''));
+        $model = trim((string) ($attrs['Model'] ?? ''));
+        if (!$this->is_readable_vehicle_label_part($make) || !$this->is_readable_vehicle_label_part($model)) {
+            return '';
         }
-        if (!empty($attrs['Rodzaj paliwa'])) { $parts[] = trim((string) $attrs['Rodzaj paliwa']); }
+        $parts = [$make, $model];
+        if (!empty($attrs['Pojemność silnika'])) {
+            $engine = $this->normalize_vehicle_engine_for_slug((string) $attrs['Pojemność silnika'], false);
+            if ($engine !== '') { $parts[] = $engine; }
+        }
+        if (!empty($attrs['Rodzaj paliwa']) && $this->is_readable_vehicle_label_part((string) $attrs['Rodzaj paliwa'])) { $parts[] = trim((string) $attrs['Rodzaj paliwa']); }
         return trim(preg_replace('/\s+/', ' ', implode(' ', array_filter($parts))) ?? '');
+    }
+
+    private function is_readable_vehicle_label_part(string $value): bool
+    {
+        $value = trim($value);
+        return $value !== '' && preg_match('/^-?\d+$/', $value) !== 1;
     }
 
     private function normalize_vehicle_engine_for_slug(string $value, bool $forSlug = true): string
@@ -4728,7 +4784,8 @@ class OvokoIntegrationService
     private function build_unique_vehicle_slug(int $productId, string $carId, string $label, string $year): string
     {
         $base = $this->normalize_vehicle_slug($label);
-        if ($base === '') { $base = 'pojazd'; }
+        if ($base === '' && $carId !== '') { return 'vehicle-' . sanitize_title($carId); }
+        if ($base === '') { return ''; }
         $candidates = [$base];
         $yearClean = preg_replace('/[^0-9]/', '', $year) ?? '';
         if ($yearClean !== '') { $candidates[] = $base . '-' . $yearClean; }
