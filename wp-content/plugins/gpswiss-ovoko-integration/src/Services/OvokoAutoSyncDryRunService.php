@@ -77,7 +77,7 @@ class OvokoAutoSyncDryRunService
             'currency' => 'PLN',
             'raw' => $raw,
             'matched_text' => '',
-            'error' => 'No supported Woo price format found in internal_notes. Price will not be overwritten.',
+            'error' => 'No supported Woo price format found in internal_notes. Existing Woo prices stay untouched; new Woo products are skipped until internal_notes contains a valid price.',
             'supported_formats' => self::supported_price_formats(),
         ];
     }
@@ -156,6 +156,7 @@ class OvokoAutoSyncDryRunService
 
         $report['status'] = 'idle';
         $report['last_cursor'] = ['page' => $page, 'next_page' => $page + 1, 'updated_after' => (string) ($options['updated_after'] ?? '')];
+        $report['dashboard_counters'] = $this->dashboard_price_counters((array) ($report['counts'] ?? []));
         $report['checked_at'] = gmdate('c');
         update_option(self::STATUS_OPTION, $this->summarize_status($report), false);
         return $report;
@@ -278,8 +279,17 @@ class OvokoAutoSyncDryRunService
         $warnings = [];
 
         $price = self::parse_internal_notes_price($record['internal_notes'] ?? null);
-        if (empty($price['ok'])) {
-            $warnings[] = (string) ($price['warning'] ?: 'missing_price_in_internal_notes');
+        $priceWarning = (string) ($price['warning'] ?? '');
+        $isExistingProduct = $productId > 0;
+        $newProductMissingPrice = !$isExistingProduct && $priceWarning === 'missing_price_in_internal_notes';
+        $newProductInvalidPrice = !$isExistingProduct && $priceWarning === 'invalid_internal_notes_price';
+        $newProductBlockedByPrice = !$isExistingProduct && (empty($price['ok']) || $newProductMissingPrice || $newProductInvalidPrice);
+        if ($newProductMissingPrice) {
+            $warnings[] = 'new_product_missing_price_in_internal_notes';
+            $warnings[] = 'new_product_would_create_as_draft_or_skip_due_to_missing_price';
+        } elseif ($newProductInvalidPrice) {
+            $warnings[] = 'new_product_invalid_internal_notes_price';
+            $warnings[] = 'new_product_would_create_as_draft_or_skip_due_to_missing_price';
         }
 
         $incomingDescription = trim((string) (($record['notes'] ?? '') ?: ($normalized['notes'] ?? '')));
@@ -324,15 +334,24 @@ class OvokoAutoSyncDryRunService
         return [
             'part_id' => $partId,
             'product_id' => $productId,
-            'product_exists' => $productId > 0,
-            'products_would_create' => $productId <= 0,
-            'products_would_update' => $productId > 0,
-            'products_would_skip' => false,
+            'product_exists' => $isExistingProduct,
+            'products_would_create' => !$isExistingProduct && !$newProductBlockedByPrice,
+            'products_would_update' => $isExistingProduct,
+            'products_would_skip' => $newProductBlockedByPrice,
             'title' => (string) ($record['name'] ?? $normalized['title'] ?? ''),
-            'price_from_internal_notes_ok' => !empty($price['ok']),
-            'price_missing_in_internal_notes' => ($price['warning'] ?? '') === 'missing_price_in_internal_notes',
-            'price_invalid_internal_notes' => ($price['warning'] ?? '') === 'invalid_internal_notes_price',
-            'price' => ['current_woo' => $currentPrice, 'incoming_from_internal_notes' => $price],
+            'existing_product_price_untouched' => $isExistingProduct,
+            'existing_product_internal_notes_price_ignored' => $isExistingProduct && $priceWarning !== 'missing_price_in_internal_notes',
+            'existing_product_internal_notes_missing_ignored' => $isExistingProduct && $priceWarning === 'missing_price_in_internal_notes',
+            'new_product_price_from_internal_notes_ok' => !$isExistingProduct && !empty($price['ok']),
+            'new_product_missing_price_in_internal_notes' => $newProductMissingPrice,
+            'new_product_invalid_internal_notes_price' => $newProductInvalidPrice,
+            'new_product_would_create_as_draft_or_skip_due_to_missing_price' => $newProductBlockedByPrice,
+            'price' => [
+                'current_woo' => $currentPrice,
+                'incoming_from_internal_notes' => $price,
+                'policy' => $isExistingProduct ? 'existing_woo_price_untouched_internal_notes_ignored' : 'new_product_price_from_internal_notes_only',
+                'safe_default_for_new_product_without_valid_internal_notes_price' => 'skip_create',
+            ],
             'stock_would_update' => $productId <= 0 || $currentStockStatus !== $stock['target_stock_status'],
             'stock' => $stock + ['current_woo_stock_status' => $currentStockStatus],
             'products_unavailable_in_ovoko' => !empty($stock['products_unavailable_in_ovoko']),
@@ -370,7 +389,7 @@ class OvokoAutoSyncDryRunService
 
     private function empty_ovoko_to_woo_report(int $limit, int $page): array
     {
-        $keys = ['existing_products_images_untouched','new_products_images_would_import','existing_products_missing_images_warning','descriptions_would_update','descriptions_empty_from_ovoko','details_would_update','details_missing_from_ovoko','details_empty_from_ovoko','details_fields_changed','price_from_internal_notes_ok','price_missing_in_internal_notes','price_invalid_internal_notes','stock_would_update','categories_would_update','products_would_create','products_would_update','products_would_skip','products_unavailable_in_ovoko'];
+        $keys = ['existing_product_price_untouched','existing_product_internal_notes_price_ignored','existing_product_internal_notes_missing_ignored','new_product_price_from_internal_notes_ok','new_product_missing_price_in_internal_notes','new_product_invalid_internal_notes_price','new_product_would_create_as_draft_or_skip_due_to_missing_price','existing_products_images_untouched','new_products_images_would_import','existing_products_missing_images_warning','descriptions_would_update','descriptions_empty_from_ovoko','details_would_update','details_missing_from_ovoko','details_empty_from_ovoko','details_fields_changed','stock_would_update','categories_would_update','products_would_create','products_would_update','products_would_skip','products_unavailable_in_ovoko'];
         return [
             'ok' => true,
             'action_name' => 'Dry-run Ovoko → Woo near real-time sync',
@@ -391,6 +410,11 @@ class OvokoAutoSyncDryRunService
             'cron_design' => $this->cron_design(),
             'unavailable_product_policy_recommendation' => $this->unavailable_policy(),
             'price_parser_supported_formats' => self::supported_price_formats(),
+            'price_policy' => [
+                'existing_products' => 'Woo price is untouched; Ovoko internal_notes price is ignored.',
+                'new_products' => 'Price may come only from Ovoko internal_notes; safer default is skip create when missing or invalid.',
+                'fallback_to_other_ovoko_price_fields' => false,
+            ],
             'safety' => ['no_woo_product_create' => true, 'no_woo_product_update' => true, 'no_price_change' => true, 'no_stock_change' => true, 'no_description_change' => true, 'no_category_change' => true, 'no_existing_image_change' => true, 'no_ovoko_write' => true],
         ];
     }
@@ -478,18 +502,33 @@ class OvokoAutoSyncDryRunService
         return '';
     }
 
+    private function dashboard_price_counters(array $counts): array
+    {
+        return [
+            'existing_product_price_untouched_total' => (int) ($counts['existing_product_price_untouched'] ?? 0),
+            'existing_product_internal_notes_price_ignored_total' => (int) ($counts['existing_product_internal_notes_price_ignored'] ?? 0),
+            'existing_product_internal_notes_missing_ignored_total' => (int) ($counts['existing_product_internal_notes_missing_ignored'] ?? 0),
+            'new_product_price_from_internal_notes_ok_total' => (int) ($counts['new_product_price_from_internal_notes_ok'] ?? 0),
+            'new_product_missing_price_in_internal_notes_total' => (int) ($counts['new_product_missing_price_in_internal_notes'] ?? 0),
+            'new_product_invalid_internal_notes_price_total' => (int) ($counts['new_product_invalid_internal_notes_price'] ?? 0),
+        ];
+    }
+
     private function summarize_status(array $report): array
     {
+        $counts = (array) ($report['counts'] ?? []);
         return [
             'status' => 'idle',
             'last_successful_sync_at' => gmdate('c'),
             'last_cursor' => $report['last_cursor'] ?? [],
             'processed' => (int) ($report['processed'] ?? 0),
-            'created' => (int) ($report['counts']['products_would_create'] ?? 0),
-            'updated' => (int) ($report['counts']['products_would_update'] ?? 0),
-            'skipped' => (int) ($report['counts']['products_would_skip'] ?? 0),
+            'created' => (int) ($counts['products_would_create'] ?? 0),
+            'updated' => (int) ($counts['products_would_update'] ?? 0),
+            'skipped' => (int) ($counts['products_would_skip'] ?? 0),
             'errors' => (array) ($report['errors'] ?? []),
             'warnings' => (array) ($report['warnings'] ?? []),
+            'counts' => $counts,
+            'dashboard_counters' => $this->dashboard_price_counters($counts),
         ];
     }
 

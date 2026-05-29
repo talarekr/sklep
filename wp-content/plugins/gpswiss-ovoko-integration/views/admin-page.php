@@ -23,6 +23,8 @@ $autoSyncUpdated = (int) ($autoSyncStatus['updated'] ?? 0);
 $autoSyncSkipped = (int) ($autoSyncStatus['skipped'] ?? 0);
 $autoSyncWarnings = (array) ($autoSyncStatus['warnings'] ?? []);
 $autoSyncErrors = (array) ($autoSyncStatus['errors'] ?? []);
+$autoSyncCounts = (array) ($autoSyncStatus['counts'] ?? []);
+$autoSyncDashboardCounters = (array) ($autoSyncStatus['dashboard_counters'] ?? []);
 $buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
 
 $noticePayload = null;
@@ -128,6 +130,14 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <div style="background:#f6f7f7;padding:10px;"><strong>Would create/update/skip</strong><br><code><?php echo esc_html($autoSyncCreated . ' / ' . $autoSyncUpdated . ' / ' . $autoSyncSkipped); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>Warnings / errors</strong><br><code><?php echo esc_html(count($autoSyncWarnings) . ' / ' . count($autoSyncErrors)); ?></code></div>
         </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:12px 0;">
+            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_price_untouched_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_price_untouched_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_internal_notes_price_ignored_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_internal_notes_price_ignored_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>existing_product_internal_notes_missing_ignored_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['existing_product_internal_notes_missing_ignored_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_price_from_internal_notes_ok_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_price_from_internal_notes_ok_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_missing_price_in_internal_notes_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_missing_price_in_internal_notes_total'] ?? 0)); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>new_product_invalid_internal_notes_price_total</strong><br><code><?php echo esc_html((string) ($autoSyncDashboardCounters['new_product_invalid_internal_notes_price_total'] ?? 0)); ?></code></div>
+        </div>
         <p><strong>Last cursor:</strong> <code><?php echo esc_html(wp_json_encode($autoSyncLastCursor, JSON_UNESCAPED_UNICODE)); ?></code></p>
         <?php if (!empty($autoSyncWarnings) || !empty($autoSyncErrors)): ?>
             <details><summary>Show latest sync warnings/errors</summary><pre><?php echo esc_html(wp_json_encode(['warnings' => $autoSyncWarnings, 'errors' => $autoSyncErrors], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
@@ -152,7 +162,8 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <h3>Dry-run sync</h3>
         <p><strong>Safety:</strong> these tools do not create Woo products, do not update prices/stock/descriptions/categories, do not touch existing images, and do not send sales/status changes to Ovoko.</p>
         <ul style="list-style:disc;margin-left:22px;">
-            <li>Woo prices are parsed only from Ovoko <code>internal_notes</code>; Ovoko price, marketplace price and Allegro price are intentionally ignored.</li>
+            <li>Existing Woo product prices are reported as <code>existing_product_price_untouched</code> and are never updated from Ovoko or <code>internal_notes</code>.</li>
+            <li>New Woo product prices may come only from Ovoko <code>internal_notes</code>; missing/invalid prices default to safer <code>skip create</code> reporting instead of publishing.</li>
             <li>Existing Woo product images are reported but never overwritten, removed or refreshed.</li>
             <li>New products are reported as <code>new_products_images_would_import</code> when Ovoko images are present, but are not created in this stage.</li>
             <li>Technical details use the same normalized Ovoko/RRR product fields as the existing details enrichment mapper.</li>
@@ -173,9 +184,32 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </form>
     </div>
 
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Woo → Ovoko sale/stock sync status</h3>
+        <p>Sale/stock outbound sync is design/dry-run only until Ovoko/RRR confirms the sale/reserve/status endpoint.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li><strong>Queue:</strong> order-status hook will enqueue work; a separate cron/worker will send to Ovoko later.</li>
+            <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
+            <li><strong>Current status:</strong> <code>design_only_not_sending_to_ovoko</code>.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_dry_run_sale_sync'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
+            <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
+            <?php submit_button('Dry-run Woo → Ovoko sale/stock sync', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
+    <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
+        <summary><strong>Advanced Settings</strong></summary>
+        <div class="notice notice-warning inline" style="margin:12px 0;">
+            <p><strong>Advanced tools — use only for maintenance/debug. These actions can modify categories/products.</strong></p>
+        </div>
+        <p>Legacy category rebuild/delete tools, CSV helpers, debug probes, old dry-runs and maintenance actions were moved here to keep the daily sync dashboard clean. Existing confirmations and safeguards are unchanged.</p>
+
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
-        <h3>Dry-run backfill Ovoko internal_notes prices from Woo</h3>
-        <p><strong>Safety:</strong> read-only analysis. This tool fetches current Ovoko <code>internal_notes</code> and Woo prices, then reports what would be appended as <code>woo_price=350.00 PLN</code>. It does not write to Ovoko or Woo.</p>
+        <h3>Advanced/dev: internal_notes price backfill diagnostics</h3>
+        <p><strong>Not part of the main sync flow.</strong> Kept only as an advanced diagnostic after the decision not to mass-update Ovoko <code>internal_notes</code>. Dry-run remains read-only; the single-part probe is live and should be used only for development verification.</p>
         <ul style="list-style:disc;margin-left:22px;">
             <li>Existing notes are preserved; if no supported price marker exists, the proposed line is appended at the end.</li>
             <li>If <code>internal_notes</code> already contains <code>woo_price=...</code> or a legacy plain numeric price, dry-run skips automatic overwrite and reports conflicts when it differs from Woo.</li>
@@ -211,29 +245,6 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <?php submit_button('Run single-part live probe', 'delete', 'submit', false); ?>
         </form>
     </div>
-
-    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Woo → Ovoko sale/stock sync status</h3>
-        <p>Sale/stock outbound sync is design/dry-run only until Ovoko/RRR confirms the sale/reserve/status endpoint.</p>
-        <ul style="list-style:disc;margin-left:22px;">
-            <li><strong>Queue:</strong> order-status hook will enqueue work; a separate cron/worker will send to Ovoko later.</li>
-            <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
-            <li><strong>Current status:</strong> <code>design_only_not_sending_to_ovoko</code>.</li>
-        </ul>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-            <?php wp_nonce_field('gpswiss_ovoko_dry_run_sale_sync'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
-            <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
-            <?php submit_button('Dry-run Woo → Ovoko sale/stock sync', 'secondary', 'submit', false); ?>
-        </form>
-    </div>
-
-    <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
-        <summary><strong>Advanced Settings</strong></summary>
-        <div class="notice notice-warning inline" style="margin:12px 0;">
-            <p><strong>Advanced tools — use only for maintenance/debug. These actions can modify categories/products.</strong></p>
-        </div>
-        <p>Legacy category rebuild/delete tools, CSV helpers, debug probes, old dry-runs and maintenance actions were moved here to keep the daily sync dashboard clean. Existing confirmations and safeguards are unchanged.</p>
 
         <div class="postbox" style="padding:16px; margin-bottom:14px;">
             <h3>Legacy quick diagnostics</h3>
