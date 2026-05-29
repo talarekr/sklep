@@ -1118,6 +1118,10 @@ class RrrApiClient
         $directMake = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_make_name','car_manufacturer_name','manufacturer_name','make_name','brand_name','make','manufacturer','brand','car_make']));
         $directModel = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_model_name','model_name','model_title','car_model_title','model','car_model_text']));
         $directGeneration = $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_model_category_name','model_category_name','generation_name','generation','modification','car_generation','car_model_category_title']));
+        if (empty($mapped['vehicle_generation']) && !empty($mapped['vehicle_model']) && empty($directGeneration)) {
+            $mapped['vehicle_generation'] = (string) $mapped['vehicle_model'];
+            $dictionarySources['vehicle_generation'] = ['source' => (string) (($dictionarySources['vehicle_model']['source'] ?? '') ?: 'dictionary_api'), 'id' => (string) (($dictionarySources['vehicle_model']['id'] ?? '') ?: ($record['car_model'] ?? '')), 'endpoint_used' => (string) ($dictionarySources['vehicle_model']['endpoint_used'] ?? ''), 'derived_from' => 'vehicle_model'];
+        }
         $fuel = (string) ($mapped['vehicle_fuel'] ?? $this->readable_vehicle_text($this->first_non_empty_value($record, ['car_fuel_name','fuel_name','fuel','car_fuel_text'])));
         $engineMarketing = $capacityL ? number_format($capacityL, 1) : '';
         $engineSource = 'derived_from_capacity_only';
@@ -1189,10 +1193,16 @@ class RrrApiClient
             'action_name' => 'Probe Ovoko dictionary value',
             'dictionary_type' => $dictionaryType,
             'id' => $id,
-            'resolved_label' => (string) ($resolution['label'] ?? ''),
-            'source' => (string) ($resolution['source'] ?? 'unresolved'),
+            'endpoints_checked' => (array) ($resolution['endpoints_checked'] ?? $this->official_vehicle_dictionary_paths($dictionaryType)),
             'endpoint_used' => (string) ($resolution['endpoint_used'] ?? ''),
+            'raw_keys' => (array) ($resolution['raw_keys'] ?? []),
+            'resolved_label' => (string) ($resolution['label'] ?? ''),
+            'resolved_make' => $dictionaryType === 'make' ? (string) ($resolution['label'] ?? '') : '',
+            'resolved_model' => $dictionaryType === 'model' ? (string) ($resolution['label'] ?? '') : '',
+            'resolved_generation' => $dictionaryType === 'generation' ? (string) ($resolution['label'] ?? '') : ($dictionaryType === 'model' ? (string) ($resolution['label'] ?? '') : ''),
+            'source' => (string) ($resolution['source'] ?? 'unresolved'),
             'official_endpoints_checked' => $this->official_vehicle_dictionary_paths($dictionaryType),
+            'model_record' => (array) ($resolution['model_record'] ?? []),
             'status' => $resolution['source'] !== 'unresolved' ? 'resolved' : 'unresolved',
             'no_write_to_woo' => true,
             'checked_at' => gmdate('c'),
@@ -1204,7 +1214,8 @@ class RrrApiClient
         $carId = max(1, $carId);
         $expected = ['model' => '1936', 'model_category' => '25', 'fuel' => '2', 'gearbox_type' => '0', 'wheel_drive' => '1', 'body_type' => '4', 'color' => '5'];
         $paths = [
-            '/get/car/models','/get/car/model/1936','/get/car/model-categories','/get/car/model-category/25','/get/car/manufacturers','/get/car/manufacturer/25',
+            '/get/car_models/25','/get/car_brands','/get/car/models','/get/car/model/1936','/get/car/model-categories','/get/car/model-category/25','/get/car/manufacturers','/get/car/manufacturer/25',
+            '/get/car_model','/get/car_models','/get/model','/get/models','/get/car_model_category','/get/car_model_categories','/get/model_category','/get/model_categories','/get/manufacturer','/get/manufacturers','/get/car_manufacturer','/get/car_manufacturers',
             '/get/models','/get/model/1936','/get/model-categories','/get/model-category/25','/get/manufacturers','/get/manufacturer/25',
             '/get/car/fuels','/get/car/fuel/2','/get/fuels','/get/fuel/2','/get/car/gearbox-types','/get/car/gearbox-type/0','/get/gearbox-types','/get/gearbox-type/0',
             '/get/car/body-types','/get/car/body-type/4','/get/body-types','/get/body-type/4','/get/car/wheel-drives','/get/car/wheel-drive/1','/get/wheel-drives','/get/wheel-drive/1',
@@ -1769,13 +1780,23 @@ class RrrApiClient
             }
         }
 
+        $normalizedReadable = array_intersect_key($normalized, array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_fuel','vehicle_gearbox_type','vehicle_color','vehicle_color_code','vehicle_drive_wheels']));
+        $warnings = [];
+        foreach (['vehicle_make','vehicle_model'] as $required) {
+            if (trim((string) ($normalizedReadable[$required] ?? '')) === '') {
+                $warnings[] = $required . '_unresolved_title_builder_will_use_fallback';
+            }
+        }
+
         return [
             'vehicle_raw_keys_sample' => array_slice(array_values(array_map('strval', array_keys($record))), 0, 80),
             'vehicle_raw_preview_redacted' => $this->redacted_vehicle_preview($record),
             'raw_vehicle_identity_fields' => $rawFields,
             'dictionary_id_candidates' => $this->extract_vehicle_dictionary_id_candidates($record),
-            'normalized_readable_fields' => array_intersect_key($normalized, array_flip(['vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_fuel','vehicle_gearbox_type','vehicle_color','vehicle_color_code','vehicle_drive_wheels'])),
+            'normalized_readable_fields' => $normalizedReadable,
             'dictionary_field_sources' => (array) ($normalized['vehicle_dictionary_field_sources'] ?? []),
+            'warnings' => $warnings,
+            'fallback_vehicle_slug_if_unresolved' => (($warnings !== [] && !empty($normalized['car_id'])) ? ('vehicle-' . sanitize_title((string) $normalized['car_id'])) : ''),
             'full_payload_omitted' => true,
         ];
     }
@@ -1811,7 +1832,7 @@ class RrrApiClient
             'make_id' => ['make_id','manufacturer_id','brand_id','car_make','car_manufacturer','car_model_category'],
             'model_id' => ['model_id','car_model_id','car_model','model'],
             'modification_id' => ['modification_id','car_modification_id','car_modification','modification'],
-            'generation_id' => ['generation_id','model_category_id','car_model_category','model_category'],
+            'generation_id' => ['generation_id','model_category_id','generation','model_category'],
             'fuel_id' => ['fuel_id','car_fuel_id','car_fuel','fuel'],
             'gearbox_id' => ['gearbox_type_id','car_gearbox_type_id','car_gearbox_type','gearbox_type','transmission_type'],
             'wheel_drive_id' => ['wheel_drive_id','car_wheel_drive_id','car_wheel_drive','wheel_drive','drive_wheels'],
@@ -1854,13 +1875,14 @@ class RrrApiClient
         $type = str_replace(['-', ' '], '_', $type);
         return match ($type) {
             'car_model', 'model' => 'model',
-            'car_model_category', 'model_category', 'generation', 'modification' => 'generation',
+            'car_model_category', 'model_category', 'manufacturer_category', 'car_make_category' => 'make',
+            'generation', 'modification' => 'generation',
             'car_fuel', 'fuel' => 'fuel',
             'car_gearbox_type', 'gearbox', 'gearbox_type', 'transmission_type' => 'gearbox',
             'car_wheel_drive', 'wheel_drive', 'drive_wheels', 'drivetrain' => 'wheel_drive',
             'car_color', 'color' => 'color',
             'car_body_type', 'body_type' => 'body_type',
-            'make', 'brand', 'manufacturer', 'car_brand' => 'make',
+            'make', 'brand', 'manufacturer', 'car_brand', 'car_manufacturer' => 'make',
             default => '',
         };
     }
@@ -1877,7 +1899,7 @@ class RrrApiClient
         $brandCandidates = array_values(array_unique($brandCandidates));
         return match ($type) {
             'make' => ['/get/car_brands'],
-            'model' => array_map(static fn($brandId) => '/get/car_models/' . rawurlencode($brandId), $brandCandidates),
+            'model' => $brandCandidates !== [] ? array_map(static fn($brandId) => '/get/car_models/' . rawurlencode($brandId), $brandCandidates) : [],
             'generation' => [],
             'fuel' => ['/get/fuel'],
             'gearbox' => ['/get/gearbox_type'],
@@ -1921,29 +1943,155 @@ class RrrApiClient
             return $cached;
         }
 
+        $endpointsChecked = [];
+        $rawKeys = [];
         foreach ($this->official_vehicle_dictionary_paths($type, $context) as $path) {
+            $endpointsChecked[] = $path;
             $raw = $this->post_form($path, [], true);
             if (empty($raw['success'])) {
                 continue;
             }
-            $label = $this->extract_dictionary_label_from_payload((array) ($raw['payload'] ?? []), $id);
+            $payload = (array) ($raw['payload'] ?? []);
+            $rawKeys[$path] = array_values(array_map('strval', array_keys($payload)));
+            $label = $this->extract_dictionary_label_from_payload($payload, $id);
             if ($label !== '') {
-                $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $path];
+                $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $path, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
+                if ($type === 'model') {
+                    $resolved['model_record'] = $this->extract_dictionary_record_from_payload($payload, $id);
+                }
                 set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
                 return $resolved;
             }
         }
 
-        $fallback = $this->fallback_vehicle_dictionary_label($type, $id);
-        if ($fallback !== '') {
-            $resolved = ['label' => $fallback, 'source' => 'local_fallback', 'endpoint_used' => ''];
+        if ($type === 'model' && $context === []) {
+            $scan = $this->scan_car_model_dictionary_by_id($id);
+            $endpointsChecked = array_values(array_unique(array_merge($endpointsChecked, (array) ($scan['endpoints_checked'] ?? []))));
+            $rawKeys = array_merge($rawKeys, (array) ($scan['raw_keys'] ?? []));
+            if ((string) ($scan['label'] ?? '') !== '') {
+                $resolved = ['label' => (string) $scan['label'], 'source' => 'dictionary_api', 'endpoint_used' => (string) ($scan['endpoint_used'] ?? ''), 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_record' => (array) ($scan['model_record'] ?? [])];
+                set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
+                return $resolved;
+            }
+        }
+
+        $csv = $this->resolve_vehicle_dictionary_from_csv_mapping($type, $id);
+        if ((string) ($csv['label'] ?? '') !== '') {
+            $resolved = ['label' => (string) $csv['label'], 'source' => 'csv_mapping', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'csv_mapping_match' => (array) ($csv['match'] ?? [])];
             set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
             return $resolved;
         }
 
-        $resolved = ['label' => '', 'source' => 'unresolved', 'endpoint_used' => ''];
+        $fallback = $this->fallback_vehicle_dictionary_label($type, $id);
+        if ($fallback !== '') {
+            $resolved = ['label' => $fallback, 'source' => 'local_fallback', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
+            set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
+            return $resolved;
+        }
+
+        $resolved = ['label' => '', 'source' => 'unresolved', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
         set_transient($cacheKey, $resolved, HOUR_IN_SECONDS);
         return $resolved;
+    }
+
+    private function extract_dictionary_record_from_payload(array $payload, string $id): array
+    {
+        $candidates = [];
+        $collect = function ($node) use (&$collect, &$candidates): void {
+            if (!is_array($node)) { return; }
+            if (!$this->is_list_array($node)) { $candidates[] = $node; }
+            foreach ($node as $child) { if (is_array($child)) { $collect($child); } }
+        };
+        $collect($payload);
+        foreach ($candidates as $candidate) {
+            $candidateId = $this->first_non_empty_value($candidate, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','car_model_id','car_model_category','car_body_type_id']);
+            if ($candidateId !== '' && (string) $candidateId === $id) {
+                return $this->safe_sample($candidate);
+            }
+        }
+        return [];
+    }
+
+    private function extract_car_brand_ids_from_payload(array $payload): array
+    {
+        $ids = [];
+        $collect = function ($node) use (&$collect, &$ids): void {
+            if (!is_array($node)) { return; }
+            if (!$this->is_list_array($node)) {
+                $id = $this->first_non_empty_value($node, ['id','brand_id','manufacturer_id','car_model_category']);
+                if ($id !== '' && $this->looks_like_dictionary_id((string) $id)) { $ids[] = (string) $id; }
+            }
+            foreach ($node as $child) { if (is_array($child)) { $collect($child); } }
+        };
+        $collect($payload);
+        return array_values(array_unique($ids));
+    }
+
+    private function scan_car_model_dictionary_by_id(string $id): array
+    {
+        $brandPath = '/get/car_brands';
+        $endpointsChecked = [$brandPath];
+        $rawKeys = [];
+        $brands = $this->post_form($brandPath, [], true);
+        $brandPayload = (array) ($brands['payload'] ?? []);
+        $rawKeys[$brandPath] = array_values(array_map('strval', array_keys($brandPayload)));
+        if (empty($brands['success'])) {
+            return ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
+        }
+        $brandIds = array_slice($this->extract_car_brand_ids_from_payload($brandPayload), 0, 500);
+        foreach ($brandIds as $brandId) {
+            $path = '/get/car_models/' . rawurlencode($brandId);
+            $endpointsChecked[] = $path;
+            $raw = $this->post_form($path, [], true);
+            $payload = (array) ($raw['payload'] ?? []);
+            $rawKeys[$path] = array_values(array_map('strval', array_keys($payload)));
+            if (empty($raw['success'])) { continue; }
+            $label = $this->extract_dictionary_label_from_payload($payload, $id);
+            if ($label !== '') {
+                return ['label' => $label, 'endpoint_used' => $path, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_record' => $this->extract_dictionary_record_from_payload($payload, $id)];
+            }
+        }
+        return ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
+    }
+
+    private function resolve_vehicle_dictionary_from_csv_mapping(string $type, string $id): array
+    {
+        $csvMap = (array) ($this->settings['ovoko_csv_mapping'] ?? []);
+        if ($csvMap === []) { return ['label' => '', 'match' => []]; }
+        foreach ($csvMap as $rows) {
+            foreach ((array) $rows as $row) {
+                if (!is_array($row)) { continue; }
+                $row = (array) $row;
+                $vehicleInfo = (string) $this->first_non_empty_value($row, ['vehicle_info','automobilis','vehicle','car','model']);
+                $parsed = $this->parse_vehicle_info_label_for_csv_dictionary($vehicleInfo);
+                if ($type === 'make') {
+                    $candidateId = (string) $this->first_non_empty_value($row, ['car_model_category','model_category','brand_id','manufacturer_id','make_id']);
+                    $label = (string) ($parsed['make'] ?? '');
+                    if ($candidateId === $id && $label !== '') { return ['label' => $label, 'match' => ['id' => (string) ($row['id'] ?? ''), 'vehicle_info' => $vehicleInfo]]; }
+                }
+                if ($type === 'model' || $type === 'generation') {
+                    $candidateId = (string) $this->first_non_empty_value($row, ['car_model','model_id','car_model_id']);
+                    $label = (string) ($parsed['model'] ?? '');
+                    if ($candidateId === $id && $label !== '') { return ['label' => $label, 'match' => ['id' => (string) ($row['id'] ?? ''), 'vehicle_info' => $vehicleInfo]]; }
+                }
+            }
+        }
+        return ['label' => '', 'match' => []];
+    }
+
+    private function parse_vehicle_info_label_for_csv_dictionary(string $vehicleInfo): array
+    {
+        $raw = trim($vehicleInfo);
+        if ($raw === '') { return ['make' => '', 'model' => '']; }
+        preg_match('/^([^,(]+)(?:\s*\(([^)]*)\))?/u', $raw, $base);
+        $label = trim((string) ($base[1] ?? $raw));
+        $known = ['Mercedes-Benz','Volkswagen','VW','Audi','BMW','Peugeot','Citroen','Citroën','Renault','Opel','Ford','Toyota','Nissan','Hyundai','Kia','Fiat','Volvo','Skoda','Škoda','Seat'];
+        foreach ($known as $brand) {
+            if (stripos($label, $brand) === 0) {
+                return ['make' => $brand === 'VW' ? 'Volkswagen' : $brand, 'model' => trim(substr($label, strlen($brand)))];
+            }
+        }
+        return ['make' => '', 'model' => $this->readable_vehicle_text($label)];
     }
 
     private function extract_dictionary_label_from_payload(array $payload, string $id): string
@@ -1978,7 +2126,7 @@ class RrrApiClient
             }
         }
         foreach ($candidates as $candidate) {
-            $candidateId = $this->first_non_empty_value($candidate, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','car_model_id','car_body_type_id']);
+            $candidateId = $this->first_non_empty_value($candidate, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','car_model_id','car_model_category','car_body_type_id']);
             if ($candidateId !== '' && (string) $candidateId !== $id) {
                 continue;
             }
