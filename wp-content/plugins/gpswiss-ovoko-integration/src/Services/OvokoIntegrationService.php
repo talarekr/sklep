@@ -2616,34 +2616,73 @@ class OvokoIntegrationService
 
 
 
-    public function export_current_product_category_assignments_csv(): string
+    public function stream_current_product_category_assignments_csv($fh, array $options = []): array
     {
-        $fh = fopen('php://temp', 'r+');
-        fputcsv($fh, ['product_id','SKU','title','ovoko_id','current_category_ids','current_category_paths','current_primary_category_id','current_primary_category_path']);
-        foreach ($this->get_product_ids_after(0, 0) as $productId) {
-            $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
-            $terms = wp_get_post_terms($productId, 'product_cat', ['fields' => 'all']);
-            $ids = [];
-            $paths = [];
-            foreach ((array) $terms as $term) {
-                if (!$term || is_wp_error($term)) { continue; }
-                $ids[] = (int) $term->term_id;
-                $paths[] = $this->get_product_cat_path((int) $term->term_id);
-            }
-            $primaryId = $this->get_primary_product_category_id($productId);
-            fputcsv($fh, [
-                $productId,
-                $product ? (string) $product->get_sku() : '',
-                (string) get_the_title($productId),
-                $this->get_product_ovoko_id($productId),
-                implode('|', $ids),
-                implode('|', array_filter($paths)),
-                $primaryId > 0 ? (string) $primaryId : '',
-                $primaryId > 0 ? $this->get_product_cat_path($primaryId) : '',
-            ]);
+        if (!is_resource($fh)) {
+            return ['ok' => false, 'error' => 'invalid_csv_stream'];
         }
-        rewind($fh);
-        return (string) stream_get_contents($fh);
+
+        $batchSize = max(1, min(200, (int) ($options['batch_size'] ?? 100)));
+        $afterProductId = max(0, (int) ($options['after_product_id'] ?? 0));
+        $maxRows = max(0, (int) ($options['max_rows'] ?? 0));
+        $rowsWritten = 0;
+        $lastProductId = $afterProductId;
+        $categoryPathCache = [];
+
+        fputcsv($fh, ['product_id','SKU','title','ovoko_id','current_category_ids','current_category_paths','current_primary_category_id','current_primary_category_path'], ',', '"', '\\');
+
+        while ($maxRows === 0 || $rowsWritten < $maxRows) {
+            $remainingRows = $maxRows > 0 ? ($maxRows - $rowsWritten) : $batchSize;
+            $limit = min($batchSize, $remainingRows);
+            $products = $this->get_product_category_assignment_export_products($lastProductId, $limit);
+            if (empty($products)) {
+                break;
+            }
+
+            $productIds = array_map(static fn(array $row): int => (int) $row['ID'], $products);
+            $metaByProduct = $this->get_product_category_assignment_export_meta($productIds);
+            $termsByProduct = $this->get_product_category_assignment_export_terms($productIds, $categoryPathCache);
+
+            foreach ($products as $productRow) {
+                $productId = (int) $productRow['ID'];
+                $meta = $metaByProduct[$productId] ?? [];
+                $terms = $termsByProduct[$productId] ?? ['ids' => [], 'paths' => []];
+                $primaryId = $this->resolve_export_primary_category_id($meta);
+
+                fputcsv($fh, [
+                    $productId,
+                    (string) ($meta['_sku'] ?? ''),
+                    (string) ($productRow['post_title'] ?? ''),
+                    $this->resolve_export_ovoko_id($meta),
+                    implode('|', $terms['ids']),
+                    implode('|', array_filter($terms['paths'])),
+                    $primaryId > 0 ? (string) $primaryId : '',
+                    $primaryId > 0 ? $this->get_product_cat_path_cached($primaryId, $categoryPathCache) : '',
+                ], ',', '"', '\\');
+
+                $rowsWritten++;
+                $lastProductId = $productId;
+                if ($maxRows > 0 && $rowsWritten >= $maxRows) {
+                    break;
+                }
+            }
+
+            fflush($fh);
+            $this->cleanup_product_category_assignment_export_batch($productIds);
+            unset($products, $productIds, $metaByProduct, $termsByProduct);
+        }
+
+        return [
+            'ok' => true,
+            'streamed' => true,
+            'storage' => 'php://output',
+            'batch_size' => $batchSize,
+            'after_product_id' => $afterProductId,
+            'max_rows' => $maxRows,
+            'rows_written' => $rowsWritten,
+            'last_product_id' => $lastProductId,
+            'data_changed' => false,
+        ];
     }
 
     public function dry_run_delete_all_product_categories(): array
@@ -2830,6 +2869,127 @@ class OvokoIntegrationService
             if ((int) $term->parent === 0) { $top[] = (string) $term->name; }
         }
         return ['ok' => true, 'action_name' => 'Post-rebuild category audit', 'total_products' => $totalProducts, 'products_with_ovoko_id' => $withOvoko, 'products_missing_ovoko_id' => $missingOvoko, 'products_with_category' => $withCategory, 'products_without_category' => $withoutCategory, 'products_with_full_ovoko_path' => $withFullPath, 'products_failed_category_assignment' => $withoutCategory, 'sample_failures' => $failed, 'total_product_categories_after_rebuild' => is_wp_error($terms) ? 0 : count((array) $terms), 'max_category_depth' => $maxDepth, 'top_level_categories_created' => array_values(array_unique($top)), 'menu_cache_status' => function_exists('gp_get_product_category_display_cache_status') ? gp_get_product_category_display_cache_status() : null];
+    }
+
+    private function get_product_category_assignment_export_products(int $afterProductId, int $limit): array
+    {
+        global $wpdb;
+        $sql = $wpdb->prepare(
+            "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status NOT IN ('trash','auto-draft') AND ID > %d ORDER BY ID ASC LIMIT %d",
+            'product',
+            $afterProductId,
+            max(1, $limit)
+        );
+        return array_map(static fn($row): array => (array) $row, (array) $wpdb->get_results($sql, ARRAY_A));
+    }
+
+    private function get_product_category_assignment_export_meta(array $productIds): array
+    {
+        global $wpdb;
+        $productIds = array_values(array_filter(array_map('intval', $productIds), static fn(int $id): bool => $id > 0));
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $metaKeys = [
+            '_sku',
+            '_ovoko_part_id',
+            'ovoko_id',
+            '_ovoko_id',
+            '_yoast_wpseo_primary_product_cat',
+            'rank_math_primary_product_cat',
+            '_gpswiss_primary_product_cat',
+        ];
+        $idPlaceholders = implode(',', array_fill(0, count($productIds), '%d'));
+        $keyPlaceholders = implode(',', array_fill(0, count($metaKeys), '%s'));
+        $sql = $wpdb->prepare(
+            "SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN ({$idPlaceholders}) AND meta_key IN ({$keyPlaceholders})",
+            ...array_merge($productIds, $metaKeys)
+        );
+
+        $metaByProduct = [];
+        foreach ((array) $wpdb->get_results($sql, ARRAY_A) as $row) {
+            $postId = (int) ($row['post_id'] ?? 0);
+            $metaKey = (string) ($row['meta_key'] ?? '');
+            if ($postId <= 0 || $metaKey === '') {
+                continue;
+            }
+            $metaByProduct[$postId][$metaKey] = (string) ($row['meta_value'] ?? '');
+        }
+        return $metaByProduct;
+    }
+
+    private function get_product_category_assignment_export_terms(array $productIds, array &$categoryPathCache): array
+    {
+        global $wpdb;
+        $productIds = array_values(array_filter(array_map('intval', $productIds), static fn(int $id): bool => $id > 0));
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $idPlaceholders = implode(',', array_fill(0, count($productIds), '%d'));
+        $sql = $wpdb->prepare(
+            "SELECT tr.object_id, t.term_id FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$wpdb->terms} t ON tt.term_id = t.term_id WHERE tr.object_id IN ({$idPlaceholders}) AND tt.taxonomy = %s ORDER BY tr.object_id ASC, t.name ASC",
+            ...array_merge($productIds, ['product_cat'])
+        );
+
+        $termsByProduct = [];
+        foreach ((array) $wpdb->get_results($sql, ARRAY_A) as $row) {
+            $productId = (int) ($row['object_id'] ?? 0);
+            $termId = (int) ($row['term_id'] ?? 0);
+            if ($productId <= 0 || $termId <= 0) {
+                continue;
+            }
+            if (!isset($termsByProduct[$productId])) {
+                $termsByProduct[$productId] = ['ids' => [], 'paths' => []];
+            }
+            $termsByProduct[$productId]['ids'][] = $termId;
+            $termsByProduct[$productId]['paths'][] = $this->get_product_cat_path_cached($termId, $categoryPathCache);
+        }
+        return $termsByProduct;
+    }
+
+    private function resolve_export_ovoko_id(array $meta): string
+    {
+        foreach (['_ovoko_part_id', 'ovoko_id', '_ovoko_id'] as $key) {
+            $value = trim((string) ($meta[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
+    }
+
+    private function resolve_export_primary_category_id(array $meta): int
+    {
+        foreach (['_yoast_wpseo_primary_product_cat', 'rank_math_primary_product_cat', '_gpswiss_primary_product_cat'] as $key) {
+            $value = (int) ($meta[$key] ?? 0);
+            if ($value > 0) {
+                return $value;
+            }
+        }
+        return 0;
+    }
+
+    private function get_product_cat_path_cached(int $termId, array &$categoryPathCache): string
+    {
+        if (!array_key_exists($termId, $categoryPathCache)) {
+            $categoryPathCache[$termId] = $this->get_product_cat_path($termId);
+        }
+        return (string) $categoryPathCache[$termId];
+    }
+
+    private function cleanup_product_category_assignment_export_batch(array $productIds): void
+    {
+        foreach (array_map('intval', $productIds) as $productId) {
+            if ($productId > 0 && function_exists('clean_post_cache')) {
+                clean_post_cache($productId);
+            }
+        }
+
+        if (function_exists('wp_cache_flush_runtime')) {
+            wp_cache_flush_runtime();
+        }
     }
 
     private function get_product_ids_after(int $afterProductId, int $limit): array

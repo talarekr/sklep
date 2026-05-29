@@ -402,11 +402,34 @@ class AdminPage
     {
         if (!current_user_can('manage_options')) { wp_die('Unauthorized'); }
         check_admin_referer('gpswiss_ovoko_export_product_category_assignments');
-        $csv = $this->service->export_current_product_category_assignments_csv();
+
+        $batchSize = isset($_POST['batch_size']) ? max(1, min(200, (int) wp_unslash($_POST['batch_size']))) : 100;
+        $afterProductId = isset($_POST['after_product_id']) ? max(0, (int) wp_unslash($_POST['after_product_id'])) : 0;
+        $maxRows = isset($_POST['max_rows']) ? max(0, (int) wp_unslash($_POST['max_rows'])) : 0;
+
+        @ini_set('zlib.output_compression', '0');
+        while (ob_get_level() > 0) {
+            if (!@ob_end_clean()) {
+                break;
+            }
+        }
+
         nocache_headers();
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="woo-product-category-assignments-' . gmdate('Ymd-His') . '.csv"');
-        echo $csv; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        header('X-Accel-Buffering: no');
+
+        $out = fopen('php://output', 'w');
+        if (!is_resource($out)) {
+            wp_die('Unable to open CSV output stream.');
+        }
+
+        $this->service->stream_current_product_category_assignments_csv($out, [
+            'batch_size' => $batchSize,
+            'after_product_id' => $afterProductId,
+            'max_rows' => $maxRows,
+        ]);
+        fclose($out);
         exit;
     }
 
