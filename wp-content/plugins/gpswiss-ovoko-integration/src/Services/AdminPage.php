@@ -486,7 +486,8 @@ class AdminPage
             'rebuild_menu_cache_when_done' => !empty($_POST['rebuild_menu_cache_when_done']),
         ];
         $result = $this->service->rebuild_woo_categories_from_ovoko_from_scratch($options);
-        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 300);
+        $noticeType = !empty($result['ok']) && empty($result['warnings']) ? 'success' : 'warning';
+        set_transient('gpswiss_ovoko_notice', ['type' => $noticeType, 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE)], 300);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
