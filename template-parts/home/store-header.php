@@ -186,39 +186,113 @@ if (function_exists('gp_log_product_category_display_debug')) {
                     <?php esc_html_e('Menu', 'gp-clone'); ?>
                 </button>
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
-                    <ul class="gp-all-cat-dropdown__list">
-                        <?php if (!empty($all_product_categories)) : ?>
-                            <?php foreach ($all_product_categories as $category) : ?>
-                                <?php
-                                $category_link = get_term_link($category);
-                                if (is_wp_error($category_link)) {
-                                    continue;
-                                }
-                                $child_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children((int) $category->term_id) : [];
-                                ?>
-                                <li>
-                                    <a href="<?php echo esc_url($category_link); ?>">
-                                        <?php echo esc_html($category->name); ?>
-                                    </a>
-                                    <?php if (!empty($child_categories)) : ?>
-                                        <ul>
-                                            <?php foreach ($child_categories as $child_category) : ?>
-                                                <?php
-                                                $child_category_link = get_term_link($child_category);
-                                                if (is_wp_error($child_category_link)) {
-                                                    continue;
-                                                }
-                                                ?>
-                                                <li><a href="<?php echo esc_url($child_category_link); ?>"><?php echo esc_html($child_category->name); ?></a></li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    <?php endif; ?>
-                                </li>
-                            <?php endforeach; ?>
-                        <?php else : ?>
-                            <li class="gp-all-cat-dropdown__empty"><?php esc_html_e('Brak dostępnych kategorii.', 'gp-clone'); ?></li>
+                    <?php if (!empty($all_product_categories)) : ?>
+                        <?php $default_active_category_id = 0; ?>
+                        <?php foreach ($all_product_categories as $candidate_category) : ?>
+                            <?php
+                            $candidate_children = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children((int) $candidate_category->term_id) : [];
+                            if (!empty($candidate_children)) {
+                                $default_active_category_id = (int) $candidate_category->term_id;
+                                break;
+                            }
+                            ?>
+                        <?php endforeach; ?>
+                        <?php if ($default_active_category_id <= 0 && isset($all_product_categories[0]) && $all_product_categories[0] instanceof WP_Term) : ?>
+                            <?php $default_active_category_id = (int) $all_product_categories[0]->term_id; ?>
                         <?php endif; ?>
-                    </ul>
+
+                        <div class="gp-all-cat-dropdown__shell" data-gp-mega-menu>
+                            <nav class="gp-all-cat-dropdown__primary" aria-label="<?php esc_attr_e('Kategorie główne', 'gp-clone'); ?>">
+                                <ul class="gp-all-cat-dropdown__list">
+                                    <?php foreach ($all_product_categories as $category) : ?>
+                                        <?php
+                                        $category_id = (int) $category->term_id;
+                                        $category_link = get_term_link($category);
+                                        if (is_wp_error($category_link)) {
+                                            continue;
+                                        }
+                                        $child_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children($category_id) : [];
+                                        $is_active_category = $category_id === $default_active_category_id;
+                                        ?>
+                                        <li class="gp-all-cat-dropdown__item<?php echo $is_active_category ? ' is-active' : ''; ?>" data-gp-mega-category-item data-category-id="<?php echo esc_attr((string) $category_id); ?>">
+                                            <a class="gp-all-cat-dropdown__top-link" href="<?php echo esc_url($category_link); ?>" data-gp-mega-category-trigger data-category-id="<?php echo esc_attr((string) $category_id); ?>" aria-current="<?php echo $is_active_category ? 'true' : 'false'; ?>">
+                                                <span><?php echo esc_html($category->name); ?></span>
+                                                <?php if (!empty($child_categories)) : ?>
+                                                    <span class="gp-all-cat-dropdown__chevron" aria-hidden="true">›</span>
+                                                <?php endif; ?>
+                                            </a>
+                                            <?php if (!empty($child_categories)) : ?>
+                                                <button class="gp-all-cat-dropdown__mobile-toggle" type="button" data-gp-mega-category-toggle data-category-id="<?php echo esc_attr((string) $category_id); ?>" aria-controls="gp-mega-panel-<?php echo esc_attr((string) $category_id); ?>" aria-expanded="<?php echo $is_active_category ? 'true' : 'false'; ?>">
+                                                    <span class="screen-reader-text"><?php echo esc_html(sprintf(__('Pokaż podkategorie: %s', 'gp-clone'), $category->name)); ?></span>
+                                                    <span aria-hidden="true">›</span>
+                                                </button>
+                                            <?php endif; ?>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </nav>
+
+                            <div class="gp-all-cat-dropdown__secondary-wrap">
+                                <div class="gp-all-cat-dropdown__scroll-indicator" aria-hidden="true"></div>
+                                <?php foreach ($all_product_categories as $category) : ?>
+                                    <?php
+                                    $category_id = (int) $category->term_id;
+                                    $category_link = get_term_link($category);
+                                    if (is_wp_error($category_link)) {
+                                        continue;
+                                    }
+                                    $level_two_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children($category_id) : [];
+                                    $is_active_category = $category_id === $default_active_category_id;
+                                    ?>
+                                    <section class="gp-all-cat-dropdown__panel<?php echo $is_active_category ? ' is-active' : ''; ?>" id="gp-mega-panel-<?php echo esc_attr((string) $category_id); ?>" data-gp-mega-panel data-category-id="<?php echo esc_attr((string) $category_id); ?>"<?php echo $is_active_category ? '' : ' hidden'; ?>>
+                                        <div class="gp-all-cat-dropdown__panel-head">
+                                            <strong><?php echo esc_html($category->name); ?></strong>
+                                            <a href="<?php echo esc_url($category_link); ?>"><?php esc_html_e('Zobacz kategorię', 'gp-clone'); ?></a>
+                                        </div>
+
+                                        <?php if (!empty($level_two_categories)) : ?>
+                                            <div class="gp-all-cat-dropdown__groups">
+                                                <?php foreach ($level_two_categories as $level_two_category) : ?>
+                                                    <?php
+                                                    $level_two_link = get_term_link($level_two_category);
+                                                    if (is_wp_error($level_two_link)) {
+                                                        continue;
+                                                    }
+                                                    $level_three_categories = function_exists('gp_get_display_product_cat_children') ? gp_get_display_product_cat_children((int) $level_two_category->term_id) : [];
+                                                    ?>
+                                                    <article class="gp-all-cat-dropdown__group">
+                                                        <h3><a href="<?php echo esc_url($level_two_link); ?>"><?php echo esc_html($level_two_category->name); ?></a></h3>
+                                                        <?php if (!empty($level_three_categories)) : ?>
+                                                            <ul>
+                                                                <?php foreach ($level_three_categories as $level_three_category) : ?>
+                                                                    <?php
+                                                                    $level_three_link = get_term_link($level_three_category);
+                                                                    if (is_wp_error($level_three_link)) {
+                                                                        continue;
+                                                                    }
+                                                                    ?>
+                                                                    <li><a href="<?php echo esc_url($level_three_link); ?>"><?php echo esc_html($level_three_category->name); ?></a></li>
+                                                                <?php endforeach; ?>
+                                                            </ul>
+                                                        <?php else : ?>
+                                                            <p><a href="<?php echo esc_url($level_two_link); ?>"><?php esc_html_e('Przejdź do tej kategorii', 'gp-clone'); ?></a></p>
+                                                        <?php endif; ?>
+                                                    </article>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else : ?>
+                                            <div class="gp-all-cat-dropdown__empty-panel">
+                                                <p><?php esc_html_e('Ta kategoria nie ma jeszcze widocznych podkategorii.', 'gp-clone'); ?></p>
+                                                <a href="<?php echo esc_url($category_link); ?>"><?php esc_html_e('Przejdź do kategorii', 'gp-clone'); ?></a>
+                                            </div>
+                                        <?php endif; ?>
+                                    </section>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php else : ?>
+                        <p class="gp-all-cat-dropdown__empty"><?php esc_html_e('Brak dostępnych kategorii.', 'gp-clone'); ?></p>
+                    <?php endif; ?>
                 </div>
             </div>
             <nav class="gp-shortcuts" aria-label="Skróty kategorii">
