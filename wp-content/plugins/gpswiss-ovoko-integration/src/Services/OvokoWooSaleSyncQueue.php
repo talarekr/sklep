@@ -129,10 +129,10 @@ class OvokoWooSaleSyncQueue
             'items' => [],
         ];
 
-        if (!$this->worker_enabled()) {
+        if (!$this->worker_enabled(!empty($options['force']))) {
             $result['ok'] = false;
             $result['status'] = 'paused';
-            $result['message'] = 'Woo → Ovoko sale worker is disabled by panel setting or code guard.';
+            $result['message'] = 'Woo → Ovoko sale worker is disabled because Auto cron is set to NIE.';
             return $result;
         }
 
@@ -330,12 +330,12 @@ class OvokoWooSaleSyncQueue
 
     private function queue_enabled(): bool
     {
-        return (bool) get_option(OvokoBidirectionalSyncOrchestrator::SALE_SYNC_ENABLED_OPTION, false) || (bool) get_option(OvokoBidirectionalSyncOrchestrator::ENABLED_OPTION, false);
+        return (bool) get_option(OvokoBidirectionalSyncOrchestrator::ENABLED_OPTION, false);
     }
 
-    private function worker_enabled(): bool
+    private function worker_enabled(bool $force = false): bool
     {
-        return defined('GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON') && GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON && $this->queue_enabled();
+        return $force || $this->queue_enabled();
     }
 
     private function resolve_item_part_id($item): string

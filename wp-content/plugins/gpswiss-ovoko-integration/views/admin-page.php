@@ -130,14 +130,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </div>
     <?php endif; ?>
 
-    <h2>Ovoko ↔ Woo Sync</h2>
+    <h2>Ovoko ↔ Woo Automatic Sync</h2>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
-        <h3>Ovoko ↔ Woo automatic sync</h3>
-        <p><strong>Production orchestrator.</strong> The hook <code>gpswiss_ovoko_bidirectional_sync</code> runs <code>Ovoko → Woo date_from delta</code> first and then <code>Woo → Ovoko sale queue</code>. Live writes require both the panel setting and <code>GPSWISS_OVOKO_ALLOW_LIVE_BIDIRECTIONAL_CRON</code>.</p>
+        <h3>Ovoko ↔ Woo Automatic Sync</h3>
+        <p><strong>Production orchestrator.</strong> The hook <code>gpswiss_ovoko_bidirectional_sync</code> runs <code>Ovoko → Woo date_from sync</code> first and then <code>Woo → Ovoko sale queue</code>. The panel switch below is the only Auto cron control.</p>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0;">
-            <div style="background:#f6f7f7;padding:10px;"><strong>sync_enabled</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['sync_enabled']) ? 'true' : 'false'); ?></code></div>
-            <div style="background:#f6f7f7;padding:10px;"><strong>woo_to_ovoko_sale_sync_enabled</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['woo_to_ovoko_sale_sync_enabled']) ? 'true' : 'false'); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>Auto cron</strong><br><code><?php echo esc_html(!empty($bidirectionalStatus['sync_enabled']) ? 'TAK' : 'NIE'); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['status'] ?? 'idle')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>last_successful_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_successful_sync_at'] ?? '') ?: 'not run yet')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>next_scheduled_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['next_scheduled_sync_at'] ?? '') ?: 'not scheduled')); ?></code></div>
@@ -156,17 +155,17 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <div style="background:#f6f7f7;padding:10px;"><strong>last_error</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_error'] ?? '') ?: 'none')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>last_warning</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_warning'] ?? '') ?: 'none')); ?></code></div>
         </div>
-        <p><strong>Guard:</strong> <code><?php echo esc_html((string) ($bidirectionalStatus['automation_guard'] ?? 'live_cron_requires_explicit_code_confirmation')); ?></code>. After deploy the default options are false, so auto sync stays paused until you enable the panel setting and the code guard.</p>
+        <p><strong>Safety:</strong> after deploy <code>ovoko_bidirectional_sync_enabled</code> defaults to <code>false</code>, so Auto cron is <strong>NIE</strong> until you enable it here.</p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_bidirectional_enable'); ?>
                 <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_enable" />
-                <?php submit_button('Enable automatic Ovoko ↔ Woo sync', 'primary', 'submit', false); ?>
+                <?php submit_button('Enable auto cron', 'primary', 'submit', false); ?>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_bidirectional_pause'); ?>
                 <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_pause" />
-                <?php submit_button('Disable / Pause sync', 'secondary', 'submit', false); ?>
+                <?php submit_button('Disable auto cron', 'secondary', 'submit', false); ?>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_bidirectional_run_now'); ?>
@@ -176,20 +175,9 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('gpswiss_ovoko_bidirectional_retry_failed_sales'); ?>
                 <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_retry_failed_sales" />
-                <?php submit_button('Retry failed Woo → Ovoko sale sync', 'secondary', 'submit', false); ?>
+                <?php submit_button('Retry failed Woo → Ovoko sales', 'secondary', 'submit', false); ?>
             </form>
         </div>
-    </div>
-
-    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #46b450;">
-        <h3>Refactor plan / architecture</h3>
-        <ol style="margin-left:22px;">
-            <li><strong>Ovoko → Woo:</strong> use only <code>/v2/get/parts?limit={limit}&amp;page={page}&amp;date_from=YYYY-MM-DD</code>; page/cursor stays inside that date window, never a full cron scan.</li>
-            <li><strong>Existing Woo products:</strong> sync stock/status, description and details; verify categories only; leave price and images untouched.</li>
-            <li><strong>New Woo products:</strong> create only with a valid <code>internal_notes</code> price, map categories from <code>category_id + /get/categories/tree</code>, and skip/draft instead of publishing when price is missing.</li>
-            <li><strong>Woo → Ovoko:</strong> queue order items after safe Woo statuses, then worker sends <code>POST /crm/changePartStatus</code> with <code>status=2</code>; checkout does not call Ovoko directly.</li>
-            <li><strong>Retry/idempotency:</strong> skip already-success order items, retry only network/5xx/rate-limit failures, keep failed items visible on this dashboard.</li>
-        </ol>
     </div>
 
     <details style="margin-top:18px;" class="gpswiss-ovoko-advanced-tools">
@@ -218,7 +206,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </form>
         <hr style="margin:16px 0;" />
         <h4>Manual live date_from Ovoko → Woo sync</h4>
-        <p><strong>Live Woo write, manual only.</strong> Creates new Woo products only when the product is missing and a valid PLN price is present in <code>internal_notes</code>. Existing products may update stock/status, description and details only; price, images and categories stay untouched. Automatic cron and the Woo → Ovoko worker remain disabled.</p>
+        <p><strong>Live Woo write, manual only.</strong> Creates new Woo products only when the product is missing and a valid PLN price is present in <code>internal_notes</code>. Existing products may update stock/status, description and details only; price, images and categories stay untouched. Automatic cron is controlled only by the main Auto cron switch.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
             <?php wp_nonce_field('gpswiss_ovoko_manual_live_date_from_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_manual_live_date_from_sync" />
@@ -232,7 +220,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
         <h3>Advanced/dev: Woo → Ovoko sale probes</h3>
-        <p>Sale probes use the confirmed dedicated endpoint <code>POST /crm/changePartStatus</code> with <code>status=2</code>. Queue/worker automation remains disabled until approval.</p>
+        <p>Sale probes use the confirmed dedicated endpoint <code>POST /crm/changePartStatus</code> with <code>status=2</code>. The automatic worker is controlled only by the main Auto cron switch.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_analyze_sale_stock_endpoint'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_analyze_sale_stock_endpoint" />
