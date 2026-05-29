@@ -1275,7 +1275,10 @@ class OvokoIntegrationService
         if ($syncHash !== '') {
             update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
         }
-        $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
+        $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId, false) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
+        if ($created) {
+            $this->log_ovoko_listing_image_generation_after_import($productId, $listingImageResult, $imageImportResult);
+        }
         if (function_exists('wc_get_product')) {
             $product = wc_get_product($productId);
             if ($product && method_exists($product, 'save')) {
@@ -1567,19 +1570,26 @@ class OvokoIntegrationService
         return is_string($newPath) && $newPath !== '' ? ($scheme . '://' . $host . $newPath) : '';
     }
 
-    public function generate_listing_image_for_ovoko_product(int $productId): array
+    public function generate_listing_image_for_ovoko_product(int $productId, bool $force = false): array
     {
         $result = [
             'ok' => false,
             'product_id' => $productId,
             'listing_image_attempted' => true,
             'listing_image_generated' => false,
+            'listing_image_force_regenerate' => $force,
             'listing_image_id' => 0,
             'listing_image_source_id' => 0,
             'listing_image_strategy' => 'allegro_product_mapper_reused',
             'listing_image_meta_written' => [],
             'errors' => [],
         ];
+
+        if ($productId <= 0 || get_post_type($productId) !== 'product') {
+            $result['reason'] = 'invalid_product_id';
+            $result['errors'][] = 'A valid WooCommerce product_id is required.';
+            return $result;
+        }
 
         $sameVehicleMeta = $this->backfill_same_vehicle_meta_for_existing_product($productId);
 
@@ -1589,7 +1599,7 @@ class OvokoIntegrationService
             return $result;
         }
 
-        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, false);
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, $force);
         $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
         $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
         $status = (string) ($awiResult['status'] ?? 'unknown');
@@ -1598,6 +1608,7 @@ class OvokoIntegrationService
         $result = array_merge($result, $awiResult, [
             'ok' => $ok,
             'listing_image_attempted' => true,
+            'listing_image_force_regenerate' => $force,
             'listing_image_generated' => $status === 'created' && $listingImageId > 0,
             'listing_image_id' => $listingImageId,
             'listing_image_source_id' => $sourceImageId,
@@ -1610,6 +1621,49 @@ class OvokoIntegrationService
         ]);
 
         return array_merge($result, $this->preview_listing_image_status($productId));
+    }
+
+    private function log_ovoko_listing_image_generation_after_import(int $productId, array $listingImageResult, array $imageImportResult): void
+    {
+        $listingAttachmentId = (int) ($listingImageResult['listing_image_id'] ?? 0);
+        $sourceAttachmentId = (int) ($listingImageResult['listing_image_source_id'] ?? ($listingImageResult['selected_source_image_id'] ?? 0));
+        $diagnostics = (array) ($listingImageResult['awi_diagnostics'] ?? []);
+        $targetFillRatio = (float) ($listingImageResult['listing_attachment_target_fill_ratio'] ?? ($diagnostics['listing_attachment_target_fill_ratio'] ?? 0));
+        $renderMetrics = [
+            'target_fill_ratio' => $targetFillRatio,
+            'fill_ratio' => (float) ($listingImageResult['listing_attachment_fill_ratio'] ?? ($diagnostics['listing_attachment_fill_ratio'] ?? 0)),
+            'render_profile' => (string) ($listingImageResult['listing_attachment_render_profile'] ?? ($diagnostics['listing_attachment_render_profile'] ?? '')),
+            'source_aspect_ratio' => (float) ($listingImageResult['selected_source_aspect_ratio'] ?? 0),
+            'source_square_fill_ratio' => (float) ($listingImageResult['selected_source_square_fill_ratio'] ?? 0),
+            'selection_reason' => (string) ($listingImageResult['selected_source_selection_reason'] ?? ''),
+            'quality_tier' => (string) ($listingImageResult['selected_source_quality_tier'] ?? ($listingImageResult['listing_quality_tier'] ?? '')),
+            'quality_score' => (float) ($listingImageResult['selected_source_quality_score'] ?? ($listingImageResult['listing_quality_score'] ?? 0)),
+            'listing_dimensions' => (array) ($listingImageResult['listing_image_dimensions'] ?? []),
+            'thumbnail_dimensions' => (array) ($listingImageResult['thumbnail_dimensions'] ?? []),
+        ];
+
+        $this->log('Ovoko listing image generation after import', [
+            'product_id' => $productId,
+            'source_attachment_id' => $sourceAttachmentId,
+            'listing_attachment_id' => $listingAttachmentId,
+            'status' => (string) ($listingImageResult['status'] ?? 'unknown'),
+            'target_fill_ratio' => $targetFillRatio,
+            'render_metrics' => $renderMetrics,
+            'result' => [
+                'status' => (string) ($listingImageResult['status'] ?? 'unknown'),
+                'listing_image_id' => $listingAttachmentId,
+                'selected_source_image_id' => $sourceAttachmentId,
+                'listing_quality_tier' => (string) ($listingImageResult['listing_quality_tier'] ?? ($listingImageResult['selected_source_quality_tier'] ?? 'unknown')),
+            ],
+            'meta_written' => (array) ($listingImageResult['listing_image_meta_written'] ?? []),
+            'images_import_result' => [
+                'featured_attachment_id' => (int) ($imageImportResult['featured_attachment_id'] ?? 0),
+                'gallery_attachment_ids' => array_values(array_map('intval', (array) ($imageImportResult['gallery_attachment_ids'] ?? []))),
+                'imported_attachment_ids' => array_values(array_map('intval', (array) ($imageImportResult['imported_attachment_ids'] ?? []))),
+                'reused_attachment_ids' => array_values(array_map('intval', (array) ($imageImportResult['reused_attachment_ids'] ?? []))),
+                'images_import_failed' => !empty($imageImportResult['images_import_failed']),
+            ],
+        ]);
     }
 
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array

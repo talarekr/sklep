@@ -914,7 +914,7 @@ class AdminPage
         }
         check_admin_referer('gpswiss_ovoko_generate_listing_image');
         $productId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
-        $result = $this->service->generate_listing_image_for_ovoko_product($productId);
+        $result = $this->service->generate_listing_image_for_ovoko_product($productId, true);
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
