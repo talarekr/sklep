@@ -198,6 +198,146 @@ class OvokoAutoSyncDryRunService
         return $report;
     }
 
+    public function manual_live_date_from_sync(array $options = []): array
+    {
+        $confirmation = trim((string) ($options['confirmation'] ?? ''));
+        $limit = max(1, min(5, (int) ($options['batch_size'] ?? 1)));
+        $page = max(1, (int) ($options['page'] ?? 1));
+        $dateFrom = trim((string) ($options['date_from'] ?? ''));
+        $report = [
+            'ok' => true,
+            'action_name' => 'Run manual live date_from Ovoko → Woo sync',
+            'mode' => 'manual_live_date_from_delta_no_cron',
+            'endpoint' => '/v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD',
+            'delta_filter_used' => 'date_from',
+            'disallowed_filters_not_used' => ['updated_from', 'updated_after', 'from', 'timestamps', 'ISO datetime', 'full scan without date_from'],
+            'date_from' => $dateFrom,
+            'date_from_used' => $dateFrom,
+            'page' => $page,
+            'batch_size' => $limit,
+            'max_batch_size' => 5,
+            'processed' => 0,
+            'created' => 0,
+            'updated' => 0,
+            'skipped_missing_price' => 0,
+            'skipped_already_synced' => 0,
+            'errors' => [],
+            'warnings' => [],
+            'created_product_ids' => [],
+            'skipped_part_ids' => [],
+            'items' => [],
+            'idempotency_meta_keys' => ['_gpswiss_ovoko_last_synced_updated_at', '_gpswiss_ovoko_last_synced_hash'],
+            'existing_product_policy' => 'stock/status, description and details may update; price untouched; images untouched; categories verify-only',
+            'automatic_cron_enabled' => false,
+            'woo_to_ovoko_worker_touched' => false,
+            'checked_at' => gmdate('c'),
+        ];
+
+        if ($confirmation !== 'RUN OVOKO DATE_FROM LIVE SYNC') {
+            $report['ok'] = false;
+            $report['errors'][] = ['code' => 'confirmation_required', 'message' => 'Type RUN OVOKO DATE_FROM LIVE SYNC to run this live manual sync.'];
+            return $report;
+        }
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom)) {
+            $report['ok'] = false;
+            $report['errors'][] = ['code' => 'invalid_date_from', 'message' => 'date_from must be YYYY-MM-DD.'];
+            return $report;
+        }
+        if (!function_exists('wc_get_product') || !post_type_exists('product')) {
+            $report['ok'] = false;
+            $report['errors'][] = ['code' => 'woocommerce_unavailable', 'message' => 'WooCommerce product APIs are unavailable.'];
+            return $report;
+        }
+
+        $client = new RrrApiClient($this->integrationService->get_settings());
+        $fetch = $client->preview_fetch_parts_by_date_from($dateFrom, $limit, $page);
+        $report['source_fetch'] = [
+            'ok' => !empty($fetch['ok']),
+            'status_code' => (string) ($fetch['status_code'] ?? ''),
+            'pagination' => (array) ($fetch['pagination'] ?? []),
+            'endpoint' => '/v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD',
+            'date_from' => $dateFrom,
+            'delta_filter_applied' => true,
+            'delta_filter_used' => 'date_from',
+        ];
+        if (empty($fetch['ok'])) {
+            $report['ok'] = false;
+            $report['errors'][] = ['code' => 'date_from_fetch_failed', 'status_code' => (string) ($fetch['status_code'] ?? ''), 'message' => (string) ($fetch['msg'] ?? $fetch['message'] ?? '')];
+            return $report;
+        }
+
+        $rawRecords = (array) ($fetch['raw_records'] ?? []);
+        foreach ((array) ($fetch['records'] ?? []) as $index => $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $payload = is_array($rawRecords[$index] ?? null) ? (array) $rawRecords[$index] : $record;
+            $record = $record + $payload;
+            $partId = trim((string) ($record['id'] ?? $record['part_id'] ?? ''));
+            $normalized = $client->normalize_rrr_single_part_payload($payload);
+            if (($normalized['part_id'] ?? '') === '' && $partId !== '') {
+                $normalized['part_id'] = $partId;
+            }
+            $updatedAt = trim((string) ($record['updated_at'] ?? $normalized['updated_at'] ?? ''));
+            $incomingHash = $this->stable_hash($this->normalize_payload_for_idempotency($partId, $updatedAt, $payload));
+            $productId = $this->find_product_id_by_ovoko_id($partId);
+            $alreadySynced = false;
+            if ($productId > 0 && $partId !== '' && $updatedAt !== '') {
+                $lastSyncedUpdatedAt = $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_updated_at']);
+                $lastSyncedHash = $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']);
+                $alreadySynced = $lastSyncedUpdatedAt === $updatedAt && $lastSyncedHash !== '' && hash_equals($lastSyncedHash, $incomingHash);
+            }
+            if ($alreadySynced) {
+                $report['processed']++;
+                $report['skipped_already_synced']++;
+                $report['skipped_part_ids'][] = $partId;
+                $report['items'][] = ['part_id' => $partId, 'product_id' => $productId, 'action' => 'skipped_already_synced'];
+                continue;
+            }
+
+            $price = self::parse_internal_notes_price($record['internal_notes'] ?? null);
+            if ($productId <= 0 && empty($price['ok'])) {
+                $report['processed']++;
+                $report['skipped_missing_price']++;
+                $report['warnings']['new_product_missing_price_in_internal_notes'] = (int) ($report['warnings']['new_product_missing_price_in_internal_notes'] ?? 0) + 1;
+                $report['skipped_part_ids'][] = $partId;
+                $report['items'][] = ['part_id' => $partId, 'action' => 'skipped_missing_price', 'warning' => 'new_product_missing_price_in_internal_notes', 'published' => false];
+                continue;
+            }
+
+            $result = $this->integrationService->apply_manual_live_date_from_part($record, $payload, [
+                'product_id' => $productId,
+                'price' => $price,
+                'sync_hash' => $incomingHash,
+                'updated_at' => $updatedAt,
+            ]);
+            $report['processed']++;
+            $report['items'][] = $result;
+            if (empty($result['ok'])) {
+                $report['ok'] = false;
+                $report['errors'][] = ['part_id' => $partId, 'product_id' => (int) ($result['product_id'] ?? 0), 'code' => (string) ($result['reason'] ?? 'sync_failed'), 'message' => (string) ($result['error'] ?? '')];
+                $report['skipped_part_ids'][] = $partId;
+                continue;
+            }
+            if (!empty($result['created'])) {
+                $report['created']++;
+                $report['created_product_ids'][] = (int) ($result['product_id'] ?? $result['created_product_id'] ?? 0);
+            } elseif (!empty($result['updated'])) {
+                $report['updated']++;
+            }
+        }
+
+        update_option(self::STATUS_OPTION, array_merge((array) get_option(self::STATUS_OPTION, []), [
+            'last_manual_live_sync_at' => gmdate('c'),
+            'last_manual_live_sync_date_from' => $dateFrom,
+            'live_cron_enabled' => false,
+            'date_from_used' => $dateFrom,
+        ]), false);
+
+        return $report;
+    }
+
+
     public function dry_run_woo_to_ovoko_sale(int $orderId): array
     {
         $endpointAnalysis = $this->sale_stock_endpoint_analysis();
