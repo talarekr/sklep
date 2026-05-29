@@ -5,19 +5,23 @@ $shop_url = function_exists('wc_get_page_id') ? get_permalink(wc_get_page_id('sh
 $section_definitions = [
     [
         'title' => __('Silniki kompletne', 'gp-clone'),
-        'terms' => ['silniki-kompletne'],
+        'terms' => ['kompletne-silniki'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/silnik-i-osprzet/silniki-i-osprzet/kompletne-silniki/',
     ],
     [
         'title' => __('Skrzynie kompletne', 'gp-clone'),
-        'terms' => ['kompletne-skrzynie'],
+        'terms' => ['automatyczna-skrzynia-biegow'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/uklad-napedowy/skrzynie-biegow-i-inne-elementy/automatyczna-skrzynia-biegow/',
     ],
     [
         'title' => __('Zwrotnice', 'gp-clone'),
-        'terms' => ['zwrotnice'],
+        'terms' => ['zwrotnica-kola-przedniego'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/os-przednia-i-inne-elementy/os-przednia/zwrotnica-kola-przedniego/',
     ],
     [
         'title' => __('Filtry DPF', 'gp-clone'),
-        'terms' => ['filtry-czastek-stalych-dpf-fap'],
+        'terms' => ['filtr-czastek-stalych-katalizator-fap-dpf'],
+        'url' => 'https://gpswiss.pl/kategoria-produktu/uklad-wydechowy-i-inne-elementy/elementy-systemu-kontroli-spalin/filtr-czastek-stalych-katalizator-fap-dpf/',
     ],
 ];
 
@@ -130,7 +134,10 @@ $get_products_for_section = static function (array $candidate_terms) use ($resol
     return wc_get_products($args);
 };
 
-$get_tile_url = static function (array $candidate_terms) use ($get_product_categories, $shop_url): string {
+$get_tile_url = static function (array $candidate_terms, string $fallback_url = '') use ($get_product_categories, $shop_url): string {
+    if ($fallback_url !== '') {
+        return $fallback_url;
+    }
     $categories = $get_product_categories($candidate_terms);
     if (!empty($categories)) {
         $link = get_term_link($categories[0]);
@@ -172,7 +179,7 @@ $icon = static function (string $type): string {
             <div class="gp-container">
                 <div class="gp-popular__head">
                     <h2 class="gp-section-title"><?php echo esc_html($section['title']); ?></h2>
-                    <a class="gp-home-section-link" href="<?php echo esc_url($get_tile_url($section['terms'])); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
+                    <a class="gp-home-section-link" href="<?php echo esc_url($get_tile_url($section['terms'], $section['url'] ?? '')); ?>"><?php esc_html_e('Pokaż wszystkie', 'gp-clone'); ?></a>
                 </div>
                 <div class="gp-carousel__viewport" data-gp-carousel-viewport>
                     <div class="gp-products gp-carousel__track" data-gp-carousel-track>
