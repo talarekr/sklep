@@ -5,6 +5,7 @@ namespace GPSwiss\Ovoko\Services;
 class OvokoBidirectionalSyncOrchestrator
 {
     public const STATUS_OPTION = 'gpswiss_ovoko_bidirectional_sync_status';
+    public const RECENT_RUNS_OPTION = 'gpswiss_ovoko_bidirectional_sync_recent_runs';
     public const ENABLED_OPTION = 'ovoko_bidirectional_sync_enabled';
     public const LOCK_TRANSIENT = 'gpswiss_ovoko_bidirectional_sync_lock';
     public const CRON_HOOK = 'gpswiss_ovoko_bidirectional_sync';
@@ -12,6 +13,7 @@ class OvokoBidirectionalSyncOrchestrator
     public const DELTA_FILTER = 'date_from';
     private const DEFAULT_BATCH_LIMIT = 5;
     private const LOCK_TTL_SECONDS = 30 * MINUTE_IN_SECONDS;
+    private const RECENT_RUNS_LIMIT = 20;
 
     private OvokoIntegrationService $integrationService;
     private OvokoWooSaleSyncQueue $saleQueue;
@@ -86,6 +88,21 @@ class OvokoBidirectionalSyncOrchestrator
         return $status;
     }
 
+    public function recent_runs(): array
+    {
+        $runs = get_option(self::RECENT_RUNS_OPTION, []);
+        if (!is_array($runs)) {
+            return [];
+        }
+
+        return array_values(array_filter($runs, 'is_array'));
+    }
+
+    public function clear_recent_runs(): void
+    {
+        delete_option(self::RECENT_RUNS_OPTION);
+    }
+
     public function request_enable_automatic_sync(): array
     {
         update_option(self::ENABLED_OPTION, true, false);
@@ -116,22 +133,28 @@ class OvokoBidirectionalSyncOrchestrator
 
     public function run_cron_guarded(string $trigger = 'cron'): array
     {
+        $startedAt = gmdate('c');
+        $startedAtFloat = microtime(true);
+
         if ($trigger === 'cron' && !$this->auto_cron_enabled()) {
+            $finishedAt = gmdate('c');
             $status = array_merge($this->dashboard_status(), [
                 'status' => 'paused',
                 'last_warning' => 'Auto cron is disabled in the plugin panel.',
             ]);
             update_option(self::STATUS_OPTION, $status, false);
-            return ['ok' => false, 'status' => 'paused', 'message' => 'Auto cron is disabled.', 'trigger' => $trigger];
+            $this->append_recent_run($this->build_recent_run_entry($startedAt, $finishedAt, $startedAtFloat, $trigger, 'skipped_disabled', [], [], 'auto cron disabled.'));
+            return ['ok' => false, 'status' => 'skipped_disabled', 'message' => 'Auto cron is disabled.', 'trigger' => $trigger];
         }
 
         if (get_transient(self::LOCK_TRANSIENT)) {
+            $finishedAt = gmdate('c');
             update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'running', 'last_warning' => 'Skipped overlapping run because lock is active.']), false);
-            return ['ok' => false, 'status' => 'running', 'message' => 'Sync lock is already active.', 'trigger' => $trigger];
+            $this->append_recent_run($this->build_recent_run_entry($startedAt, $finishedAt, $startedAtFloat, $trigger, 'skipped_locked', [], [], 'existing lock, run skipped.'));
+            return ['ok' => false, 'status' => 'skipped_locked', 'message' => 'Sync lock is already active.', 'trigger' => $trigger];
         }
 
-        set_transient(self::LOCK_TRANSIENT, gmdate('c'), self::LOCK_TTL_SECONDS);
-        $startedAt = gmdate('c');
+        set_transient(self::LOCK_TRANSIENT, $startedAt, self::LOCK_TTL_SECONDS);
         try {
             update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'running', 'last_error' => '', 'last_warning' => '', 'lock_started_at' => $startedAt]), false);
 
@@ -144,13 +167,16 @@ class OvokoBidirectionalSyncOrchestrator
                 'last_attempted_sync_at' => $now,
                 'last_successful_sync_at' => $ok ? $now : (string) ($this->dashboard_status()['last_successful_sync_at'] ?? ''),
                 'last_error' => $ok ? '' : $this->first_error_message([$ovokoResult, $saleResult]),
-                'last_warning' => (string) (($ovokoResult['warning'] ?? '') ?: ($saleResult['warning'] ?? '')),
+                'last_warning' => $this->first_warning_message([$ovokoResult, $saleResult]),
             ]);
             update_option(self::STATUS_OPTION, $status, false);
+            $this->append_recent_run($this->build_recent_run_entry($startedAt, $now, $startedAtFloat, $trigger, $ok ? 'success' : 'error', $ovokoResult, $saleResult, (string) $status['last_warning'], (string) $status['last_error']));
 
             return ['ok' => $ok, 'status' => $status['status'], 'trigger' => $trigger, 'sequence' => ['ovoko_to_woo_date_from_delta' => $ovokoResult, 'woo_to_ovoko_sale_queue' => $saleResult]];
         } catch (\Throwable $e) {
-            update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'error', 'last_error' => $e->getMessage(), 'last_attempted_sync_at' => gmdate('c')]), false);
+            $finishedAt = gmdate('c');
+            update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'error', 'last_error' => $e->getMessage(), 'last_attempted_sync_at' => $finishedAt]), false);
+            $this->append_recent_run($this->build_recent_run_entry($startedAt, $finishedAt, $startedAtFloat, $trigger, 'error', [], [], '', $e->getMessage()));
             return ['ok' => false, 'status' => 'error', 'trigger' => $trigger, 'message' => $e->getMessage()];
         } finally {
             delete_transient(self::LOCK_TRANSIENT);
@@ -279,6 +305,78 @@ class OvokoBidirectionalSyncOrchestrator
             'lock_status' => 'unlocked',
             'lock_started_at' => '',
         ];
+    }
+
+    private function append_recent_run(array $entry): void
+    {
+        $runs = $this->recent_runs();
+        array_unshift($runs, $entry);
+        $runs = array_slice($runs, 0, self::RECENT_RUNS_LIMIT);
+        update_option(self::RECENT_RUNS_OPTION, $runs, false);
+    }
+
+    private function build_recent_run_entry(string $startedAt, string $finishedAt, float $startedAtFloat, string $trigger, string $status, array $ovokoResult = [], array $saleResult = [], string $lastWarning = '', string $lastError = ''): array
+    {
+        $ovokoErrors = (array) ($ovokoResult['errors'] ?? []);
+        $ovokoWarnings = (array) ($ovokoResult['warnings'] ?? []);
+        $page = (int) ($ovokoResult['page'] ?? 0);
+        $nextPage = (int) ($ovokoResult['next_page'] ?? 0);
+
+        return [
+            'started_at' => $startedAt,
+            'finished_at' => $finishedAt,
+            'duration_seconds' => round(max(0, microtime(true) - $startedAtFloat), 3),
+            'trigger' => $trigger === 'manual' ? 'manual' : 'cron',
+            'status' => $status,
+            'date_from_used' => (string) ($ovokoResult['date_from_used'] ?? $ovokoResult['date_from'] ?? ''),
+            'page' => $page > 0 ? $page : null,
+            'next_page' => $nextPage > 0 ? $nextPage : null,
+            'has_more_pages' => isset($ovokoResult['has_more_pages']) ? (bool) $ovokoResult['has_more_pages'] : null,
+            'ovoko_to_woo' => [
+                'processed' => (int) ($ovokoResult['processed'] ?? 0),
+                'created' => (int) ($ovokoResult['created'] ?? 0),
+                'updated' => (int) ($ovokoResult['updated'] ?? 0),
+                'skipped_missing_price' => (int) ($ovokoResult['skipped_missing_price'] ?? 0),
+                'skipped_already_synced' => (int) ($ovokoResult['skipped_already_synced'] ?? 0),
+                'errors_count' => count($ovokoErrors),
+                'warnings_count' => count($ovokoWarnings),
+            ],
+            'woo_to_ovoko' => [
+                'processed' => (int) ($saleResult['processed'] ?? 0),
+                'success' => (int) ($saleResult['success'] ?? 0),
+                'failed' => (int) ($saleResult['failed'] ?? 0),
+                'skipped' => (int) ($saleResult['skipped'] ?? 0),
+            ],
+            'last_error' => $lastError,
+            'last_warning' => $lastWarning,
+            'raw' => [
+                'ovoko_to_woo_date_from_delta' => $ovokoResult,
+                'woo_to_ovoko_sale_queue' => $saleResult,
+            ],
+        ];
+    }
+
+    private function first_warning_message(array $results): string
+    {
+        foreach ($results as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+            if (!empty($result['warning'])) {
+                return (string) $result['warning'];
+            }
+            $warnings = (array) ($result['warnings'] ?? []);
+            foreach ($warnings as $key => $warning) {
+                if (is_scalar($warning)) {
+                    return is_string($key) ? $key : (string) $warning;
+                }
+                if (is_array($warning)) {
+                    return (string) ($warning['message'] ?? $warning['code'] ?? 'sync_warning');
+                }
+            }
+        }
+
+        return '';
     }
 
     private function schedule_cron_if_needed(): bool
