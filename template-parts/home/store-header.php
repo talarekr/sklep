@@ -65,10 +65,19 @@ if (!is_array($all_product_categories) || is_wp_error($all_product_categories)) 
     $all_product_categories = [];
 }
 $all_product_categories = array_values(array_filter($all_product_categories, static fn($term): bool => $term instanceof WP_Term));
+$all_product_category_names = array_map(static fn(WP_Term $term): string => (string) $term->name, $all_product_categories);
+$all_product_category_debug = [
+    'count' => count($all_product_categories),
+    'first' => array_slice($all_product_category_names, 0, 3),
+    'last' => array_slice($all_product_category_names, -3),
+];
 if (function_exists('gp_log_product_category_display_debug')) {
     gp_log_product_category_display_debug('header_menu', [
         'header_menu_category_ids' => array_map(static fn(WP_Term $term): int => (int) $term->term_id, $all_product_categories),
-        'header_menu_category_names' => array_map(static fn(WP_Term $term): string => (string) $term->name, $all_product_categories),
+        'header_menu_category_names' => $all_product_category_names,
+        'header_menu_category_count' => $all_product_category_debug['count'],
+        'header_menu_first_category_names' => $all_product_category_debug['first'],
+        'header_menu_last_category_names' => $all_product_category_debug['last'],
     ]);
 }
 ?>
@@ -187,6 +196,23 @@ if (function_exists('gp_log_product_category_display_debug')) {
                 </button>
                 <div class="gp-all-cat-dropdown" id="gp-all-categories-dropdown" data-gp-all-cat-dropdown hidden>
                     <?php if (!empty($all_product_categories)) : ?>
+                        <?php if (current_user_can('manage_woocommerce')) : ?>
+                            <div
+                                class="gp-all-cat-dropdown__debug screen-reader-text"
+                                data-gp-mega-debug-count="<?php echo esc_attr((string) $all_product_category_debug['count']); ?>"
+                                data-gp-mega-debug-first="<?php echo esc_attr(implode(' | ', $all_product_category_debug['first'])); ?>"
+                                data-gp-mega-debug-last="<?php echo esc_attr(implode(' | ', $all_product_category_debug['last'])); ?>"
+                            >
+                                <?php
+                                echo esc_html(sprintf(
+                                    __('Mega-menu renderuje %1$d kategorii 1. poziomu. Pierwsze: %2$s. Ostatnie: %3$s.', 'gp-clone'),
+                                    $all_product_category_debug['count'],
+                                    implode(', ', $all_product_category_debug['first']),
+                                    implode(', ', $all_product_category_debug['last'])
+                                ));
+                                ?>
+                            </div>
+                        <?php endif; ?>
                         <?php $default_active_category_id = 0; ?>
                         <?php foreach ($all_product_categories as $candidate_category) : ?>
                             <?php
