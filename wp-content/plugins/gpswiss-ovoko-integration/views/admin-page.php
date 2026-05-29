@@ -211,22 +211,40 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Woo → Ovoko sale/stock sync status</h3>
-        <p>Sale/stock outbound sync is design/dry-run only until Ovoko/RRR confirms the sale/reserve/status endpoint.</p>
+        <p>Sale/stock outbound sync uses the confirmed dedicated endpoint <code>POST /crm/changePartStatus</code> with <code>status=2</code> for Sold out / Sprzedano. Automation remains disabled; only dry-run and the manual single-order live probe are available.</p>
         <ul style="list-style:disc;margin-left:22px;">
             <li><strong>Queue:</strong> order-status hook will enqueue work; a separate cron/worker will send to Ovoko later.</li>
             <li><strong>Idempotency:</strong> one request per order item using <code>ovoko_sale_sync_request_id</code> and status meta.</li>
-            <li><strong>Current status:</strong> <code>design_only_not_sending_to_ovoko</code>.</li>
+            <li><strong>Current status:</strong> <code>manual_probe_only_no_automatic_worker</code>.</li>
+            <li><strong>Cancel/refund:</strong> design only; statuses <code>0</code> and <code>3</code> exist, but no automatic restore/return is implemented yet.</li>
         </ul>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
             <?php wp_nonce_field('gpswiss_ovoko_analyze_sale_stock_endpoint'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_analyze_sale_stock_endpoint" />
             <?php submit_button('Analyze Woo → Ovoko sale/stock endpoint', 'secondary', 'submit', false); ?>
         </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:14px;">
             <?php wp_nonce_field('gpswiss_ovoko_dry_run_sale_sync'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_dry_run_sale_sync" />
             <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
             <?php submit_button('Dry-run Woo order → Ovoko sale sync', 'secondary', 'submit', false); ?>
+            <p class="description">Dry-run only. Proposed endpoint: <code>/crm/changePartStatus</code>; proposed payload: <code>part_id</code>, <code>status=2</code>, and local-only <code>request_id</code>. Nothing is sent to Ovoko.</p>
+        </form>
+        <hr style="margin:16px 0;" />
+        <h4>Single-order live probe: mark Ovoko part sold from Woo order</h4>
+        <p><strong>Live write for one order item only.</strong> Admin-only manual probe reads the Woo order item, finds the product Ovoko <code>part_id</code>, skips if item meta already says success, reads Ovoko before/after, and sends only auth + <code>part_id</code> + <code>status=2</code> to <code>/crm/changePartStatus</code>.</p>
+        <ul style="list-style:disc;margin-left:22px;">
+            <li>Requires exactly one Woo order item in the order.</li>
+            <li>Required confirmation phrase: <code>MARK OVOKO PART SOLD</code>.</li>
+            <li>Does not change Woo product stock; Woo handles local sale stock separately.</li>
+            <li>No automatic retries, worker, cron, or checkout live hook are enabled by this probe.</li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:0;">
+            <?php wp_nonce_field('gpswiss_ovoko_single_order_mark_sold_live_probe'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_single_order_mark_sold_live_probe" />
+            <label>Woo order_id: <input type="number" min="1" name="order_id" placeholder="Order ID" /></label>
+            <label style="display:block; margin-top:8px;">confirmation: <input type="text" name="confirmation" placeholder="MARK OVOKO PART SOLD" style="width:320px;" /></label>
+            <?php submit_button('Run single-order live probe: mark Ovoko part sold', 'delete', 'submit', false); ?>
         </form>
     </div>
 
