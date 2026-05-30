@@ -279,19 +279,26 @@ class OvokoAutoSyncDryRunService
                 $normalized['part_id'] = $partId;
             }
             $updatedAt = trim((string) ($record['updated_at'] ?? $normalized['updated_at'] ?? ''));
-            $incomingHash = $this->stable_hash($this->normalize_payload_for_idempotency($partId, $updatedAt, $payload));
+            $idempotency = $this->integrationService->build_manual_live_date_from_idempotency($record, $payload);
+            $incomingHash = (string) ($idempotency['hash'] ?? '');
+            $idempotencyFieldsUsed = (array) ($idempotency['fields_used'] ?? []);
             $productId = $this->find_product_id_by_ovoko_id($partId);
-            $alreadySynced = false;
-            if ($productId > 0 && $partId !== '' && $updatedAt !== '') {
-                $lastSyncedUpdatedAt = $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_updated_at']);
-                $lastSyncedHash = $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']);
-                $alreadySynced = $lastSyncedUpdatedAt === $updatedAt && $lastSyncedHash !== '' && hash_equals($lastSyncedHash, $incomingHash);
-            }
+            $lastSyncedHash = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']) : '';
+            $alreadySynced = $productId > 0 && $partId !== '' && $lastSyncedHash !== '' && $incomingHash !== '' && hash_equals($lastSyncedHash, $incomingHash);
             if ($alreadySynced) {
                 $report['processed']++;
                 $report['skipped_already_synced']++;
                 $report['skipped_part_ids'][] = $partId;
-                $report['items'][] = ['part_id' => $partId, 'product_id' => $productId, 'action' => 'skipped_already_synced'];
+                $report['items'][] = [
+                    'part_id' => $partId,
+                    'product_id' => $productId,
+                    'action' => 'skipped_already_synced',
+                    'idempotency_previous_hash' => $lastSyncedHash,
+                    'idempotency_new_hash' => $incomingHash,
+                    'idempotency_hash_equal' => true,
+                    'idempotency_skip_reason' => 'stable_business_fields_unchanged',
+                    'idempotency_hash_fields_used' => $idempotencyFieldsUsed,
+                ];
                 continue;
             }
 
@@ -310,6 +317,8 @@ class OvokoAutoSyncDryRunService
                 'price' => $price,
                 'sync_hash' => $incomingHash,
                 'updated_at' => $updatedAt,
+                'idempotency_previous_hash' => $lastSyncedHash,
+                'idempotency_hash_fields_used' => $idempotencyFieldsUsed,
             ]);
             $report['processed']++;
             $report['items'][] = $result;
@@ -571,10 +580,11 @@ class OvokoAutoSyncDryRunService
         $currentPrice = $product ? (string) $product->get_regular_price() : '';
         $currentStockStatus = $product ? (string) $product->get_stock_status() : '';
         $updatedAt = trim((string) ($record['updated_at'] ?? $normalized['updated_at'] ?? ''));
-        $incomingSyncHash = $this->stable_hash($this->normalize_payload_for_idempotency($partId, $updatedAt, $payload));
+        $idempotency = $this->integrationService->build_manual_live_date_from_idempotency($record, $payload);
+        $incomingSyncHash = (string) ($idempotency['hash'] ?? '');
         $lastSyncedUpdatedAt = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_updated_at']) : '';
         $lastSyncedHash = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']) : '';
-        $alreadySynced = $productId > 0 && $partId !== '' && $updatedAt !== '' && $lastSyncedUpdatedAt === $updatedAt && $lastSyncedHash !== '' && hash_equals($lastSyncedHash, $incomingSyncHash);
+        $alreadySynced = $productId > 0 && $partId !== '' && $lastSyncedHash !== '' && $incomingSyncHash !== '' && hash_equals($lastSyncedHash, $incomingSyncHash);
         $currentWooCategoryPath = $productId > 0 ? $this->get_current_product_category_path($productId) : '';
         $categoryAction = $isExistingProduct ? 'verify_only' : ($categoryTreeResolutionOk && !$newProductBlockedByPrice ? 'would_assign_from_tree' : 'skip');
         $categoriesWouldUpdate = !$isExistingProduct && !$newProductBlockedByPrice && $categoryId !== '' && $categoryTreeResolutionOk;
@@ -600,7 +610,9 @@ class OvokoAutoSyncDryRunService
                 'incoming_hash' => $incomingSyncHash,
                 'stored_updated_at' => $lastSyncedUpdatedAt,
                 'stored_hash' => $lastSyncedHash,
-                'skip_reason' => $alreadySynced ? 'skipped_already_synced' : '',
+                'hash_equal' => $alreadySynced,
+                'skip_reason' => $alreadySynced ? 'stable_business_fields_unchanged' : '',
+                'hash_fields_used' => (array) ($idempotency['fields_used'] ?? []),
                 'dry_run_no_meta_write' => true,
             ],
             'existing_product_price_untouched' => $isExistingProduct,
