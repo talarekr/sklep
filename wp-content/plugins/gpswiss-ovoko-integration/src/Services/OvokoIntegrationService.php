@@ -658,6 +658,264 @@ class OvokoIntegrationService
     }
 
 
+    public function manual_probe_ovoko_single_part_stock(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $client = new RrrApiClient($this->get_settings());
+        $fetch = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($fetch['payload'] ?? []);
+        $record = $client->extract_single_part_record($payload);
+        $normalized = $client->normalize_rrr_single_part_payload($payload, ['details_only' => true]);
+        if (($normalized['part_id'] ?? '') === '') {
+            $normalized['part_id'] = (string) $partId;
+        }
+
+        $product = $this->find_product_by_part_id((string) $partId);
+        $productId = (int) ($product['product_id'] ?? 0);
+        $woo = $this->read_woo_stock_snapshot($productId);
+        $rawStock = $this->extract_ovoko_stock_raw_fields($record, $normalized);
+        $mapped = $this->map_ovoko_stock_fields($rawStock);
+
+        return [
+            'ok' => !empty($fetch['ok']),
+            'action_name' => 'Manual Ovoko single-part probe',
+            'mode' => 'read_only_no_write',
+            'part_id' => $partId,
+            'request' => [
+                'method' => 'POST',
+                'path' => '/get/part/' . $partId,
+                'content_type' => 'application/x-www-form-urlencoded',
+                'form_data_fields' => ['username', 'password', 'user_token'],
+            ],
+            'status_code' => (string) ($fetch['status_code'] ?? ''),
+            'msg' => (string) ($fetch['msg'] ?? $fetch['message'] ?? ''),
+            'ovoko_stock_raw' => $rawStock,
+            'ovoko_updated_at' => (string) ($rawStock['updated_at_raw'] ?? ''),
+            'mapped_stock_status' => $mapped['stock_status'],
+            'mapped_stock_quantity' => $mapped['stock_quantity'],
+            'mapped_reason' => $mapped['reason'],
+            'woo_product' => [
+                'product_id' => $productId ?: null,
+                'matched_meta_key' => (string) ($product['matched_meta_key'] ?? ''),
+                'found' => $productId > 0,
+            ],
+            'woo_stock' => $woo,
+            'raw_payload_summary' => [
+                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'record_keys' => array_values(array_map('strval', array_keys($record))),
+                'full_payload_omitted' => true,
+            ],
+            'no_write_to_woo' => true,
+            'no_ovoko_write' => true,
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
+    public function manual_sync_ovoko_single_part_stock(int $partId): array
+    {
+        $partId = max(1, $partId);
+        $errors = [];
+        $client = new RrrApiClient($this->get_settings());
+        $fetch = $client->preview_fetch_single_part($partId);
+        $payload = (array) ($fetch['payload'] ?? []);
+        $record = $client->extract_single_part_record($payload);
+        $normalized = $client->normalize_rrr_single_part_payload($payload, ['details_only' => true]);
+        $rawStock = $this->extract_ovoko_stock_raw_fields($record, $normalized);
+        $mapped = $this->map_ovoko_stock_fields($rawStock);
+        $product = $this->find_product_by_part_id((string) $partId);
+        $productId = (int) ($product['product_id'] ?? 0);
+        $previous = $this->read_woo_stock_snapshot($productId);
+        $changed = false;
+
+        if (empty($fetch['ok'])) {
+            $errors[] = 'ovoko_single_part_fetch_failed';
+        }
+        if ($record === []) {
+            $errors[] = 'ovoko_single_part_record_missing';
+        }
+        if ($productId <= 0) {
+            $errors[] = 'woo_product_mapping_not_found';
+        }
+
+        if ($errors === []) {
+            $targetStatus = (string) $mapped['stock_status'];
+            $targetQuantity = (int) $mapped['stock_quantity'];
+            $previousStatus = (string) ($previous['stock_status'] ?? '');
+            $previousQuantityRaw = $previous['stock_quantity'] ?? null;
+            $previousQuantity = is_numeric($previousQuantityRaw) ? (int) $previousQuantityRaw : null;
+            $changed = $previousStatus !== $targetStatus || $previousQuantity !== $targetQuantity;
+
+            if (function_exists('wc_get_product')) {
+                $wooProduct = wc_get_product($productId);
+                if ($wooProduct) {
+                    if (method_exists($wooProduct, 'set_stock_quantity')) {
+                        $wooProduct->set_stock_quantity($targetQuantity);
+                    }
+                    if (method_exists($wooProduct, 'set_stock_status')) {
+                        $wooProduct->set_stock_status($targetStatus);
+                    }
+                    if (method_exists($wooProduct, 'save')) {
+                        $wooProduct->save();
+                    }
+                } else {
+                    $errors[] = 'wc_product_not_found';
+                }
+            } else {
+                update_post_meta($productId, '_stock', (string) $targetQuantity);
+                update_post_meta($productId, '_stock_status', $targetStatus);
+            }
+
+            if ($errors === [] && function_exists('wc_delete_product_transients')) {
+                wc_delete_product_transients($productId);
+            }
+        }
+
+        $after = $this->read_woo_stock_snapshot($productId);
+        $logEntry = [
+            'part_id' => $partId,
+            'product_id' => $productId ?: null,
+            'ovoko_status_raw' => (string) ($rawStock['status_raw'] ?? ''),
+            'ovoko_quantity_raw' => $rawStock['quantity_raw'],
+            'mapped_stock_status' => (string) $mapped['stock_status'],
+            'mapped_stock_quantity' => (int) $mapped['stock_quantity'],
+            'previous_woo_stock_status' => (string) ($previous['stock_status'] ?? ''),
+            'previous_woo_stock_quantity' => $previous['stock_quantity'] ?? null,
+            'changed' => $changed,
+            'errors' => $errors,
+            'checked_at' => gmdate('c'),
+        ];
+        $this->append_manual_single_part_stock_sync_log($logEntry);
+        error_log('[GPSWISS_OVOKO] Manual Ovoko single-part stock sync ' . wp_json_encode($logEntry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+        return [
+            'ok' => $errors === [],
+            'action_name' => 'Manual Ovoko single-part stock sync',
+            'mode' => 'single_part_stock_status_only',
+            'part_id' => $partId,
+            'product_id' => $productId ?: null,
+            'matched_meta_key' => (string) ($product['matched_meta_key'] ?? ''),
+            'ovoko_stock_raw' => $rawStock,
+            'mapped_stock_status' => (string) $mapped['stock_status'],
+            'mapped_stock_quantity' => (int) $mapped['stock_quantity'],
+            'mapped_reason' => (string) $mapped['reason'],
+            'previous_woo_stock_status' => (string) ($previous['stock_status'] ?? ''),
+            'previous_woo_stock_quantity' => $previous['stock_quantity'] ?? null,
+            'after_woo_stock' => $after,
+            'changed' => $changed,
+            'errors' => $errors,
+            'guardrails' => [
+                'no_price_change' => true,
+                'no_images_change' => true,
+                'no_categories_change' => true,
+                'no_title_change' => true,
+                'no_description_change' => true,
+                'no_mass_sync' => true,
+                'no_woo_to_ovoko' => true,
+                'date_from_logic_unchanged' => true,
+            ],
+            'checked_at' => gmdate('c'),
+        ];
+    }
+
+    public function get_manual_single_part_stock_sync_logs(): array
+    {
+        return array_values(array_filter((array) get_option('gpswiss_ovoko_manual_single_part_stock_sync_logs', []), 'is_array'));
+    }
+
+    private function extract_ovoko_stock_raw_fields(array $record, array $normalized = []): array
+    {
+        $status = $this->first_non_empty_value($record, ['status', 'part_status', 'availability_status']);
+        if ($status === '') {
+            $status = (string) ($normalized['status'] ?? '');
+        }
+
+        return [
+            'status_raw' => $status,
+            'availability_raw' => $this->first_non_empty_value($record, ['availability', 'available', 'is_available', 'in_stock']),
+            'quantity_raw' => $this->first_non_empty_value($record, ['quantity', 'qty', 'stock', 'stock_quantity', 'amount']),
+            'sold_raw' => $this->first_non_empty_value($record, ['sold', 'is_sold', 'sold_at', 'sold_date', 'sale_date']),
+            'updated_at_raw' => $this->first_non_empty_value($record, ['updated_at', 'update_date', 'modified_at', 'last_update', 'changed_at']),
+            'raw_field_presence' => [
+                'status' => array_values(array_intersect(['status', 'part_status', 'availability_status'], array_keys($record))),
+                'availability' => array_values(array_intersect(['availability', 'available', 'is_available', 'in_stock'], array_keys($record))),
+                'quantity' => array_values(array_intersect(['quantity', 'qty', 'stock', 'stock_quantity', 'amount'], array_keys($record))),
+                'sold' => array_values(array_intersect(['sold', 'is_sold', 'sold_at', 'sold_date', 'sale_date'], array_keys($record))),
+                'updated_at' => array_values(array_intersect(['updated_at', 'update_date', 'modified_at', 'last_update', 'changed_at'], array_keys($record))),
+            ],
+        ];
+    }
+
+    private function map_ovoko_stock_fields(array $rawStock): array
+    {
+        $status = strtolower(trim((string) ($rawStock['status_raw'] ?? '')));
+        $availability = strtolower(trim((string) ($rawStock['availability_raw'] ?? '')));
+        $quantityRaw = $rawStock['quantity_raw'] ?? '';
+        $soldRaw = $rawStock['sold_raw'] ?? '';
+        $sold = in_array(strtolower(trim((string) $soldRaw)), ['1', 'true', 'yes', 'y', 'sold'], true) || (is_string($soldRaw) && trim($soldRaw) !== '' && preg_match('/^\d{4}-\d{2}-\d{2}/', trim($soldRaw)));
+        $unavailableStatus = in_array($status, ['2', 'sold', 'deleted', 'removed', 'inactive', 'unavailable', 'reserved', 'not_available', 'outofstock', 'out_of_stock'], true);
+        $availableStatus = in_array($status, ['0', '1', 'active', 'available', 'in_stock', 'instock'], true);
+        $availabilityUnavailable = in_array($availability, ['0', 'false', 'no', 'n', 'unavailable', 'sold', 'outofstock', 'out_of_stock'], true);
+        $quantity = is_numeric($quantityRaw) ? max(0, (int) $quantityRaw) : null;
+
+        if ($sold || $unavailableStatus || $availabilityUnavailable || $quantity === 0) {
+            return ['stock_status' => 'outofstock', 'stock_quantity' => 0, 'reason' => 'ovoko_sold_or_unavailable_signal'];
+        }
+
+        if ($quantity !== null) {
+            return ['stock_status' => $quantity > 0 ? 'instock' : 'outofstock', 'stock_quantity' => $quantity, 'reason' => 'ovoko_quantity_signal'];
+        }
+
+        return ['stock_status' => 'instock', 'stock_quantity' => 1, 'reason' => $availableStatus ? 'ovoko_available_status_signal' : 'default_single_part_available_until_unavailable_signal'];
+    }
+
+    private function first_non_empty_value(array $record, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $record)) {
+                continue;
+            }
+            $value = $record[$key];
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                return sanitize_text_field((string) $value);
+            }
+        }
+
+        return '';
+    }
+
+    private function read_woo_stock_snapshot(int $productId): array
+    {
+        if ($productId <= 0) {
+            return ['product_id' => null, 'stock_status' => '', 'stock_quantity' => null, 'manage_stock' => null];
+        }
+
+        $stockStatus = (string) get_post_meta($productId, '_stock_status', true);
+        $stockQuantity = get_post_meta($productId, '_stock', true);
+        $manageStock = get_post_meta($productId, '_manage_stock', true);
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if ($product) {
+                $stockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : $stockStatus;
+                $stockQuantity = method_exists($product, 'get_stock_quantity') ? $product->get_stock_quantity() : $stockQuantity;
+                $manageStock = method_exists($product, 'get_manage_stock') ? $product->get_manage_stock() : $manageStock;
+            }
+        }
+
+        return [
+            'product_id' => $productId,
+            'stock_status' => $stockStatus,
+            'stock_quantity' => $stockQuantity,
+            'manage_stock' => $manageStock,
+        ];
+    }
+
+    private function append_manual_single_part_stock_sync_log(array $entry): void
+    {
+        $logs = $this->get_manual_single_part_stock_sync_logs();
+        array_unshift($logs, $entry);
+        update_option('gpswiss_ovoko_manual_single_part_stock_sync_logs', array_slice($logs, 0, 20), false);
+    }
+
     private function enrich_with_vehicle_data(array $normalized, RrrApiClient $client): array
     {
         $carId = (string) ($normalized['car_id'] ?? '');

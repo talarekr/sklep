@@ -39,6 +39,7 @@ $autoSyncDashboardCounters = (array) ($autoSyncStatus['dashboard_counters'] ?? [
 $buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
 $bidirectionalStatus = (array) ($data['bidirectional_sync_status'] ?? []);
 $bidirectionalRecentRuns = array_values(array_filter((array) ($data['bidirectional_sync_recent_runs'] ?? []), 'is_array'));
+$manualSinglePartStockSyncLogs = array_values(array_filter((array) ($data['manual_single_part_stock_sync_logs'] ?? []), 'is_array'));
 
 $noticePayload = null;
 if (!empty($notice['text']) && is_string($notice['text'])) {
@@ -179,6 +180,51 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <?php submit_button('Retry failed Woo → Ovoko sales', 'secondary', 'submit', false); ?>
             </form>
         </div>
+    </div>
+
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #d63638;">
+        <h3>Manual Ovoko single-part stock diagnostics</h3>
+        <p><strong>Emergency-safe tool for one Ovoko part only.</strong> It fetches <code>/get/part/{part_id}</code>, maps the existing Woo product by Ovoko meta, and can update only Woo stock/status. It does not change price, images, categories, title, description, the existing <code>date_from</code> create/update logic, or Woo → Ovoko sync.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:12px 0;">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                <?php wp_nonce_field('gpswiss_ovoko_manual_single_part_probe'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_manual_single_part_probe" />
+                <label>part_id: <input type="number" min="1" name="part_id" value="4303" style="width:120px;" /></label>
+                <?php submit_button('Probe part stock only', 'secondary', 'submit', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                <?php wp_nonce_field('gpswiss_ovoko_manual_single_part_stock_sync'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_manual_single_part_stock_sync" />
+                <label>part_id: <input type="number" min="1" name="part_id" value="4303" style="width:120px;" /></label>
+                <?php submit_button('Sync stock/status for part', 'primary', 'submit', false); ?>
+            </form>
+        </div>
+        <p><strong>Suggested next step after this single-part fix:</strong> add a separate small reconciliation worker for old mapped products: select a small batch of existing Woo products that already have Ovoko <code>part_id</code> meta, fetch each part by ID, update only <code>stock_quantity</code>/<code>stock_status</code>, skip prices/images/categories/content, expose it in this panel and optionally schedule it under Auto cron. It should use a cursor and never run a full mass update at once.</p>
+        <?php if ($manualSinglePartStockSyncLogs !== []): ?>
+            <details style="margin-top:10px;">
+                <summary>Recent Manual Ovoko single-part stock sync logs</summary>
+                <div style="overflow-x:auto;margin-top:10px;">
+                    <table class="widefat striped" style="min-width:980px;">
+                        <thead><tr><th>Time</th><th>part_id</th><th>product_id</th><th>Ovoko raw</th><th>Mapped</th><th>Previous Woo</th><th>Changed</th><th>Errors</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($manualSinglePartStockSyncLogs as $log): ?>
+                            <tr>
+                                <td><code><?php echo esc_html((string) ($log['checked_at'] ?? '')); ?></code></td>
+                                <td><code><?php echo esc_html((string) ($log['part_id'] ?? '')); ?></code></td>
+                                <td><code><?php echo esc_html((string) ($log['product_id'] ?? '')); ?></code></td>
+                                <td>status=<code><?php echo esc_html((string) ($log['ovoko_status_raw'] ?? '')); ?></code><br>quantity=<code><?php echo esc_html((string) ($log['ovoko_quantity_raw'] ?? '')); ?></code></td>
+                                <td><code><?php echo esc_html((string) ($log['mapped_stock_status'] ?? '')); ?></code> / <code><?php echo esc_html((string) ($log['mapped_stock_quantity'] ?? '')); ?></code></td>
+                                <td><code><?php echo esc_html((string) ($log['previous_woo_stock_status'] ?? '')); ?></code> / <code><?php echo esc_html((string) ($log['previous_woo_stock_quantity'] ?? '')); ?></code></td>
+                                <td><code><?php echo !empty($log['changed']) ? 'true' : 'false'; ?></code></td>
+                                <td><code><?php echo esc_html(wp_json_encode((array) ($log['errors'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        <?php endif; ?>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px;">

@@ -29,6 +29,8 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_probe_updated_from_delta', [$this, 'handle_probe_updated_from_delta']);
         add_action('admin_post_gpswiss_ovoko_dry_run_auto_sync', [$this, 'handle_dry_run_auto_sync']);
         add_action('admin_post_gpswiss_ovoko_manual_live_date_from_sync', [$this, 'handle_manual_live_date_from_sync']);
+        add_action('admin_post_gpswiss_ovoko_manual_single_part_probe', [$this, 'handle_manual_single_part_probe']);
+        add_action('admin_post_gpswiss_ovoko_manual_single_part_stock_sync', [$this, 'handle_manual_single_part_stock_sync']);
         add_action('admin_post_gpswiss_ovoko_dry_run_sale_sync', [$this, 'handle_dry_run_sale_sync']);
         add_action('admin_post_gpswiss_ovoko_bidirectional_enable', [$this, 'handle_bidirectional_enable']);
         add_action('admin_post_gpswiss_ovoko_bidirectional_pause', [$this, 'handle_bidirectional_pause']);
@@ -151,9 +153,10 @@ class AdminPage
             $bidirectionalOrchestrator = new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service);
             $data['bidirectional_sync_status'] = $bidirectionalOrchestrator->dashboard_status();
             $data['bidirectional_sync_recent_runs'] = $bidirectionalOrchestrator->recent_runs();
+            $data['manual_single_part_stock_sync_logs'] = $this->service->get_manual_single_part_stock_sync_logs();
         } catch (\Throwable $e) {
             $bidirectionalOrchestrator = new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service);
-            $data = ['settings' => $this->service->get_settings(), 'bidirectional_sync_status' => $bidirectionalOrchestrator->dashboard_status(), 'bidirectional_sync_recent_runs' => $bidirectionalOrchestrator->recent_runs()];
+            $data = ['settings' => $this->service->get_settings(), 'bidirectional_sync_status' => $bidirectionalOrchestrator->dashboard_status(), 'bidirectional_sync_recent_runs' => $bidirectionalOrchestrator->recent_runs(), 'manual_single_part_stock_sync_logs' => $this->service->get_manual_single_part_stock_sync_logs()];
             $notice = ['type' => 'error', 'text' => 'Dashboard diagnostics temporarily unavailable: ' . $e->getMessage()];
             include dirname(__DIR__, 2) . '/views/admin-page.php';
             return;
@@ -280,6 +283,33 @@ class AdminPage
         exit;
     }
 
+
+
+    public function handle_manual_single_part_probe(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_manual_single_part_probe');
+        $partId = isset($_POST['part_id']) ? (int) $_POST['part_id'] : 0;
+        $result = $this->service->manual_probe_ovoko_single_part_stock($partId);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 180);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_manual_single_part_stock_sync(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_manual_single_part_stock_sync');
+        $partId = isset($_POST['part_id']) ? (int) $_POST['part_id'] : 0;
+        $result = $this->service->manual_sync_ovoko_single_part_stock($partId);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)], 180);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
 
     public function handle_bidirectional_enable(): void
     {
