@@ -142,7 +142,11 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <div style="background:#f6f7f7;padding:10px;"><strong>status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['status'] ?? 'idle')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>last_successful_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['last_successful_sync_at'] ?? '') ?: 'not run yet')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>next_scheduled_sync_at</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['next_scheduled_sync_at'] ?? '') ?: 'not scheduled')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>stored_watermark_date</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['stored_watermark_date'] ?? '') ?: 'not set')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>computed_effective_date_from</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['computed_effective_date_from'] ?? $bidirectionalStatus['date_from_used'] ?? '') ?: 'not run yet')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>overlap_days_applied</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['overlap_days_applied'] ?? 0)); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>date_from_used</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['date_from_used'] ?? '') ?: 'not run yet')); ?></code></div>
+            <div style="background:#f6f7f7;padding:10px;"><strong>watermark update</strong><br><code><?php echo esc_html((string) (($bidirectionalStatus['watermark_update_reason'] ?? '') ?: 'not run yet')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>current page/cursor</strong><br><code><?php echo esc_html(wp_json_encode($bidirectionalStatus['current_cursor'] ?? ['page' => ($bidirectionalStatus['current_page'] ?? 1)])); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>lock status</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['lock_status'] ?? 'unlocked')); ?></code></div>
             <div style="background:#f6f7f7;padding:10px;"><strong>processed_from_ovoko</strong><br><code><?php echo esc_html((string) ($bidirectionalStatus['processed_from_ovoko'] ?? $bidirectionalStatus['processed_total'] ?? 0)); ?></code></div>
@@ -179,6 +183,14 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <input type="hidden" name="action" value="gpswiss_ovoko_bidirectional_retry_failed_sales" />
                 <?php submit_button('Retry failed Woo → Ovoko sales', 'secondary', 'submit', false); ?>
             </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('gpswiss_ovoko_probe_event_sources_for_part'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_probe_event_sources_for_part" />
+                <input type="hidden" name="part_id" value="4303" />
+                <input type="hidden" name="today" value="2026-05-30" />
+                <input type="hidden" name="yesterday" value="2026-05-29" />
+                <?php submit_button('Probe Ovoko event sources for part 4303', 'secondary', 'submit', false); ?>
+            </form>
         </div>
     </div>
 
@@ -200,7 +212,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <?php submit_button('Sync stock/status for part', 'primary', 'submit', false); ?>
             </form>
         </div>
-        <p><strong>Suggested next step after this single-part fix:</strong> add a separate small reconciliation worker for old mapped products: select a small batch of existing Woo products that already have Ovoko <code>part_id</code> meta, fetch each part by ID, update only <code>stock_quantity</code>/<code>stock_status</code>, skip prices/images/categories/content, expose it in this panel and optionally schedule it under Auto cron. It should use a cursor and never run a full mass update at once.</p>
+        <p><strong>Suggested next step after this single-part fix:</strong> use the read-only event-source probe to identify the Ovoko/RRR endpoint that returns sold/status-changed parts by date. Any Woo product reconciliation must remain an emergency fallback only, not the main cron strategy.</p>
         <?php if ($manualSinglePartStockSyncLogs !== []): ?>
             <details style="margin-top:10px;">
                 <summary>Recent Manual Ovoko single-part stock sync logs</summary>
@@ -247,6 +259,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                         <th>Trigger</th>
                         <th>Status</th>
                         <th>Date from</th>
+                        <th>Watermark / overlap</th>
                         <th>Page</th>
                         <th>Ovoko processed / created / updated / skipped</th>
                         <th>Woo sales processed / success / failed</th>
@@ -275,6 +288,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                             <td><?php echo esc_html((string) ($run['trigger'] ?? '')); ?></td>
                             <td><code><?php echo esc_html((string) ($run['status'] ?? '')); ?></code></td>
                             <td><code><?php echo esc_html((string) (($run['date_from_used'] ?? '') ?: '—')); ?></code></td>
+                            <td><small>prev: <code><?php echo esc_html((string) (($run['previous_watermark_date'] ?? '') ?: '—')); ?></code><br>before: <code><?php echo esc_html((string) (($run['stored_watermark_date_before'] ?? '') ?: '—')); ?></code><br>effective: <code><?php echo esc_html((string) (($run['computed_effective_date_from'] ?? '') ?: '—')); ?></code><br>overlap: <code><?php echo esc_html((string) ($run['overlap_days_applied'] ?? 0)); ?></code><br>advance: <code><?php echo esc_html(isset($run['should_advance_watermark']) ? (!empty($run['should_advance_watermark']) ? 'yes' : 'no') : '—'); ?></code><br>updated_to: <code><?php echo esc_html((string) (($run['watermark_updated_to'] ?? '') ?: '—')); ?></code><br>reason: <code><?php echo esc_html((string) (($run['watermark_update_reason'] ?? '') ?: '—')); ?></code></small></td>
                             <td><?php echo esc_html($pageLabel); ?></td>
                             <td><?php echo esc_html((string) ($ovokoRun['processed'] ?? 0)); ?> / <?php echo esc_html((string) ($ovokoRun['created'] ?? 0)); ?> / <?php echo esc_html((string) ($ovokoRun['updated'] ?? 0)); ?> / <?php echo esc_html((string) $skippedTotal); ?><br><small>missing price: <?php echo esc_html((string) ($ovokoRun['skipped_missing_price'] ?? 0)); ?>, already synced: <?php echo esc_html((string) ($ovokoRun['skipped_already_synced'] ?? 0)); ?>, errors: <?php echo esc_html((string) ($ovokoRun['errors_count'] ?? 0)); ?>, warnings: <?php echo esc_html((string) ($ovokoRun['warnings_count'] ?? 0)); ?></small></td>
                             <td><?php echo esc_html((string) ($wooRun['processed'] ?? 0)); ?> / <?php echo esc_html((string) ($wooRun['success'] ?? 0)); ?> / <?php echo esc_html((string) ($wooRun['failed'] ?? 0)); ?><br><small>skipped: <?php echo esc_html((string) ($wooRun['skipped'] ?? 0)); ?></small></td>

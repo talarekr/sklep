@@ -12,6 +12,7 @@ class OvokoBidirectionalSyncOrchestrator
     public const CRON_SCHEDULE = 'gpswiss_ovoko_every_15_minutes';
     public const DELTA_FILTER = 'date_from';
     private const DEFAULT_BATCH_LIMIT = 5;
+    private const WATERMARK_OVERLAP_DAYS = 1;
     private const LOCK_TTL_SECONDS = 30 * MINUTE_IN_SECONDS;
     private const RECENT_RUNS_LIMIT = 20;
 
@@ -66,6 +67,7 @@ class OvokoBidirectionalSyncOrchestrator
             $status['status'] = 'paused';
         }
         $status['delta_filter_used'] = self::DELTA_FILTER;
+        $status['stored_watermark_date'] = (string) ($status['stored_watermark_date'] ?: ($legacyOvokoToWoo['stored_watermark_date'] ?? $legacyOvokoToWoo['last_successful_sync_date'] ?? ''));
         $status['date_from_used'] = (string) ($status['date_from_used'] ?: ($legacyOvokoToWoo['date_from_used'] ?? $legacyOvokoToWoo['date_from'] ?? ''));
         $status['last_successful_sync_at'] = (string) ($status['last_successful_sync_at'] ?: ($legacyOvokoToWoo['last_successful_sync_at'] ?? ''));
         $status['last_successful_sync_date'] = (string) ($status['last_successful_sync_date'] ?: ($legacyOvokoToWoo['last_successful_sync_date'] ?? ''));
@@ -190,9 +192,9 @@ class OvokoBidirectionalSyncOrchestrator
             'schedule' => self::CRON_SCHEDULE,
             'sequence' => [
                 '1_ovoko_to_woo' => [
-                    'endpoint' => '/v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD',
-                    'allowed_delta_filter' => 'date_from YYYY-MM-DD only',
-                    'forbidden_filters' => ['updated_from', 'updated_after', 'from', 'timestamps', 'ISO datetime', 'full page scan without date_from'],
+                    'endpoint' => 'event/status-change endpoint selected by read-only Ovoko/RRR probe; current safe candidate remains /v2/get/parts?limit={limit}&page={page}&date_from=YYYY-MM-DD until probe proves a better source',
+                    'allowed_delta_filter' => 'Ovoko/RRR changed/sold/status-event list by date; date_from is only a candidate/fallback source',
+                    'forbidden_filters' => ['Woo product batch reconciliation as primary cron logic', 'full page scan without an Ovoko event/date filter'],
                     'existing_products' => ['stock/status sync', 'description sync', 'details sync', 'categories verify-only', 'price untouched', 'images untouched'],
                     'new_products' => ['require valid internal_notes price', 'price from internal_notes only', 'categories from category_id + /get/categories/tree', 'images may import', 'missing price skip'],
                     'idempotency_meta' => ['_gpswiss_ovoko_last_synced_updated_at', '_gpswiss_ovoko_last_synced_hash'],
@@ -229,12 +231,27 @@ class OvokoBidirectionalSyncOrchestrator
         $hasMorePages = $totalCount > 0 ? ($page * $limit) < $totalCount : $processed >= $limit;
         $nextPage = $hasMorePages ? $page + 1 : 1;
         $now = gmdate('c');
+        $runDate = gmdate('Y-m-d');
         $stored = $this->dashboard_status();
+        $errors = (array) ($result['errors'] ?? []);
+        $shouldAdvanceWatermark = !empty($result['ok']) && !$hasMorePages && $errors === [];
+        $watermarkUpdatedTo = $shouldAdvanceWatermark ? $runDate : (string) ($stored['stored_watermark_date'] ?? '');
+        $watermarkUpdateReason = $shouldAdvanceWatermark
+            ? 'advanced_after_full_successful_run'
+            : (!empty($result['ok']) ? ($hasMorePages ? 'not_advanced_more_pages_remaining' : 'not_advanced_errors_present') : 'not_advanced_run_failed');
         update_option(self::STATUS_OPTION, array_merge($stored, [
+            'previous_watermark_date' => (string) ($dateWindow['previous_watermark_date'] ?? ''),
+            'stored_watermark_date_before' => (string) ($dateWindow['stored_watermark_date_before'] ?? ''),
+            'stored_watermark_date' => $watermarkUpdatedTo,
+            'computed_effective_date_from' => $dateFrom,
+            'overlap_days_applied' => (int) ($dateWindow['overlap_days_applied'] ?? 0),
             'date_from_used' => $dateFrom,
             'date_from_source' => (string) ($dateWindow['source'] ?? ''),
+            'should_advance_watermark' => $shouldAdvanceWatermark,
+            'watermark_updated_to' => $watermarkUpdatedTo,
+            'watermark_update_reason' => $watermarkUpdateReason,
             'current_page' => $nextPage,
-            'current_cursor' => ['date_from' => $dateFrom, 'page' => $page, 'next_page' => $nextPage, 'limit' => $limit, 'scope' => 'date_from_delta_window_only'],
+            'current_cursor' => ['stored_watermark_date' => $watermarkUpdatedTo, 'effective_date_from_used' => $dateFrom, 'date_from' => $dateFrom, 'page' => $page, 'next_page' => $nextPage, 'limit' => $limit, 'scope' => 'ovoko_changed_parts_date_window_only'],
             'processed_from_ovoko' => $processed,
             'processed_total' => $processed,
             'created_from_ovoko' => $created,
@@ -242,28 +259,62 @@ class OvokoBidirectionalSyncOrchestrator
             'skipped_from_ovoko' => $skipped,
             'skipped_missing_price' => $skippedMissingPrice,
             'skipped_already_synced' => $skippedAlreadySynced,
-            'last_successful_sync_date' => !empty($result['ok']) && !$hasMorePages ? gmdate('Y-m-d') : (string) ($stored['last_successful_sync_date'] ?? ''),
+            'last_successful_sync_date' => $shouldAdvanceWatermark ? $runDate : (string) ($stored['last_successful_sync_date'] ?? ''),
             'last_ovoko_to_woo_sync_at' => $now,
         ]), false);
 
-        return $result + ['date_from_used' => $dateFrom, 'page' => $page, 'next_page' => $nextPage, 'has_more_pages' => $hasMorePages];
+        return $result + [
+            'previous_watermark_date' => (string) ($dateWindow['previous_watermark_date'] ?? ''),
+            'stored_watermark_date_before' => (string) ($dateWindow['stored_watermark_date_before'] ?? ''),
+            'stored_watermark_date' => $watermarkUpdatedTo,
+            'computed_effective_date_from' => $dateFrom,
+            'overlap_days_applied' => (int) ($dateWindow['overlap_days_applied'] ?? 0),
+            'date_from_used' => $dateFrom,
+            'should_advance_watermark' => $shouldAdvanceWatermark,
+            'watermark_updated_to' => $watermarkUpdatedTo,
+            'watermark_update_reason' => $watermarkUpdateReason,
+            'page' => $page,
+            'next_page' => $nextPage,
+            'has_more_pages' => $hasMorePages,
+        ];
     }
 
     private function build_date_from_window(array $status): array
     {
         $settings = $this->integrationService->get_settings();
         $configuredStart = trim((string) ($settings['ovoko_bidirectional_sync_start_date'] ?? ''));
-        $last = trim((string) ($status['last_successful_sync_date'] ?? ''));
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $last)) {
-            $timestamp = strtotime($last . ' 00:00:00 UTC') ?: time();
-            return ['date_from' => gmdate('Y-m-d', $timestamp - DAY_IN_SECONDS), 'source' => 'last_successful_sync_date_minus_1_day_overlap'];
+        $storedWatermark = trim((string) ($status['stored_watermark_date'] ?? ''));
+        $legacyLast = trim((string) ($status['last_successful_sync_date'] ?? ''));
+        $previousWatermark = preg_match('/^\d{4}-\d{2}-\d{2}$/', $storedWatermark) ? $storedWatermark : $legacyLast;
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $previousWatermark)) {
+            $timestamp = strtotime($previousWatermark . ' 00:00:00 UTC') ?: time();
+            return [
+                'date_from' => gmdate('Y-m-d', $timestamp - (self::WATERMARK_OVERLAP_DAYS * DAY_IN_SECONDS)),
+                'source' => 'stored_watermark_date_minus_overlap',
+                'previous_watermark_date' => $previousWatermark,
+                'stored_watermark_date_before' => $storedWatermark,
+                'overlap_days_applied' => self::WATERMARK_OVERLAP_DAYS,
+            ];
         }
 
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $configuredStart)) {
-            return ['date_from' => $configuredStart, 'source' => 'setting_ovoko_bidirectional_sync_start_date'];
+            return [
+                'date_from' => $configuredStart,
+                'source' => 'setting_ovoko_bidirectional_sync_start_date',
+                'previous_watermark_date' => '',
+                'stored_watermark_date_before' => $storedWatermark,
+                'overlap_days_applied' => 0,
+            ];
         }
 
-        return ['date_from' => gmdate('Y-m-d'), 'source' => 'fallback_today'];
+        return [
+            'date_from' => gmdate('Y-m-d'),
+            'source' => 'fallback_today',
+            'previous_watermark_date' => '',
+            'stored_watermark_date_before' => $storedWatermark,
+            'overlap_days_applied' => 0,
+        ];
     }
 
     private function resolve_page_for_window(array $status, string $dateFrom): int
@@ -285,6 +336,14 @@ class OvokoBidirectionalSyncOrchestrator
             'last_successful_sync_date' => '',
             'last_attempted_sync_at' => '',
             'next_scheduled_sync_at' => '',
+            'previous_watermark_date' => '',
+            'stored_watermark_date_before' => '',
+            'stored_watermark_date' => '',
+            'computed_effective_date_from' => '',
+            'overlap_days_applied' => 0,
+            'should_advance_watermark' => false,
+            'watermark_updated_to' => '',
+            'watermark_update_reason' => '',
             'delta_filter_used' => self::DELTA_FILTER,
             'date_from_used' => '',
             'date_from_source' => '',
@@ -328,7 +387,15 @@ class OvokoBidirectionalSyncOrchestrator
             'duration_seconds' => round(max(0, microtime(true) - $startedAtFloat), 3),
             'trigger' => $trigger === 'manual' ? 'manual' : 'cron',
             'status' => $status,
+            'previous_watermark_date' => (string) ($ovokoResult['previous_watermark_date'] ?? ''),
+            'stored_watermark_date_before' => (string) ($ovokoResult['stored_watermark_date_before'] ?? ''),
+            'stored_watermark_date' => (string) ($ovokoResult['stored_watermark_date'] ?? ''),
+            'computed_effective_date_from' => (string) ($ovokoResult['computed_effective_date_from'] ?? ''),
+            'overlap_days_applied' => (int) ($ovokoResult['overlap_days_applied'] ?? 0),
             'date_from_used' => (string) ($ovokoResult['date_from_used'] ?? $ovokoResult['date_from'] ?? ''),
+            'should_advance_watermark' => isset($ovokoResult['should_advance_watermark']) ? (bool) $ovokoResult['should_advance_watermark'] : null,
+            'watermark_updated_to' => (string) ($ovokoResult['watermark_updated_to'] ?? ''),
+            'watermark_update_reason' => (string) ($ovokoResult['watermark_update_reason'] ?? ''),
             'page' => $page > 0 ? $page : null,
             'next_page' => $nextPage > 0 ? $nextPage : null,
             'has_more_pages' => isset($ovokoResult['has_more_pages']) ? (bool) $ovokoResult['has_more_pages'] : null,

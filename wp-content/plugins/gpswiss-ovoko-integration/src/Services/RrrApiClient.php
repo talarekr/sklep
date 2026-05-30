@@ -173,6 +173,183 @@ class RrrApiClient
         return $this->post_form('/v2/get/parts?limit=' . $limit . '&page=' . $page . '&date_from=' . rawurlencode($dateFrom), [], true);
     }
 
+    public function probe_ovoko_event_sources_for_part(int $partId = 4303, array $dates = []): array
+    {
+        $partId = max(1, $partId);
+        $dates = $dates !== [] ? $dates : [gmdate('Y-m-d'), gmdate('Y-m-d', time() - DAY_IN_SECONDS)];
+        $dates = array_values(array_unique(array_filter(array_map(static function ($date): string {
+            $date = trim((string) $date);
+            return preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ? $date : '';
+        }, $dates))));
+        if ($dates === []) {
+            $dates = [gmdate('Y-m-d')];
+        }
+
+        $singlePart = $this->preview_fetch_single_part($partId);
+        $singleRecord = $this->extract_single_part_record((array) ($singlePart['payload'] ?? []));
+        $singleNormalized = $this->normalize_rrr_single_part_payload((array) ($singlePart['payload'] ?? []), ['details_only' => true]);
+
+        $rows = [];
+        foreach ($dates as $date) {
+            foreach ($this->event_source_probe_specs($date) as $spec) {
+                $result = $this->post_form((string) $spec['path'], (array) $spec['body'], true);
+                $rows[] = $this->summarize_event_source_probe_row($spec, $date, $partId, $result);
+            }
+        }
+
+        $hits = array_values(array_filter($rows, static fn(array $row): bool => !empty($row['contains_target_part'])));
+
+        return [
+            'ok' => true,
+            'action_name' => 'Read-only Ovoko/RRR event source probe',
+            'probe_type' => 'read_only_ovoko_status_sale_event_source_probe',
+            'read_only' => true,
+            'target_part_id' => (string) $partId,
+            'dates_checked' => $dates,
+            'today_utc' => gmdate('Y-m-d'),
+            'single_part_reference' => [
+                'endpoint' => '/get/part/{part_id}',
+                'ok' => !empty($singlePart['ok']),
+                'status_code' => (string) ($singlePart['status_code'] ?? ''),
+                'status' => (string) ($singleNormalized['status'] ?? ($singleRecord['status'] ?? '')),
+                'updated_at' => (string) ($singleNormalized['updated_at'] ?? ($singleRecord['updated_at'] ?? '')),
+            ],
+            'documented_or_known_endpoint_families_checked' => [
+                'parts updated from date' => ['/v2/get/parts date_from query', '/v2/get/parts updated_from/updated_after query', '/crm/export/parts-v2 body filters'],
+                'sold parts/status changes/deleted unavailable' => ['/v2/get/parts status=2 variants', '/crm/export/parts-v2 status=2 variants'],
+                'CRM changes' => ['/crm/export/parts-v2 filters', '/crm/export/part single reference'],
+                'orders/sales in Ovoko' => ['/v2/get/orders variants', '/crm/export/orders variants'],
+                'warehouse status' => ['/v2/get/parts warehouse/status-style filters where available'],
+            ],
+            'hit_count' => count($hits),
+            'found_target_part' => $hits !== [],
+            'first_hit' => $hits[0] ?? null,
+            'results' => $rows,
+            'recommendation' => $hits !== []
+                ? 'Use the first hit endpoint/params as the event/status-change source candidate and keep Woo product reconciliation only as fallback.'
+                : 'No probed read-only endpoint returned the target part in the checked dates. Confirm the official Ovoko/RRR sold/status-change endpoint with Ovoko support before changing cron source logic.',
+        ];
+    }
+
+    private function event_source_probe_specs(string $date): array
+    {
+        $dateTime = $date . ' 00:00:00';
+        $queryEndpoints = ['/v2/get/parts'];
+        $bodyEndpoints = ['/crm/export/parts-v2'];
+        $orderEndpoints = ['/v2/get/orders', '/v2/get/sales', '/crm/export/orders', '/crm/export/sales'];
+        $specs = [];
+
+        foreach ($queryEndpoints as $endpoint) {
+            foreach ([
+                ['date_from' => $date],
+                ['updated_from' => $dateTime],
+                ['updated_after' => $dateTime],
+                ['status' => '2'],
+                ['date_from' => $date, 'status' => '2'],
+                ['updated_from' => $dateTime, 'status' => '2'],
+                ['updated_after' => $dateTime, 'status' => '2'],
+            ] as $params) {
+                $specs[] = ['endpoint' => $endpoint, 'path' => $endpoint . '?' . http_build_query(['limit' => 50, 'page' => 1] + $params, '', '&', PHP_QUERY_RFC3986), 'body' => [], 'params' => $params, 'param_location' => 'query'];
+            }
+        }
+
+        foreach ($bodyEndpoints as $endpoint) {
+            foreach ([
+                ['date_from' => $date],
+                ['updated_from' => $dateTime],
+                ['updated_after' => $dateTime],
+                ['status' => '2'],
+                ['date_from' => $date, 'status' => '2'],
+                ['updated_from' => $dateTime, 'status' => '2'],
+                ['updated_after' => $dateTime, 'status' => '2'],
+            ] as $params) {
+                $specs[] = ['endpoint' => $endpoint, 'path' => $endpoint, 'body' => ['limit' => 50, 'page' => 1] + $params, 'params' => $params, 'param_location' => 'body'];
+            }
+        }
+
+        foreach ($orderEndpoints as $endpoint) {
+            foreach ([['date_from' => $date], ['updated_from' => $dateTime], ['updated_after' => $dateTime], ['status' => '2']] as $params) {
+                $specs[] = ['endpoint' => $endpoint, 'path' => $endpoint . '?' . http_build_query(['limit' => 50, 'page' => 1] + $params, '', '&', PHP_QUERY_RFC3986), 'body' => [], 'params' => $params, 'param_location' => 'query'];
+            }
+        }
+
+        return $specs;
+    }
+
+    private function summarize_event_source_probe_row(array $spec, string $date, int $targetPartId, array $result): array
+    {
+        $payload = (array) ($result['payload'] ?? []);
+        $rawRecords = (array) ($result['raw_records'] ?? []);
+        $records = $rawRecords !== [] ? $rawRecords : (array) ($result['records'] ?? []);
+        $target = $this->find_record_containing_part_id($records, (string) $targetPartId);
+        if ($target === [] && $payload !== []) {
+            $target = $this->find_record_containing_part_id([$payload], (string) $targetPartId);
+        }
+        $recordIds = $this->extract_probe_record_ids_from_any($records);
+        $targetNormalized = $target !== [] ? $this->normalize_rrr_single_part_payload($target, ['details_only' => true]) : [];
+
+        return [
+            'endpoint' => (string) ($spec['endpoint'] ?? ''),
+            'path' => (string) ($spec['path'] ?? ''),
+            'params' => (array) ($spec['params'] ?? []),
+            'param_location' => (string) ($spec['param_location'] ?? ''),
+            'date_checked' => $date,
+            'ok' => !empty($result['ok']),
+            'http_code' => $result['http_code'] ?? null,
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'message' => (string) ($result['msg'] ?? $result['message'] ?? ''),
+            'total_count' => (int) ($result['pagination']['total_count'] ?? count($records)),
+            'returned_count' => (int) ($result['records_count'] ?? count($records)),
+            'contains_target_part' => $target !== [],
+            'target_part_status' => $target !== [] ? (string) ($targetNormalized['status'] ?? ($target['status'] ?? '')) : '',
+            'target_part_updated_at' => $target !== [] ? (string) ($targetNormalized['updated_at'] ?? ($target['updated_at'] ?? '')) : '',
+            'part_ids_sample' => array_slice($recordIds, 0, 20),
+            'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'full_payload_omitted' => true,
+        ];
+    }
+
+    private function extract_probe_record_ids_from_any(array $records): array
+    {
+        $ids = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            foreach (['id', 'part_id', 'partId', 'rrr_id'] as $key) {
+                $id = trim((string) ($record[$key] ?? ''));
+                if ($id !== '' && preg_match('/^\d+$/', $id)) {
+                    $ids[] = sanitize_text_field($id);
+                    break;
+                }
+            }
+        }
+        return array_values(array_unique($ids));
+    }
+
+    private function find_record_containing_part_id(array $records, string $partId): array
+    {
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            foreach (['id', 'part_id', 'partId', 'rrr_id'] as $key) {
+                if ((string) ($record[$key] ?? '') === $partId) {
+                    return $record;
+                }
+            }
+            foreach ($record as $value) {
+                if (is_array($value)) {
+                    $found = $this->find_record_containing_part_id([$value], $partId);
+                    if ($found !== []) {
+                        return $found;
+                    }
+                }
+            }
+        }
+        return [];
+    }
+
     public function probe_parts_delta_filter_support(string $fromIso = ''): array
     {
         $fromIso = trim($fromIso) !== '' ? trim($fromIso) : gmdate('c', time() - DAY_IN_SECONDS);
