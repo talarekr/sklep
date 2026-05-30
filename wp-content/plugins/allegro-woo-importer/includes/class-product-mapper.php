@@ -2236,7 +2236,6 @@ class ProductMapper
             'boost_wide',
             'boost_tall',
             'boost_generic',
-            'ovoko_listing_aggressive',
         ];
 
         return in_array($render_profile, $allowed_profiles, true) ? $render_profile : 'standard';
@@ -2286,7 +2285,7 @@ class ProductMapper
             $target_ratio = 0.995;
             $safe_margin_ratio = 0.002;
             $crop_padding_ratio = 0.02;
-        } elseif (in_array($render_profile, ['boost_generic', 'ovoko_listing_aggressive'], true)) {
+        } elseif ($render_profile === 'boost_generic') {
             $target_ratio = 0.99;
             $safe_margin_ratio = 0.005;
             $crop_padding_ratio = 0.03;
