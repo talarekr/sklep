@@ -470,6 +470,7 @@ class OvokoAutoSyncDryRunService
         $sample = $client->preview_fetch_parts_sample(1, 1);
         $deltaProbe = $client->probe_parts_delta_filter_support();
         $preciseDeltaProbe = (array) ($deltaProbe['precise_updated_from_probe'] ?? []);
+        $eventSourceProbe = $client->probe_ovoko_event_sources_for_part(4303, ['2026-05-30', '2026-05-29']);
         $record = (array) (($sample['records'][0] ?? []));
         $fields = array_values(array_map('strval', array_keys($record)));
         $hasUpdatedAt = array_key_exists('updated_at', $record);
@@ -481,6 +482,7 @@ class OvokoAutoSyncDryRunService
             'read_endpoints_confirmed_in_client' => ['/v2/get/parts?limit={n}&page={p}', '/get/part/{part_id}', '/get/categories/tree', '/v2/get/parts/categories'],
             'write_endpoint_seen_in_client' => ['/crm/updatePart' => 'Only tested for place/internal_notes update; not approved for sale/stock/status sync.'],
             'woo_to_ovoko_sale_stock_endpoint_analysis' => $this->sale_stock_endpoint_analysis(),
+            'read_only_event_source_probe_for_part_4303' => $eventSourceProbe,
             'parts_page_probe' => [
                 'ok' => !empty($sample['ok']),
                 'status_code' => (string) ($sample['status_code'] ?? ''),

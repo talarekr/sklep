@@ -26,6 +26,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
         add_action('admin_post_gpswiss_ovoko_check_rrr_api', [$this, 'handle_check_rrr_api']);
         add_action('admin_post_gpswiss_ovoko_auto_sync_endpoint_analysis', [$this, 'handle_auto_sync_endpoint_analysis']);
+        add_action('admin_post_gpswiss_ovoko_probe_event_sources_for_part', [$this, 'handle_probe_event_sources_for_part']);
         add_action('admin_post_gpswiss_ovoko_probe_updated_from_delta', [$this, 'handle_probe_updated_from_delta']);
         add_action('admin_post_gpswiss_ovoko_dry_run_auto_sync', [$this, 'handle_dry_run_auto_sync']);
         add_action('admin_post_gpswiss_ovoko_manual_live_date_from_sync', [$this, 'handle_manual_live_date_from_sync']);
@@ -228,6 +229,23 @@ class AdminPage
         check_admin_referer('gpswiss_ovoko_auto_sync_endpoint_analysis');
         $result = (new OvokoAutoSyncDryRunService($this->service))->endpoint_capability_analysis();
         set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => wp_json_encode($result)], 60);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_probe_event_sources_for_part(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_probe_event_sources_for_part');
+        $partId = isset($_POST['part_id']) ? (int) $_POST['part_id'] : 4303;
+        $today = isset($_POST['today']) ? sanitize_text_field((string) $_POST['today']) : gmdate('Y-m-d');
+        $yesterday = isset($_POST['yesterday']) ? sanitize_text_field((string) $_POST['yesterday']) : gmdate('Y-m-d', time() - DAY_IN_SECONDS);
+        $client = new RrrApiClient($this->service->get_settings());
+        $result = $client->probe_ovoko_event_sources_for_part($partId, [$today, $yesterday]);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['found_target_part']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 180);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
