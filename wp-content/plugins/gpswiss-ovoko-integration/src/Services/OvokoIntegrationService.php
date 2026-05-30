@@ -1686,6 +1686,7 @@ class OvokoIntegrationService
 
     public function generate_listing_image_for_ovoko_product(int $productId, bool $force = false): array
     {
+        $ovokoListingRenderProfile = 'ovoko_listing_aggressive';
         $result = [
             'ok' => false,
             'product_id' => $productId,
@@ -1695,6 +1696,7 @@ class OvokoIntegrationService
             'listing_image_id' => 0,
             'listing_image_source_id' => 0,
             'listing_image_strategy' => 'allegro_product_mapper_reused',
+            'listing_image_render_profile_requested' => $ovokoListingRenderProfile,
             'listing_image_meta_written' => [],
             'errors' => [],
         ];
@@ -1713,7 +1715,7 @@ class OvokoIntegrationService
             return $result;
         }
 
-        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, $force);
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, $force, $ovokoListingRenderProfile);
         $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
         $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
         $status = (string) ($awiResult['status'] ?? 'unknown');
@@ -1727,6 +1729,7 @@ class OvokoIntegrationService
             'listing_image_id' => $listingImageId,
             'listing_image_source_id' => $sourceImageId,
             'listing_image_strategy' => 'allegro_product_mapper_reused',
+            'listing_image_render_profile_requested' => $ovokoListingRenderProfile,
             'listing_image_meta_written' => ['_awi_listing_image_id', '_awi_listing_image_source_id', '_awi_listing_image_generated_at'],
             'same_vehicle_meta_written' => $sameVehicleMeta['written_meta_keys'],
             'same_vehicle_car_id' => $sameVehicleMeta['car_id'],

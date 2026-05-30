@@ -167,10 +167,10 @@ final class Plugin
         return $instance->mapper->get_preferred_listing_image_id($product_id);
     }
 
-    public static function ensure_listing_image_for_product(int $product_id, bool $force = false): array
+    public static function ensure_listing_image_for_product(int $product_id, bool $force = false, string $preferred_render_profile = 'standard'): array
     {
         $instance = self::instance();
-        return $instance->mapper->ensure_listing_image_for_product($product_id, $force);
+        return $instance->mapper->ensure_listing_image_for_product($product_id, $force, $preferred_render_profile);
     }
 
     public static function get_listing_image_diagnostics(int $product_id): array

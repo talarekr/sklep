@@ -78,8 +78,9 @@ class ProductMapper
         return 0;
     }
 
-    public function ensure_listing_image_for_product(int $product_id, bool $force = false): array
+    public function ensure_listing_image_for_product(int $product_id, bool $force = false, string $preferred_render_profile = 'standard'): array
     {
+        $preferred_render_profile = $this->normalize_listing_render_profile($preferred_render_profile);
         $selection = $this->select_best_listing_source_image($product_id);
         $selected_source_id = (int) ($selection['selected_source_image_id'] ?? 0);
         $selected_source_aspect_ratio = (float) ($selection['selected_source_aspect_ratio'] ?? 0.0);
@@ -116,7 +117,8 @@ class ProductMapper
             ];
         }
 
-        $created_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id, 'standard');
+        $initial_render_profile = $preferred_render_profile !== '' ? $preferred_render_profile : 'standard';
+        $created_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id, $initial_render_profile);
         if (is_wp_error($created_listing_id)) {
             return [
                 'status' => 'error',
@@ -155,7 +157,9 @@ class ProductMapper
             $baseline_tier = (string) ($quality['listing_quality_tier'] ?? 'unknown');
             $baseline_score = (float) ($quality['listing_quality_score'] ?? 0.0);
             $baseline_fill_ratio = (float) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, true);
-            $boost_profile = $this->determine_listing_quality_boost_profile($selected_source_aspect_ratio);
+            $boost_profile = $initial_render_profile !== 'standard'
+                ? $initial_render_profile
+                : $this->determine_listing_quality_boost_profile($selected_source_aspect_ratio);
             $boosted_listing_id = $this->create_listing_image_attachment($selected_source_id, $product_id, $boost_profile);
             if (!is_wp_error($boosted_listing_id)) {
                 wp_delete_attachment((int) $created_listing_id, true);
@@ -2224,11 +2228,27 @@ class ProductMapper
         $this->logger->info('Image import checkpoint.', $checkpoint);
     }
 
+    private function normalize_listing_render_profile(string $render_profile): string
+    {
+        $render_profile = sanitize_key($render_profile);
+        $allowed_profiles = [
+            'standard',
+            'boost_wide',
+            'boost_tall',
+            'boost_generic',
+            'ovoko_listing_aggressive',
+        ];
+
+        return in_array($render_profile, $allowed_profiles, true) ? $render_profile : 'standard';
+    }
+
     /**
      * @return int|\WP_Error
      */
     private function create_listing_image_attachment(int $source_attachment_id, int $product_id, string $render_profile = 'standard')
     {
+        $render_profile = $this->normalize_listing_render_profile($render_profile);
+
         if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
             return new \WP_Error('gd_missing', __('Brak biblioteki GD wymaganej do generowania obrazu listingowego.', 'allegro-woo-importer'));
         }
@@ -2266,7 +2286,7 @@ class ProductMapper
             $target_ratio = 0.995;
             $safe_margin_ratio = 0.002;
             $crop_padding_ratio = 0.02;
-        } elseif ($render_profile === 'boost_generic') {
+        } elseif (in_array($render_profile, ['boost_generic', 'ovoko_listing_aggressive'], true)) {
             $target_ratio = 0.99;
             $safe_margin_ratio = 0.005;
             $crop_padding_ratio = 0.03;
