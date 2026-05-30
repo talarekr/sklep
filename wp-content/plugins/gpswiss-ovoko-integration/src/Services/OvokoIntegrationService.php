@@ -698,6 +698,113 @@ class OvokoIntegrationService
         return ['normalized' => $normalized, 'vehicle_debug' => $vehicleDebug];
     }
 
+    public function build_manual_live_date_from_idempotency(array $record, array $payload): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        $normalized = $client->normalize_rrr_single_part_payload($payload);
+        $partId = trim((string) (($record['id'] ?? $record['part_id'] ?? '') ?: ($normalized['part_id'] ?? '')));
+        if ($partId !== '') {
+            $normalized['part_id'] = $partId;
+        }
+
+        $attributesBeforeVehicleFetch = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+        if ($this->missing_expected_vehicle_fields_from_attributes($attributesBeforeVehicleFetch) !== []) {
+            $vehicleEnriched = $this->enrich_with_vehicle_data($normalized, $client);
+            $normalized = (array) ($vehicleEnriched['normalized'] ?? $normalized);
+            if ($partId !== '') {
+                $normalized['part_id'] = $partId;
+            }
+        }
+
+        $status = strtolower(trim((string) (($record['status'] ?? '') ?: ($normalized['status'] ?? ''))));
+        $unavailable = in_array($status, ['sold', 'deleted', 'removed', 'inactive', 'unavailable', 'reserved'], true);
+        $description = trim((string) (($normalized['notes'] ?? '') ?: ($record['notes'] ?? '')));
+        $attributes = $this->build_ovoko_technical_attributes_from_normalized($normalized);
+
+        $vehicleFieldNames = [
+            'car_id', 'vehicle_id', 'vehicle_make', 'vehicle_model', 'vehicle_generation', 'vehicle_fuel',
+            'vehicle_engine_capacity_l', 'vehicle_engine_power_kw', 'vehicle_engine_code', 'vehicle_gearbox_type',
+            'vehicle_body_type', 'vehicle_drive_wheels', 'vehicle_steering_position', 'vehicle_color',
+            'vehicle_color_code', 'vehicle_period', 'vehicle_year', 'mileage_km',
+        ];
+        $vehicleFields = [];
+        foreach ($vehicleFieldNames as $fieldName) {
+            $vehicleFields[$fieldName] = $normalized[$fieldName] ?? '';
+        }
+
+        $hashPayload = [
+            'part_id' => $partId,
+            'stock' => [
+                'ovoko_status' => $status,
+                'manage_stock' => 'yes',
+                'quantity' => $unavailable ? 0 : 1,
+                'stock_status' => $unavailable ? 'outofstock' : 'instock',
+            ],
+            'description' => $description,
+            'technical_details' => $attributes,
+            'vehicle_fields' => $vehicleFields,
+        ];
+        $canonicalPayload = $this->canonicalize_ovoko_idempotency_value($hashPayload);
+        $fieldsUsed = [
+            'part_id',
+            'stock.ovoko_status',
+            'stock.manage_stock',
+            'stock.quantity',
+            'stock.stock_status',
+            'description',
+            'technical_details:' . implode('|', array_keys((array) ($canonicalPayload['technical_details'] ?? []))),
+            'vehicle_fields:' . implode('|', array_keys((array) ($canonicalPayload['vehicle_fields'] ?? []))),
+        ];
+
+        return [
+            'hash' => hash('sha256', wp_json_encode($canonicalPayload)),
+            'payload' => $canonicalPayload,
+            'fields_used' => array_values(array_filter($fieldsUsed, static fn($field) => trim((string) $field) !== '')),
+            'category_id_diagnostic' => trim((string) (($record['category_id'] ?? '') ?: ($normalized['category_id'] ?? ''))),
+        ];
+    }
+
+    private function canonicalize_ovoko_idempotency_value(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            $isList = array_is_list($value);
+            $canonical = [];
+            foreach ($value as $key => $item) {
+                $canonicalItem = $this->canonicalize_ovoko_idempotency_value($item);
+                if ($this->is_empty_ovoko_idempotency_value($canonicalItem)) {
+                    continue;
+                }
+                $canonical[$key] = $canonicalItem;
+            }
+            if ($isList) {
+                usort($canonical, static fn($left, $right) => strcmp(wp_json_encode($left), wp_json_encode($right)));
+                return array_values($canonical);
+            }
+            ksort($canonical, SORT_STRING);
+            return $canonical;
+        }
+        if (is_bool($value) || is_int($value) || is_float($value)) {
+            return $value;
+        }
+        if ($value === null) {
+            return '';
+        }
+        $stringValue = trim(wp_strip_all_tags((string) $value));
+        $stringValue = preg_replace('/\s+/u', ' ', $stringValue) ?? $stringValue;
+        if (preg_match('/^-?\d+$/', $stringValue)) {
+            return (int) $stringValue;
+        }
+        if (preg_match('/^-?\d+\.\d+$/', $stringValue)) {
+            return (float) $stringValue;
+        }
+        return $stringValue;
+    }
+
+    private function is_empty_ovoko_idempotency_value(mixed $value): bool
+    {
+        return $value === '' || $value === null || (is_array($value) && $value === []);
+    }
+
     private function vehicle_data_from_csv_mapping(array $normalized): array
     {
         $csvMap = (array) ($this->get_settings()['ovoko_csv_mapping'] ?? []);
@@ -1179,6 +1286,8 @@ class OvokoIntegrationService
         }
         $updatedAt = trim((string) (($options['updated_at'] ?? '') ?: ($record['updated_at'] ?? $normalized['updated_at'] ?? '')));
         $syncHash = trim((string) ($options['sync_hash'] ?? ''));
+        $idempotencyPreviousHash = trim((string) ($options['idempotency_previous_hash'] ?? ''));
+        $idempotencyHashFieldsUsed = (array) ($options['idempotency_hash_fields_used'] ?? []);
         $price = (array) ($options['price'] ?? []);
         $priceValue = (string) ($price['price'] ?? '');
         $status = strtolower(trim((string) (($record['status'] ?? '') ?: ($normalized['status'] ?? ''))));
@@ -1327,6 +1436,11 @@ class OvokoIntegrationService
             'same_vehicle_meta_written' => $sameVehicleMeta['written_meta_keys'],
             'same_vehicle_car_id' => $sameVehicleMeta['car_id'],
             'same_vehicle_url' => $sameVehicleMeta['vehicle_parts_url'],
+            'idempotency_previous_hash' => $idempotencyPreviousHash,
+            'idempotency_new_hash' => $syncHash,
+            'idempotency_hash_equal' => $idempotencyPreviousHash !== '' && $syncHash !== '' && hash_equals($idempotencyPreviousHash, $syncHash),
+            'idempotency_skip_reason' => '',
+            'idempotency_hash_fields_used' => $idempotencyHashFieldsUsed,
             'idempotency_meta_written' => ['_gpswiss_ovoko_last_synced_updated_at' => $updatedAt, '_gpswiss_ovoko_last_synced_hash' => $syncHash],
             'published' => $created,
         ];
