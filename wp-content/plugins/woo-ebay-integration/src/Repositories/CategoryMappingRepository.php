@@ -169,6 +169,7 @@ class CategoryMappingRepository
             $samples[] = [
                 'id' => (int) $product_id,
                 'title' => (string) $product->get_name(),
+                'translated_title' => trim((string) get_post_meta((int) $product_id, '_wei_ebay_de_title', true)),
                 'description' => trim(wp_strip_all_tags((string) $product->get_description() . ' ' . (string) $product->get_short_description())),
                 'mpn' => $this->product_meta_or_attribute($product, (int) $product_id, ['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number'], ['MPN', 'Herstellernummer', 'OEM', 'Numer części', 'Numer czesci']),
                 'manufacturer' => $this->product_meta_or_attribute($product, (int) $product_id, ['_manufacturer', '_brand'], ['Producent', 'Marka', 'Manufacturer', 'Brand']),

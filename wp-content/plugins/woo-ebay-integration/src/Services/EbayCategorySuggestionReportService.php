@@ -2,10 +2,30 @@
 
 namespace WEI\Services;
 
+use WEI\Plugin;
 use WEI\Repositories\CategoryMappingRepository;
+use WEI\Services\Translation\GoogleCloudTranslateProvider;
 
 class EbayCategorySuggestionReportService
 {
+    private const AUTOMOTIVE_CONTEXT = 'Autoteile';
+    private const PL_DE_AUTO_PHRASES = [
+        'Wąż / Przewód klimatyzacji A/C' => 'Klimaanlagenschlauch Klimaleitung',
+        'Przewód klimatyzacji' => 'Klimaleitung',
+        'Wąż klimatyzacji' => 'Klimaanlagenschlauch',
+        'Czujnik' => 'Sensor',
+        'Zderzak' => 'Stoßstange',
+        'Reflektor' => 'Scheinwerfer',
+        'Lampa tylna' => 'Rückleuchte',
+        'Lusterko' => 'Außenspiegel',
+        'Drzwi' => 'Tür',
+        'Maska' => 'Motorhaube',
+        'Błotnik' => 'Kotflügel',
+        'Alternator' => 'Lichtmaschine',
+        'Rozrusznik' => 'Anlasser',
+        'Turbosprężarka' => 'Turbolader',
+    ];
+
     public const MARKETPLACE_ID = 'EBAY_DE';
     public const VALIDATION_OPTION = 'wei_ebay_category_validation_statuses';
     public const LAST_SUMMARY_OPTION = 'wei_ebay_category_suggestions_summary';
@@ -65,22 +85,33 @@ class EbayCategorySuggestionReportService
             $termId = (int) ($row['term_id'] ?? 0);
             $currentId = trim((string) ($row['ebay_category_id'] ?? ''));
             $samples = $this->categoryRepo->sample_products_for_category($termId, $sampleLimit);
-            $queries = self::build_queries((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''), $samples);
+            $queryPlan = $this->build_german_query_plan((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''), $samples);
+            $queries = (array) ($queryPlan['queries'] ?? []);
             $taxonomyError = '';
             $chosenQuery = '';
+            $chosenQuerySource = '';
             $suggestions = [];
+            $rejectedSuggestions = [];
 
-            foreach ($queries as $query) {
+            foreach ($queries as $queryEntry) {
+                $query = is_array($queryEntry) ? (string) ($queryEntry['query'] ?? '') : (string) $queryEntry;
+                if ($query === '') {
+                    continue;
+                }
                 $result = $this->taxonomy->get_category_suggestions_result($marketplaceId, $query, $forceRefresh);
                 if (($result['status'] ?? '') !== 'ok') {
                     $taxonomyError = trim($taxonomyError . ' ' . (string) ($result['error'] ?? $result['status'] ?? 'suggestion_failed'));
                     $summary['api_errors']++;
                     continue;
                 }
-                $parsed = self::parse_suggestions((array) ($result['suggestions'] ?? []), $topLimit);
+                $parsed = self::parse_suggestions((array) ($result['suggestions'] ?? []), $topLimit * 4);
+                $queryRejected = [];
+                $parsed = self::filter_and_rank_suggestions($parsed, (string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''), $query, $topLimit, $queryRejected);
+                $rejectedSuggestions = array_merge($rejectedSuggestions, $queryRejected);
                 if ($parsed !== []) {
                     $suggestions = $parsed;
                     $chosenQuery = $query;
+                    $chosenQuerySource = is_array($queryEntry) ? (string) ($queryEntry['source'] ?? '') : '';
                     break;
                 }
             }
@@ -108,7 +139,7 @@ class EbayCategorySuggestionReportService
             }
 
             $status = self::mapping_status($currentId, $currentValidation, $suggestions);
-            $confidence = self::confidence($currentId, $currentValidation, $suggestions, $status);
+            $confidence = self::confidence($currentId, $currentValidation, $suggestions, $status, $chosenQuery);
             if ($confidence === 'high') {
                 $summary['high_confidence']++;
             } elseif ($confidence === 'medium') {
@@ -120,7 +151,7 @@ class EbayCategorySuggestionReportService
             }
 
             $best = $suggestions[0] ?? [];
-            $report = $this->build_report_row($row, $samples, $currentValidation, $status, $suggestions, $best, $confidence, $chosenQuery, $taxonomyError);
+            $report = $this->build_report_row($row, $samples, $currentValidation, $status, $suggestions, $best, $confidence, $chosenQuery, $taxonomyError, $queryPlan, $chosenQuerySource, $rejectedSuggestions);
             $reportRows[] = $report;
             $readyRows[] = $this->build_ready_row($report, $currentId, $best);
         }
@@ -134,33 +165,304 @@ class EbayCategorySuggestionReportService
         return $summary;
     }
 
+    public function build_german_query_plan(string $wooName, string $wooPath, array $samples = []): array
+    {
+        $sampleTitles = array_values(array_filter(array_map(static fn(array $sample): string => trim((string) ($sample['title'] ?? '')), $samples)));
+        $existingTranslatedTitles = array_values(array_filter(array_map(static fn(array $sample): string => trim((string) ($sample['translated_title'] ?? '')), $samples)));
+        $rawPolishQuery = self::clean_query(trim($wooName . ' ' . str_replace(' > ', ' ', $wooPath) . ' ' . implode(' ', array_slice($sampleTitles, 0, 3))));
+
+        $translationInputs = [];
+        $nameLocal = self::local_auto_phrase_translation($wooName);
+        if ($nameLocal === '') {
+            $translationInputs['name'] = $wooName;
+        }
+        $pathLocal = self::local_auto_phrase_translation($wooPath);
+        if ($pathLocal === '') {
+            $translationInputs['path'] = str_replace(' > ', ' ', $wooPath);
+        }
+        if ($existingTranslatedTitles === [] && $sampleTitles !== []) {
+            foreach (array_slice($sampleTitles, 0, 2) as $idx => $title) {
+                $translationInputs['title_' . $idx] = $title;
+            }
+        }
+
+        $translated = $this->translate_to_german($translationInputs);
+        $translationSource = (string) ($translated['source'] ?? 'local_dictionary');
+        $translatedValues = (array) ($translated['values'] ?? []);
+
+        $translatedName = $nameLocal !== '' ? $nameLocal : (string) ($translatedValues['name'] ?? $wooName);
+        $translatedPath = $pathLocal !== '' ? $pathLocal : (string) ($translatedValues['path'] ?? str_replace(' > ', ' ', $wooPath));
+        $sampleTranslatedTitles = $existingTranslatedTitles;
+        foreach ($translatedValues as $key => $value) {
+            if (str_starts_with((string) $key, 'title_') && trim((string) $value) !== '') {
+                $sampleTranslatedTitles[] = trim((string) $value);
+            }
+        }
+        $sampleTranslatedTitles = array_values(array_unique(array_filter($sampleTranslatedTitles)));
+
+        $queries = [];
+        $add = static function (array &$queries, string $query, string $source, string $raw, string $translatedText, string $translationSource): void {
+            $query = self::ensure_automotive_context($query);
+            if ($query !== '') {
+                $queries[] = [
+                    'query' => mb_substr($query, 0, 300),
+                    'source' => $source,
+                    'raw' => $raw,
+                    'translated' => $translatedText,
+                    'translation_source' => $translationSource,
+                ];
+            }
+        };
+
+        $add($queries, $translatedName, 'translated_woo_subcategory_name', $wooName, $translatedName, $nameLocal !== '' ? 'local_dictionary' : $translationSource);
+        $add($queries, $translatedPath, 'translated_woo_category_path', $wooPath, $translatedPath, $pathLocal !== '' ? 'local_dictionary' : $translationSource);
+        foreach (array_slice($sampleTranslatedTitles, 0, 2) as $title) {
+            $add($queries, $title, 'sample_translated_product_title', implode(' | ', $sampleTitles), $title, $existingTranslatedTitles !== [] ? 'existing_ebay_title' : $translationSource);
+        }
+        foreach (array_slice($samples, 0, 3) as $sample) {
+            $brandPart = trim((string) ($sample['manufacturer'] ?? '') . ' ' . (string) ($sample['mpn'] ?? '') . ' ' . $translatedName);
+            $add($queries, $brandPart, 'sample_brand_model_part_name', (string) ($sample['title'] ?? ''), $brandPart, $nameLocal !== '' ? 'local_dictionary' : $translationSource);
+        }
+
+        $deduped = [];
+        $seen = [];
+        foreach ($queries as $query) {
+            $key = mb_strtolower((string) $query['query']);
+            if ($key !== '' && !isset($seen[$key])) {
+                $seen[$key] = true;
+                $deduped[] = $query;
+            }
+        }
+
+        return [
+            'raw_polish_query' => $rawPolishQuery,
+            'translated_german_query' => self::clean_query(trim($translatedName . ' ' . $translatedPath)),
+            'translation_source' => $nameLocal !== '' || $pathLocal !== '' ? 'local_dictionary' . ($translationSource !== 'disabled' ? '+' . $translationSource : '') : $translationSource,
+            'sample_product_titles' => implode(' | ', array_slice($sampleTitles, 0, 5)),
+            'sample_translated_titles' => implode(' | ', array_slice($sampleTranslatedTitles, 0, 5)),
+            'queries' => $deduped,
+        ];
+    }
+
     public static function build_queries(string $wooName, string $wooPath, array $samples = []): array
     {
         $queries = [];
-        foreach ([$wooName, str_replace(' > ', ' ', $wooPath)] as $query) {
-            $query = trim((string) preg_replace('/\s+/', ' ', wp_strip_all_tags($query)));
+        $name = self::local_auto_phrase_translation($wooName);
+        if ($name === '') {
+            $name = self::looks_polish($wooName) ? '' : $wooName;
+        }
+        $path = self::local_auto_phrase_translation($wooPath);
+        if ($path === '') {
+            $path = self::looks_polish($wooPath) ? '' : str_replace(' > ', ' ', $wooPath);
+        }
+        foreach ([$name, $path] as $query) {
+            $query = self::ensure_automotive_context($query);
             if ($query !== '') {
                 $queries[] = $query;
             }
         }
-
-        $normalized = strtolower(remove_accents($wooName . ' ' . $wooPath));
-        if (str_contains($normalized, 'klimatyzacji') || str_contains($normalized, 'klima') || str_contains($normalized, 'a/c')) {
-            array_push($queries, 'Klimaanlagenschlauch', 'Klimaleitung', 'Klimaleitungen Schläuche Anschlüsse Auto');
-        }
-
         foreach (array_slice($samples, 0, 3) as $sample) {
-            $title = trim((string) ($sample['translated_title'] ?? $sample['title'] ?? ''));
+            $title = trim((string) ($sample['translated_title'] ?? ''));
+            if ($title === '') {
+                $title = self::local_auto_phrase_translation((string) ($sample['title'] ?? ''));
+            }
             $manufacturer = trim((string) ($sample['manufacturer'] ?? ''));
             $mpn = trim((string) ($sample['mpn'] ?? ''));
-            $query = trim($wooName . ' ' . $title . ' ' . $manufacturer . ' ' . $mpn . ' Autoteile');
-            $query = trim((string) preg_replace('/\s+/', ' ', wp_strip_all_tags($query)));
+            $query = self::ensure_automotive_context(trim($title . ' ' . $manufacturer . ' ' . $mpn));
             if ($query !== '') {
                 $queries[] = mb_substr($query, 0, 300);
             }
         }
-
         return array_values(array_unique(array_filter($queries)));
+    }
+
+    /** @param array<string,string> $texts */
+    private function translate_to_german(array $texts): array
+    {
+        $texts = array_filter(array_map('strval', $texts), static fn(string $text): bool => trim($text) !== '');
+        if ($texts === []) {
+            return ['source' => 'local_dictionary', 'values' => []];
+        }
+
+        $settings = $this->settings();
+        $providerKey = strtolower((string) ($settings['translation_provider'] ?? 'disabled'));
+        if ($providerKey === 'google') {
+            $providerKey = 'google_cloud_translate';
+        }
+        if ($providerKey !== 'google_cloud_translate') {
+            return ['source' => 'disabled', 'values' => []];
+        }
+
+        try {
+            $provider = new GoogleCloudTranslateProvider($settings, $this->logger);
+            if (!$provider->is_configured()) {
+                return ['source' => 'google_cloud_translate_not_configured', 'values' => []];
+            }
+            $keys = array_keys($texts);
+            $values = $provider->translate_texts(array_values($texts), 'pl', 'de', 'text');
+            $mapped = [];
+            foreach ($keys as $idx => $key) {
+                $mapped[(string) $key] = self::clean_query((string) ($values[$idx] ?? ''));
+            }
+            return ['source' => 'google_cloud_translate', 'values' => $mapped];
+        } catch (\Throwable $e) {
+            $this->logger->warning('eBay.de category suggestion query translation failed', ['error' => $e->getMessage()]);
+            return ['source' => 'google_cloud_translate_failed', 'values' => []];
+        }
+    }
+
+    private function settings(): array
+    {
+        $settings = function_exists('get_option') ? get_option(Plugin::OPTION_KEY, []) : [];
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+        if (($settings['translation_provider'] ?? '') === 'google') {
+            $settings['translation_provider'] = 'google_cloud_translate';
+        }
+        if (!isset($settings['translation_provider'])) {
+            $settings['translation_provider'] = 'disabled';
+        }
+        if (!isset($settings['translation_api_key'])) {
+            $settings['translation_api_key'] = '';
+        }
+        return $settings;
+    }
+
+    private static function local_auto_phrase_translation(string $text): string
+    {
+        $text = trim(wp_strip_all_tags($text));
+        if ($text === '') {
+            return '';
+        }
+        $normalized = self::normalize_lookup_text($text);
+        $hits = [];
+        foreach (self::PL_DE_AUTO_PHRASES as $pl => $de) {
+            $needle = self::normalize_lookup_text((string) $pl);
+            if ($needle !== '' && ($normalized === $needle || str_contains($normalized, $needle))) {
+                $hits[] = (string) $de;
+            }
+        }
+        if ($hits === [] && (str_contains($normalized, 'klimatyzacji') || str_contains($normalized, 'klima') || str_contains($normalized, 'a c'))) {
+            $hits[] = 'Klimaanlagenschlauch Klimaleitung';
+        }
+        $query = self::clean_query(implode(' ', array_unique($hits)));
+        $parts = preg_split('/\s+/', $query) ?: [];
+        return implode(' ', array_values(array_unique(array_filter($parts))));
+    }
+
+    private static function normalize_lookup_text(string $text): string
+    {
+        $text = mb_strtolower(remove_accents(wp_strip_all_tags($text)));
+        $text = str_replace(['/', '&', '-'], ' ', $text);
+        return trim((string) preg_replace('/\s+/', ' ', $text));
+    }
+
+    private static function clean_query(string $query): string
+    {
+        return trim((string) preg_replace('/\s+/', ' ', wp_strip_all_tags(html_entity_decode($query, ENT_QUOTES | ENT_HTML5, 'UTF-8'))));
+    }
+
+    private static function ensure_automotive_context(string $query): string
+    {
+        $query = self::clean_query($query);
+        if ($query === '') {
+            return '';
+        }
+        $normalized = mb_strtolower(remove_accents($query));
+        if (!str_contains($normalized, 'autoteile') && !str_contains($normalized, 'auto ersatzteile') && !str_contains($normalized, 'auto & motorrad')) {
+            $query .= ' ' . self::AUTOMOTIVE_CONTEXT;
+        }
+        return self::clean_query($query);
+    }
+
+    private static function looks_polish(string $text): bool
+    {
+        $normalized = self::normalize_lookup_text($text);
+        return preg_match('/[ąćęłńóśźż]/iu', $text) === 1 || str_contains($normalized, 'czesci') || str_contains($normalized, 'samochod') || str_contains($normalized, 'przewod') || str_contains($normalized, 'waz');
+    }
+
+    public static function is_automotive_woo_category(string $wooName, string $wooPath): bool
+    {
+        $text = self::normalize_lookup_text($wooName . ' ' . $wooPath);
+        if ($text === '') {
+            return false;
+        }
+        if (self::local_auto_phrase_translation($wooName . ' ' . $wooPath) !== '') {
+            return true;
+        }
+        foreach (['czesci', 'samochod', 'auto', 'motoryz', 'klima', 'zderzak', 'reflektor', 'lampa', 'lusterko', 'drzwi', 'maska', 'blotnik', 'alternator', 'rozrusznik', 'turbosprezarka', 'czujnik'] as $keyword) {
+            if (str_contains($text, $keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function is_automotive_suggestion(array $suggestion): bool
+    {
+        $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
+        foreach (['auto & motorrad', 'autoteile', 'autoersatz', 'auto ersatz', 'fahrzeugteile', 'kfz', 'pkw', 'motorteile', 'karosserie', 'klimaanlage'] as $keyword) {
+            if (str_contains($text, $keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function is_bad_generic_suggestion(array $suggestion): bool
+    {
+        $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
+        foreach (['sonstige', 'cds', 'bucher', 'bücher', 'dvds', 'filme', 'musik', 'computer', 'elektronik'] as $keyword) {
+            if (str_contains($text, $keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function filter_and_rank_suggestions(array $suggestions, string $wooName, string $wooPath, string $query, int $limit = 5, ?array &$rejected = null): array
+    {
+        $isAuto = self::is_automotive_woo_category($wooName, $wooPath);
+        $queryTokens = self::query_match_tokens($query);
+        $accepted = [];
+        $rejected = [];
+        foreach ($suggestions as $suggestion) {
+            if (!is_array($suggestion)) {
+                continue;
+            }
+            $isAutomotiveSuggestion = self::is_automotive_suggestion($suggestion);
+            if ($isAuto && !$isAutomotiveSuggestion) {
+                $suggestion['rejected_reason'] = 'rejected_non_automotive';
+                $rejected[] = $suggestion;
+                continue;
+            }
+            $score = is_numeric($suggestion['score'] ?? null) ? (float) $suggestion['score'] : 0.0;
+            $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
+            foreach ($queryTokens as $token) {
+                if ($token !== '' && str_contains($text, $token)) {
+                    $score += 0.20;
+                }
+            }
+            if ($isAutomotiveSuggestion) {
+                $score += 0.35;
+            }
+            if (self::is_bad_generic_suggestion($suggestion)) {
+                $score -= 0.80;
+            }
+            $suggestion['score'] = (string) round($score, 4);
+            $accepted[] = $suggestion;
+        }
+        usort($accepted, static fn(array $a, array $b): int => ((float) ($b['score'] ?? 0)) <=> ((float) ($a['score'] ?? 0)));
+        return array_slice($accepted, 0, max(1, $limit));
+    }
+
+    private static function query_match_tokens(string $query): array
+    {
+        $query = mb_strtolower(remove_accents($query));
+        $parts = preg_split('/[^a-z0-9]+/u', $query) ?: [];
+        $stop = ['autoteile', 'auto', 'ersatzteile', 'gebraucht', 'teile'];
+        return array_values(array_unique(array_filter($parts, static fn(string $token): bool => mb_strlen($token) >= 5 && !in_array($token, $stop, true))));
     }
 
     public static function parse_suggestions(array $rawSuggestions, int $limit = 5): array
@@ -215,18 +517,30 @@ class EbayCategorySuggestionReportService
         return 'needs_manual_review';
     }
 
-    public static function confidence(string $currentId, array $validation, array $suggestions, string $status): string
+    public static function confidence(string $currentId, array $validation, array $suggestions, string $status, string $query = ''): string
     {
-        if ($status === 'likely_ok' || ($status === 'review_suggested' && $suggestions !== [] && empty($validation['valid']))) {
-            return 'high';
+        if ($suggestions === []) {
+            return 'manual_review';
         }
-        if ($suggestions !== [] && $status === 'review_suggested') {
-            return 'medium';
-        }
-        if ($suggestions !== []) {
+        $top = $suggestions[0];
+        if (self::is_bad_generic_suggestion($top)) {
             return 'low';
         }
-        return 'manual_review';
+        $automotive = self::is_automotive_suggestion($top);
+        $matchedTokens = 0;
+        $text = mb_strtolower(remove_accents((string) (($top['category_path'] ?? '') . ' ' . ($top['category_name'] ?? ''))));
+        foreach (self::query_match_tokens($query) as $token) {
+            if ($token !== '' && str_contains($text, $token)) {
+                $matchedTokens++;
+            }
+        }
+        if ($status === 'likely_ok' || ($automotive && $matchedTokens > 0 && ($status === 'review_suggested' || empty($validation['valid'])))) {
+            return 'high';
+        }
+        if ($automotive && ($status === 'review_suggested' || $matchedTokens > 0)) {
+            return 'medium';
+        }
+        return 'low';
     }
 
     public static function suggestion_report_columns(): array
@@ -235,7 +549,7 @@ class EbayCategorySuggestionReportService
         for ($i = 1; $i <= 3; $i++) {
             array_push($columns, "suggested_ebay_category_id_{$i}", "suggested_ebay_category_name_{$i}", "suggested_ebay_category_path_{$i}", "suggested_ebay_category_score_{$i}");
         }
-        return array_merge($columns, ['suggested_ebay_category_id','suggested_ebay_category_path','confidence','sample_product_ids','sample_product_titles','query_used','taxonomy_error','note']);
+        return array_merge($columns, ['suggested_ebay_category_id','suggested_ebay_category_path','confidence','raw_polish_query','translated_german_query','query_used','query_source','translation_source','sample_product_ids','sample_product_titles','sample_translated_titles','rejected_suggestions','taxonomy_error','note']);
     }
 
     public static function ready_to_import_columns(): array
@@ -252,11 +566,11 @@ class EbayCategorySuggestionReportService
         return $details;
     }
 
-    private function build_report_row(array $row, array $samples, array $currentValidation, string $status, array $suggestions, array $best, string $confidence, string $query, string $error): array
+    private function build_report_row(array $row, array $samples, array $currentValidation, string $status, array $suggestions, array $best, string $confidence, string $query, string $error, array $queryPlan = [], string $querySource = '', array $rejectedSuggestions = []): array
     {
         $parentId = (int) ($row['parent'] ?? 0);
         $sampleIds = array_map(static fn(array $sample): string => (string) ($sample['id'] ?? ''), $samples);
-        $sampleTitles = array_map(static fn(array $sample): string => (string) ($sample['translated_title'] ?? $sample['title'] ?? ''), $samples);
+        $sampleTitles = array_map(static fn(array $sample): string => (string) ($sample['title'] ?? ''), $samples);
         $report = array_fill_keys(self::suggestion_report_columns(), '');
         $report['woo_subcategory_id'] = (string) ($row['term_id'] ?? '');
         $report['woo_category_id'] = (string) ($parentId > 0 ? $parentId : ($row['term_id'] ?? ''));
@@ -281,9 +595,15 @@ class EbayCategorySuggestionReportService
         $report['suggested_ebay_category_id'] = (string) ($best['category_id'] ?? '');
         $report['suggested_ebay_category_path'] = (string) ($best['category_path'] ?? '');
         $report['confidence'] = $confidence;
+        $report['raw_polish_query'] = (string) ($queryPlan['raw_polish_query'] ?? '');
+        $report['translated_german_query'] = (string) ($queryPlan['translated_german_query'] ?? '');
+        $report['query_used'] = $query;
+        $report['query_source'] = $querySource;
+        $report['translation_source'] = (string) ($queryPlan['translation_source'] ?? '');
         $report['sample_product_ids'] = implode('|', array_filter($sampleIds));
         $report['sample_product_titles'] = implode(' | ', array_filter($sampleTitles));
-        $report['query_used'] = $query;
+        $report['sample_translated_titles'] = (string) ($queryPlan['sample_translated_titles'] ?? '');
+        $report['rejected_suggestions'] = implode(' | ', array_map(static fn(array $suggestion): string => trim((string) ($suggestion['category_id'] ?? '') . ':' . (string) ($suggestion['category_name'] ?? '') . ':' . (string) ($suggestion['rejected_reason'] ?? '')), array_slice($rejectedSuggestions, 0, 10)));
         $report['taxonomy_error'] = trim($error);
         $report['note'] = $status === 'invalid_current' ? 'Current eBay category is invalid/not found or non-leaf for EBAY_DE; review before import.' : 'Suggestion only; no production mapping was changed.';
         return $report;
