@@ -1310,67 +1310,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $sku;
     }
 
-    public function generate_german_content_meta_only(int $product_id): array
+    public function generate_german_content_meta_only(int $product_id, bool $forceRefresh = false): array
     {
-        $product = wc_get_product($product_id);
-        if (!$product) {
-            return ['result' => 'skipped', 'product_id' => $product_id, 'reason' => 'product_not_found'];
-        }
-
-        $settings = $this->settings();
-        $settings['_wei_german_content_only_action'] = true;
-        $source = $this->ebay_german_content_source($product, $product_id);
-        $cached = $this->ebay_german_content_translator()->cached($product_id, $source);
-        $beforeTitle = trim((string) ($cached['title'] ?? get_post_meta($product_id, '_wei_ebay_de_title', true)));
-        $beforeDescription = trim((string) ($cached['description'] ?? get_post_meta($product_id, '_wei_ebay_de_description', true)));
-        if ($beforeTitle !== '' && $beforeDescription !== '' && empty($cached['stale'])) {
-            return [
-                'result' => 'already_ready',
-                'product_id' => $product_id,
-                'title_length' => mb_strlen($beforeTitle),
-                'description_length' => mb_strlen($beforeDescription),
-                'source' => (string) ($cached['translation_source'] ?? (trim((string) get_post_meta($product_id, '_wei_ebay_de_content_source', true)) ?: 'custom_meta')),
-                'source_hash' => (string) ($cached['source_hash'] ?? ''),
-                'cached_translation_hash' => (string) ($cached['cached_translation_hash'] ?? ''),
-                'stale' => false,
-                'ebay_api_calls' => false,
-                'published' => false,
-                'offer_write_calls' => false,
-                'wrote_woo_sku' => false,
-                'wrote_woo_price' => false,
-                'wrote_allegro' => false,
-            ];
-        }
-
-        $previousSuppress = $this->suppressVerboseLogs;
-        $this->suppressVerboseLogs = true;
-        try {
-            $content = $this->resolve_german_content($product, $product_id, 'EBAY_DE', $settings);
-        } finally {
-            $this->suppressVerboseLogs = $previousSuppress;
-        }
-
-        $ready = !empty($content['ready']);
-        if ($ready) {
-            $title = trim((string) ($content['title'] ?? ''));
-            $description = trim((string) ($content['description'] ?? ''));
-            if ($title !== '' && $description !== '') {
-                update_post_meta($product_id, '_wei_ebay_de_title', $title);
-                update_post_meta($product_id, '_wei_ebay_de_description', $description);
-                update_post_meta($product_id, '_wei_ebay_de_content_source', (string) ($content['source'] ?? 'generated'));
-                update_post_meta($product_id, '_wei_ebay_de_content_generated_at', gmdate('c'));
-                update_post_meta($product_id, '_wei_ebay_de_content_hash', $this->german_content_source_hash($product));
-            }
-        }
-
-        return [
-            'result' => $ready ? 'generated' : 'failed',
-            'product_id' => $product_id,
-            'source' => (string) ($content['source'] ?? ''),
-            'provider' => (string) ($content['provider'] ?? ''),
-            'title_length' => (int) ($content['title_length'] ?? 0),
-            'description_length' => (int) ($content['description_length'] ?? 0),
-            'error_message' => (string) ($content['error_message'] ?? ''),
+        $safety = [
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+            'modified_woo_product' => false,
             'ebay_api_calls' => false,
             'published' => false,
             'offer_write_calls' => false,
@@ -1378,6 +1324,179 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'wrote_woo_price' => false,
             'wrote_allegro' => false,
         ];
+
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            return array_merge([
+                'result' => 'error',
+                'product_id' => $product_id,
+                'reason' => 'product_not_found',
+                'source_hash' => '',
+                'stored_hash' => '',
+                'stale_before' => false,
+                'stale_after' => false,
+                'translation_source' => '',
+                'google_api_called' => false,
+                'translated_title' => '',
+                'translated_description_preview' => '',
+                'translated_fields_count' => 0,
+                'translated_item_specifics_count' => 0,
+                'untranslated_fields' => [],
+            ], $safety);
+        }
+
+        $settings = $this->settings();
+        $settings['_wei_german_content_only_action'] = true;
+        $source = $this->ebay_german_content_source($product, $product_id);
+        $translator = $this->ebay_german_content_translator();
+        $cachedBefore = $translator->cached($product_id, $source);
+        $sourceHash = (string) ($cachedBefore['source_hash'] ?? $translator->source_hash($source));
+        $staleBefore = !empty($cachedBefore['stale']);
+
+        if (!$forceRefresh) {
+            $beforeTitle = trim((string) ($cachedBefore['title'] ?? get_post_meta($product_id, '_wei_ebay_de_title', true)));
+            $beforeDescription = trim((string) ($cachedBefore['description'] ?? get_post_meta($product_id, '_wei_ebay_de_description', true)));
+            if ($beforeTitle !== '' && $beforeDescription !== '' && !$staleBefore) {
+                return array_merge([
+                    'result' => 'already_ready',
+                    'product_id' => $product_id,
+                    'title_length' => mb_strlen($beforeTitle),
+                    'description_length' => mb_strlen($beforeDescription),
+                    'source' => (string) ($cachedBefore['translation_source'] ?? (trim((string) get_post_meta($product_id, '_wei_ebay_de_content_source', true)) ?: 'custom_meta')),
+                    'source_hash' => $sourceHash,
+                    'stored_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'cached_translation_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'stale' => false,
+                    'stale_before' => false,
+                    'stale_after' => false,
+                    'translation_source' => (string) ($cachedBefore['translation_source'] ?? 'cache'),
+                    'google_api_called' => false,
+                    'translated_title' => $beforeTitle,
+                    'translated_description_preview' => mb_substr(wp_strip_all_tags($beforeDescription), 0, 240),
+                    'translated_fields_count' => count((array) ($cachedBefore['fields'] ?? [])),
+                    'translated_item_specifics_count' => count((array) ($cachedBefore['aspects'] ?? [])),
+                    'untranslated_fields' => $translator->untranslated_fields($cachedBefore),
+                ], $safety);
+            }
+
+            $previousSuppress = $this->suppressVerboseLogs;
+            $this->suppressVerboseLogs = true;
+            try {
+                $content = $this->resolve_german_content($product, $product_id, 'EBAY_DE', $settings);
+            } finally {
+                $this->suppressVerboseLogs = $previousSuppress;
+            }
+        } else {
+            $provider = $this->translation_provider($settings);
+            if (!$provider || !$provider->is_configured()) {
+                return array_merge([
+                    'result' => 'error',
+                    'product_id' => $product_id,
+                    'reason' => 'translation_provider_not_configured',
+                    'source_hash' => $sourceHash,
+                    'stored_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'cached_translation_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'stale_before' => $staleBefore,
+                    'stale_after' => $staleBefore,
+                    'translation_source' => $this->configured_translation_provider_key($settings),
+                    'google_api_called' => false,
+                    'translated_title' => '',
+                    'translated_description_preview' => '',
+                    'translated_fields_count' => 0,
+                    'translated_item_specifics_count' => 0,
+                    'untranslated_fields' => [],
+                    'error_message' => 'Google Translation provider is not configured.',
+                ], $safety);
+            }
+
+            try {
+                $payload = $translator->refresh($product_id, $source, $provider);
+                $mpn = (string) ($this->resolve_mpn_aspect_value($product, $product_id, (string) $product->get_sku())['value'] ?? '');
+                $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, '', $settings);
+                $title = $this->sanitize_ebay_de_title((string) ($payload['title'] ?? ''), $mpn, $manufacturer);
+                if ($title !== (string) ($payload['title'] ?? '')) {
+                    $payload['title'] = $title;
+                    update_post_meta($product_id, EbayGermanContentTranslator::META_TITLE, $title);
+                    update_post_meta($product_id, EbayGermanContentTranslator::META_PAYLOAD, $payload);
+                }
+                $description = trim(wp_kses_post((string) ($payload['description'] ?? '')));
+                if ($title === '' || $description === '') {
+                    throw new \RuntimeException('Google Translation provider returned empty German title or description.');
+                }
+                $content = $this->log_german_content($product_id, $product_id, (string) ($payload['translation_source'] ?? ('generated_' . $provider->provider_key())), $title, $description, [
+                    'provider' => $provider->provider_key(),
+                    'generated' => true,
+                    'stale' => false,
+                    'source_hash' => $sourceHash,
+                    'content_hash' => $sourceHash,
+                    'cached_translation_hash' => $sourceHash,
+                    'current_content_hash' => $sourceHash,
+                    'source_description' => (string) ($source['description'] ?? ''),
+                    'description_source' => (string) ($source['description_source'] ?? 'post_content'),
+                    'fields' => (array) ($payload['fields'] ?? []),
+                    'translated_fields' => (array) ($payload['translated_fields'] ?? []),
+                    'untranslated_fields' => $translator->untranslated_fields($payload),
+                    'aspects' => (array) ($payload['aspects'] ?? []),
+                    'google_api_called' => !empty($payload['google_api_called']),
+                ]);
+            } catch (\Throwable $e) {
+                return array_merge([
+                    'result' => 'error',
+                    'product_id' => $product_id,
+                    'reason' => 'generation_failed',
+                    'source_hash' => $sourceHash,
+                    'stored_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'cached_translation_hash' => (string) ($cachedBefore['cached_translation_hash'] ?? ''),
+                    'stale_before' => $staleBefore,
+                    'stale_after' => $staleBefore,
+                    'translation_source' => $this->configured_translation_provider_key($settings),
+                    'google_api_called' => false,
+                    'translated_title' => '',
+                    'translated_description_preview' => '',
+                    'translated_fields_count' => 0,
+                    'translated_item_specifics_count' => 0,
+                    'untranslated_fields' => [],
+                    'error_message' => 'German eBay content generation failed: ' . $e->getMessage(),
+                ], $safety);
+            }
+        }
+
+        $cachedAfter = $translator->cached($product_id, $source);
+        $ready = !empty($content['ready']);
+        $title = trim((string) ($content['title'] ?? ''));
+        $description = trim((string) ($content['description'] ?? ''));
+
+        if ($ready && $title !== '' && $description !== '') {
+            update_post_meta($product_id, '_wei_ebay_de_title', $title);
+            update_post_meta($product_id, '_wei_ebay_de_description', $description);
+            update_post_meta($product_id, '_wei_ebay_de_content_source', (string) ($content['source'] ?? 'generated'));
+            update_post_meta($product_id, '_wei_ebay_de_content_generated_at', gmdate('c'));
+            update_post_meta($product_id, '_wei_ebay_de_content_hash', $sourceHash);
+            $cachedAfter = $translator->cached($product_id, $source);
+        }
+
+        return array_merge([
+            'result' => $ready ? 'success' : 'error',
+            'product_id' => $product_id,
+            'source' => (string) ($content['source'] ?? ''),
+            'provider' => (string) ($content['provider'] ?? ''),
+            'title_length' => (int) ($content['title_length'] ?? 0),
+            'description_length' => (int) ($content['description_length'] ?? 0),
+            'source_hash' => $sourceHash,
+            'stored_hash' => (string) get_post_meta($product_id, '_wei_ebay_de_content_hash', true),
+            'cached_translation_hash' => (string) ($cachedAfter['cached_translation_hash'] ?? ''),
+            'stale' => !empty($cachedAfter['stale']),
+            'stale_before' => $staleBefore,
+            'stale_after' => !empty($cachedAfter['stale']),
+            'translation_source' => (string) ($content['source'] ?? $cachedAfter['translation_source'] ?? ''),
+            'google_api_called' => !empty($content['google_api_called']),
+            'translated_title' => $title,
+            'translated_description_preview' => mb_substr(wp_strip_all_tags($description), 0, 240),
+            'translated_fields_count' => count((array) ($content['fields'] ?? $cachedAfter['fields'] ?? [])),
+            'translated_item_specifics_count' => count((array) ($content['aspects'] ?? $cachedAfter['aspects'] ?? [])),
+            'untranslated_fields' => (array) ($content['untranslated_fields'] ?? $translator->untranslated_fields($cachedAfter)),
+            'error_message' => (string) ($content['error_message'] ?? ''),
+        ], $safety);
     }
 
     private function resolve_german_content($product, int $product_id, string $marketplaceId, array $settings): array

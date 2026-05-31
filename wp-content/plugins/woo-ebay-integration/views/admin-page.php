@@ -466,10 +466,11 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
             </div>
             <div class="wei-action-group safe">
                 <h3>Regenerate / refresh eBay content</h3>
-                <p class="description">Uses the existing disabled single-template update handler; it records a status only and does not update active listings at this stage.</p>
+                <p class="description">Safely regenerates German eBay content in local product meta only. Calls Google Translate via the configured provider, refreshes _wei_ebay_de_* cache/hash, and never updates or creates active eBay listings.</p>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_description_template_single'); ?>
-                    <input type="hidden" name="action" value="wei_description_template_single" />
+                    <?php wp_nonce_field('wei_ebay_regenerate_german_content'); ?>
+                    <input type="hidden" name="action" value="wei_ebay_regenerate_german_content" />
+                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
                     <button class="button">Regenerate/refresh eBay content</button>
                 </form>
             </div>
