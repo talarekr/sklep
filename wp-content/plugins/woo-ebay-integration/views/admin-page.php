@@ -315,6 +315,23 @@ $displayValue = static function ($value, string $fallback = '—') use ($toScala
 $adminPostUrl = $toScalarString(admin_url('admin-post.php'));
 $adminPageUrl = $toScalarString(admin_url('admin.php'));
 $connectUrl = $toScalarString($connect_url ?? '');
+
+$oauthDiagnostics = is_array($oauth_diagnostics ?? null) ? $oauth_diagnostics : [];
+$oauthCallbackDebug = [
+    'oauth_status' => (string) ($oauthDiagnostics['oauth_status'] ?? ''),
+    'has_refresh_token' => !empty($oauthDiagnostics['has_refresh_token']),
+    'callback_url' => (string) ($oauthDiagnostics['callback_url'] ?? ''),
+    'redirect_uri_configured' => (string) ($oauthDiagnostics['redirect_uri_configured'] ?? ''),
+    'state_valid' => $oauthDiagnostics['state_valid'] ?? null,
+    'token_exchange_success' => $oauthDiagnostics['token_exchange_success'] ?? null,
+    'token_exchange_error' => (string) ($oauthDiagnostics['token_exchange_error'] ?? ''),
+];
+$oauthCallbackMessage = [
+    'oauth_error' => isset($_GET['oauth_error']) ? sanitize_text_field(wp_unslash((string) $_GET['oauth_error'])) : '',
+    'error_description' => isset($_GET['error_description']) ? sanitize_text_field(wp_unslash((string) $_GET['error_description'])) : '',
+    'state_valid' => isset($_GET['state_valid']) ? sanitize_text_field(wp_unslash((string) $_GET['state_valid'])) : '',
+    'redirect_uri_used' => isset($_GET['redirect_uri_used']) ? esc_url_raw(wp_unslash((string) $_GET['redirect_uri_used'])) : '',
+];
 $setting = static fn(string $key, $default = ''): string => $toScalarString($s[$key] ?? $default);
 $boolLabel = static fn($enabled): string => !empty($enabled) ? 'Enabled' : 'Disabled';
 $badgeClass = static fn($enabled): string => !empty($enabled) ? 'ok' : 'warn';
@@ -600,7 +617,8 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
         <p class="wei-danger"><strong>Safety:</strong> these tools are rare or technical. They keep existing capability checks and nonces, but may run heavy scans, write diagnostics, reset checkpoints or process queues. Use only when needed.</p>
         <details><summary>Account / API diagnostics</summary>
             <div class="wei-actions"><a class="button button-primary" href="<?php echo esc_url($connectUrl); ?>">Connect eBay</a><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_disconnect'); ?><input type="hidden" name="action" value="wei_disconnect" /><button class="button">Disconnect eBay</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_test'); ?><input type="hidden" name="action" value="wei_test_connection" /><button class="button">Test connection</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_upsert_inventory_location'); ?><input type="hidden" name="action" value="wei_upsert_inventory_location" /><button class="button">Create / update inventory location</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_refresh_policies'); ?><input type="hidden" name="action" value="wei_refresh_policies" /><button class="button">Refresh policies from eBay</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run API readiness check</button></form></div>
-            <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['cached_policies' => $cached, 'last_status' => $status, 'auto_sync' => array_diff_key($autoSync, array_flip(['readiness_summary']))], 8000)); ?></pre>
+            <?php if (!empty($oauthCallbackMessage['oauth_error'])): ?><div class="notice notice-error inline"><p><strong>eBay OAuth error:</strong> <?php echo esc_html($oauthCallbackMessage['oauth_error']); ?> <?php echo $oauthCallbackMessage['error_description'] !== '' ? esc_html(' — ' . $oauthCallbackMessage['error_description']) : ''; ?></p><pre class="wei-scroll"><?php echo esc_html($technicalPreview($oauthCallbackMessage, 3000)); ?></pre></div><?php endif; ?>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['oauth' => $oauthCallbackDebug, 'cached_policies' => $cached, 'last_status' => $status, 'auto_sync' => array_diff_key($autoSync, array_flip(['readiness_summary']))], 8000)); ?></pre>
         </details>
         <details><summary>Settings</summary>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
@@ -637,7 +655,7 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                     <tr><th><label for="wei-stock-batch-size">Stock batch size</label></th><td><input id="wei-stock-batch-size" type="number" min="1" max="300" name="auto_sync_stock_batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_stock_batch_size', 100)); ?>" /></td></tr>
                     <tr><th><label for="wei-client-id">Client ID</label></th><td><input id="wei-client-id" class="regular-text" name="client_id" value="<?php echo esc_attr((string) $setting('client_id')); ?>" /></td></tr>
                     <tr><th><label for="wei-client-secret">Client secret</label></th><td><input id="wei-client-secret" class="regular-text" type="password" name="client_secret" value="<?php echo esc_attr((string) $setting('client_secret')); ?>" autocomplete="new-password" /> <span class="description"><?php echo esc_html($maskSecret((string) $setting('client_secret'))); ?></span></td></tr>
-                    <tr><th><label for="wei-redirect-uri">Redirect URI</label></th><td><input id="wei-redirect-uri" class="large-text" name="redirect_uri" value="<?php echo esc_attr((string) $setting('redirect_uri')); ?>" /></td></tr>
+                    <tr><th><label for="wei-redirect-uri">Redirect URI</label></th><td><input id="wei-redirect-uri" class="large-text" name="redirect_uri" value="<?php echo esc_attr((string) $setting('redirect_uri', (string) ($oauthCallbackDebug['redirect_uri_configured'] ?? ''))); ?>" /> <span class="description">Must match the eBay Developer App redirect. Current callback URL: <?php echo esc_html((string) ($oauthCallbackDebug['callback_url'] ?? '')); ?></span></td></tr>
                 </table>
                 <p><button class="button button-primary">Save settings</button></p>
             </form>
