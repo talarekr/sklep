@@ -313,6 +313,7 @@ class OvokoBidirectionalSyncOrchestrator
         }
 
         $orders = $this->extract_orders_from_response($fetch);
+        $parserDiagnostics = $this->build_orders_parser_diagnostics($orders);
         $itemRowsCount = $this->count_order_item_rows($orders);
         $soldItems = $this->extract_sold_part_items_from_orders($orders);
         $uniquePartIds = [];
@@ -389,6 +390,7 @@ class OvokoBidirectionalSyncOrchestrator
             'warnings_count' => count($warnings),
             'changed_product_ids' => array_values(array_unique(array_map('intval', $changedProductIds))),
             'missing_part_ids' => array_values(array_unique($missingPartIds)),
+            'parser_diagnostics' => $parserDiagnostics,
             'errors' => $errors,
             'warnings' => $warnings,
             'http_code' => $fetch['http_code'] ?? null,
@@ -426,13 +428,7 @@ class OvokoBidirectionalSyncOrchestrator
             if (!is_array($order)) {
                 continue;
             }
-            $rows = [];
-            foreach (['item_list', 'items', 'products', 'parts'] as $key) {
-                if (is_array($order[$key] ?? null)) {
-                    $rows = (array) $order[$key];
-                    break;
-                }
-            }
+            $rows = $this->extract_order_item_rows($order)['rows'];
             $count += $rows === [] ? 1 : count(array_filter($rows, 'is_array'));
         }
 
@@ -447,13 +443,7 @@ class OvokoBidirectionalSyncOrchestrator
                 continue;
             }
             $orderId = $this->extract_order_id($order);
-            $rows = [];
-            foreach (['item_list', 'items', 'products', 'parts'] as $key) {
-                if (is_array($order[$key] ?? null)) {
-                    $rows = (array) $order[$key];
-                    break;
-                }
-            }
+            $rows = $this->extract_order_item_rows($order)['rows'];
             if ($rows === []) {
                 $rows = [$order];
             }
@@ -472,6 +462,91 @@ class OvokoBidirectionalSyncOrchestrator
         return $items;
     }
 
+    private function extract_order_item_rows(array $order): array
+    {
+        foreach (['item_list', 'items', 'products', 'parts', 'order_items', 'orderItems', 'itemList'] as $key) {
+            if (is_array($order[$key] ?? null)) {
+                return ['key' => $key, 'rows' => (array) $order[$key]];
+            }
+        }
+
+        return ['key' => '', 'rows' => []];
+    }
+
+    private function build_orders_parser_diagnostics(array $orders): array
+    {
+        $samples = [];
+        $itemListKeysUsed = [];
+        $orderTopLevelKeys = [];
+        $candidateFieldsFound = [];
+        $candidateValues = [];
+        $rejections = [];
+
+        foreach ($orders as $order) {
+            if (!is_array($order)) {
+                continue;
+            }
+
+            if ($orderTopLevelKeys === []) {
+                $orderTopLevelKeys = array_values(array_map('strval', array_keys($order)));
+            }
+
+            $rowsInfo = $this->extract_order_item_rows($order);
+            $itemListKey = (string) ($rowsInfo['key'] ?? '');
+            if ($itemListKey !== '') {
+                $itemListKeysUsed[$itemListKey] = true;
+            }
+            $rows = (array) ($rowsInfo['rows'] ?? []);
+            if ($rows === []) {
+                $rows = [$order];
+                $itemListKey = $itemListKey !== '' ? $itemListKey : '__order_as_item_fallback__';
+            }
+
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                $candidate = $this->inspect_order_item_part_id_candidates($row);
+                foreach ((array) ($candidate['candidate_part_id_fields_found'] ?? []) as $field) {
+                    $candidateFieldsFound[(string) $field] = true;
+                }
+                foreach ((array) ($candidate['extracted_candidate_values'] ?? []) as $field => $value) {
+                    $candidateValues[(string) $field] = $value;
+                }
+                foreach ((array) ($candidate['rejections'] ?? []) as $rejection) {
+                    if (count($rejections) < 12) {
+                        $rejections[] = $rejection;
+                    }
+                }
+
+                if (count($samples) < 3) {
+                    $samples[] = [
+                        'order_top_level_keys' => array_values(array_map('strval', array_keys($order))),
+                        'item_list_key_used' => $itemListKey,
+                        'item_row_keys' => array_values(array_map('strval', array_keys($row))),
+                        'candidate_part_id_fields_found' => (array) ($candidate['candidate_part_id_fields_found'] ?? []),
+                        'extracted_candidate_values' => (array) ($candidate['extracted_candidate_values'] ?? []),
+                        'accepted_part_id' => (string) ($candidate['accepted_part_id'] ?? ''),
+                        'accepted_part_id_field' => (string) ($candidate['accepted_part_id_field'] ?? ''),
+                        'why_part_id_rejected' => (array) ($candidate['rejections'] ?? []),
+                        'sample_sanitized_item_row' => $this->sanitize_order_item_row_for_diagnostics($row),
+                    ];
+                }
+            }
+        }
+
+        return [
+            'full_payload_omitted' => true,
+            'order_top_level_keys_sample' => $orderTopLevelKeys,
+            'item_list_keys_used' => array_values(array_keys($itemListKeysUsed)),
+            'candidate_part_id_fields_found' => array_values(array_keys($candidateFieldsFound)),
+            'extracted_candidate_values_sample' => array_slice($candidateValues, 0, 20, true),
+            'why_part_id_rejected_sample' => $rejections,
+            'samples' => $samples,
+        ];
+    }
+
     private function extract_order_id(array $order): string
     {
         foreach (['order_id', 'id', 'orderId', 'order_number', 'number'] as $key) {
@@ -486,14 +561,195 @@ class OvokoBidirectionalSyncOrchestrator
 
     private function extract_part_id_from_order_item(array $item): string
     {
-        foreach (['_ovoko_part_id', 'ovoko_part_id', 'part_id', 'partId', 'rrr_part_id', 'rrrPartId'] as $key) {
-            $value = trim((string) ($item[$key] ?? ''));
-            if ($value !== '' && preg_match('/^\d+$/', $value)) {
-                return sanitize_text_field($value);
+        return (string) ($this->inspect_order_item_part_id_candidates($item)['accepted_part_id'] ?? '');
+    }
+
+    private function inspect_order_item_part_id_candidates(array $item): array
+    {
+        $candidatePaths = [
+            '_ovoko_part_id',
+            'ovoko_part_id',
+            'part_id',
+            'partId',
+            'rrr_part_id',
+            'rrrPartId',
+            'id',
+            'item_id',
+            'product_id',
+            'part.id',
+            'id_bridge',
+            'external_id',
+            'rrr_id',
+            'article_id',
+            'item.item_id',
+        ];
+        $found = [];
+        $values = [];
+        $rejections = [];
+
+        foreach ($candidatePaths as $path) {
+            $lookup = $this->read_array_path($item, $path);
+            if (empty($lookup['exists'])) {
+                continue;
             }
+
+            $value = $lookup['value'];
+            $stringValue = is_scalar($value) || $value === null ? trim((string) $value) : '';
+            $found[] = $path;
+            $values[$path] = is_scalar($value) || $value === null ? $stringValue : '[non_scalar]';
+            $reason = $this->order_item_part_id_rejection_reason($value);
+            if ($reason === '') {
+                return [
+                    'accepted_part_id' => sanitize_text_field($stringValue),
+                    'accepted_part_id_field' => $path,
+                    'candidate_part_id_fields_found' => array_values(array_unique($found)),
+                    'extracted_candidate_values' => $values,
+                    'rejections' => $rejections,
+                ];
+            }
+            $rejections[] = ['field' => $path, 'value' => $values[$path], 'reason' => $reason];
+        }
+
+        $recursive = $this->find_recursive_order_item_part_id_candidate($item, '', $candidatePaths);
+        foreach ((array) ($recursive['found'] ?? []) as $field => $value) {
+            $found[] = (string) $field;
+            $values[(string) $field] = $value;
+        }
+        foreach ((array) ($recursive['rejections'] ?? []) as $rejection) {
+            $rejections[] = $rejection;
+        }
+        $accepted = (string) ($recursive['accepted_part_id'] ?? '');
+        if ($accepted !== '') {
+            return [
+                'accepted_part_id' => $accepted,
+                'accepted_part_id_field' => (string) ($recursive['accepted_part_id_field'] ?? ''),
+                'candidate_part_id_fields_found' => array_values(array_unique($found)),
+                'extracted_candidate_values' => $values,
+                'rejections' => $rejections,
+            ];
+        }
+
+        return [
+            'accepted_part_id' => '',
+            'accepted_part_id_field' => '',
+            'candidate_part_id_fields_found' => array_values(array_unique($found)),
+            'extracted_candidate_values' => $values,
+            'rejections' => $rejections !== [] ? $rejections : [['field' => '', 'value' => '', 'reason' => 'no_candidate_part_id_field_found']],
+        ];
+    }
+
+    private function read_array_path(array $array, string $path): array
+    {
+        $current = $array;
+        foreach (explode('.', $path) as $segment) {
+            if (!is_array($current) || !array_key_exists($segment, $current)) {
+                return ['exists' => false, 'value' => null];
+            }
+            $current = $current[$segment];
+        }
+
+        return ['exists' => true, 'value' => $current];
+    }
+
+    private function order_item_part_id_rejection_reason($value): string
+    {
+        if (is_array($value) || is_object($value)) {
+            return 'non_scalar_value';
+        }
+        $stringValue = trim((string) $value);
+        if ($stringValue === '') {
+            return 'empty_value';
+        }
+        if (!preg_match('/^\d+$/', $stringValue)) {
+            return 'not_numeric_digits';
+        }
+        if ((int) $stringValue <= 0) {
+            return 'not_positive_integer';
         }
 
         return '';
+    }
+
+    private function find_recursive_order_item_part_id_candidate(array $value, string $prefix = '', array $skipPaths = []): array
+    {
+        $found = [];
+        $rejections = [];
+        $candidateLeafKeys = ['id', 'part_id', 'partId', 'item_id', 'product_id', 'id_bridge', 'external_id', 'rrr_id', 'article_id'];
+
+        foreach ($value as $key => $child) {
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . (string) $key;
+            if (in_array($path, $skipPaths, true)) {
+                continue;
+            }
+
+            if (is_array($child)) {
+                $nested = $this->find_recursive_order_item_part_id_candidate($child, $path, $skipPaths);
+                foreach ((array) ($nested['found'] ?? []) as $field => $nestedValue) {
+                    $found[(string) $field] = $nestedValue;
+                }
+                foreach ((array) ($nested['rejections'] ?? []) as $rejection) {
+                    if (count($rejections) < 12) {
+                        $rejections[] = $rejection;
+                    }
+                }
+                if ((string) ($nested['accepted_part_id'] ?? '') !== '') {
+                    return [
+                        'accepted_part_id' => (string) $nested['accepted_part_id'],
+                        'accepted_part_id_field' => (string) ($nested['accepted_part_id_field'] ?? ''),
+                        'found' => $found,
+                        'rejections' => $rejections,
+                    ];
+                }
+                continue;
+            }
+
+            if (!in_array((string) $key, $candidateLeafKeys, true)) {
+                continue;
+            }
+
+            $reason = $this->order_item_part_id_rejection_reason($child);
+            $stringValue = is_scalar($child) || $child === null ? trim((string) $child) : '';
+            $found[$path] = is_scalar($child) || $child === null ? $stringValue : '[non_scalar]';
+            if ($reason === '') {
+                return [
+                    'accepted_part_id' => sanitize_text_field($stringValue),
+                    'accepted_part_id_field' => $path,
+                    'found' => $found,
+                    'rejections' => $rejections,
+                ];
+            }
+            if (count($rejections) < 12) {
+                $rejections[] = ['field' => $path, 'value' => $found[$path], 'reason' => $reason];
+            }
+        }
+
+        return ['accepted_part_id' => '', 'accepted_part_id_field' => '', 'found' => $found, 'rejections' => $rejections];
+    }
+
+    private function sanitize_order_item_row_for_diagnostics(array $row, int $depth = 0): array
+    {
+        $safe = [];
+        $sensitivePatterns = '/(customer|client|buyer|email|phone|tel|mobile|address|street|city|postcode|postal|zip|country|name|surname|firstname|lastname|first_name|last_name|company|vat|tax|nip|pesel|shipping|billing|invoice|recipient|receiver|contact|comment|note)/i';
+
+        foreach ($row as $key => $value) {
+            $keyString = (string) $key;
+            if (preg_match($sensitivePatterns, $keyString)) {
+                $safe[$keyString] = '[redacted]';
+                continue;
+            }
+            if (is_array($value)) {
+                $safe[$keyString] = $depth >= 2 ? '[nested_array_omitted]' : $this->sanitize_order_item_row_for_diagnostics($value, $depth + 1);
+                continue;
+            }
+            if (is_scalar($value) || $value === null) {
+                $text = sanitize_text_field((string) $value);
+                $safe[$keyString] = strlen($text) > 120 ? substr($text, 0, 117) . '...' : $text;
+                continue;
+            }
+            $safe[$keyString] = '[non_scalar_omitted]';
+        }
+
+        return $safe;
     }
 
     private function first_order_id_for_part(array $soldItems, string $partId): string
@@ -717,6 +973,7 @@ class OvokoBidirectionalSyncOrchestrator
                 'warnings_count' => (int) ($ordersStockResult['warnings_count'] ?? count((array) ($ordersStockResult['warnings'] ?? []))),
                 'changed_product_ids' => array_values(array_map('intval', (array) ($ordersStockResult['changed_product_ids'] ?? []))),
                 'missing_part_ids' => array_values(array_map('strval', (array) ($ordersStockResult['missing_part_ids'] ?? []))),
+                'parser_diagnostics' => (array) ($ordersStockResult['parser_diagnostics'] ?? []),
             ],
             'woo_to_ovoko' => [
                 'processed' => (int) ($saleResult['processed'] ?? 0),
