@@ -1350,6 +1350,59 @@ class OvokoAutoSyncDryRunService
         return $result;
     }
 
+
+
+    public function mark_product_sold_in_ovoko(int $productId, string $ovokoId, array $options = []): array
+    {
+        $client = new RrrApiClient($this->integrationService->get_settings());
+        $mode = (string) (($options['mode'] ?? '') ?: 'automatic_sale_queue_worker');
+        $source = (string) ($options['source'] ?? 'external_sale');
+        $sourceOrderId = (string) ($options['source_order_id'] ?? '');
+        $sourceItemId = (string) ($options['source_item_id'] ?? '');
+        $requestId = (string) ($options['request_id'] ?? '');
+        $result = [
+            'ok' => false,
+            'action_name' => 'Mark Ovoko part sold from external sale product job',
+            'mode' => $mode,
+            'source' => $source,
+            'source_order_id' => $sourceOrderId,
+            'external_order_id' => $sourceOrderId,
+            'source_item_id' => $sourceItemId,
+            'product_id' => $productId,
+            'part_id' => $ovokoId,
+            'request_id' => $requestId,
+            'confirmed_endpoint' => '/crm/changePartStatus',
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'sent_status' => 2,
+            'success_contract' => 'HTTP 200 and status_code=R200',
+            'warnings' => [],
+            'errors' => [],
+            'api_response' => null,
+            'checked_at' => gmdate('c'),
+        ];
+
+        if ($productId <= 0) {
+            $result['errors'][] = 'missing_product_id';
+            return $result;
+        }
+        $ovokoId = trim($ovokoId);
+        if ($ovokoId === '' || !preg_match('/^\d+$/', $ovokoId)) {
+            $result['errors'][] = 'missing_or_invalid_ovoko_part_id_product_meta';
+            return $result;
+        }
+
+        $apiResponse = $client->change_part_status($ovokoId, 2);
+        $result['api_response'] = $apiResponse;
+        $success = !empty($apiResponse['ok']) && (int) ($apiResponse['http_status'] ?? 0) === 200 && (string) ($apiResponse['status_code'] ?? '') === 'R200';
+        $result['ok'] = $success;
+        if (!$success) {
+            $result['errors'][] = (string) ($apiResponse['message'] ?? 'changePartStatus failed');
+        }
+
+        return $result;
+    }
+
     private function summarize_ovoko_part_fetch(RrrApiClient $client, array $fetch): array
     {
         $payload = is_array($fetch['payload'] ?? null) ? (array) $fetch['payload'] : [];

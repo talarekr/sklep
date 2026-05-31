@@ -44,6 +44,7 @@ class OrderImporter
                 $sku = trim((string) ($line['sku'] ?? ''));
                 $offerId = trim((string) ($line['offerId'] ?? $line['offer']['offerId'] ?? ''));
                 $itemId = trim((string) ($line['legacyItemId'] ?? $line['itemId'] ?? ''));
+                $lineItemId = trim((string) ($line['lineItemId'] ?? ''));
                 $resolution = $this->resolve_line_item_product($sku, $offerId, $itemId);
                 if (!$resolution) {
                     $this->logger->warning('eBay order line item skipped: no Woo product mapping', ['sku' => $sku, 'offer_id' => $offerId, 'item_id' => $itemId, 'ebay_order_id' => $order_id]);
@@ -77,8 +78,21 @@ class OrderImporter
                 update_post_meta($product_id, '_wei_processed_ebay_order_ids', array_values(array_unique($processedOrders)));
                 update_post_meta($product_id, '_wei_last_ebay_order_id', $order_id);
                 update_post_meta($product_id, '_wei_ebay_export_status', 'stock_synced_to_woo');
-                $this->logger->info('Woo stock updated from eBay order', ['product_id' => $product_id, 'ebay_sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode, 'resolved_by' => $resolution['resolved_by'], 'wrote_allegro' => false]);
-                $processed[] = ['order_id' => $order_id, 'product_id' => $product_id, 'result' => 'stock_synced_to_woo', 'old_stock' => $oldStock, 'new_stock' => $newStock, 'resolved_by' => $resolution['resolved_by']];
+
+                $ovokoPartId = $this->resolve_ovoko_part_id($product_id);
+                $this->logger->info('EBAY_ORDER_SALE_DETECTED', ['source' => 'ebay_order', 'ebay_order_id' => $order_id, 'ebay_line_item_id' => $lineItemId !== '' ? $lineItemId : ($itemId !== '' ? $itemId : $offerId), 'product_id' => $product_id, 'ovoko_part_id' => $ovokoPartId, 'quantity' => $qty, 'old_stock' => $oldStock, 'new_stock' => $newStock]);
+                $ovokoQueue = $this->enqueue_ovoko_sale_job_from_ebay_order($order_id, $lineItemId !== '' ? $lineItemId : ($itemId !== '' ? $itemId : $offerId), $product_id, $ovokoPartId, [
+                    'sku' => $sku,
+                    'offer_id' => $offerId,
+                    'item_id' => $itemId,
+                    'quantity' => $qty,
+                    'old_stock' => $oldStock,
+                    'new_stock' => $newStock,
+                    'resolved_by' => (string) $resolution['resolved_by'],
+                ]);
+
+                $this->logger->info('Woo stock updated from eBay order', ['product_id' => $product_id, 'ebay_sku' => $sku, 'ebay_order_id' => $order_id, 'old_stock' => $oldStock, 'new_stock' => $newStock, 'mode' => $mode, 'resolved_by' => $resolution['resolved_by'], 'wrote_allegro' => false, 'ovoko_sale_queue' => $ovokoQueue]);
+                $processed[] = ['order_id' => $order_id, 'product_id' => $product_id, 'result' => 'stock_synced_to_woo', 'old_stock' => $oldStock, 'new_stock' => $newStock, 'resolved_by' => $resolution['resolved_by'], 'ovoko_part_id' => $ovokoPartId, 'ovoko_sale_queue' => $ovokoQueue];
             }
         }
 
@@ -124,6 +138,66 @@ class OrderImporter
         }
 
         return null;
+    }
+
+
+
+    private function enqueue_ovoko_sale_job_from_ebay_order(string $orderId, string $lineItemId, int $productId, string $ovokoPartId, array $context): array
+    {
+        $payload = [
+            'source' => 'ebay_order',
+            'source_order_id' => $orderId,
+            'ebay_order_id' => $orderId,
+            'source_item_id' => $lineItemId,
+            'ebay_line_item_id' => $lineItemId,
+            'product_id' => $productId,
+            'ovoko_part_id' => $ovokoPartId,
+            'part_id' => $ovokoPartId,
+            'status_sent_to_ovoko' => 2,
+            'context' => $context,
+        ];
+        $default = ['ok' => false, 'queued' => false, 'skipped' => true, 'reason' => 'gpswiss_ovoko_queue_filter_unavailable'] + $payload;
+        $result = apply_filters('gpswiss_ovoko_enqueue_sale_job_result', $default, $payload);
+        $result = is_array($result) ? $result : $default;
+
+        $logContext = [
+            'source' => 'ebay_order',
+            'ebay_order_id' => $orderId,
+            'ebay_line_item_id' => $lineItemId,
+            'product_id' => $productId,
+            'ovoko_part_id' => $ovokoPartId,
+            'queue_result' => $result,
+        ];
+        if (!empty($result['queued'])) {
+            $this->logger->info('EBAY_ORDER_OVOKO_SALE_JOB_QUEUED', $logContext);
+        } elseif (!empty($result['skipped'])) {
+            $this->logger->warning('EBAY_ORDER_OVOKO_SALE_JOB_SKIPPED', $logContext);
+        } else {
+            $this->logger->error('EBAY_ORDER_OVOKO_SALE_JOB_FAILED', $logContext);
+        }
+
+        return $result;
+    }
+
+    private function resolve_ovoko_part_id(int $productId): string
+    {
+        $parentProductId = 0;
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            $parentProductId = $product && method_exists($product, 'get_parent_id') ? (int) $product->get_parent_id() : 0;
+        }
+        foreach ([$productId, $parentProductId] as $candidateProductId) {
+            if ($candidateProductId <= 0) {
+                continue;
+            }
+            foreach (['_ovoko_part_id', 'ovoko_part_id', 'part_id', 'source_part_id', 'external_part_id'] as $key) {
+                $value = (string) get_post_meta($candidateProductId, $key, true);
+                if ($value !== '' && preg_match('/^\d+$/', $value)) {
+                    return $value;
+                }
+            }
+        }
+        return '';
     }
 
     private function find_product_id_by_wei_ebay_sku(string $sku): int
