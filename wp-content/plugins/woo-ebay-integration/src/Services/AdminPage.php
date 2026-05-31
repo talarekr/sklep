@@ -35,6 +35,7 @@ class AdminPage
         add_action('admin_post_wei_description_template_publish_dry_run', [$this, 'description_template_publish_dry_run']);
         add_action('admin_post_wei_description_template_single', [$this, 'description_template_single']);
         add_action('admin_post_wei_ebay_regenerate_german_content', [$this, 'regenerate_german_content']);
+        add_action('admin_post_wei_generate_german_content_batch', [$this, 'generate_german_content_batch']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -80,6 +81,7 @@ class AdminPage
         add_action('admin_post_wei_ebay_process_queue_now', [$this, 'ebay_process_queue_now']);
         add_action('admin_post_wei_ebay_rebuild_ready_queue', [$this, 'ebay_rebuild_ready_queue']);
         add_action('admin_post_wei_ebay_initial_publish_batch', [$this, 'ebay_initial_publish_batch']);
+        add_action('admin_post_wei_publish_ready_products', [$this, 'publish_ready_products']);
         add_action('admin_post_wei_ebay_rebuild_initial_publish_candidates', [$this, 'ebay_rebuild_initial_publish_candidates']);
         add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
         add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
@@ -1403,6 +1405,32 @@ class AdminPage
         $this->go();
     }
 
+
+    public function publish_ready_products(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_publish_ready_products');
+        $batchSize = max(1, min(50, absint($_POST['batch_size'] ?? 5)));
+        $res = $this->run_initial_publish_batch($batchSize);
+        $this->set_status('Publish ready products: ' . wp_json_encode([
+            'processed' => (int) ($res['processed'] ?? 0),
+            'ready' => (int) $this->initial_publish_total_ready($this->initial_publish_candidate_summary()),
+            'exported' => (int) ($res['success'] ?? 0),
+            'published' => (int) ($res['success'] ?? 0),
+            'skipped_not_ready' => (int) ($res['skipped_not_ready'] ?? 0),
+            'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
+            'stale_german_content' => (int) ($res['stale_german_content'] ?? 0),
+            'missing_required_aspects' => (int) ($res['missing_required_aspects'] ?? 0),
+            'missing_image' => (int) ($res['missing_image'] ?? 0),
+            'missing_stock' => (int) ($res['missing_stock'] ?? 0),
+            'invalid_price' => (int) ($res['invalid_price'] ?? 0),
+            'errors' => (int) ($res['failed'] ?? 0),
+            'report_url' => (string) ($res['report_url'] ?? ''),
+            'status' => (string) ($res['status'] ?? ''),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
     public function ebay_initial_publish_toggle_pause(): void
     {
         $this->require_manage_options();
@@ -1754,6 +1782,15 @@ class AdminPage
         $lastPublishedProductId = 0;
         $lastListingId = '';
         $newCursor = $cursor;
+        $skipSummary = [
+            'skipped_not_ready' => 0,
+            'blocked_by_category' => 0,
+            'stale_german_content' => 0,
+            'missing_required_aspects' => 0,
+            'missing_image' => 0,
+            'missing_stock' => 0,
+            'invalid_price' => 0,
+        ];
 
         $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
         foreach ($ids as $productId) {
@@ -1772,6 +1809,9 @@ class AdminPage
                 $preflight = $this->adapter->preflight_product($productId);
                 if (empty($preflight['ready'])) {
                     $reason = (string) ($preflight['status'] ?? 'not_ready');
+                    $this->accumulate_publish_not_ready_reason($skipSummary, $preflight);
+                    update_post_meta($productId, '_wei_ebay_last_sync_status', 'not_ready');
+                    update_post_meta($productId, '_wei_ebay_last_sync_error', $reason);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="' . $this->compact_log_value($reason) . '"';
                     continue;
                 }
@@ -1831,7 +1871,32 @@ class AdminPage
             'remaining' => $remaining,
             'cursor' => $newCursor,
             'last_error' => $lastError,
-        ];
+        ] + $skipSummary;
+    }
+
+    private function accumulate_publish_not_ready_reason(array &$summary, array $preflight): void
+    {
+        $summary['skipped_not_ready'] = (int) ($summary['skipped_not_ready'] ?? 0) + 1;
+        $status = strtolower((string) ($preflight['status'] ?? ''));
+        $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
+        if ($status === 'blocked_by_category' || $status === 'missing_category' || str_contains($message, 'category')) {
+            $summary['blocked_by_category'] = (int) ($summary['blocked_by_category'] ?? 0) + 1;
+        }
+        if ($status === 'stale_german_content' || str_contains($message, 'stale') || str_contains($message, 'german')) {
+            $summary['stale_german_content'] = (int) ($summary['stale_german_content'] ?? 0) + 1;
+        }
+        if (str_contains($message, 'aspect') || str_contains($message, 'specific')) {
+            $summary['missing_required_aspects'] = (int) ($summary['missing_required_aspects'] ?? 0) + 1;
+        }
+        if (str_contains($message, 'image') || str_contains($message, 'photo')) {
+            $summary['missing_image'] = (int) ($summary['missing_image'] ?? 0) + 1;
+        }
+        if (str_contains($message, 'stock') || str_contains($message, 'quantity')) {
+            $summary['missing_stock'] = (int) ($summary['missing_stock'] ?? 0) + 1;
+        }
+        if ($status === 'invalid_price' || str_contains($message, 'price')) {
+            $summary['invalid_price'] = (int) ($summary['invalid_price'] ?? 0) + 1;
+        }
     }
 
     private function initial_publish_published_details(int $productId, array $result): array
@@ -2474,6 +2539,94 @@ class AdminPage
 
         $this->set_status('eBay.de German content regenerated meta-only: ' . wp_json_encode($res));
         wp_send_json($res);
+    }
+
+
+    public function generate_german_content_batch(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_german_content_batch');
+
+        $mode = sanitize_key((string) ($_POST['mode'] ?? 'stale'));
+        $mode = in_array($mode, ['all', 'stale'], true) ? $mode : 'stale';
+        $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
+        $cursorOption = 'wei_ebay_german_content_batch_cursor_' . $mode;
+        $cursor = (int) get_option($cursorOption, 0);
+        $productIds = $this->german_content_batch_product_ids($batchSize, $mode, $cursor);
+        $summary = [
+            'mode' => $mode,
+            'status' => 'in_progress',
+            'cursor' => $cursor,
+            'next_cursor' => 0,
+            'processed' => 0,
+            'generated' => 0,
+            'already_fresh' => 0,
+            'stale_fixed' => 0,
+            'errors' => 0,
+            'google_api_called' => false,
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'report_url' => '',
+            'results' => [],
+        ];
+
+        foreach ($productIds as $productId) {
+            $productId = (int) $productId;
+            $res = $this->adapter->generate_german_content_meta_only($productId, $mode === 'all');
+            $summary['processed']++;
+            if (($res['result'] ?? '') === 'already_ready') {
+                $summary['already_fresh']++;
+            } elseif (($res['result'] ?? '') === 'success' || ($res['result'] ?? '') === 'generated') {
+                $summary['generated']++;
+                if (!empty($res['stale_before']) && empty($res['stale_after'])) {
+                    $summary['stale_fixed']++;
+                }
+            } else {
+                $summary['errors']++;
+            }
+            if (!empty($res['google_api_called'])) {
+                $summary['google_api_called'] = true;
+            }
+            $summary['results'][] = [
+                'product_id' => $productId,
+                'result' => (string) ($res['result'] ?? ''),
+                'stale_before' => !empty($res['stale_before']),
+                'stale_after' => !empty($res['stale_after']),
+                'google_api_called' => !empty($res['google_api_called']),
+                'called_ebay_api' => false,
+                'updated_ebay_listing' => false,
+            ];
+        }
+
+        $lastProductId = $productIds !== [] ? max(array_map('intval', $productIds)) : 0;
+        $completed = count($productIds) < $batchSize;
+        $summary['status'] = $completed ? 'completed' : 'in_progress';
+        $summary['next_cursor'] = $completed ? 0 : $lastProductId;
+        if ($completed) {
+            delete_option($cursorOption);
+        } else {
+            update_option($cursorOption, $lastProductId, false);
+        }
+
+        update_option('wei_ebay_german_content_audit_summary', array_diff_key($summary, ['results' => true]), false);
+        $this->set_status('Generate German content: ' . wp_json_encode($summary, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    private function german_content_batch_product_ids(int $batchSize, string $mode, int $cursor = 0): array
+    {
+        global $wpdb;
+        $sql = "
+            SELECT p.ID
+            FROM {$wpdb->posts} p
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND p.ID > %d
+            GROUP BY p.ID
+            ORDER BY p.ID ASC
+            LIMIT %d
+        ";
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
     }
 
     public function description_template_single(): void

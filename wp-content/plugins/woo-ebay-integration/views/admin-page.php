@@ -402,7 +402,7 @@ $movedModules = [
     'Manual export/publish/preflight forms' => 'Main actions, renamed as daily single-product workflow',
     'Readiness/category audit report tables' => 'Advanced diagnostics, with only operational counts surfaced in Dashboard / Category mapping',
 ];
-$sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bulk publish', 'eBay sync', 'Advanced diagnostics', 'Recent logs'];
+$sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Publish', 'Advanced / Debug', 'Recent logs'];
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
@@ -463,181 +463,173 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
         </details>
     </div>
 
-    <div class="wei-box">
-        <h2>Main actions</h2>
-        <p class="description">Główny workflow pojedynczego produktu: wpisz Woo product ID i przejdź od readiness przez preview do publikacji. Formularze używają istniejących action handlerów i nonce.</p>
-        <div class="wei-workflow">
-            <div class="wei-action-group primary">
-                <h3>Check listing readiness for product</h3>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_preflight'); ?>
-                    <input type="hidden" name="action" value="wei_preflight_product" />
-                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
-                    <button class="button button-primary">Check readiness</button>
-                </form>
-            </div>
-            <div class="wei-action-group primary">
-                <h3>Preview listing</h3>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_description_template_preview'); ?>
-                    <input type="hidden" name="action" value="wei_description_template_preview" />
-                    <label>Product ID / SKU <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required /></label>
-                    <button class="button">Preview listing</button>
-                </form>
-            </div>
-            <div class="wei-action-group primary">
-                <h3>Publish single product</h3>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This will publish a public eBay offer for the selected product if the existing handler allows it. Continue?');">
-                    <?php wp_nonce_field('wei_publish_product_offer_only'); ?>
-                    <input type="hidden" name="action" value="wei_publish_product_offer_only" />
-                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
-                    <button class="button button-primary">Publish single product</button>
-                </form>
-            </div>
-            <div class="wei-action-group safe">
-                <h3>Inspect offer before publish</h3>
-                <p class="description">Read-only diagnostic: fetches the existing Inventory API offer and inventory item, then shows publish-critical fields without calling publishOffer.</p>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_inspect_offer_before_publish'); ?>
-                    <input type="hidden" name="action" value="wei_inspect_offer_before_publish" />
-                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
-                    <button class="button">Inspect offer before publish</button>
-                </form>
-            </div>
-            <div class="wei-action-group safe">
-                <h3>Regenerate / refresh eBay content</h3>
-                <p class="description">Safely regenerates German eBay content in local product meta only. Calls Google Translate via the configured provider, refreshes _wei_ebay_de_* cache/hash, and never updates or creates active eBay listings.</p>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_ebay_regenerate_german_content'); ?>
-                    <input type="hidden" name="action" value="wei_ebay_regenerate_german_content" />
-                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
-                    <button class="button">Regenerate/refresh eBay content</button>
-                </form>
-            </div>
-            <div class="wei-action-group safe">
-                <h3>Export product payload</h3>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_export'); ?>
-                    <input type="hidden" name="action" value="wei_export_product" />
-                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
-                    <input type="text" name="ebay_category_id" placeholder="optional category ID" />
-                    <textarea name="ebay_aspects_json" placeholder='optional aspects JSON' rows="1"></textarea>
-                    <button class="button">Export single product</button>
-                </form>
-            </div>
-            <div class="wei-action-group safe">
-                <h3>Last result as JSON</h3>
-                <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_action' => $lastAction, 'product_id' => $lastProductId, 'stage' => $lastStage, 'message' => $lastShortMessage, 'payload' => $lastStatusPayload], 5000)); ?></pre>
-            </div>
+    <div class="wei-box" data-wei-module="german-content">
+        <h2>1. German Content</h2>
+        <p class="description">Generate German title, description, listing template data, Spezifikationen and Artikelmerkmale for eBay.de. These actions write only local German-content meta and do not call eBay APIs.</p>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Translation provider</span><strong><?php echo esc_html($translationLabel); ?></strong></div>
+            <div class="wei-card"><span>Last processed</span><strong><?php echo esc_html((string) ($german_content_audit_summary['processed'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Generated</span><strong><?php echo esc_html((string) ($german_content_audit_summary['generated'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Already fresh</span><strong><?php echo esc_html((string) ($german_content_audit_summary['already_ready'] ?? ($german_content_audit_summary['already_fresh'] ?? '-'))); ?></strong></div>
+            <div class="wei-card"><span>Errors</span><strong><?php echo esc_html((string) ($german_content_audit_summary['failed'] ?? ($german_content_audit_summary['errors'] ?? '-'))); ?></strong></div>
+            <div class="wei-card"><span>eBay API calls</span><strong>false</strong></div>
         </div>
+        <div class="wei-actions" data-wei-primary-actions="german-content">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_german_content_batch'); ?>
+                <input type="hidden" name="action" value="wei_generate_german_content_batch" />
+                <input type="hidden" name="mode" value="all" />
+                <label>Batch size <input type="number" min="1" max="200" name="batch_size" value="50" /></label>
+                <button class="button button-primary">Generate / refresh German content for all products</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_german_content_batch'); ?>
+                <input type="hidden" name="action" value="wei_generate_german_content_batch" />
+                <input type="hidden" name="mode" value="stale" />
+                <label>Batch size <input type="number" min="1" max="200" name="batch_size" value="50" /></label>
+                <button class="button">Generate / refresh stale German content only</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_description_template_preview'); ?>
+                <input type="hidden" name="action" value="wei_description_template_preview" />
+                <label>Product ID / SKU <input type="text" name="product_or_sku" placeholder="Product ID or SKU" required /></label>
+                <button class="button">Preview German listing template</button>
+            </form>
+        </div>
+        <details><summary>German Content last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['processed' => (int) ($german_content_audit_summary['processed'] ?? 0), 'generated' => (int) ($german_content_audit_summary['generated'] ?? 0), 'already_fresh' => (int) ($german_content_audit_summary['already_ready'] ?? $german_content_audit_summary['already_fresh'] ?? 0), 'stale_fixed' => (int) ($german_content_audit_summary['stale_fixed'] ?? 0), 'errors' => (int) ($german_content_audit_summary['failed'] ?? $german_content_audit_summary['errors'] ?? 0), 'google_api_called' => !empty($german_content_audit_summary['google_api_called']), 'called_ebay_api' => false, 'updated_ebay_listing' => false, 'report_url' => (string) ($german_content_audit_summary['reports']['csv']['url'] ?? '')], 4000)); ?></pre></details>
     </div>
 
-    <div class="wei-box">
-        <h2>Kategorie eBay</h2>
-        <p class="description">Sekcja mapowania WooCommerce → eBay. Generowanie CSV z Ovoko tylko pobiera dane i tworzy plik diagnostyczny — nie zmienia produktów, kategorii Woo ani aktywnych listingów.</p>
+    <div class="wei-box" data-wei-module="ebay-categories">
+        <h2>2. Kategorie eBay</h2>
+        <p class="description">Check and maintain WooCommerce product_cat → eBay.de category ID mapping. Main actions focus on CSV import/export and readiness validation; suggestion generators and auto-mapping are in Advanced / Debug.</p>
         <?php $ovokoConfidence = is_array($ovoko_category_suggestions_summary['confidence'] ?? null) ? $ovoko_category_suggestions_summary['confidence'] : []; ?>
         <div class="wei-grid">
-            <div class="wei-card"><span>Liczba kategorii WooCommerce</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_categories_total'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Liczba końcowych podkategorii</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_leaf_categories'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Zmapowane kategorie</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
-            <div class="wei-card"><span>Niezmapowane / review</span><strong><?php echo esc_html((string) $categoryMissingCount); ?></strong></div>
-            <div class="wei-card"><span>Ovoko: listingi pobrane</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['ovoko_listings_fetched'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Ovoko: dostały ebay_category_id</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['mapped_categories'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Ovoko: bez dopasowania</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_categories'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Confidence high/medium/low/none</span><strong><?php echo esc_html((string) (($ovokoConfidence['high'] ?? 0) . '/' . ($ovokoConfidence['medium'] ?? 0) . '/' . ($ovokoConfidence['low'] ?? 0) . '/' . ($ovokoConfidence['none'] ?? 0))); ?></strong></div>
-            <div class="wei-card"><span>Różne kategorie eBay</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['distinct_ebay_categories_detected'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Produkty w niezmapowanych</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Ostatnie generowanie</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['generated_at'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Ostatni import CSV</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['imported_at'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>total_categories</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_categories_total'] ?? $categorySummary['total'])); ?></strong></div>
+            <div class="wei-card"><span>mapped_categories</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
+            <div class="wei-card"><span>valid_categories</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
+            <div class="wei-card"><span>invalid_category_id</span><strong><?php echo esc_html((string) ($categorySummary['blocked_by_expected_keyword'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>non_leaf_category</span><strong><?php echo esc_html((string) ($categorySummary['blocked_by_sonstige'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) $categoryBlockedCount); ?></strong></div>
+            <div class="wei-card"><span>needs_review</span><strong><?php echo esc_html((string) $categoryMissingCount); ?></strong></div>
+            <div class="wei-card"><span>products_affected</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? $blockedByCategoryCount)); ?></strong></div>
+            <div class="wei-card"><span>report_url</span><strong><?php $categoryReportUrl = (string) ($category_template_export_summary['reports']['template_csv']['url'] ?? $category_teaching_export_summary['reports']['teaching_csv']['url'] ?? ''); echo $categoryReportUrl !== '' ? '<a href="' . esc_url($categoryReportUrl) . '">open</a>' : '—'; ?></strong></div>
         </div>
-        <div class="wei-actions">
+        <div class="wei-actions" data-wei-primary-actions="categories">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_export_category_template_csv'); ?>
+                <input type="hidden" name="action" value="wei_export_category_template_csv" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
+                <label><input type="checkbox" name="export_all_categories" value="1" /> include empty categories</label>
+                <button class="button button-primary">Export category mapping CSV</button>
+            </form>
             <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_import_category_teaching_csv'); ?>
                 <input type="hidden" name="action" value="wei_import_category_teaching_csv" />
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
                 <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
-                <button class="button button-primary">Importuj CSV jako mapping produkcyjny</button>
+                <button class="button button-primary">Import category mapping CSV</button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_export_category_template_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_category_template_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <label><input type="checkbox" name="export_all_categories" value="1" /> eksportuj wszystkie kategorie</label>
-                <button class="button">Eksportuj szablon CSV kategorii</button>
+                <?php wp_nonce_field('wei_full_category_audit'); ?>
+                <input type="hidden" name="action" value="wei_full_category_audit" />
+                <button class="button">Validate current category mappings</button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_export_ovoko_category_suggestions_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_ovoko_category_suggestions_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <label>Limit listingów Ovoko <input type="number" name="limit" min="1" max="10000" value="500" /></label>
-                <label><input type="checkbox" name="export_all_categories" value="1" /> wszystkie kategorie</label>
-                <label><input type="checkbox" name="force_refresh" value="1" /> odśwież cache</label>
-                <button class="button">Auto-uzupełnij CSV z Ovoko/eBay</button>
+                <?php wp_nonce_field('wei_full_category_audit'); ?>
+                <input type="hidden" name="action" value="wei_full_category_audit" />
+                <input type="hidden" name="verbose_debug" value="1" />
+                <button class="button">Run category readiness audit</button>
             </form>
-            <?php $ovokoCsv = is_array($ovoko_category_suggestions_summary['reports']['ovoko_suggestions_csv'] ?? null) ? $ovoko_category_suggestions_summary['reports']['ovoko_suggestions_csv'] : []; ?>
-            <?php if (!empty($ovokoCsv['url'])): ?><a class="button button-primary" href="<?php echo esc_url((string) $ovokoCsv['url']); ?>">Pobierz ostatni CSV Ovoko</a><?php endif; ?>
-            <a class="button" href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => 'blocked_by_category'], $adminPageUrl)); ?>">Produkty blocked_by_category</a>
-            <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Tabela mapowań</a>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
+                <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
+                <button class="button">Export blocked category report</button>
+            </form>
+            <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
-        <p class="description">Importowane minimum CSV: <code>woo_subcategory_id</code> albo <code>woo_category_id</code> oraz <code>ebay_category_id</code>. Puste <code>ebay_category_id</code> są pomijane i raportowane jako <code>skipped_empty_ebay_id</code>.</p>
-        <details><summary>Last import/export status JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_import' => $category_teaching_import_summary, 'last_template_export' => $category_template_export_summary, 'last_ovoko_export' => $ovoko_category_suggestions_summary, 'legacy_teaching_export' => $category_teaching_export_summary, 'last_manual_apply' => $manual_woo_category_apply_summary], 9000)); ?></pre></details>
+        <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
+        <details><summary>Category last summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['total_categories' => ($ovoko_category_suggestions_summary['woo_categories_total'] ?? $categorySummary['total']), 'mapped_categories' => ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto']), 'valid_categories' => ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto']), 'invalid_category_id' => ($categorySummary['blocked_by_expected_keyword'] ?? 0), 'non_leaf_category' => ($categorySummary['blocked_by_sonstige'] ?? 0), 'blocked_by_category' => $categoryBlockedCount, 'needs_review' => $categoryMissingCount, 'products_affected' => ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? $blockedByCategoryCount), 'report_url' => $categoryReportUrl, 'last_import' => $category_teaching_import_summary, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
         <?php if ($categoryRowsLoaded): ?>
             <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Status</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
         <?php endif; ?>
     </div>
 
-    <div class="wei-box">
-        <h2>Bulk publish</h2>
-        <p class="description">Masowe wystawianie jest niżej niż workflow pojedynczego produktu. Używa istniejących kandydatów initial publish i istniejącego handlera batch.</p>
+    <div class="wei-box" data-wei-module="publish">
+        <h2>3. Publish</h2>
+        <p class="description">Publish ready products only. The publish batch preflights each product, skips anything not ready, creates/replaces inventory, creates/updates the offer through the existing exporter, publishes, and stores offer_id/listing_id/public_url meta when eBay returns them.</p>
         <div class="wei-grid">
-            <div class="wei-card"><span>Status</span><strong><?php echo esc_html($initialPublishPublicationStatus); ?></strong></div>
-            <div class="wei-card"><span>Current cursor</span><strong><?php echo esc_html((string) ($initialPublish['cursor'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Published total</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
-            <div class="wei-card"><span>Remaining</span><strong><?php echo esc_html((string) $initialPublishRemaining); ?></strong></div>
-            <div class="wei-card"><span>Success / failed / skipped</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?> / <?php echo esc_html((string) $initialPublishFailed); ?> / <?php echo esc_html((string) ($initialPublishCandidates['skipped'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>Last run</span><strong><?php echo esc_html($initialPublishLastRunAt !== '' ? $initialPublishLastRunAt : '-'); ?></strong></div>
+            <div class="wei-card"><span>processed</span><strong><?php echo esc_html((string) ($initialPublish['processed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>ready</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
+            <div class="wei-card"><span>exported</span><strong><?php echo esc_html((string) ($exportSummary['exported'] ?? $initialPublishSuccess)); ?></strong></div>
+            <div class="wei-card"><span>published</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
+            <div class="wei-card"><span>skipped_not_ready</span><strong><?php echo esc_html((string) ($initialPublishCandidates['skipped_not_eligible'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) $blockedByCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>stale_german_content</span><strong><?php echo esc_html((string) ($initialPublishCandidates['content_not_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>missing_required_aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
+            <div class="wei-card"><span>missing_image</span><strong><?php echo esc_html((string) ($readinessSummary['missing_image'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>missing_stock</span><strong><?php echo esc_html((string) ($readinessSummary['missing_stock'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>invalid_price</span><strong><?php echo esc_html((string) ($readinessSummary['invalid_price'] ?? $initialPublishCandidates['price_not_ready'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>errors</span><strong><?php echo esc_html((string) $initialPublishFailed); ?></strong></div>
         </div>
-        <div class="wei-actions">
+        <div class="wei-actions" data-wei-primary-actions="publish">
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_ebay_rebuild_initial_publish_candidates'); ?>
-                <input type="hidden" name="action" value="wei_ebay_rebuild_initial_publish_candidates" />
-                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="100" /></label>
-                <label><input type="checkbox" name="reset_rebuild" value="1" <?php checked(($initialPublishCandidates['status'] ?? '') !== 'in_progress'); ?> /> reset cursor</label>
-                <button class="button">Build / refresh candidates</button>
+                <?php wp_nonce_field('wei_auto_sync_readiness_now'); ?>
+                <input type="hidden" name="action" value="wei_auto_sync_readiness_now" />
+                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="200" /></label>
+                <button class="button">Run readiness scan</button>
             </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This can publish public eBay listings in a batch. Continue?');">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_auto_sync_export_now'); ?>
+                <input type="hidden" name="action" value="wei_auto_sync_export_now" />
+                <label>Batch size <input type="number" min="1" max="50" name="batch_size" value="20" /></label>
+                <button class="button">Export ready products to eBay</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This can publish public eBay listings for ready products only. Continue?');">
                 <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
                 <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
                 <label>Batch size <input type="number" min="1" max="50" name="batch_size" value="5" /></label>
-                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Start batch</button>
+                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready offers</button>
             </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_initial_publish_toggle_pause'); ?><input type="hidden" name="action" value="wei_ebay_initial_publish_toggle_pause" /><button class="button"><?php echo $initialPublishPublicationStatus === 'paused' ? 'Resume batch' : 'Pause batch'; ?></button></form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Publish ready products runs the existing ready-product publish batch. It skips not_ready products. Continue?');">
+                <?php wp_nonce_field('wei_publish_ready_products'); ?>
+                <input type="hidden" name="action" value="wei_publish_ready_products" />
+                <label>Batch size <input type="number" min="1" max="50" name="batch_size" value="5" /></label>
+                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready products</button>
+            </form>
         </div>
-        <h3>Last batch log</h3>
-        <pre class="wei-scroll"><?php echo esc_html($initialPublishLastBatch !== '-' ? implode("\n", $initialPublishLog) : '-'); ?></pre>
-    </div>
-
-    <div class="wei-box">
-        <h2>eBay sync</h2>
-        <p class="description">Synchronizacja zamówień i inventory/offers jest osobno od wystawiania produktów.</p>
-        <div class="wei-grid">
-            <div class="wei-card"><span>Mode</span><strong><?php echo esc_html($autoModeLabels[(string) $setting('auto_sync_mode', 'disabled')] ?? (string) $setting('auto_sync_mode', 'disabled')); ?></strong></div>
-            <div class="wei-card"><span>Last result</span><strong><?php echo esc_html((string) ($autoSync['checkpoint']['last_run_status'] ?? $autoStatus)); ?></strong></div>
-            <div class="wei-card"><span>Next run</span><strong><?php echo esc_html((string) ($autoSync['next_run'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Paused</span><strong><?php echo !empty($s['auto_sync_paused']) ? 'Paused' : 'Running'; ?></strong></div>
-        </div>
-        <div class="wei-actions">
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_sync_now'); ?><input type="hidden" name="action" value="wei_ebay_sync_now" /><button class="button button-primary">Run eBay scheduled sync manually</button></form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Import orders now</button></form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><input type="number" min="1" max="300" name="batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_stock_batch_size', 100)); ?>" /><button class="button">Sync inventory/offers now</button></form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_toggle_pause'); ?><input type="hidden" name="action" value="wei_auto_sync_toggle_pause" /><button class="button"><?php echo !empty($s['auto_sync_paused']) ? 'Resume sync' : 'Pause sync'; ?></button></form>
-        </div>
-        <details><summary>Last sync result JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($lastSyncResult, 4000)); ?></pre></details>
+        <details><summary>Publish summary and last batch log</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['processed' => (int) ($initialPublish['processed'] ?? 0), 'ready' => (int) $initialPublishTotalReady, 'exported' => (int) ($exportSummary['exported'] ?? $initialPublishSuccess), 'published' => (int) $initialPublishSuccess, 'skipped_not_ready' => (int) ($initialPublishCandidates['skipped_not_eligible'] ?? 0), 'blocked_by_category' => (int) $blockedByCategoryCount, 'stale_german_content' => (int) ($initialPublishCandidates['content_not_ready'] ?? 0), 'missing_required_aspects' => (int) $missingAspectsCount, 'missing_image' => (int) ($readinessSummary['missing_image'] ?? 0), 'missing_stock' => (int) ($readinessSummary['missing_stock'] ?? 0), 'invalid_price' => (int) ($readinessSummary['invalid_price'] ?? $initialPublishCandidates['price_not_ready'] ?? 0), 'errors' => (int) $initialPublishFailed, 'report_url' => (string) ($autoLastSummary['report_url'] ?? ''), 'last_batch_log' => $initialPublishLog], 8000)); ?></pre></details>
     </div>
 
     <details class="wei-box">
-        <summary>Advanced diagnostics <span class="wei-badge warn">collapsed by default</span></summary>
+        <summary>Advanced / Debug <span class="wei-badge warn">collapsed by default</span></summary>
         <p class="wei-danger"><strong>Safety:</strong> these tools are rare or technical. They keep existing capability checks and nonces, but may run heavy scans, write diagnostics, reset checkpoints or process queues. Use only when needed.</p>
+        <details><summary>Advanced / Debug: eBay sync and order tools</summary>
+            <p class="description">Synchronizacja zamówień i inventory/offers jest ukryta poza głównym trzyetapowym flow.</p>
+            <div class="wei-grid">
+                <div class="wei-card"><span>Mode</span><strong><?php echo esc_html($autoModeLabels[(string) $setting('auto_sync_mode', 'disabled')] ?? (string) $setting('auto_sync_mode', 'disabled')); ?></strong></div>
+                <div class="wei-card"><span>Last result</span><strong><?php echo esc_html((string) ($autoSync['checkpoint']['last_run_status'] ?? $autoStatus)); ?></strong></div>
+                <div class="wei-card"><span>Next run</span><strong><?php echo esc_html((string) ($autoSync['next_run'] ?? '-')); ?></strong></div>
+                <div class="wei-card"><span>Paused</span><strong><?php echo !empty($s['auto_sync_paused']) ? 'Paused' : 'Running'; ?></strong></div>
+            </div>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_sync_now'); ?><input type="hidden" name="action" value="wei_ebay_sync_now" /><button class="button button-primary">Run eBay scheduled sync manually</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_orders_now'); ?><input type="hidden" name="action" value="wei_auto_sync_orders_now" /><button class="button">Import orders now</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_stock_now'); ?><input type="hidden" name="action" value="wei_auto_sync_stock_now" /><input type="number" min="1" max="300" name="batch_size" value="<?php echo esc_attr((string) $setting('auto_sync_stock_batch_size', 100)); ?>" /><button class="button">Sync inventory/offers now</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_sync_toggle_pause'); ?><input type="hidden" name="action" value="wei_auto_sync_toggle_pause" /><button class="button"><?php echo !empty($s['auto_sync_paused']) ? 'Resume sync' : 'Pause sync'; ?></button></form>
+            </div>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview($lastSyncResult, 4000)); ?></pre>
+        </details>
+        <details><summary>Advanced / Debug: single-product publish and content tools</summary>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Run single-product readiness preflight</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_inspect_offer_before_publish'); ?><input type="hidden" name="action" value="wei_inspect_offer_before_publish" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Inspect offer before publish</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Manual publish offer only can publish one public eBay listing. Continue?');"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Manual publish offer only</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><input type="text" name="ebay_category_id" placeholder="optional category ID" /><textarea name="ebay_aspects_json" placeholder="optional aspects JSON" rows="1"></textarea><button class="button">Export single product</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_regenerate_german_content'); ?><input type="hidden" name="action" value="wei_ebay_regenerate_german_content" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Regenerate German content for one product</button></form>
+            </div>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_action' => $lastAction, 'product_id' => $lastProductId, 'stage' => $lastStage, 'message' => $lastShortMessage, 'payload' => $lastStatusPayload], 5000)); ?></pre>
+        </details>
         <details><summary>Account / API diagnostics</summary>
             <div class="wei-actions"><a class="button button-primary" href="<?php echo esc_url($connectUrl); ?>">Connect eBay</a><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_disconnect'); ?><input type="hidden" name="action" value="wei_disconnect" /><button class="button">Disconnect eBay</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_test'); ?><input type="hidden" name="action" value="wei_test_connection" /><button class="button">Test connection</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_upsert_inventory_location'); ?><input type="hidden" name="action" value="wei_upsert_inventory_location" /><button class="button">Create / update inventory location</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_refresh_policies'); ?><input type="hidden" name="action" value="wei_refresh_policies" /><button class="button">Refresh policies from eBay</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_readiness'); ?><input type="hidden" name="action" value="wei_readiness" /><button class="button">Run API readiness check</button></form></div>
             <?php if (!empty($oauthCallbackMessage['oauth_error'])): ?><div class="notice notice-error inline"><p><strong>eBay OAuth error:</strong> <?php echo esc_html($oauthCallbackMessage['oauth_error']); ?> <?php echo $oauthCallbackMessage['error_description'] !== '' ? esc_html(' — ' . $oauthCallbackMessage['error_description']) : ''; ?></p><pre class="wei-scroll"><?php echo esc_html($technicalPreview($oauthCallbackMessage, 3000)); ?></pre></div><?php endif; ?>
@@ -692,14 +684,14 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                     <input type="hidden" name="action" value="wei_generate_all_ebay_de_category_suggestions" />
                     <label>Mode <select name="mode"><option value="leaf_with_products">leaf categories with products</option><option value="with_products">all categories with products</option><option value="all_categories">all categories</option></select></label>
                     <label><input type="checkbox" name="force_refresh" value="1" /> force refresh cache</label>
-                    <button class="button button-primary">Wygeneruj wszystkie sugestie kategorii eBay.de</button>
+                    <button class="button button-primary">Generate all eBay.de category suggestions</button>
                 </form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                     <?php wp_nonce_field('wei_generate_all_ebay_de_category_suggestions'); ?>
                     <input type="hidden" name="action" value="wei_generate_all_ebay_de_category_suggestions" />
                     <input type="hidden" name="continue_from_progress" value="1" />
                     <label>Mode <select name="mode"><option value="leaf_with_products">leaf categories with products</option><option value="with_products">all categories with products</option><option value="all_categories">all categories</option></select></label>
-                    <button class="button">Kontynuuj przerwane generowanie</button>
+                    <button class="button">Debug continue batch</button>
                 </form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                     <?php wp_nonce_field('wei_reset_ebay_de_category_suggestions_progress'); ?>
@@ -716,7 +708,7 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['readiness_counts' => array_diff_key($readinessSummary, array_flip(['not_ready_items', 'blocked_by_category_items', 'missing_required_aspects_items', 'invalid_price_items'])), 'ebay_de_category_suggestions' => $ebayCategorySuggestionsSummary, 'ebay_de_category_suggestions_progress' => $ebayCategorySuggestionsProgress, 'full_category_audit' => $full_category_audit_summary, 'german_content_audit' => $german_content_audit_summary], 6000)); ?></pre>
         </details>
         <details><summary>Category mapping technical tools</summary>
-            <div class="wei-actions"><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_map_categories'); ?><input type="hidden" name="action" value="wei_auto_map_categories" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Re-evaluate category mappings</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_repair_blocked_category_mappings'); ?><input type="hidden" name="action" value="wei_repair_blocked_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Re-evaluate blocked only</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_repair_audit_category_groups'); ?><input type="hidden" name="action" value="wei_repair_audit_category_groups" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Repair from audit groups</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_apply_manual_woo_category_mappings'); ?><input type="hidden" name="action" value="wei_apply_manual_woo_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Apply manual mappings to products</button></form></div>
+            <div class="wei-actions"><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_auto_map_categories'); ?><input type="hidden" name="action" value="wei_auto_map_categories" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Auto category mapping</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_repair_blocked_category_mappings'); ?><input type="hidden" name="action" value="wei_repair_blocked_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Re-evaluate blocked only</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_repair_audit_category_groups'); ?><input type="hidden" name="action" value="wei_repair_audit_category_groups" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Repair from audit groups</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_apply_manual_woo_category_mappings'); ?><input type="hidden" name="action" value="wei_apply_manual_woo_category_mappings" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><button class="button">Apply manual mappings to products</button></form></div>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_test_category_teaching_rule_match'); ?><input type="hidden" name="action" value="wei_test_category_teaching_rule_match" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="number" name="product_id" placeholder="Woo product ID" /><button class="button">Test teaching rule match</button></form>
         </details>
         <details><summary>Listing quality / cleanup tools</summary>
@@ -732,12 +724,10 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
             <p><a class="button" href="<?php echo esc_url($loadProductSyncUrl); ?>">Load recent product sync rows</a></p>
             <?php if ($productSyncRowsLoaded): ?><div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Product</th><th>eBay SKU / inventory_id</th><th>offer_id</th><th>listing_id</th><th>public_url</th><th>last_export_at</th><th>last_publish_at</th><th>last_sync_status</th><th>last_sync_error</th><th>listing status</th></tr></thead><tbody><?php foreach ($productSyncRows as $row): ?><?php $editUrl = $toScalarString($row['edit_url'] ?? ''); $publicUrl = $toScalarString($row['public_url'] ?? ''); $skuOrInventory = $displayValue($row['sku'] ?? '') !== '—' ? $displayValue($row['sku'] ?? '') : $displayValue($row['inventory_id'] ?? ''); ?><tr><td><?php if ($editUrl !== ''): ?><a href="<?php echo esc_url($editUrl); ?>"><?php endif; ?>#<?php echo esc_html($displayValue($row['product_id'] ?? '')); ?> <?php echo esc_html($displayValue($row['title'] ?? '')); ?><?php if ($editUrl !== ''): ?></a><?php endif; ?></td><td><code><?php echo esc_html($skuOrInventory); ?></code></td><td><code><?php echo esc_html($displayValue($row['offer_id'] ?? '')); ?></code></td><td><code><?php echo esc_html($displayValue($row['listing_id'] ?? '')); ?></code></td><td><?php if ($publicUrl !== ''): ?><a href="<?php echo esc_url($publicUrl); ?>" target="_blank" rel="noopener noreferrer">open</a><?php else: ?><?php echo esc_html('—'); ?><?php endif; ?></td><td><?php echo esc_html($displayValue($row['last_export_at'] ?? '')); ?></td><td><?php echo esc_html($displayValue($row['last_publish_at'] ?? '')); ?></td><td><?php echo esc_html($displayValue($row['last_sync_status'] ?? '')); ?></td><td><?php echo esc_html($displayValue($row['last_sync_error'] ?? '')); ?></td><td><?php echo esc_html($displayValue($row['listing_status'] ?? '')); ?></td></tr><?php endforeach; ?></tbody></table></div><?php else: ?><p class="description">Rows are not loaded during normal render.</p><?php endif; ?>
         </details>
+        <details><summary>Raw logs</summary>
+            <p class="description">Ostatnie logi z prostym filtrem i zwijanym technical JSON.</p>
+            <p><?php foreach ($logFilters as $filter => $label): ?><a href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'wei_log_filter' => $filter], $adminPageUrl)); ?>"><?php echo $logFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === array_key_last($logFilters) ? '' : ' / '; ?><?php endforeach; ?></p>
+            <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>At</th><th>Level</th><th>Summary</th><th>Technical JSON</th></tr></thead><tbody><?php foreach ($recentLogs as $log): ?><?php $message = (string) ($log['message'] ?? ''); $short = strlen($message) > 180 ? substr($message, 0, 177) . '...' : $message; ?><tr><td><?php echo esc_html((string) ($log['at'] ?? '')); ?></td><td><?php echo esc_html((string) ($log['level'] ?? '')); ?></td><td><?php echo esc_html($short); ?></td><td><details><summary>show JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($log['context'] ?? [], 2500)); ?></pre></details></td></tr><?php endforeach; ?></tbody></table></div>
+        </details>
     </details>
-
-    <div class="wei-box">
-        <h2>Recent logs</h2>
-        <p class="description">Ostatnie logi z prostym filtrem i zwijanym technical JSON.</p>
-        <p><?php foreach ($logFilters as $filter => $label): ?><a href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'wei_log_filter' => $filter], $adminPageUrl)); ?>"><?php echo $logFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === array_key_last($logFilters) ? '' : ' / '; ?><?php endforeach; ?></p>
-        <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>At</th><th>Level</th><th>Summary</th><th>Technical JSON</th></tr></thead><tbody><?php foreach ($recentLogs as $log): ?><?php $message = (string) ($log['message'] ?? ''); $short = strlen($message) > 180 ? substr($message, 0, 177) . '...' : $message; ?><tr><td><?php echo esc_html((string) ($log['at'] ?? '')); ?></td><td><?php echo esc_html((string) ($log['level'] ?? '')); ?></td><td><?php echo esc_html($short); ?></td><td><details><summary>show JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($log['context'] ?? [], 2500)); ?></pre></details></td></tr><?php endforeach; ?></tbody></table></div>
-    </div>
 </div>
