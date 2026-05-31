@@ -886,3 +886,13 @@ The vehicle resolver now uses the official CRM Info dictionary endpoints documen
 - `car_body_type`: `/get/car_body_type`.
 
 A read-only admin diagnostic action, **Probe Ovoko dictionary value**, can probe a single `dictionary_type` + `id` and now reports `endpoints_checked`, `endpoint_used`, payload `raw_keys`, `resolved_label`, `resolved_make` / `resolved_model` / `resolved_generation` when applicable, plus whether the value came from `dictionary_api`, `csv_mapping`, `local_fallback`, or remains `unresolved` in vehicle-data diagnostics. Numeric dictionary IDs are never copied into public vehicle fields as names; unresolved values stay empty so title and same-vehicle slug builders can use safe fallbacks such as `vehicle-{car_id}` and emit warnings.
+
+## Ovoko/RRR official event sources for sold/status changes
+
+Official RRR API documentation identifies two relevant source types for Ovoko → Woo stock/status changes:
+
+1. **Real-time source:** webhooks, especially `part.status.changed`. Ovoko posts a JSON payload to a merchant callback URL when a part status changes; the payload includes `event_id`, `event_type`, `timestamp`, and `event_data.part_id` + `event_data.status` such as `sold`. Webhooks are push-based, not date-queryable, and require registering a public HTTPS callback URL in the scrapyard API integration settings.
+2. **Read-only pull diagnostics source:** `POST /get/logs/{from_date}/{to_date}` with standard RRR form auth (`username`, `password`, `user_token`). The documented response contains a `list` of CRM log rows with `action`, `item_list`, `date`, `user`, and `details`; this is the official pull endpoint to probe for part edit/status actions by date while webhook ingestion is not yet implemented.
+3. **Order-date source:** `POST /v2/get/orders/{from_date}/{to_date}` with standard RRR form auth can return Ovoko orders and order `item_list` rows containing part IDs, but it is order-driven rather than a complete part-status-change feed.
+
+The admin action **Probe Ovoko event sources for part 4303** remains read-only. It now probes the documented logs date window and documented order date-window endpoints in addition to existing candidate `/v2/get/parts` filters. This is diagnostic only and does not change the automatic cron source logic.
