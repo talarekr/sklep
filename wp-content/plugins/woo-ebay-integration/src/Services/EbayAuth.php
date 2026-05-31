@@ -57,23 +57,44 @@ class EbayAuth
 
     public function handle_oauth_callback(): void
     {
-        $page = sanitize_text_field((string) ($_GET['page'] ?? ''));
-        if ($page !== self::CALLBACK_PAGE_SLUG) {
-            return;
-        }
+        $this->maybe_intercept_oauth_callback('admin_init');
+    }
 
-        $this->store_oauth_diagnostics([
-            'callback_intercepted_by_admin_init' => true,
-            'page_param' => $page,
-        ], false);
+    public function handle_current_screen_oauth_callback(): void
+    {
+        $this->maybe_intercept_oauth_callback('current_screen');
+    }
 
-        $this->process_oauth_callback(true);
-        exit;
+    public function handle_load_oauth_callback(): void
+    {
+        $this->maybe_intercept_oauth_callback('load-admin_page_ebay-auth-callback');
+    }
+
+    public function handle_woocommerce_load_oauth_callback(): void
+    {
+        $this->maybe_intercept_oauth_callback('load-woocommerce_page_ebay-auth-callback');
+    }
+
+    public function handle_admin_bootstrap_oauth_callback(): void
+    {
+        $this->maybe_intercept_oauth_callback('plugins_loaded');
     }
 
     public function handle_admin_post_oauth_callback(): void
     {
+        $this->store_intercept_diagnostics('admin_post_' . self::ADMIN_POST_CALLBACK_ACTION, false);
         $this->process_oauth_callback(false);
+    }
+
+    public function maybe_intercept_oauth_callback(string $hook): void
+    {
+        if (!$this->is_oauth_callback_request()) {
+            return;
+        }
+
+        $this->store_intercept_diagnostics($hook, true);
+        $this->process_oauth_callback(true);
+        exit;
     }
 
     public function mark_callback_page_registered(): void
@@ -101,9 +122,9 @@ class EbayAuth
         if (!current_user_can('manage_options')) {
             $this->store_oauth_diagnostics([
                 'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
-                'page_param' => sanitize_text_field((string) ($_GET['page'] ?? '')),
-                'code_received' => isset($_GET['code']) && (string) $_GET['code'] !== '',
-                'state_received' => isset($_GET['state']) && (string) $_GET['state'] !== '',
+                'page_param' => $this->request_value('page'),
+                'code_received' => $this->request_value('code') !== '',
+                'state_received' => $this->request_value('state') !== '',
                 'token_exchange_attempted' => false,
                 'token_exchange_success' => false,
                 'token_exchange_error' => 'not_wordpress_administrator',
@@ -111,19 +132,19 @@ class EbayAuth
             wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
         }
 
-        $state = sanitize_text_field((string) ($_GET['state'] ?? ''));
+        $state = $this->request_value('state');
         $statePayload = $state !== '' ? get_transient('wei_oauth_state_' . $state) : false;
         $stateValid = is_array($statePayload);
-        $error = sanitize_text_field((string) ($_GET['error'] ?? ''));
-        $errorDescription = sanitize_text_field((string) ($_GET['error_description'] ?? ''));
-        $expiresIn = sanitize_text_field((string) ($_GET['expires_in'] ?? ''));
-        $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
+        $error = $this->request_value('error');
+        $errorDescription = $this->request_value('error_description');
+        $expiresIn = $this->request_value('expires_in');
+        $code = $this->request_value('code');
         $redirectUri = $this->configured_redirect_uri();
 
         $this->store_oauth_diagnostics([
             'oauth_status' => $error !== '' ? 'callback_error' : 'callback_received',
             'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
-            'page_param' => sanitize_text_field((string) ($_GET['page'] ?? '')),
+            'page_param' => $this->request_value('page'),
             'code_received' => $code !== '',
             'state_received' => $state !== '',
             'expires_in_received' => $expiresIn,
@@ -214,6 +235,9 @@ class EbayAuth
             'oauth_status' => (string) ($s['oauth_status'] ?? ($hasRefreshToken ? 'connected' : 'not_connected')),
             'has_refresh_token' => $hasRefreshToken,
             'callback_intercepted_by_admin_init' => $s['callback_intercepted_by_admin_init'] ?? null,
+            'intercept_hook' => (string) ($s['intercept_hook'] ?? ''),
+            'request_uri' => (string) ($s['request_uri'] ?? ''),
+            'raw_get_keys' => is_array($s['raw_get_keys'] ?? null) ? $s['raw_get_keys'] : [],
             'callback_page_registered' => $s['callback_page_registered'] ?? false,
             'page_param' => (string) ($s['page_param'] ?? ''),
             'code_received' => $s['code_received'] ?? null,
@@ -348,6 +372,45 @@ class EbayAuth
         return (string) $data['access_token'];
     }
 
+    private function is_oauth_callback_request(): bool
+    {
+        $getPage = $this->sanitize_raw((string) ($_GET['page'] ?? ''));
+        $requestPage = $this->sanitize_raw((string) ($_REQUEST['page'] ?? ''));
+        $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+
+        return $getPage === self::CALLBACK_PAGE_SLUG
+            || $requestPage === self::CALLBACK_PAGE_SLUG
+            || strpos($requestUri, 'page=' . self::CALLBACK_PAGE_SLUG) !== false;
+    }
+
+    private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit): void
+    {
+        $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+        error_log('WEI OAuth callback intercept hit: request_uri=' . $requestUri . ' hook=' . $hook);
+
+        $this->store_oauth_diagnostics([
+            'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
+            'intercept_hook' => $hook,
+            'request_uri' => $requestUri,
+            'page_param' => $this->request_value('page'),
+            'raw_get_keys' => array_keys($_GET),
+            'code_received' => $this->request_value('code') !== '',
+            'state_received' => $this->request_value('state') !== '',
+            'expires_in_received' => $this->request_value('expires_in'),
+            'token_exchange_attempted' => false,
+        ], false);
+    }
+
+    private function request_value(string $key): string
+    {
+        return $this->sanitize_raw((string) ($_REQUEST[$key] ?? $_GET[$key] ?? ''));
+    }
+
+    private function sanitize_raw(string $value): string
+    {
+        return function_exists('sanitize_text_field') ? sanitize_text_field($value) : trim(strip_tags($value));
+    }
+
     private function redirect_with_error(string $error, array $extra = []): void
     {
         $args = ['page' => 'woo-ebay', 'ebay_error' => $error];
@@ -432,7 +495,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];

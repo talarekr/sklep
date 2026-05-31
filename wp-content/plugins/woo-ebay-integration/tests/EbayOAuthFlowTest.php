@@ -94,13 +94,46 @@ namespace {
     $source = file_get_contents($ref->getFileName());
     $assert(str_contains($source, '\'redirect_uri\' => $redirectUri'), 'Token exchange body must use the same OAuth redirect parameter variable.');
     $assert(str_contains($source, 'callback_intercepted_by_admin_init'), 'OAuth diagnostics must track admin_init callback interception.');
+    $assert(str_contains($source, 'intercept_hook'), 'OAuth diagnostics must store the hook that intercepted the callback.');
+    $assert(str_contains($source, 'request_uri'), 'OAuth diagnostics must store the raw callback request URI.');
+    $assert(str_contains($source, 'raw_get_keys'), 'OAuth diagnostics must store raw GET keys for callback debugging.');
+    $assert(str_contains($source, 'WEI OAuth callback intercept hit: request_uri='), 'OAuth callback intercept must emit temporary error_log diagnostics.');
     $assert(str_contains($source, 'Please log in as WordPress administrator and retry eBay Connect.'), 'Non-admin callback must show a clear administrator login message.');
     $assert(str_contains($source, '\'code_received\' => $code !== \'\''), 'Callback diagnostics must record code_received for code callbacks.');
     $assert(str_contains($source, '\'oauth_status\' => $error !== \'\' ? \'callback_error\' : \'callback_received\''), 'Callback diagnostics must record clear eBay error/decline callbacks.');
     $assert(str_contains($source, "new \\WP_Error('wei_missing_refresh', 'Missing eBay refresh token')"), 'Export without refresh token must still report wei_missing_refresh / Missing eBay refresh token.');
 
     $pluginSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
+    $bootstrapSource = file_get_contents(__DIR__ . '/../woo-ebay-integration.php');
     $assert(str_contains($pluginSource, "add_action('admin_init', [\$auth, 'handle_oauth_callback'], 0)"), 'Plugin must register the OAuth callback interceptor on global admin_init priority 0.');
+    $assert(str_contains($pluginSource, "add_action('current_screen', [\$auth, 'handle_current_screen_oauth_callback'], 0)"), 'Plugin must register current_screen OAuth callback fallback.');
+    $assert(str_contains($pluginSource, "add_action('load-admin_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_load_oauth_callback'], 0)"), 'Plugin must register load-admin_page OAuth callback fallback.');
+    $assert(str_contains($pluginSource, "add_action('load-woocommerce_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_woocommerce_load_oauth_callback'], 0)"), 'Plugin must register WooCommerce submenu load OAuth callback fallback.');
+    $assert(str_contains($pluginSource, "add_action('admin_post_nopriv_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION"), 'Plugin must register nopriv admin-post OAuth callback fallback.');
+    $assert(str_contains($bootstrapSource, 'handle_admin_bootstrap_oauth_callback'), 'Main plugin file must register a bootstrap-level callback interceptor before WooCommerce-dependent boot.');
+
+    $isCallbackRequest = $ref->getMethod('is_oauth_callback_request');
+    $isCallbackRequest->setAccessible(true);
+
+    $_GET = ['page' => 'ebay-auth-callback', 'code' => 'CODE1', 'state' => 'STATE1'];
+    $_REQUEST = $_GET;
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&code=CODE1&state=STATE1';
+    $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via $_GET page.');
+
+    $_GET = ['code' => 'CODE2'];
+    $_REQUEST = ['page' => 'ebay-auth-callback', 'code' => 'CODE2'];
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php';
+    $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via $_REQUEST page.');
+
+    $_GET = ['code' => 'CODE3'];
+    $_REQUEST = ['code' => 'CODE3'];
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&code=CODE3';
+    $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via REQUEST_URI.');
+
+    $_GET = ['page' => 'woo-ebay'];
+    $_REQUEST = $_GET;
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=woo-ebay';
+    $assert($isCallbackRequest->invoke($auth) === false, 'Callback detector must ignore normal plugin admin pages.');
 
     if ($failures !== []) {
         fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
