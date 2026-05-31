@@ -1808,6 +1808,14 @@ class OvokoIntegrationService
             'listing_attachment_target_fill_ratio' => (float) ($diagnostics['listing_attachment_target_fill_ratio'] ?? get_post_meta($listingImageId, '_awi_listing_target_fill_ratio', true)),
             'listing_attachment_fill_ratio' => (float) ($diagnostics['listing_attachment_fill_ratio'] ?? get_post_meta($listingImageId, '_awi_listing_fill_ratio', true)),
             'listing_attachment_render_profile' => (string) ($diagnostics['listing_attachment_render_profile'] ?? get_post_meta($listingImageId, '_awi_listing_render_profile', true)),
+            'ovoko_safe_zoom_applied' => !empty($diagnostics['ovoko_safe_zoom_applied']),
+            'ovoko_safe_zoom_factor' => (float) ($diagnostics['ovoko_safe_zoom_factor'] ?? 0),
+            'ovoko_safe_zoom_reason' => (string) ($diagnostics['ovoko_safe_zoom_reason'] ?? ''),
+            'rendered_width_before_safe_zoom' => (int) ($diagnostics['rendered_width_before_safe_zoom'] ?? 0),
+            'rendered_height_before_safe_zoom' => (int) ($diagnostics['rendered_height_before_safe_zoom'] ?? 0),
+            'rendered_width_after_safe_zoom' => (int) ($diagnostics['rendered_width_after_safe_zoom'] ?? 0),
+            'rendered_height_after_safe_zoom' => (int) ($diagnostics['rendered_height_after_safe_zoom'] ?? 0),
+            'safe_zoom_crop_risk' => !empty($diagnostics['safe_zoom_crop_risk']),
             'awi_diagnostics' => $diagnostics,
         ];
     }
@@ -2002,7 +2010,7 @@ class OvokoIntegrationService
             'gallery_ids_after_save' => $galleryIdsAfterSave,
         ]);
 
-        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, true);
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, true, 'ovoko_safe_zoom');
         $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
         $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
         $status = (string) ($awiResult['status'] ?? 'unknown');
@@ -2044,6 +2052,14 @@ class OvokoIntegrationService
             'quality_score' => (float) ($listingImageResult['selected_source_quality_score'] ?? ($listingImageResult['listing_quality_score'] ?? 0)),
             'listing_dimensions' => (array) ($listingImageResult['listing_image_dimensions'] ?? []),
             'thumbnail_dimensions' => (array) ($listingImageResult['thumbnail_dimensions'] ?? []),
+            'ovoko_safe_zoom_applied' => !empty($listingImageResult['ovoko_safe_zoom_applied']) || !empty($diagnostics['ovoko_safe_zoom_applied']),
+            'ovoko_safe_zoom_factor' => (float) ($listingImageResult['ovoko_safe_zoom_factor'] ?? ($diagnostics['ovoko_safe_zoom_factor'] ?? 0)),
+            'ovoko_safe_zoom_reason' => (string) ($listingImageResult['ovoko_safe_zoom_reason'] ?? ($diagnostics['ovoko_safe_zoom_reason'] ?? '')),
+            'rendered_width_before_safe_zoom' => (int) ($listingImageResult['rendered_width_before_safe_zoom'] ?? ($diagnostics['rendered_width_before_safe_zoom'] ?? 0)),
+            'rendered_height_before_safe_zoom' => (int) ($listingImageResult['rendered_height_before_safe_zoom'] ?? ($diagnostics['rendered_height_before_safe_zoom'] ?? 0)),
+            'rendered_width_after_safe_zoom' => (int) ($listingImageResult['rendered_width_after_safe_zoom'] ?? ($diagnostics['rendered_width_after_safe_zoom'] ?? 0)),
+            'rendered_height_after_safe_zoom' => (int) ($listingImageResult['rendered_height_after_safe_zoom'] ?? ($diagnostics['rendered_height_after_safe_zoom'] ?? 0)),
+            'safe_zoom_crop_risk' => !empty($listingImageResult['safe_zoom_crop_risk']) || !empty($diagnostics['safe_zoom_crop_risk']),
         ];
 
         $this->log('Ovoko listing image generation after import', [

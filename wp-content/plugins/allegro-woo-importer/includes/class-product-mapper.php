@@ -37,6 +37,14 @@ class ProductMapper
     private const LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY = '_awi_listing_render_profile';
     private const LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY = '_awi_listing_quality_boost_applied';
     private const LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY = '_awi_listing_quality_boost_upgraded';
+    private const LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_APPLIED_META_KEY = '_awi_listing_ovoko_safe_zoom_applied';
+    private const LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_FACTOR_META_KEY = '_awi_listing_ovoko_safe_zoom_factor';
+    private const LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_REASON_META_KEY = '_awi_listing_ovoko_safe_zoom_reason';
+    private const LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_BEFORE_SAFE_ZOOM_META_KEY = '_awi_listing_rendered_width_before_safe_zoom';
+    private const LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_BEFORE_SAFE_ZOOM_META_KEY = '_awi_listing_rendered_height_before_safe_zoom';
+    private const LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_AFTER_SAFE_ZOOM_META_KEY = '_awi_listing_rendered_width_after_safe_zoom';
+    private const LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_AFTER_SAFE_ZOOM_META_KEY = '_awi_listing_rendered_height_after_safe_zoom';
+    private const LISTING_IMAGE_ATTACHMENT_SAFE_ZOOM_CROP_RISK_META_KEY = '_awi_listing_safe_zoom_crop_risk';
     private const LISTING_IMAGE_ASPECT_RATIO_META_KEY = '_gp_listing_aspect_ratio';
     private const LISTING_IMAGE_IS_EXTREME_RATIO_META_KEY = '_gp_listing_is_extreme_ratio';
     private const LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY = '_gp_listing_selected_source_image_id';
@@ -48,6 +56,7 @@ class ProductMapper
     private const LISTING_REQUIRES_BETTER_SOURCE_META_KEY = '_gp_listing_requires_better_source';
     private const LISTING_IMAGE_CANVAS_SIZE = 900;
     private const LISTING_IMAGE_TARGET_FILL_RATIO = 0.90;
+    private const OVOKO_SAFE_ZOOM_MIN_RENDERED_HEIGHT = 650;
 
     private AllegroClient $client;
     private Logger $logger;
@@ -149,6 +158,7 @@ class ProductMapper
 
         if (
             $created_listing_id > 0
+            && $initial_render_profile === 'standard'
             && (
                 (string) ($quality['listing_quality_tier'] ?? '') === 'degraded'
                 || !empty($quality['requires_better_source'])
@@ -210,6 +220,14 @@ class ProductMapper
             'final_quality_score_after_boost' => round((float) ($quality['listing_quality_score'] ?? 0.0), 6),
             'quality_boost_applied' => $quality_boost_applied,
             'quality_boost_upgraded' => $quality_boost_upgraded,
+            'ovoko_safe_zoom_applied' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_APPLIED_META_KEY, true) === 1,
+            'ovoko_safe_zoom_factor' => (float) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_FACTOR_META_KEY, true),
+            'ovoko_safe_zoom_reason' => (string) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_REASON_META_KEY, true),
+            'rendered_width_before_safe_zoom' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_BEFORE_SAFE_ZOOM_META_KEY, true),
+            'rendered_height_before_safe_zoom' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_BEFORE_SAFE_ZOOM_META_KEY, true),
+            'rendered_width_after_safe_zoom' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_AFTER_SAFE_ZOOM_META_KEY, true),
+            'rendered_height_after_safe_zoom' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_AFTER_SAFE_ZOOM_META_KEY, true),
+            'safe_zoom_crop_risk' => (int) get_post_meta($created_listing_id, self::LISTING_IMAGE_ATTACHMENT_SAFE_ZOOM_CROP_RISK_META_KEY, true) === 1,
         ];
     }
 
@@ -285,6 +303,14 @@ class ProductMapper
             'listing_attachment_render_profile' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true),
             'listing_attachment_quality_boost_applied' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, true) === 1,
             'listing_attachment_quality_boost_upgraded' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, true) === 1,
+            'ovoko_safe_zoom_applied' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_APPLIED_META_KEY, true) === 1,
+            'ovoko_safe_zoom_factor' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_FACTOR_META_KEY, true),
+            'ovoko_safe_zoom_reason' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_REASON_META_KEY, true),
+            'rendered_width_before_safe_zoom' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_BEFORE_SAFE_ZOOM_META_KEY, true),
+            'rendered_height_before_safe_zoom' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_BEFORE_SAFE_ZOOM_META_KEY, true),
+            'rendered_width_after_safe_zoom' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_AFTER_SAFE_ZOOM_META_KEY, true),
+            'rendered_height_after_safe_zoom' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_AFTER_SAFE_ZOOM_META_KEY, true),
+            'safe_zoom_crop_risk' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_SAFE_ZOOM_CROP_RISK_META_KEY, true) === 1,
             'aspect_ratio' => $aspect_ratio,
             'is_extreme_aspect_ratio' => $is_extreme_aspect_ratio,
             'fit_limited_by' => $fit_limited_by,
@@ -2723,9 +2749,37 @@ class ProductMapper
             'boost_wide',
             'boost_tall',
             'boost_generic',
+            'ovoko_safe_zoom',
         ];
 
         return in_array($render_profile, $allowed_profiles, true) ? $render_profile : 'standard';
+    }
+
+    private function is_ovoko_listing_image_context(int $product_id, string $render_profile): bool
+    {
+        if ($render_profile === 'ovoko_safe_zoom') {
+            return true;
+        }
+
+        $ovoko_meta_keys = [
+            '_ovoko_part_id',
+            'ovoko_part_id',
+            '_ovoko_source_id',
+            '_ovoko_category',
+            '_ovoko_raw_payload',
+        ];
+
+        foreach ($ovoko_meta_keys as $meta_key) {
+            if (function_exists('metadata_exists') && metadata_exists('post', $product_id, $meta_key)) {
+                return true;
+            }
+
+            if ((string) get_post_meta($product_id, $meta_key, true) !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2803,9 +2857,10 @@ class ProductMapper
         $crop_y = $object_y;
         $crop_width = $object_width;
         $crop_height = $object_height;
+        $is_ovoko_listing_context = $this->is_ovoko_listing_image_context($product_id, $render_profile);
 
-        $use_quality_boost_profile = $render_profile !== 'standard';
-        if ($is_extreme_object_ratio || $use_quality_boost_profile) {
+        $use_quality_boost_profile = in_array($render_profile, ['boost_wide', 'boost_tall', 'boost_generic'], true);
+        if (($is_extreme_object_ratio && !$is_ovoko_listing_context) || $use_quality_boost_profile) {
             $fit_mode = $use_quality_boost_profile ? ('quality_boost_' . $render_profile) : 'smart_crop_square';
             $used_crop = 1;
             if ($render_profile === 'boost_wide') {
@@ -2847,6 +2902,51 @@ class ProductMapper
         }
         $target_width = max(1, (int) round($crop_width * $scale));
         $target_height = max(1, (int) round($crop_height * $scale));
+        $rendered_width_before_safe_zoom = $target_width;
+        $rendered_height_before_safe_zoom = $target_height;
+        $rendered_width_after_safe_zoom = $target_width;
+        $rendered_height_after_safe_zoom = $target_height;
+        $ovoko_safe_zoom_applied = false;
+        $ovoko_safe_zoom_factor = 1.0;
+        $ovoko_safe_zoom_reason = 'not_ovoko_listing_context';
+        $safe_zoom_crop_risk = false;
+
+        if ($is_ovoko_listing_context && $fit_mode === 'contain_full' && $used_crop === 0) {
+            if ($target_height < self::OVOKO_SAFE_ZOOM_MIN_RENDERED_HEIGHT) {
+                $height_factor = self::OVOKO_SAFE_ZOOM_MIN_RENDERED_HEIGHT / max(1, $target_height);
+                $canvas_width_factor = $canvas_size / max(1, $target_width);
+                $canvas_height_factor = $canvas_size / max(1, $target_height);
+                $safe_zoom_factor = min($height_factor, $canvas_width_factor, $canvas_height_factor);
+
+                if ($safe_zoom_factor > 1.001) {
+                    $safe_zoom_width = max(1, (int) round($target_width * $safe_zoom_factor));
+                    $safe_zoom_height = max(1, (int) round($target_height * $safe_zoom_factor));
+                    $safe_zoom_crop_risk = $safe_zoom_width > $canvas_size || $safe_zoom_height > $canvas_size;
+
+                    if (!$safe_zoom_crop_risk) {
+                        $target_width = $safe_zoom_width;
+                        $target_height = $safe_zoom_height;
+                        $rendered_width_after_safe_zoom = $target_width;
+                        $rendered_height_after_safe_zoom = $target_height;
+                        $scale *= $safe_zoom_factor;
+                        $ovoko_safe_zoom_applied = true;
+                        $ovoko_safe_zoom_factor = $safe_zoom_factor;
+                        $fit_mode = 'ovoko_safe_zoom_contain_full';
+                        $ovoko_safe_zoom_reason = $safe_zoom_factor < $height_factor ? 'height_below_threshold_capped_by_canvas' : 'height_below_threshold';
+                    } else {
+                        $ovoko_safe_zoom_reason = 'crop_risk_fallback_to_contain_full';
+                    }
+                } else {
+                    $safe_zoom_crop_risk = $height_factor > min($canvas_width_factor, $canvas_height_factor);
+                    $ovoko_safe_zoom_reason = $safe_zoom_crop_risk ? 'crop_risk_fallback_to_contain_full' : 'no_safe_zoom_available';
+                }
+            } else {
+                $ovoko_safe_zoom_reason = 'rendered_height_already_ok';
+            }
+        } elseif ($is_ovoko_listing_context) {
+            $ovoko_safe_zoom_reason = 'not_contain_full';
+        }
+
         $dst_x = (int) floor(($canvas_size - $target_width) / 2);
         $dst_y = (int) floor(($canvas_size - $target_height) / 2);
         $fill_ratio = max($target_width, $target_height) / max(1, $canvas_size);
@@ -2924,8 +3024,16 @@ class ProductMapper
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, $used_crop);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, round($fill_ratio, 6));
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, $render_profile);
-        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, $render_profile === 'standard' ? 0 : 1);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, $use_quality_boost_profile ? 1 : 0);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, 0);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_APPLIED_META_KEY, $ovoko_safe_zoom_applied ? 1 : 0);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_FACTOR_META_KEY, round($ovoko_safe_zoom_factor, 6));
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_OVOKO_SAFE_ZOOM_REASON_META_KEY, $ovoko_safe_zoom_reason);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_BEFORE_SAFE_ZOOM_META_KEY, $rendered_width_before_safe_zoom);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_BEFORE_SAFE_ZOOM_META_KEY, $rendered_height_before_safe_zoom);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_AFTER_SAFE_ZOOM_META_KEY, $rendered_width_after_safe_zoom);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_AFTER_SAFE_ZOOM_META_KEY, $rendered_height_after_safe_zoom);
+        update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ATTACHMENT_SAFE_ZOOM_CROP_RISK_META_KEY, $safe_zoom_crop_risk ? 1 : 0);
         $aspect_ratio = $crop_width / max(1, $crop_height);
         $is_extreme = ($aspect_ratio < 0.55 || $aspect_ratio > 1.8);
         update_post_meta((int) $attachment_id, self::LISTING_IMAGE_ASPECT_RATIO_META_KEY, round($aspect_ratio, 6));
@@ -2953,6 +3061,14 @@ class ProductMapper
             'aspect_ratio' => round($aspect_ratio, 6),
             'is_extreme_aspect_ratio' => $is_extreme,
             'fit_limited_by' => $crop_height > $crop_width ? 'height' : 'width',
+            'ovoko_safe_zoom_applied' => $ovoko_safe_zoom_applied,
+            'ovoko_safe_zoom_factor' => round($ovoko_safe_zoom_factor, 6),
+            'ovoko_safe_zoom_reason' => $ovoko_safe_zoom_reason,
+            'rendered_width_before_safe_zoom' => $rendered_width_before_safe_zoom,
+            'rendered_height_before_safe_zoom' => $rendered_height_before_safe_zoom,
+            'rendered_width_after_safe_zoom' => $rendered_width_after_safe_zoom,
+            'rendered_height_after_safe_zoom' => $rendered_height_after_safe_zoom,
+            'safe_zoom_crop_risk' => $safe_zoom_crop_risk,
         ]);
 
         return (int) $attachment_id;
