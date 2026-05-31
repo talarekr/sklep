@@ -86,6 +86,62 @@ class CategoryMappingRepository
         return is_array($rows) ? $rows : [];
     }
 
+
+    public function list_woo_categories_for_suggestions(string $marketplace_id = 'EBAY_DE', int $limit = 50, int $offset = 0, string $mode = 'leaf_with_products'): array
+    {
+        global $wpdb;
+        $terms = $wpdb->terms;
+        $termTaxonomy = $wpdb->term_taxonomy;
+        $relationships = $wpdb->term_relationships;
+        $posts = $wpdb->posts;
+        $mappings = $wpdb->prefix . 'wei_ebay_category_mappings';
+
+        $limit = max(1, min(500, $limit));
+        $offset = max(0, $offset);
+        $where = ["tt.taxonomy = 'product_cat'"];
+        if ($mode === 'leaf_with_products') {
+            $where[] = "NOT EXISTS (SELECT 1 FROM {$termTaxonomy} child_tt WHERE child_tt.taxonomy = 'product_cat' AND child_tt.parent = t.term_id)";
+            $where[] = "COUNT(DISTINCT p.ID) > 0";
+        } elseif ($mode === 'with_products') {
+            $where[] = "COUNT(DISTINCT p.ID) > 0";
+        }
+
+        $having = '';
+        $plainWhere = [];
+        foreach ($where as $clause) {
+            if (str_contains($clause, 'COUNT(')) {
+                $having = 'HAVING ' . $clause;
+            } else {
+                $plainWhere[] = $clause;
+            }
+        }
+
+        $sql = $wpdb->prepare(
+            "SELECT t.term_id, t.name, t.slug, tt.parent, COUNT(DISTINCT p.ID) AS product_count,
+                    m.ebay_category_id, m.ebay_category_name, m.ebay_category_path, m.source, m.confidence, m.status, m.updated_at, m.error_reason, m.sample_product_ids, m.suggestion_payload
+             FROM {$terms} t
+             INNER JOIN {$termTaxonomy} tt ON tt.term_id = t.term_id
+             LEFT JOIN {$relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             LEFT JOIN {$posts} p ON p.ID = tr.object_id AND p.post_type = 'product' AND p.post_status IN ('publish','draft','private')
+             LEFT JOIN {$mappings} m ON m.woo_term_id = t.term_id AND m.marketplace_id = %s
+             WHERE " . implode(' AND ', $plainWhere) . "
+             GROUP BY t.term_id
+             {$having}
+             ORDER BY product_count DESC, t.name ASC
+             LIMIT %d OFFSET %d",
+            $marketplace_id,
+            $limit,
+            $offset
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        foreach ((array) $rows as &$row) {
+            $row['woo_category_path'] = $this->woo_category_path((int) $row['term_id']);
+        }
+
+        return is_array($rows) ? $rows : [];
+    }
+
     public function sample_products_for_category(int $term_id, int $limit = 5): array
     {
         $query = new \WP_Query([
