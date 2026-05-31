@@ -291,6 +291,106 @@ class ProductMapper
         ];
     }
 
+    public function diagnose_frontend_listing_image_for_product(int $product_id): array
+    {
+        $product = function_exists('wc_get_product') ? wc_get_product($product_id) : null;
+        $thumbnail_id = (int) get_post_meta($product_id, '_thumbnail_id', true);
+        if ($thumbnail_id <= 0) {
+            $thumbnail_id = (int) get_post_thumbnail_id($product_id);
+        }
+
+        $awi_listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $awi_listing_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
+        $returned_image_id = $this->get_preferred_listing_image_id($product_id);
+        $returned_image_url = $returned_image_id > 0 ? (string) wp_get_attachment_url($returned_image_id) : '';
+        $thumbnail_path = $thumbnail_id > 0 ? (string) get_attached_file($thumbnail_id) : '';
+        $awi_listing_path = $awi_listing_image_id > 0 ? (string) get_attached_file($awi_listing_image_id) : '';
+        $thumbnail_dimensions = $this->get_attachment_dimensions($thumbnail_id, $thumbnail_path);
+        $awi_listing_dimensions = $this->get_attachment_dimensions($awi_listing_image_id, $awi_listing_path);
+        $image_size = 'large';
+        $image_html = '';
+        if ($returned_image_id > 0) {
+            $image_html = (string) wp_get_attachment_image($returned_image_id, $image_size, false, [
+                'class' => 'product-image__img',
+                'loading' => 'lazy',
+                'decoding' => 'async',
+            ]);
+        }
+        $image_attrs = $this->extract_img_attributes($image_html);
+        $src = (string) ($image_attrs['src'] ?? '');
+        $srcset = (string) ($image_attrs['srcset'] ?? '');
+        $uses_awi_listing_file_in_src = $src !== '' && strpos($src, '-awi-listing') !== false;
+        $srcset_uses_awi_listing_files_only = $srcset !== '' && strpos($srcset, '-awi-listing') !== false && strpos($srcset, wp_basename((string) wp_get_attachment_url($thumbnail_id))) === false;
+
+        return [
+            'tool' => 'Diagnose frontend listing image for product',
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'product_id' => $product_id,
+            'product_exists' => $product instanceof \WC_Product,
+            'product_title' => get_the_title($product_id),
+            '_thumbnail_id' => $thumbnail_id,
+            '_awi_listing_image_id' => $awi_listing_image_id,
+            '_awi_listing_image_source_id' => $awi_listing_source_id,
+            'thumbnail_url' => $thumbnail_id > 0 ? (string) wp_get_attachment_url($thumbnail_id) : '',
+            'awi_listing_image_url' => $awi_listing_image_id > 0 ? (string) wp_get_attachment_url($awi_listing_image_id) : '',
+            'awi_helper_returned_image_id' => $returned_image_id,
+            'awi_helper_returned_image_url' => $returned_image_url,
+            'returned_image_id_equals_awi_listing_image_id' => $returned_image_id > 0 && $returned_image_id === $awi_listing_image_id,
+            'returned_image_id_equals_thumbnail_id' => $returned_image_id > 0 && $returned_image_id === $thumbnail_id,
+            'awi_listing_image_attachment_exists' => $awi_listing_image_id > 0 && get_post($awi_listing_image_id) instanceof \WP_Post,
+            'awi_listing_image_file_path' => $awi_listing_path,
+            'awi_listing_image_file_exists' => $awi_listing_path !== '' && file_exists($awi_listing_path),
+            'thumbnail_image' => [
+                'id' => $thumbnail_id,
+                'url' => $thumbnail_id > 0 ? (string) wp_get_attachment_url($thumbnail_id) : '',
+                'file_path' => $thumbnail_path,
+                'file_exists' => $thumbnail_path !== '' && file_exists($thumbnail_path),
+                'width' => (int) ($thumbnail_dimensions['width'] ?? 0),
+                'height' => (int) ($thumbnail_dimensions['height'] ?? 0),
+            ],
+            'awi_listing_image' => [
+                'id' => $awi_listing_image_id,
+                'url' => $awi_listing_image_id > 0 ? (string) wp_get_attachment_url($awi_listing_image_id) : '',
+                'file_path' => $awi_listing_path,
+                'file_exists' => $awi_listing_path !== '' && file_exists($awi_listing_path),
+                'width' => (int) ($awi_listing_dimensions['width'] ?? 0),
+                'height' => (int) ($awi_listing_dimensions['height'] ?? 0),
+            ],
+            'product_card_template' => [
+                'file' => 'template-parts/product/product-card.php',
+                'image_id_expression' => 'AWI\\Plugin::get_listing_image_id_for_product((int) $product->get_id()) with Woo thumbnail fallback',
+                'wp_get_attachment_image_size' => $image_size,
+                'debug_comment_enabled_for' => 'current_user_can("manage_options") or ?awi_image_debug=1',
+            ],
+            'html_image_output' => [
+                'wp_get_attachment_image_size' => $image_size,
+                'html' => $image_html,
+                'src' => $src,
+                'srcset' => $srcset,
+                'src_contains_awi_listing_filename' => $uses_awi_listing_file_in_src,
+                'srcset_contains_awi_listing_filename' => $srcset !== '' && strpos($srcset, '-awi-listing') !== false,
+                'srcset_appears_to_use_only_awi_listing_attachment' => $srcset_uses_awi_listing_files_only,
+            ],
+            'css_observations_no_css_changes' => [
+                'style.css' => [
+                    '.product-image' => 'height: 168px; display:flex; align-items:center; justify-content:center; no overflow:hidden in this rule',
+                    '.product-image img' => 'width: 261px; height: 168px; object-fit: contain; transform: scale(1.1); overflow: clip',
+                ],
+                'assets/css/woocommerce.css' => [
+                    '.woocommerce ... .product-image' => 'height: 168px; display:flex; align-items:center; justify-content:center; no overflow:hidden in this rule',
+                    '.woocommerce ... .product-image img' => 'width: 261px; height: 168px; object-fit: contain; transform: scale(1.1); overflow: clip',
+                ],
+                'initial_interpretation' => 'CSS uses object-fit: contain, not cover. The fixed 261x168 box plus transform: scale(1.1) can make a 900x900 AWI image look visually cropped/scaled inside the listing card even when the AWI file is selected.',
+            ],
+            'template_usage_observations' => [
+                'woocommerce/content-product.php' => 'Woo loop items render template-parts/product/product-card.php.',
+                'template-parts/home/popular-products.php' => 'Homepage/popular carousel sections render template-parts/product/product-card.php.',
+                'functions.php mini cart' => 'Mini-cart uses $product->get_image("woocommerce_thumbnail") and is not a product listing card.',
+            ],
+            'classification_hint' => $this->classify_frontend_listing_image($returned_image_id, $awi_listing_image_id, $thumbnail_id, $uses_awi_listing_file_in_src),
+        ];
+    }
+
     public function compare_listing_image_input_output(array $product_ids, int $force_regenerate_runs = 0): array
     {
         $product_ids = array_values(array_unique(array_filter(array_map('intval', $product_ids), static fn(int $id): bool => $id > 0)));
@@ -564,6 +664,39 @@ class ProductMapper
             'differences' => $differences,
             'snapshots' => $snapshots,
         ];
+    }
+
+    private function extract_img_attributes(string $html): array
+    {
+        if ($html === '' || !preg_match('/<img\s+([^>]+)>/i', $html, $match)) {
+            return [];
+        }
+
+        $attributes = [];
+        if (preg_match_all('/([a-zA-Z0-9_:-]+)=["\']([^"\']*)["\']/', (string) $match[1], $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $attribute) {
+                $attributes[strtolower((string) $attribute[1])] = html_entity_decode((string) $attribute[2], ENT_QUOTES, 'UTF-8');
+            }
+        }
+
+        return $attributes;
+    }
+
+    private function classify_frontend_listing_image(int $returned_image_id, int $awi_listing_image_id, int $thumbnail_id, bool $src_uses_awi_listing_file): string
+    {
+        if ($returned_image_id > 0 && $awi_listing_image_id > 0 && $returned_image_id === $awi_listing_image_id && $src_uses_awi_listing_file) {
+            return 'A) frontend helper/rendered HTML uses the AWI listing image; if it still looks cropped, investigate CSS/container/srcset rendering.';
+        }
+
+        if ($returned_image_id > 0 && $thumbnail_id > 0 && $returned_image_id === $thumbnail_id) {
+            return 'B) frontend helper falls back to the Woo thumbnail.';
+        }
+
+        if ($returned_image_id > 0 && $awi_listing_image_id > 0 && $returned_image_id === $awi_listing_image_id) {
+            return 'C) frontend helper selected the AWI attachment, but the generated src does not clearly contain an -awi-listing filename; inspect attachment metadata/srcset and CSS/container rendering.';
+        }
+
+        return 'D) inconclusive from helper-level diagnostics; inspect the actual page source/debug comment to verify whether another template bypasses product-card.php.';
     }
 
     private function get_attachment_dimensions(int $attachment_id, string $path = ''): array

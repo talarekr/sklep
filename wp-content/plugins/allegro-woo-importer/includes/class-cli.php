@@ -27,6 +27,7 @@ class Cli
 
         \WP_CLI::add_command('awi listing-images regenerate', [$this, 'regenerate_listing_images']);
         \WP_CLI::add_command('awi listing-images inspect-front', [$this, 'inspect_front_listing_images']);
+        \WP_CLI::add_command('awi listing-images diagnose-frontend', [$this, 'diagnose_frontend_listing_image']);
         \WP_CLI::add_command('awi listing-images compare', [$this, 'compare_listing_image_input_output']);
     }
 
@@ -158,6 +159,25 @@ class Cli
 
         $force_runs = isset($assoc_args['force-runs']) ? max(0, (int) $assoc_args['force-runs']) : 0;
         $report = $this->mapper->compare_listing_image_input_output($product_ids, $force_runs);
+        \WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+
+    /**
+     * Diagnozuje realny frontendowy wybór obrazu listingowego dla jednego produktu.
+     *
+     * [--product-id=<id>]
+     * : ID produktu WooCommerce do diagnostyki.
+     */
+    public function diagnose_frontend_listing_image(array $args, array $assoc_args): void
+    {
+        $product_id = isset($assoc_args['product-id']) ? (int) $assoc_args['product-id'] : 0;
+        if ($product_id <= 0) {
+            \WP_CLI::error('Podaj --product-id=<id>.');
+            return;
+        }
+
+        $report = $this->mapper->diagnose_frontend_listing_image_for_product($product_id);
         \WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
