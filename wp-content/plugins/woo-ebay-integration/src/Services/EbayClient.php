@@ -149,6 +149,21 @@ class EbayClient
         ], 'application');
     }
 
+    public function browse_get_item_by_legacy_id(string $legacy_item_id, string $marketplace_id = 'EBAY_DE')
+    {
+        $legacy_item_id = trim($legacy_item_id);
+        if ($legacy_item_id === '') {
+            return new \WP_Error('wei_browse_legacy_item_id_missing', 'legacy_item_id is required when loading an eBay Browse item');
+        }
+
+        $marketplace_id = trim($marketplace_id) !== '' ? trim($marketplace_id) : 'EBAY_DE';
+        return $this->request('GET', '/buy/browse/v1/item/get_item_by_legacy_id', null, ['legacy_item_id' => $legacy_item_id], [
+            'stage' => 'buy_browse_get_item_by_legacy_id',
+            'marketplace_id' => $marketplace_id,
+            'ebay_marketplace_header' => $marketplace_id,
+        ], 'application');
+    }
+
     public function get_orders(array $query = [])
     {
         return $this->request('GET', '/sell/fulfillment/v1/order', null, $query);

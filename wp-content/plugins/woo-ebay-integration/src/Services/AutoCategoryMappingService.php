@@ -10,6 +10,11 @@ class AutoCategoryMappingService
 {
     private const REVIEW_CONFIDENCE_THRESHOLD = 0.60;
     private const TOP_CANDIDATE_LIMIT = 10;
+    private const OVOKO_STORE_SLUG = 'usedautocarparts';
+    private const OVOKO_STORE_URL = 'https://www.ebay.de/str/usedautocarparts';
+    private const OVOKO_SELLER_USERNAME = 'OvokoParts-Germany';
+    private const OVOKO_EXPECTED_SELLERS = ['OvokoParts-Germany', 'ovokoparts-germany'];
+    private const OVOKO_KNOWN_ITEM_URLS = ['https://www.ebay.de/itm/277935341444'];
 
 
     public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbayClient $client = null)
@@ -1681,6 +1686,25 @@ class AutoCategoryMappingService
         $categories = $this->woo_category_export_rows($marketplaceId, $leafOnly);
         $ovoko = $this->load_ovoko_listings($marketplaceId, $limit, $forceRefresh);
         $listings = is_array($ovoko['items'] ?? null) ? $ovoko['items'] : [];
+
+        if ($listings === []) {
+            $errorCode = (string) ($ovoko['status'] ?? '') === 'missing_category_id' ? 'missing_category_id' : 'seller_mismatch';
+            $message = $errorCode === 'missing_category_id' ? 'Ovoko listings were found but categoryId was not returned; refusing to generate category suggestions CSV.' : 'No accepted Ovoko listings were returned; refusing to generate category suggestions CSV.';
+            $summary = $this->ovoko_category_suggestions_failure_summary($started, $marketplaceId, $limit, $categories, $ovoko, $errorCode, $message);
+            update_option('wei_ebay_ovoko_category_suggestions_summary', $summary, false);
+            $this->logger->error('Ovoko category suggestions CSV blocked', $summary);
+            return $summary;
+        }
+
+        $missingCategoryListings = array_values(array_filter($listings, static fn(array $listing): bool => trim((string) ($listing['category_id'] ?? '')) === ''));
+        if ($missingCategoryListings !== []) {
+            $summary = $this->ovoko_category_suggestions_failure_summary($started, $marketplaceId, $limit, $categories, $ovoko, 'missing_category_id', 'Accepted Ovoko listings are missing categoryId; refusing to generate category suggestions CSV.');
+            $summary['accepted_missing_category_id_count'] = count($missingCategoryListings);
+            update_option('wei_ebay_ovoko_category_suggestions_summary', $summary, false);
+            $this->logger->error('Ovoko category suggestions CSV blocked', $summary);
+            return $summary;
+        }
+
         $taxonomyLookup = $this->category_path_lookup_from_listings($marketplaceId, $listings);
         foreach ($listings as &$listing) {
             $cid = (string) ($listing['category_id'] ?? '');
@@ -1738,14 +1762,14 @@ class AutoCategoryMappingService
 
         $reports = $this->write_category_csv_report('wei-ebay-ovoko-category-suggestions-', $headers, $rows);
         $unmatchedReports = $this->write_category_csv_report('wei-ebay-ovoko-unmatched-categories-', ['woo_subcategory_id', 'woo_subcategory_name', 'woo_category_path', 'products_count', 'note'], $unmatched);
-        $summary = [
+        $summary = $this->ovoko_listing_diagnostics($ovoko, $listings) + [
             'generated_at' => gmdate('Y-m-d H:i:s'),
             'marketplace_id' => $marketplaceId,
-            'seller_username_requested' => 'ovoko_germany',
+            'seller_username_requested' => self::OVOKO_SELLER_USERNAME,
             'seller_username_detected' => (string) ($ovoko['seller_username_detected'] ?? ''),
             'browse_api_status' => (string) ($ovoko['status'] ?? ''),
             'browse_api_error' => (string) ($ovoko['error'] ?? ''),
-            'browse_api_get_item_used' => false,
+            'browse_api_get_item_used' => !empty($ovoko['browse_api_get_item_used']),
             'category_id_returned_by_browse' => $this->listings_have_category_id($listings),
             'item_url_returned_by_browse' => $this->listings_have_item_url($listings),
             'taxonomy_lookup_built' => $taxonomyLookup !== [],
@@ -1764,6 +1788,7 @@ class AutoCategoryMappingService
             'elapsed_seconds' => round(microtime(true) - $started, 3),
             'reports' => array_merge($reports, $unmatchedReports),
             'sample_matches' => $examples,
+            'sample_accepted_ovoko_listings' => array_slice($listings, 0, 10),
         ];
         update_option('wei_ebay_ovoko_category_suggestions_summary', $summary, false);
         return $summary;
@@ -1869,17 +1894,28 @@ class AutoCategoryMappingService
 
     private function load_ovoko_listings(string $marketplaceId, int $limit, bool $forceRefresh): array
     {
-        $cacheKey = 'wei_ovoko_browse_' . sanitize_key($marketplaceId) . '_' . $limit . '_v1';
+        $cacheKey = 'wei_ovoko_browse_' . sanitize_key($marketplaceId) . '_' . $limit . '_v2';
         if (!$forceRefresh) {
             $cached = get_transient($cacheKey);
             if (is_array($cached)) { return $cached + ['source' => 'cache']; }
         }
-        if (!$this->client) { return ['status' => 'client_missing', 'items' => [], 'error' => 'EbayClient not injected']; }
-        $items = [];
+        if (!$this->client) { return ['status' => 'client_missing', 'items' => [], 'error' => 'EbayClient not injected'] + $this->empty_ovoko_listing_diagnostics(); }
+
+        $accepted = [];
+        $rejected = [];
+        $missingCategoryRejected = 0;
+        $sellerUsernamesSeen = [];
         $sellerDetected = '';
         $errors = [];
         $pageSize = min(200, max(1, $limit));
-        foreach (['ovoko_germany', 'ovokogermany'] as $sellerFilter) {
+        $browseGetItemUsed = false;
+
+        $searchFilters = [
+            self::OVOKO_SELLER_USERNAME,
+            strtolower(self::OVOKO_SELLER_USERNAME),
+            self::OVOKO_STORE_SLUG,
+        ];
+        foreach (array_values(array_unique($searchFilters)) as $sellerFilter) {
             for ($offset = 0; $offset < $limit; $offset += $pageSize) {
                 $res = $this->client->browse_search(['category_ids' => '131090', 'filter' => 'sellers:{' . $sellerFilter . '}', 'limit' => $pageSize, 'offset' => $offset], $marketplaceId);
                 if (is_wp_error($res)) { $errors[] = $sellerFilter . ': ' . $res->get_error_message(); break; }
@@ -1887,28 +1923,298 @@ class AutoCategoryMappingService
                 if ($summaries === []) { break; }
                 foreach ($summaries as $summary) {
                     if (!is_array($summary)) { continue; }
-                    $seller = is_array($summary['seller'] ?? null) ? $summary['seller'] : [];
-                    $sellerUsername = (string) ($seller['username'] ?? '');
-                    if ($sellerDetected === '' && $sellerUsername !== '') { $sellerDetected = $sellerUsername; }
-                    $items[] = [
-                        'item_id' => (string) ($summary['itemId'] ?? $summary['legacyItemId'] ?? ''),
-                        'title' => (string) ($summary['title'] ?? ''),
-                        'seller_username' => $sellerUsername,
-                        'item_url' => (string) ($summary['itemWebUrl'] ?? ''),
-                        'category_id' => (string) ($summary['categoryId'] ?? ''),
-                        'category_path' => '',
-                        'price' => is_array($summary['price'] ?? null) ? (string) (($summary['price']['value'] ?? '') . ' ' . ($summary['price']['currency'] ?? '')) : '',
-                        'condition' => (string) ($summary['condition'] ?? ''),
-                    ];
-                    if (count($items) >= $limit) { break 3; }
+                    $listing = $this->ovoko_listing_from_browse_summary($summary, 'browse_search:' . $sellerFilter);
+                    $sellerUsername = (string) ($listing['seller_username'] ?? '');
+                    if ($sellerUsername !== '') {
+                        $sellerUsernamesSeen[$sellerUsername] = true;
+                        if ($sellerDetected === '') { $sellerDetected = $sellerUsername; }
+                    }
+                    if (!$this->is_expected_ovoko_seller($sellerUsername)) {
+                        $rejected[] = $listing + ['reject_reason' => 'seller_mismatch'];
+                        continue;
+                    }
+                    if ((string) ($listing['category_id'] ?? '') === '' && (string) ($listing['item_id'] ?? '') !== '') {
+                        $details = $this->load_browse_item_details((string) $listing['item_id'], '', $marketplaceId);
+                        $browseGetItemUsed = $browseGetItemUsed || !empty($details['used']);
+                        if (is_array($details['listing'] ?? null)) {
+                            $listing = $this->merge_ovoko_listing_details($listing, (array) $details['listing']);
+                            $detailSeller = (string) ($listing['seller_username'] ?? '');
+                            if ($detailSeller !== '') { $sellerUsernamesSeen[$detailSeller] = true; }
+                        }
+                    }
+                    if ((string) ($listing['category_id'] ?? '') === '') {
+                        $missingCategoryRejected++;
+                        $rejected[] = $listing + ['reject_reason' => 'missing_category_id'];
+                        continue;
+                    }
+                    $accepted[$this->ovoko_listing_key($listing)] = $listing;
+                    if (count($accepted) >= $limit) { break 3; }
                 }
                 if (count($summaries) < $pageSize) { break; }
             }
-            if ($items !== []) { break; }
+            if (count($accepted) >= $limit) { break; }
         }
-        $result = ['status' => $errors === [] ? 'ok' : 'partial_or_failed', 'items' => $items, 'seller_username_detected' => $sellerDetected, 'error' => implode('; ', $errors), 'source' => 'api'];
+
+        if (count($accepted) < $limit) {
+            $storeResult = $this->load_ovoko_public_store_listings($marketplaceId, $limit - count($accepted));
+            $browseGetItemUsed = $browseGetItemUsed || !empty($storeResult['browse_api_get_item_used']);
+            foreach ((array) ($storeResult['errors'] ?? []) as $error) { $errors[] = (string) $error; }
+            foreach ((array) ($storeResult['seller_usernames_seen'] ?? []) as $sellerUsername) {
+                if ($sellerUsername !== '') { $sellerUsernamesSeen[(string) $sellerUsername] = true; }
+            }
+            if ($sellerDetected === '' && (string) ($storeResult['seller_username_detected'] ?? '') !== '') {
+                $sellerDetected = (string) $storeResult['seller_username_detected'];
+            }
+            foreach ((array) ($storeResult['rejected'] ?? []) as $listing) {
+                if (!is_array($listing)) { continue; }
+                if ((string) ($listing['reject_reason'] ?? '') === 'missing_category_id') { $missingCategoryRejected++; }
+                $rejected[] = $listing;
+            }
+            foreach ((array) ($storeResult['items'] ?? []) as $listing) {
+                if (!is_array($listing)) { continue; }
+                $accepted[$this->ovoko_listing_key($listing)] = $listing;
+                if (count($accepted) >= $limit) { break; }
+            }
+        }
+
+        $acceptedItems = array_values($accepted);
+        $rejectedNonOvoko = array_values(array_filter($rejected, static fn(array $listing): bool => (string) ($listing['reject_reason'] ?? '') === 'seller_mismatch'));
+        $status = $acceptedItems !== [] ? ($errors === [] ? 'ok' : 'partial_or_failed') : ($missingCategoryRejected > 0 ? 'missing_category_id' : 'seller_mismatch');
+        $result = $this->ovoko_listing_diagnostics([
+            'store_slug_used' => self::OVOKO_STORE_SLUG,
+            'seller_usernames_seen' => array_keys($sellerUsernamesSeen),
+            'rejected_non_ovoko_listings' => count($rejectedNonOvoko),
+        ], $acceptedItems) + [
+            'status' => $status,
+            'items' => $acceptedItems,
+            'seller_username_detected' => $sellerDetected,
+            'error' => implode('; ', array_filter($errors)),
+            'source' => 'api',
+            'browse_api_get_item_used' => $browseGetItemUsed,
+            'rejected_missing_category_id_listings' => $missingCategoryRejected,
+            'rejected_non_ovoko_listing_samples' => array_slice($rejectedNonOvoko, 0, 10),
+        ];
         set_transient($cacheKey, $result, HOUR_IN_SECONDS * 6);
         return $result;
+    }
+
+    private function load_ovoko_public_store_listings(string $marketplaceId, int $limit): array
+    {
+        $itemUrls = self::OVOKO_KNOWN_ITEM_URLS;
+        $errors = [];
+        if (function_exists('wp_remote_get')) {
+            $response = wp_remote_get(self::OVOKO_STORE_URL, ['timeout' => 20, 'headers' => ['Accept-Language' => 'de-DE,de;q=0.9,en;q=0.8']]);
+            if (is_wp_error($response)) {
+                $errors[] = 'store_scrape: ' . $response->get_error_message();
+            } else {
+                $body = (string) wp_remote_retrieve_body($response);
+                foreach ($this->extract_ebay_item_urls_from_html($body) as $url) { $itemUrls[] = $url; }
+            }
+        } else {
+            $errors[] = 'store_scrape: wp_remote_get unavailable';
+        }
+
+        $accepted = [];
+        $rejected = [];
+        $sellerUsernamesSeen = [];
+        $sellerDetected = '';
+        $browseGetItemUsed = false;
+        foreach (array_values(array_unique($itemUrls)) as $url) {
+            if (count($accepted) >= $limit) { break; }
+            $legacyItemId = $this->legacy_item_id_from_ebay_url($url);
+            if ($legacyItemId === '') { continue; }
+            $details = $this->load_browse_item_details('', $legacyItemId, $marketplaceId);
+            $browseGetItemUsed = $browseGetItemUsed || !empty($details['used']);
+            if (is_wp_error($details['error'] ?? null)) {
+                $errors[] = 'store_item ' . $legacyItemId . ': ' . $details['error']->get_error_message();
+                continue;
+            }
+            $listing = is_array($details['listing'] ?? null) ? (array) $details['listing'] : [];
+            if ($listing === []) { continue; }
+            $listing['item_url'] = (string) ($listing['item_url'] ?? $url);
+            $sellerUsername = (string) ($listing['seller_username'] ?? '');
+            if ($sellerUsername !== '') {
+                $sellerUsernamesSeen[$sellerUsername] = true;
+                if ($sellerDetected === '') { $sellerDetected = $sellerUsername; }
+            }
+            if (!$this->is_expected_ovoko_seller($sellerUsername)) {
+                $rejected[] = $listing + ['reject_reason' => 'seller_mismatch'];
+                continue;
+            }
+            if ((string) ($listing['category_id'] ?? '') === '') {
+                $rejected[] = $listing + ['reject_reason' => 'missing_category_id'];
+                continue;
+            }
+            $accepted[$this->ovoko_listing_key($listing)] = $listing + ['source' => 'store_get_item'];
+        }
+
+        return [
+            'items' => array_values($accepted),
+            'rejected' => $rejected,
+            'errors' => $errors,
+            'seller_usernames_seen' => array_keys($sellerUsernamesSeen),
+            'seller_username_detected' => $sellerDetected,
+            'browse_api_get_item_used' => $browseGetItemUsed,
+        ];
+    }
+
+    private function load_browse_item_details(string $itemId, string $legacyItemId, string $marketplaceId): array
+    {
+        $res = null;
+        if ($legacyItemId !== '' && method_exists($this->client, 'browse_get_item_by_legacy_id')) {
+            $res = $this->client->browse_get_item_by_legacy_id($legacyItemId, $marketplaceId);
+        } elseif ($itemId !== '') {
+            $res = $this->client->browse_get_item($itemId, $marketplaceId);
+        }
+        if ($res === null) { return ['used' => false, 'listing' => [], 'error' => null]; }
+        if (is_wp_error($res)) { return ['used' => true, 'listing' => [], 'error' => $res]; }
+        if (!is_array($res)) { return ['used' => true, 'listing' => [], 'error' => null]; }
+        return ['used' => true, 'listing' => $this->ovoko_listing_from_browse_item($res, $legacyItemId !== '' ? 'browse_get_item_by_legacy_id' : 'browse_get_item'), 'error' => null];
+    }
+
+    private function ovoko_listing_from_browse_summary(array $summary, string $source): array
+    {
+        $seller = is_array($summary['seller'] ?? null) ? $summary['seller'] : [];
+        return [
+            'item_id' => (string) ($summary['itemId'] ?? $summary['legacyItemId'] ?? ''),
+            'legacy_item_id' => (string) ($summary['legacyItemId'] ?? ''),
+            'title' => (string) ($summary['title'] ?? ''),
+            'seller_username' => (string) ($seller['username'] ?? ''),
+            'item_url' => (string) ($summary['itemWebUrl'] ?? ''),
+            'category_id' => (string) ($summary['categoryId'] ?? ''),
+            'category_path' => '',
+            'price' => is_array($summary['price'] ?? null) ? trim((string) (($summary['price']['value'] ?? '') . ' ' . ($summary['price']['currency'] ?? ''))) : '',
+            'condition' => (string) ($summary['condition'] ?? ''),
+            'source' => $source,
+        ];
+    }
+
+    private function ovoko_listing_from_browse_item(array $item, string $source): array
+    {
+        $seller = is_array($item['seller'] ?? null) ? $item['seller'] : [];
+        $categoryId = (string) ($item['categoryId'] ?? '');
+        if ($categoryId === '' && is_array($item['primaryItemGroup'] ?? null)) {
+            $categoryId = (string) ($item['primaryItemGroup']['categoryId'] ?? '');
+        }
+        return [
+            'item_id' => (string) ($item['itemId'] ?? $item['legacyItemId'] ?? ''),
+            'legacy_item_id' => (string) ($item['legacyItemId'] ?? ''),
+            'title' => (string) ($item['title'] ?? ''),
+            'seller_username' => (string) ($seller['username'] ?? ''),
+            'item_url' => (string) ($item['itemWebUrl'] ?? ''),
+            'category_id' => $categoryId,
+            'category_path' => '',
+            'price' => is_array($item['price'] ?? null) ? trim((string) (($item['price']['value'] ?? '') . ' ' . ($item['price']['currency'] ?? ''))) : '',
+            'condition' => (string) ($item['condition'] ?? ''),
+            'source' => $source,
+        ];
+    }
+
+    private function merge_ovoko_listing_details(array $listing, array $details): array
+    {
+        foreach (['item_id', 'legacy_item_id', 'title', 'seller_username', 'item_url', 'category_id', 'category_path', 'price', 'condition'] as $key) {
+            if ((string) ($listing[$key] ?? '') === '' && (string) ($details[$key] ?? '') !== '') { $listing[$key] = (string) $details[$key]; }
+        }
+        $listing['source'] = trim((string) ($listing['source'] ?? '') . '+get_item');
+        return $listing;
+    }
+
+    private function ovoko_listing_key(array $listing): string
+    {
+        $itemId = (string) ($listing['item_id'] ?? '');
+        if ($itemId !== '') { return $itemId; }
+        $url = (string) ($listing['item_url'] ?? '');
+        return $url !== '' ? $url : hash('sha256', wp_json_encode($listing));
+    }
+
+    private function is_expected_ovoko_seller(string $sellerUsername): bool
+    {
+        return in_array($this->normalize_ovoko_seller_username($sellerUsername), array_map([$this, 'normalize_ovoko_seller_username'], self::OVOKO_EXPECTED_SELLERS), true);
+    }
+
+    private function normalize_ovoko_seller_username(string $sellerUsername): string
+    {
+        return strtolower(trim($sellerUsername));
+    }
+
+    private function extract_ebay_item_urls_from_html(string $html): array
+    {
+        if ($html === '') { return []; }
+        preg_match_all('~https?://www\.ebay\.de/itm/(?:[^"\'<>\s?/]+/)?(\d{9,15})(?:[?][^"\'<>\s]*)?~i', $html, $matches);
+        $urls = [];
+        foreach ((array) ($matches[1] ?? []) as $id) { $urls[] = 'https://www.ebay.de/itm/' . $id; }
+        return array_values(array_unique($urls));
+    }
+
+    private function legacy_item_id_from_ebay_url(string $url): string
+    {
+        return preg_match('~/itm/(?:[^/?#]+/)?(\d{9,15})~', $url, $m) ? (string) $m[1] : '';
+    }
+
+    private function empty_ovoko_listing_diagnostics(): array
+    {
+        return [
+            'store_slug_used' => self::OVOKO_STORE_SLUG,
+            'store_url_used' => self::OVOKO_STORE_URL,
+            'expected_sellers' => self::OVOKO_EXPECTED_SELLERS,
+            'seller_usernames_seen' => [],
+            'accepted_ovoko_listings' => 0,
+            'rejected_non_ovoko_listings' => 0,
+        ];
+    }
+
+    private function ovoko_listing_diagnostics(array $source, array $acceptedListings): array
+    {
+        $seen = [];
+        foreach ((array) ($source['seller_usernames_seen'] ?? []) as $sellerUsername) {
+            if ((string) $sellerUsername !== '') { $seen[(string) $sellerUsername] = true; }
+        }
+        foreach ($acceptedListings as $listing) {
+            $sellerUsername = (string) ($listing['seller_username'] ?? '');
+            if ($sellerUsername !== '') { $seen[$sellerUsername] = true; }
+        }
+        return [
+            'store_slug_used' => (string) ($source['store_slug_used'] ?? self::OVOKO_STORE_SLUG),
+            'store_url_used' => self::OVOKO_STORE_URL,
+            'expected_sellers' => self::OVOKO_EXPECTED_SELLERS,
+            'seller_usernames_seen' => array_keys($seen),
+            'accepted_ovoko_listings' => count($acceptedListings),
+            'rejected_non_ovoko_listings' => (int) ($source['rejected_non_ovoko_listings'] ?? 0),
+        ];
+    }
+
+    private function ovoko_category_suggestions_failure_summary(float $started, string $marketplaceId, int $limit, array $categories, array $ovoko, string $errorCode, string $message): array
+    {
+        return $this->ovoko_listing_diagnostics($ovoko, is_array($ovoko['items'] ?? null) ? (array) $ovoko['items'] : []) + [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'marketplace_id' => $marketplaceId,
+            'status' => 'blocked',
+            'error_code' => $errorCode,
+            'error' => $message,
+            'seller_username_requested' => self::OVOKO_SELLER_USERNAME,
+            'seller_username_detected' => (string) ($ovoko['seller_username_detected'] ?? ''),
+            'browse_api_status' => (string) ($ovoko['status'] ?? ''),
+            'browse_api_error' => (string) ($ovoko['error'] ?? ''),
+            'browse_api_get_item_used' => !empty($ovoko['browse_api_get_item_used']),
+            'category_id_returned_by_browse' => false,
+            'item_url_returned_by_browse' => false,
+            'taxonomy_lookup_built' => false,
+            'taxonomy_category_paths_cached' => 0,
+            'woo_categories_processed' => count($categories),
+            'woo_categories_total' => $this->count_product_categories(),
+            'woo_leaf_categories' => $this->count_leaf_product_categories(),
+            'mapped_categories' => 0,
+            'unmapped_categories' => count($categories),
+            'ovoko_listings_fetched' => 0,
+            'distinct_ebay_categories_detected' => 0,
+            'limit' => $limit,
+            'cache_source' => (string) ($ovoko['source'] ?? ''),
+            'elapsed_seconds' => round(microtime(true) - $started, 3),
+            'reports' => [],
+            'sample_matches' => [],
+            'sample_accepted_ovoko_listings' => [],
+            'rejected_non_ovoko_listing_samples' => (array) ($ovoko['rejected_non_ovoko_listing_samples'] ?? []),
+        ];
     }
 
     private function category_path_lookup_from_listings(string $marketplaceId, array $listings): array
