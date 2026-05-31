@@ -217,8 +217,9 @@ class RrrApiClient
             'documented_or_known_endpoint_families_checked' => [
                 'parts updated from date' => ['/v2/get/parts date_from query', '/v2/get/parts updated_from/updated_after query', '/crm/export/parts-v2 body filters'],
                 'sold parts/status changes/deleted unavailable' => ['/v2/get/parts status=2 variants', '/crm/export/parts-v2 status=2 variants'],
-                'CRM changes' => ['/crm/export/parts-v2 filters', '/crm/export/part single reference'],
-                'orders/sales in Ovoko' => ['/v2/get/orders variants', '/crm/export/orders variants'],
+                'CRM changes' => ['/get/logs/{from_date}/{to_date}', '/crm/export/parts-v2 filters', '/crm/export/part single reference'],
+                'orders/sales in Ovoko' => ['/v2/get/orders/{from_date}/{to_date}', '/get/orders/{from_date}/{to_date}', '/v2/get/orders query variants', '/crm/export/orders variants'],
+                'webhooks' => ['part.status.changed push event (documented real-time source; not date-queryable by this read-only pull probe)', 'order.created push event'],
                 'warehouse status' => ['/v2/get/parts warehouse/status-style filters where available'],
             ],
             'hit_count' => count($hits),
@@ -237,7 +238,30 @@ class RrrApiClient
         $queryEndpoints = ['/v2/get/parts'];
         $bodyEndpoints = ['/crm/export/parts-v2'];
         $orderEndpoints = ['/v2/get/orders', '/v2/get/sales', '/crm/export/orders', '/crm/export/sales'];
+        $documentedOrderEndpoints = ['/v2/get/orders', '/get/orders'];
         $specs = [];
+
+        $specs[] = [
+            'endpoint' => '/get/logs/{from_date}/{to_date}',
+            'path' => '/get/logs/' . rawurlencode($date) . '/' . rawurlencode($date),
+            'body' => [],
+            'params' => ['from_date' => $date, 'to_date' => $date],
+            'param_location' => 'path',
+            'official_source' => 'RRR API CRM Export Logs',
+            'notes' => 'Documented pull-style CRM log feed; can include add_part, edit_part and other part actions with item_list/details.',
+        ];
+
+        foreach ($documentedOrderEndpoints as $endpoint) {
+            $specs[] = [
+                'endpoint' => $endpoint . '/{from_date}/{to_date}',
+                'path' => $endpoint . '/' . rawurlencode($date) . '/' . rawurlencode($date),
+                'body' => [],
+                'params' => ['from_date' => $date, 'to_date' => $date],
+                'param_location' => 'path',
+                'official_source' => $endpoint === '/v2/get/orders' ? 'RRR API CRM Export Orders V2' : 'RRR API CRM Export Orders deprecated',
+                'notes' => 'Documented order-date pull endpoint; order item_list rows include sold part IDs when the sale has an Ovoko order.',
+            ];
+        }
 
         foreach ($queryEndpoints as $endpoint) {
             foreach ([
@@ -301,9 +325,14 @@ class RrrApiClient
             'total_count' => (int) ($result['pagination']['total_count'] ?? count($records)),
             'returned_count' => (int) ($result['records_count'] ?? count($records)),
             'contains_target_part' => $target !== [],
+            'contains_target_part_id' => $target !== [],
             'target_part_status' => $target !== [] ? (string) ($targetNormalized['status'] ?? ($target['status'] ?? '')) : '',
             'target_part_updated_at' => $target !== [] ? (string) ($targetNormalized['updated_at'] ?? ($target['updated_at'] ?? '')) : '',
             'part_ids_sample' => array_slice($recordIds, 0, 20),
+            'sample_ids' => array_slice($recordIds, 0, 20),
+            'pagination' => (array) ($result['pagination'] ?? []),
+            'official_source' => (string) ($spec['official_source'] ?? ''),
+            'notes' => (string) ($spec['notes'] ?? ''),
             'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
             'full_payload_omitted' => true,
         ];
@@ -3049,20 +3078,26 @@ class RrrApiClient
         $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
         $ok = $httpCode === 200 && $statusCode === 'R200';
         $pagination = is_array($decoded['pagination'] ?? null) ? $decoded['pagination'] : [];
-        $records = [];
+        $sourceRows = [];
         if (is_array($decoded['data'] ?? null)) {
-            foreach ($decoded['data'] as $row) {
-                if (!is_array($row)) {
-                    continue;
-                }
-                $records[] = [
-                    'id' => sanitize_text_field((string) ($row['id'] ?? '')),
-                    'external_id' => isset($row['external_id']) ? sanitize_text_field((string) $row['external_id']) : null,
-                    'name' => sanitize_text_field((string) ($row['name'] ?? '')),
-                    'status' => sanitize_text_field((string) ($row['status'] ?? '')),
-                    'updated_at' => sanitize_text_field((string) ($row['updated_at'] ?? '')),
-                ];
-            }
+            $sourceRows = $decoded['data'];
+        } elseif (is_array($decoded['list'] ?? null)) {
+            $sourceRows = $decoded['list'];
+        }
+
+        $rawRows = array_values(array_filter($sourceRows, 'is_array'));
+        $records = [];
+        foreach ($rawRows as $row) {
+            $records[] = [
+                'id' => sanitize_text_field((string) ($row['id'] ?? $row['part_id'] ?? $row['order_id'] ?? '')),
+                'part_id' => sanitize_text_field((string) ($row['part_id'] ?? '')),
+                'order_id' => sanitize_text_field((string) ($row['order_id'] ?? '')),
+                'action' => sanitize_text_field((string) ($row['action'] ?? '')),
+                'external_id' => isset($row['external_id']) ? sanitize_text_field((string) $row['external_id']) : null,
+                'name' => sanitize_text_field((string) ($row['name'] ?? '')),
+                'status' => sanitize_text_field((string) ($row['status'] ?? $row['order_status'] ?? '')),
+                'updated_at' => sanitize_text_field((string) ($row['updated_at'] ?? $row['date'] ?? $row['order_date'] ?? '')),
+            ];
         }
         $firstRecord = $records[0] ?? [];
 
@@ -3081,7 +3116,7 @@ class RrrApiClient
             'first_record' => $firstRecord,
             'records' => $records,
             'records_count' => count($records),
-            'raw_records' => $includeRawPayload && is_array($decoded['data'] ?? null) ? array_values(array_filter($decoded['data'], 'is_array')) : [],
+            'raw_records' => $includeRawPayload ? $rawRows : [],
             'payload' => $includeRawPayload && is_array($decoded) ? $decoded : [],
         ];
     }
