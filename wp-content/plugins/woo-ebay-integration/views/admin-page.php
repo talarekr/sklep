@@ -491,6 +491,16 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                 </form>
             </div>
             <div class="wei-action-group safe">
+                <h3>Inspect offer before publish</h3>
+                <p class="description">Read-only diagnostic: fetches the existing Inventory API offer and inventory item, then shows publish-critical fields without calling publishOffer.</p>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                    <?php wp_nonce_field('wei_inspect_offer_before_publish'); ?>
+                    <input type="hidden" name="action" value="wei_inspect_offer_before_publish" />
+                    <label>Product ID <input type="number" name="product_id" placeholder="Woo product ID" required /></label>
+                    <button class="button">Inspect offer before publish</button>
+                </form>
+            </div>
+            <div class="wei-action-group safe">
                 <h3>Regenerate / refresh eBay content</h3>
                 <p class="description">Safely regenerates German eBay content in local product meta only. Calls Google Translate via the configured provider, refreshes _wei_ebay_de_* cache/hash, and never updates or creates active eBay listings.</p>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
