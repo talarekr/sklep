@@ -52,6 +52,7 @@ class AdminPage
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
+        add_action('admin_post_wei_generate_ebay_de_category_suggestions', [$this, 'generate_ebay_de_category_suggestions']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
@@ -903,6 +904,32 @@ class AdminPage
         $this->go();
     }
 
+
+
+    public function generate_ebay_de_category_suggestions(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_ebay_de_category_suggestions');
+
+        $limit = max(1, min(500, absint($_POST['limit'] ?? 50)));
+        $mode = sanitize_text_field((string) ($_POST['mode'] ?? 'leaf_with_products'));
+        $forceRefresh = !empty($_POST['force_refresh']);
+        $restart = !empty($_POST['restart']);
+        $reporter = new EbayCategorySuggestionReportService($this->categoryRepo, $this->taxonomy, $this->logger);
+        try {
+            $res = $reporter->generate([
+                'limit' => $limit,
+                'mode' => $mode,
+                'force_refresh' => $forceRefresh,
+                'restart' => $restart,
+            ]);
+        } catch (\Throwable $e) {
+            $res = ['result' => 'error', 'error' => $e->getMessage(), 'marketplace_id' => EbayCategorySuggestionReportService::MARKETPLACE_ID];
+        }
+
+        $this->set_status('eBay.de category suggestions: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
 
     public function repair_blocked_category_mappings(): void
     {

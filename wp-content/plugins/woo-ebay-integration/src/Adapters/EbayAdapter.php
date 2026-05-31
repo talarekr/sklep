@@ -15,6 +15,7 @@ use WEI\Services\EbayConditionResolver;
 use WEI\Services\EbayShippingPolicyResolver;
 use WEI\Services\EbayGermanContentTranslator;
 use WEI\Services\CategoryMappingSafety;
+use WEI\Services\EbayCategorySuggestionReportService;
 use WEI\Services\Logger;
 use WEI\Services\Translation\GoogleCloudTranslateProvider;
 use WEI\Services\Translation\OpenAiTranslationProvider;
@@ -120,12 +121,34 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'unmapped' => 0,
             'taxonomy_api_forbidden' => 0,
             'suggestion_failed' => 0,
+            'invalid_current_mappings' => 0,
+            'non_leaf_current_mappings' => 0,
+            'invalid_category_examples' => [],
             'threshold' => CategoryMappingSafety::threshold($settings),
         ];
         foreach ($rows as $row) {
             $productCount = max(0, (int) ($row['product_count'] ?? 0));
             $summary['total_products_counted'] += $productCount;
             $evaluation = $this->evaluate_category_mapping_row($row, $settings);
+            $currentValidation = $this->known_category_validation((string) ($row['ebay_category_id'] ?? ''), (int) ($row['term_id'] ?? 0));
+            if (!empty($currentValidation) && (($currentValidation['validation_status'] ?? '') === 'invalid_ebay_category_id' || ($currentValidation['validation_status'] ?? '') === 'non_leaf_ebay_category_id' || empty($currentValidation['valid']) || empty($currentValidation['leaf']))) {
+                $summary['ready'] = false;
+                if (!empty($currentValidation['valid']) && empty($currentValidation['leaf'])) {
+                    $summary['non_leaf_current_mappings'] += $productCount;
+                } else {
+                    $summary['invalid_current_mappings'] += $productCount;
+                }
+                $summary['products_needs_category_review'] += $productCount;
+                if (count($summary['invalid_category_examples']) < 10) {
+                    $summary['invalid_category_examples'][] = [
+                        'woo_term_id' => (int) ($row['term_id'] ?? 0),
+                        'woo_category_path' => (string) ($row['woo_category_path'] ?? ''),
+                        'current_ebay_category_id' => (string) ($row['ebay_category_id'] ?? ''),
+                        'validation_status' => (string) ($currentValidation['validation_status'] ?? 'invalid_ebay_category_id'),
+                    ];
+                }
+                continue;
+            }
             $finalStatus = (string) ($evaluation['final_status'] ?? 'needs_category_review');
             $fallback = $this->static_category_fallback((int) ($row['term_id'] ?? 0), $marketplaceId);
             if ($finalStatus === 'ready_manual' || $fallback['category_id'] !== '') {
@@ -161,6 +184,25 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return $summary;
+    }
+
+
+    private function known_category_validation(string $categoryId, int $wooTermId = 0): array
+    {
+        $categoryId = trim($categoryId);
+        $validation = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
+        if (!is_array($validation)) {
+            return [];
+        }
+        $byTerm = is_array($validation['by_woo_term_id'] ?? null) ? $validation['by_woo_term_id'] : [];
+        if ($wooTermId > 0 && is_array($byTerm[(string) $wooTermId] ?? null)) {
+            return $byTerm[(string) $wooTermId];
+        }
+        $byCategory = is_array($validation['by_category_id'] ?? null) ? $validation['by_category_id'] : [];
+        if ($categoryId !== '' && is_array($byCategory[$categoryId] ?? null)) {
+            return $byCategory[$categoryId];
+        }
+        return [];
     }
 
     public function upsert_inventory_location(): array
@@ -2990,6 +3032,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (empty($content['title']) || empty($content['description'])) { $errors[] = (string) ($content['error_message'] ?? 'German title/description missing'); $status = 'not_ready_missing_german_content'; }
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
         if ($categoryId === '') { $errors[] = 'Category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
+        $knownCategoryValidation = $this->known_category_validation($categoryId, (int) ($category['woo_term_id'] ?? $category['mapping']['woo_term_id'] ?? 0));
+        if ($categoryId !== '' && !empty($knownCategoryValidation) && (($knownCategoryValidation['validation_status'] ?? '') === 'invalid_ebay_category_id' || ($knownCategoryValidation['validation_status'] ?? '') === 'non_leaf_ebay_category_id' || empty($knownCategoryValidation['valid']) || empty($knownCategoryValidation['leaf']))) {
+            $errors[] = 'Known invalid/non-leaf eBay category ID for Woo category';
+            $status = (string) ($knownCategoryValidation['validation_status'] ?? 'invalid_ebay_category_id');
+            if ($status === 'non_leaf_ebay_category_id') {
+                $status = 'needs_category_review';
+            }
+            $category['validation_status'] = (string) ($knownCategoryValidation['validation_status'] ?? 'invalid_ebay_category_id');
+            $category['current_ebay_category_id'] = $categoryId;
+            $category['woo_term_id'] = (int) ($knownCategoryValidation['woo_term_id'] ?? $category['woo_term_id'] ?? 0);
+            $category['woo_category_path'] = (string) ($knownCategoryValidation['woo_category_path'] ?? $category['woo_category_path'] ?? '');
+        }
         if ($missingAspects !== [] && $categoryId !== '') { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
         $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
@@ -3008,7 +3062,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
 
@@ -4316,8 +4370,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return 'Missing required eBay item specifics/aspects: ' . implode(', ', $missingAspects) . '. Add them in eBay Aspects / Item specifics JSON, e.g. "Hersteller": ["SEAT"].';
         }
 
-        if ($errorId === '25005') {
-            return 'Invalid category ID. Selected eBay category is not a leaf category. Choose a final EBAY_DE category.';
+        $normalizedFallback = strtolower($fallback);
+        if ($errorId === '25005' || str_contains($normalizedFallback, 'invalid category') || str_contains($normalizedFallback, 'kategorie ist nicht gültig')) {
+            return 'Invalid category ID. Update Woo → eBay category mapping for this Woo category and rerun export.';
         }
 
         return $fallback !== '' ? $fallback : 'eBay export failed. Check logs for the full API response.';

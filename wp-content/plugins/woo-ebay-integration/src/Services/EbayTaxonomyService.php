@@ -17,18 +17,24 @@ class EbayTaxonomyService
         return (string) ($result['category_tree_id'] ?? '');
     }
 
-    public function get_default_category_tree_id_result(string $marketplace_id = 'EBAY_DE'): array
+    public function get_default_category_tree_id_result(string $marketplace_id = 'EBAY_DE', bool $force_refresh = false): array
     {
         $marketplace_id = trim($marketplace_id);
         $memoryKey = sanitize_key($marketplace_id);
-        if (isset($this->treeResults[$memoryKey])) {
+        if ($force_refresh) {
+            unset($this->treeResults[$memoryKey]);
+        }
+        if (!$force_refresh && isset($this->treeResults[$memoryKey])) {
             return $this->treeResults[$memoryKey];
         }
 
         $oauthContext = $this->client->taxonomy_oauth_context();
         $cacheKey = 'wei_taxonomy_tree_' . sanitize_key($marketplace_id);
+        if ($force_refresh) {
+            delete_transient($cacheKey);
+        }
         $cached = get_transient($cacheKey);
-        if (is_string($cached) && $cached !== '') {
+        if (!$force_refresh && is_string($cached) && $cached !== '') {
             $result = ['status' => 'ok', 'category_tree_id' => $cached, 'source' => 'cache'] + $oauthContext;
             $this->logger->info('Loaded eBay taxonomy tree id', ['marketplace_id' => $marketplace_id, 'category_tree_id' => $cached, 'source' => 'cache'] + $oauthContext);
             return $this->treeResults[$memoryKey] = $result;
@@ -61,9 +67,9 @@ class EbayTaxonomyService
         return is_array($result['suggestions'] ?? null) ? $result['suggestions'] : [];
     }
 
-    public function get_category_suggestions_result(string $marketplace_id, string $query): array
+    public function get_category_suggestions_result(string $marketplace_id, string $query, bool $force_refresh = false): array
     {
-        $tree = $this->get_default_category_tree_id_result($marketplace_id);
+        $tree = $this->get_default_category_tree_id_result($marketplace_id, $force_refresh);
         $treeId = (string) ($tree['category_tree_id'] ?? '');
         if (($tree['status'] ?? '') === 'taxonomy_api_forbidden') {
             return ['status' => 'taxonomy_api_forbidden', 'suggestions' => [], 'error' => (string) ($tree['error'] ?? 'eBay Taxonomy API forbidden'), 'tree' => $tree];
@@ -73,8 +79,11 @@ class EbayTaxonomyService
         }
 
         $cacheKey = 'wei_tax_suggest_' . md5($marketplace_id . '|' . $query);
+        if ($force_refresh) {
+            delete_transient($cacheKey);
+        }
         $cached = get_transient($cacheKey);
-        if (is_array($cached)) {
+        if (!$force_refresh && is_array($cached)) {
             return ['status' => 'ok', 'suggestions' => $cached, 'source' => 'cache', 'tree' => $tree];
         }
 
@@ -91,7 +100,7 @@ class EbayTaxonomyService
     }
 
 
-    public function get_category_details_result(string $marketplace_id, string $category_id): array
+    public function get_category_details_result(string $marketplace_id, string $category_id, bool $force_refresh = false): array
     {
         $category_id = trim($category_id);
         if ($category_id === '') {
@@ -99,12 +108,15 @@ class EbayTaxonomyService
         }
 
         $cacheKey = 'wei_cat_details_' . sanitize_key($marketplace_id) . '_' . sanitize_key($category_id);
+        if ($force_refresh) {
+            delete_transient($cacheKey);
+        }
         $cached = get_transient($cacheKey);
-        if (is_array($cached)) {
+        if (!$force_refresh && is_array($cached)) {
             return $cached + ['source' => 'cache'];
         }
 
-        $tree = $this->get_default_category_tree_id_result($marketplace_id);
+        $tree = $this->get_default_category_tree_id_result($marketplace_id, $force_refresh);
         $treeId = (string) ($tree['category_tree_id'] ?? '');
         if (($tree['status'] ?? '') === 'taxonomy_api_forbidden' || $treeId === '') {
             return ['status' => (string) ($tree['status'] ?? 'category_details_failed'), 'category_id' => $category_id, 'category_name' => 'unknown', 'category_path' => 'unknown', 'error' => (string) ($tree['error'] ?? 'Missing eBay category_tree_id')];
@@ -133,12 +145,46 @@ class EbayTaxonomyService
             $names[] = $name;
         }
 
-        $result = ['status' => 'ok', 'category_id' => $category_id, 'category_name' => $name !== '' ? $name : 'unknown', 'category_path' => $names !== [] ? implode(' > ', array_values(array_unique($names))) : 'unknown'];
+        $children = is_array($node['childCategoryTreeNodes'] ?? null) ? $node['childCategoryTreeNodes'] : [];
+        $leaf = isset($category['leafCategoryTreeNode']) ? (bool) $category['leafCategoryTreeNode'] : (isset($node['leafCategoryTreeNode']) ? (bool) $node['leafCategoryTreeNode'] : $children === []);
+        $result = ['status' => 'ok', 'category_id' => $category_id, 'category_name' => $name !== '' ? $name : 'unknown', 'category_path' => $names !== [] ? implode(' > ', array_values(array_unique($names))) : 'unknown', 'leaf' => $leaf];
         set_transient($cacheKey, $result, DAY_IN_SECONDS * 7);
         return $result;
     }
 
-    public function get_required_aspects(string $marketplace_id, string $category_id): array
+    public function validate_category_result(string $marketplace_id, string $category_id, bool $force_refresh = false): array
+    {
+        $category_id = trim($category_id);
+        if ($category_id === '') {
+            return ['category_id' => '', 'valid' => false, 'leaf' => false, 'category_path' => '', 'validation_status' => 'missing', 'taxonomy_error' => 'Missing category_id'];
+        }
+
+        $details = $this->get_category_details_result($marketplace_id, $category_id, $force_refresh);
+        if (($details['status'] ?? '') !== 'ok') {
+            return [
+                'category_id' => $category_id,
+                'valid' => false,
+                'leaf' => false,
+                'category_path' => (string) ($details['category_path'] ?? ''),
+                'validation_status' => 'invalid_ebay_category_id',
+                'taxonomy_error' => (string) ($details['error'] ?? $details['status'] ?? 'category_details_failed'),
+            ];
+        }
+
+        $leaf = !empty($details['leaf']);
+        $aspects = $this->get_required_aspects($marketplace_id, $category_id, $force_refresh);
+        return [
+            'category_id' => $category_id,
+            'valid' => true,
+            'leaf' => $leaf,
+            'category_name' => (string) ($details['category_name'] ?? ''),
+            'category_path' => (string) ($details['category_path'] ?? ''),
+            'validation_status' => $leaf ? 'valid_leaf' : 'non_leaf_ebay_category_id',
+            'required_aspects_count' => count($aspects),
+        ];
+    }
+
+    public function get_required_aspects(string $marketplace_id, string $category_id, bool $force_refresh = false): array
     {
         $category_id = trim($category_id);
         if ($category_id === '') {
@@ -146,13 +192,17 @@ class EbayTaxonomyService
         }
 
         $cacheKey = 'wei_req_aspects_' . sanitize_key($marketplace_id) . '_' . sanitize_key($category_id);
+        if ($force_refresh) {
+            delete_transient($cacheKey);
+        }
         $cached = get_transient($cacheKey);
-        if (is_array($cached)) {
+        if (!$force_refresh && is_array($cached)) {
             return $cached;
         }
 
         $required = $this->static_required_aspects($marketplace_id, $category_id);
-        $treeId = $this->get_default_category_tree_id($marketplace_id);
+        $tree = $this->get_default_category_tree_id_result($marketplace_id, $force_refresh);
+        $treeId = (string) ($tree['category_tree_id'] ?? '');
         if ($treeId !== '') {
             $res = $this->client->get_item_aspects_for_category($treeId, $category_id);
             if (!is_wp_error($res)) {
@@ -226,12 +276,16 @@ class EbayTaxonomyService
     public function get_local_category_index(string $marketplace_id): array
     {
         $cacheKey = 'wei_tax_local_index_' . sanitize_key($marketplace_id) . '_auto_parts_v1';
+        if ($force_refresh) {
+            delete_transient($cacheKey);
+        }
         $cached = get_transient($cacheKey);
-        if (is_array($cached)) {
+        if (!$force_refresh && is_array($cached)) {
             return $cached;
         }
 
-        $treeId = $this->get_default_category_tree_id($marketplace_id);
+        $tree = $this->get_default_category_tree_id_result($marketplace_id, $force_refresh);
+        $treeId = (string) ($tree['category_tree_id'] ?? '');
         if ($treeId === '') {
             return [];
         }
