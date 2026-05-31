@@ -613,6 +613,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $marketplaceId = $this->marketplace_id();
         $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : [];
         $sku = (string) ($skuResolution['sku'] ?? $mapping['sku'] ?? get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $publishContext = $this->manual_publish_context($product, $product_id, $sku, $marketplaceId, $preflight);
         $baseResult = [
             'result' => 'error',
             'published' => false,
@@ -623,9 +624,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'public_url' => $this->listing_public_url($listingId, $marketplaceId),
             'marketplace_id' => $marketplaceId,
             'inventory_id' => $sku,
+            'category_id' => $publishContext['category_id'],
+            'business_policy_ids' => $publishContext['business_policy_ids'],
+            'price' => $publishContext['price'],
+            'condition' => $publishContext['condition'],
+            'content' => $publishContext['content'],
             'status' => (string) ($preflight['status'] ?? 'not_ready'),
             'preflight_ready' => !empty($preflight['ready']),
             'preflight' => $preflight,
+            'inspect_offer_before_publish' => null,
             'ebay_response' => null,
             'wrote_woo_sku' => false,
             'wrote_woo_price' => false,
@@ -665,13 +672,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'wrote_allegro' => false,
         ]);
 
+        $offerInspection = $this->inspect_offer_before_publish($product_id, $variation_id, $offerId, $sku, $marketplaceId);
+        $baseResult['inspect_offer_before_publish'] = $offerInspection;
+
         $published = $this->client->publish_offer($offerId, [
             'stage' => 'manualPublishOfferOnly',
             'product_id' => $product_id,
             'variation_id' => $variation_id,
             'sku' => $sku,
+            'inventory_id' => $sku,
             'offer_id' => $offerId,
+            'request_offer_id' => $offerId,
+            'request_inventory_id' => $sku,
             'marketplace_id' => $marketplaceId,
+            'category_id' => $publishContext['category_id'],
+            'business_policy_ids' => $publishContext['business_policy_ids'],
+            'price' => $publishContext['price'],
+            'condition' => $publishContext['condition'],
+            'content' => $publishContext['content'],
         ]);
 
         if (is_wp_error($published)) {
@@ -681,12 +699,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 update_option('wei_ebay_global_status', 'blocked_by_ebay_account_restriction', false);
                 update_option('wei_ebay_account_restriction_status', 'detected', false);
             }
+            $diagnostics = $this->publish_error_diagnostics($published, $offerId, $sku);
             $result = array_merge($baseResult, [
                 'status' => $blocked ? 'blocked_by_ebay_account_restriction' : 'publish_error',
                 'message' => $published->get_error_message(),
                 'error' => $published->get_error_code(),
-                'error_details' => is_array($errorData) ? $errorData : [],
-                'ebay_response' => is_array($errorData) && isset($errorData['response_body']) ? $errorData['response_body'] : $errorData,
+                'http_status' => $diagnostics['http_status'],
+                'endpoint' => $diagnostics['endpoint'],
+                'method' => $diagnostics['method'],
+                'request_offer_id' => $diagnostics['request_offer_id'],
+                'request_inventory_id' => $diagnostics['request_inventory_id'],
+                'ebay_error_id' => $diagnostics['ebay_error_id'],
+                'ebay_errors' => $diagnostics['ebay_errors'],
+                'error_details' => $diagnostics['error_details'],
+                'ebay_raw_response' => $diagnostics['ebay_raw_response'],
+                'x-ebay-c-request-id' => $diagnostics['x-ebay-c-request-id'],
+                'correlation_headers' => $diagnostics['correlation_headers'],
+                'ebay_response' => $diagnostics['ebay_response'],
                 'blocked_by_ebay_account_restriction' => $blocked,
             ]);
             $this->record_manual_publish_result($product_id, $metaProductId, $result);
@@ -1210,6 +1239,164 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
 
         return array_values(array_unique($missing));
+    }
+
+
+    public function inspect_offer_before_publish_action(int $product_id, ?int $variation_id = null): array
+    {
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) {
+            return [
+                'result' => 'error',
+                'status' => 'product_not_found',
+                'message' => 'Product not found.',
+                'product_id' => $product_id,
+                'called_publish_offer' => false,
+            ];
+        }
+
+        $metaProductId = $variation_id ?: $product_id;
+        $mapping = $this->repo->find_by_product($product_id, $variation_id);
+        $offerId = trim((string) ($mapping['remote_offer_id'] ?? ''));
+        if ($offerId === '') {
+            $offerId = trim((string) get_post_meta($metaProductId, '_wei_ebay_offer_id', true));
+        }
+        $preflight = $this->preflight_product($product_id, $variation_id, true, false, ['suppress_side_effects' => true, 'audit_mode' => true]);
+        $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : [];
+        $sku = (string) ($skuResolution['sku'] ?? $mapping['sku'] ?? get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $marketplaceId = $this->marketplace_id();
+        $publishContext = $this->manual_publish_context($product, $product_id, $sku, $marketplaceId, $preflight);
+
+        $result = [
+            'result' => $offerId !== '' ? 'success' : 'error',
+            'status' => $offerId !== '' ? 'inspected' : 'missing_offer_id',
+            'message' => $offerId !== '' ? 'Inspect offer before publish completed; no publishOffer call was made.' : 'No eBay offer_id exists for this product.',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'offer_id' => $offerId,
+            'inventory_id' => $sku,
+            'marketplace_id' => $marketplaceId,
+            'preflight_ready' => !empty($preflight['ready']),
+            'content' => $publishContext['content'],
+            'category_id' => $publishContext['category_id'],
+            'business_policy_ids' => $publishContext['business_policy_ids'],
+            'price' => $publishContext['price'],
+            'condition' => $publishContext['condition'],
+            'called_publish_offer' => false,
+            'inspect_offer_before_publish' => $offerId !== '' ? $this->inspect_offer_before_publish($product_id, $variation_id, $offerId, $sku, $marketplaceId) : null,
+        ];
+
+        update_option('wei_ebay_last_inspect_offer_before_publish_result', $result, false);
+        update_post_meta($product_id, '_wei_ebay_inspect_offer_before_publish_result', wp_json_encode($result));
+        $this->logger->info('Inspect offer before publish completed', $result);
+
+        return $result;
+    }
+
+    private function manual_publish_context($product, int $product_id, string $sku, string $marketplaceId, array $preflight): array
+    {
+        $settings = $this->settings();
+        $shippingPolicyResolution = is_array($preflight['shipping_policy_resolution'] ?? null) ? $preflight['shipping_policy_resolution'] : EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
+        $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
+        $conditionResolution = EbayConditionResolver::resolve($marketplaceId, $settings);
+        $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) (is_object($product) && method_exists($product, 'get_price') ? $product->get_price() : 0);
+        $category = is_array($preflight['category'] ?? null) ? $preflight['category'] : [];
+        $content = is_array($preflight['content'] ?? null) ? $preflight['content'] : [];
+
+        return [
+            'sku' => $sku,
+            'category_id' => (string) ($category['category_id'] ?? ''),
+            'business_policy_ids' => [
+                'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
+                'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
+                'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+            ],
+            'price' => [
+                'value' => $priceValue,
+                'currency' => $this->offer_currency($marketplaceId),
+                'resolution' => $priceResolution,
+            ],
+            'condition' => $conditionResolution,
+            'content' => [
+                'stale' => !empty($content['stale']),
+                'source' => (string) ($content['source'] ?? ''),
+                'title_present' => trim((string) ($content['title'] ?? '')) !== '',
+                'description_present' => trim((string) ($content['description'] ?? '')) !== '',
+            ],
+        ];
+    }
+
+    private function inspect_offer_before_publish(int $product_id, ?int $variation_id, string $offerId, string $sku, string $marketplaceId): array
+    {
+        $offerResponse = $this->client->get_offer($offerId, [
+            'stage' => 'inspectOfferBeforePublish.getOffer',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'sku' => $sku,
+            'inventory_id' => $sku,
+            'offer_id' => $offerId,
+            'marketplace_id' => $marketplaceId,
+        ]);
+        $inventoryResponse = $sku !== '' ? $this->client->get_inventory_item($sku, [
+            'stage' => 'inspectOfferBeforePublish.getInventoryItem',
+            'product_id' => $product_id,
+            'variation_id' => $variation_id,
+            'sku' => $sku,
+            'inventory_id' => $sku,
+            'offer_id' => $offerId,
+            'marketplace_id' => $marketplaceId,
+        ]) : new \WP_Error('wei_inventory_id_missing', 'inventory_id is missing');
+
+        $offer = is_wp_error($offerResponse) ? [] : (array) $offerResponse;
+        $listingDescription = (string) ($offer['listingDescription'] ?? '');
+
+        return [
+            'called_publish_offer' => false,
+            'offer_ok' => !is_wp_error($offerResponse),
+            'offer_error' => is_wp_error($offerResponse) ? $this->api_result($offerResponse) : null,
+            'inventory_item_exists' => !is_wp_error($inventoryResponse),
+            'inventory_item_error' => is_wp_error($inventoryResponse) ? $this->api_result($inventoryResponse) : null,
+            'offer_id' => $offerId,
+            'inventory_id' => $sku,
+            'marketplace' => (string) ($offer['marketplaceId'] ?? $marketplaceId),
+            'categoryId' => (string) ($offer['categoryId'] ?? ''),
+            'listingPolicies' => is_array($offer['listingPolicies'] ?? null) ? $offer['listingPolicies'] : [],
+            'merchantLocationKey' => (string) ($offer['merchantLocationKey'] ?? ''),
+            'pricingSummary' => is_array($offer['pricingSummary'] ?? null) ? $offer['pricingSummary'] : [],
+            'format' => (string) ($offer['format'] ?? ''),
+            'availableQuantity' => $offer['availableQuantity'] ?? ($offer['availability']['shipToLocationAvailability']['quantity'] ?? null),
+            'listingDescription' => [
+                'present' => $listingDescription !== '',
+                'length' => mb_strlen($listingDescription),
+            ],
+            'offer' => $offer,
+        ];
+    }
+
+    private function publish_error_diagnostics(\WP_Error $error, string $offerId, string $sku): array
+    {
+        $data = $error->get_error_data();
+        $details = is_array($data) ? $data : [];
+        $responseBody = $details['response_body'] ?? ($details['error_details']['response_body'] ?? null);
+        $errors = is_array($details['ebay_errors'] ?? null) ? $details['ebay_errors'] : [];
+        if ($errors === [] && is_array($responseBody) && is_array($responseBody['errors'] ?? null)) {
+            $errors = array_values(array_filter($responseBody['errors'], 'is_array'));
+        }
+
+        return [
+            'http_status' => $details['http_status'] ?? $details['status'] ?? null,
+            'endpoint' => (string) ($details['endpoint'] ?? ''),
+            'method' => (string) ($details['method'] ?? ''),
+            'request_offer_id' => (string) ($details['request_offer_id'] ?? $offerId),
+            'request_inventory_id' => (string) ($details['request_inventory_id'] ?? $sku),
+            'ebay_error_id' => $details['ebay_error_id'] ?? ($errors[0]['errorId'] ?? null),
+            'ebay_errors' => $errors,
+            'error_details' => $details,
+            'ebay_raw_response' => (string) ($details['ebay_raw_response'] ?? ''),
+            'x-ebay-c-request-id' => (string) ($details['x-ebay-c-request-id'] ?? ''),
+            'correlation_headers' => is_array($details['correlation_headers'] ?? null) ? $details['correlation_headers'] : [],
+            'ebay_response' => $responseBody ?? $data,
+        ];
     }
 
     private function record_manual_publish_result(int $product_id, int $metaProductId, array $result): void

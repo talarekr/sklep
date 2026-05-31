@@ -48,6 +48,7 @@ class AdminPage
         add_action('admin_post_wei_basic_specifics_bulk_process', [$this, 'basic_specifics_bulk_process']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
         add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
+        add_action('admin_post_wei_inspect_offer_before_publish', [$this, 'inspect_offer_before_publish']);
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
@@ -1930,6 +1931,22 @@ class AdminPage
             'wrote_allegro' => false,
         ];
         $this->set_status('Manual publish offer only: ' . wp_json_encode($res));
+        $this->go();
+    }
+
+
+    public function inspect_offer_before_publish(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_inspect_offer_before_publish');
+        $id = (int) ($_POST['product_id'] ?? 0);
+        $res = $id > 0 ? $this->adapter->inspect_offer_before_publish_action($id) : [
+            'result' => 'error',
+            'status' => 'missing_product_id',
+            'message' => 'Missing Woo product ID.',
+            'called_publish_offer' => false,
+        ];
+        $this->set_status('Inspect offer before publish: ' . wp_json_encode($res));
         $this->go();
     }
 

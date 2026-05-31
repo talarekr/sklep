@@ -300,6 +300,31 @@ class EbayClient
 
             $sanitized_headers = $this->sanitize_sensitive_data($args['headers'] ?? []);
             $request_payload = $body !== null ? $this->sanitize_sensitive_data($body) : null;
+            $response_body = is_array($decoded) ? $decoded : $raw_body;
+            $ebay_errors = is_array($decoded) ? $this->extract_response_messages($decoded, ['errors']) : [];
+            $first_ebay_error = is_array($ebay_errors[0] ?? null) ? $ebay_errors[0] : [];
+            $first_ebay_message = trim((string) ($first_ebay_error['message'] ?? $first_ebay_error['longMessage'] ?? ''));
+            $ebay_error_id = $first_ebay_error['errorId'] ?? null;
+            $request_offer_id = (string) ($context['offer_id'] ?? $context['request_offer_id'] ?? '');
+            $request_inventory_id = (string) ($context['inventory_id'] ?? $context['sku'] ?? $context['request_inventory_id'] ?? '');
+            $ebay_request_id = $this->header_value($normalized_headers, 'x-ebay-c-request-id');
+            if ($ebay_request_id === '') {
+                $ebay_request_id = $this->header_value($normalized_headers, 'x-ebay-request-id');
+            }
+
+            $error_details = [
+                'http_status' => $status,
+                'endpoint' => $path,
+                'method' => $method,
+                'request_offer_id' => $request_offer_id,
+                'request_inventory_id' => $request_inventory_id,
+                'ebay_error_id' => $ebay_error_id,
+                'ebay_errors' => $ebay_errors,
+                'ebay_raw_response' => $raw_body,
+                'response_body' => $response_body,
+                'correlation_headers' => $correlation_headers,
+                'x-ebay-c-request-id' => $ebay_request_id,
+            ];
 
             $error_context = array_merge([
                 'stage' => (string) ($context['stage'] ?? 'unknown'),
@@ -307,17 +332,32 @@ class EbayClient
                 'sku' => isset($context['sku']) ? (string) $context['sku'] : null,
                 'endpoint' => $path,
                 'method' => $method,
+                'http_status' => $status,
                 'status' => $status,
-                'response_body' => is_array($decoded) ? $decoded : $raw_body,
+                'request_offer_id' => $request_offer_id,
+                'request_inventory_id' => $request_inventory_id,
+                'ebay_error_id' => $ebay_error_id,
+                'ebay_errors' => $ebay_errors,
+                'error_details' => $error_details,
+                'response_body' => $response_body,
+                'ebay_raw_response' => $raw_body,
                 'request_payload' => $request_payload,
                 'request_headers' => $sanitized_headers,
                 'token_type' => $tokenType === 'application' ? 'application' : 'user',
                 'correlation_headers' => $correlation_headers,
-                'response_headers' => $normalized_headers,
+                'x-ebay-c-request-id' => $ebay_request_id,
+                'response_headers' => $this->sanitize_sensitive_data($normalized_headers),
             ], $this->sanitize_sensitive_data($context));
 
+            $message = 'eBay API HTTP ' . $status;
+            if ($first_ebay_message !== '') {
+                $message .= ': ' . $first_ebay_message;
+            } else {
+                $message .= ' error';
+            }
+
             $this->logger->error('eBay API request failed', $error_context);
-            return new \WP_Error('wei_ebay_http_error', 'eBay API HTTP error', $error_context);
+            return new \WP_Error('wei_ebay_http_error', $message, $error_context);
         }
 
         return new \WP_Error('wei_ebay_http_error', 'eBay API retries exhausted');
@@ -336,6 +376,21 @@ class EbayClient
         }
 
         return self::MARKETPLACE_CONTENT_LANGUAGE[$marketplaceId] ?? self::MARKETPLACE_CONTENT_LANGUAGE['EBAY_DE'];
+    }
+
+
+    private function header_value(array $headers, string $name): string
+    {
+        foreach ($headers as $header_name => $header_value) {
+            if (strtolower((string) $header_name) === strtolower($name)) {
+                if (is_array($header_value)) {
+                    return implode(', ', array_map('strval', $header_value));
+                }
+                return (string) $header_value;
+            }
+        }
+
+        return '';
     }
 
     private function extract_response_messages(array $response, array $keys): array
