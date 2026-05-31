@@ -29,6 +29,7 @@ class Cli
         \WP_CLI::add_command('awi listing-images inspect-front', [$this, 'inspect_front_listing_images']);
         \WP_CLI::add_command('awi listing-images diagnose-frontend', [$this, 'diagnose_frontend_listing_image']);
         \WP_CLI::add_command('awi listing-images compare', [$this, 'compare_listing_image_input_output']);
+        \WP_CLI::add_command('awi listing-images crop-audit', [$this, 'audit_listing_image_crop']);
     }
 
     /**
@@ -162,6 +163,40 @@ class Cli
         \WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
+
+    /**
+     * Audytuje read-only bbox/crop math dla zdjęcia listingowego produktu.
+     *
+     * [--product-id=<id>]
+     * : Pojedynczy product_id do diagnostyki.
+     *
+     * [--allegro-product-id=<id>]
+     * : Product_id produktu Allegro do porównania.
+     *
+     * [--ovoko-product-id=<id>]
+     * : Product_id produktu Ovoko do porównania.
+     *
+     * [--write-debug-images=<0|1>]
+     * : Opcjonalnie zapisuje debug JPG do uploads/awi-debug/. Domyślnie 0.
+     */
+    public function audit_listing_image_crop(array $args, array $assoc_args): void
+    {
+        $product_ids = [];
+        foreach (['product-id', 'allegro-product-id', 'ovoko-product-id'] as $key) {
+            if (!empty($assoc_args[$key])) {
+                $product_ids[] = (int) $assoc_args[$key];
+            }
+        }
+
+        if ($product_ids === []) {
+            \WP_CLI::error('Podaj --product-id, --allegro-product-id lub --ovoko-product-id.');
+            return;
+        }
+
+        $write_debug_images = !empty($assoc_args['write-debug-images']) && (string) $assoc_args['write-debug-images'] !== '0';
+        $report = $this->mapper->audit_listing_image_crop($product_ids, $write_debug_images);
+        \WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
 
     /**
      * Diagnozuje realny frontendowy wybór obrazu listingowego dla jednego produktu.
