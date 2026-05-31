@@ -6,6 +6,7 @@
  * @var string $callback_uri
  * @var array  $listing_regen_checkpoint
  * @var array  $listing_last_batch
+ * @var array|null $single_listing_regen_result
  * @var array  $import_lock_status
  * @var array  $missing_import_checkpoint
  * @var array  $event_sync_status
@@ -238,6 +239,23 @@ if (!isset($option_key) || !is_string($option_key) || $option_key == '') {
         <li><?php esc_html_e('Łącznie błędów:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ((int) ($listing_regen_checkpoint['error_total'] ?? 0))); ?></strong></li>
         <li><?php esc_html_e('Aktualizacja checkpointu:', 'allegro-woo-importer'); ?> <strong><?php echo esc_html((string) ($listing_regen_checkpoint['updated_at'] ?? '—')); ?></strong></li>
     </ul>
+
+    <h3><?php esc_html_e('Regeneracja pojedynczego produktu', 'allegro-woo-importer'); ?></h3>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+        <?php wp_nonce_field('awi_listing_image_regenerate_single'); ?>
+        <input type="hidden" name="action" value="awi_listing_image_regenerate_single">
+        <label for="awi-listing-single-product-id"><?php esc_html_e('Woo product ID:', 'allegro-woo-importer'); ?></label>
+        <input id="awi-listing-single-product-id" type="number" min="1" name="awi_listing_single_product_id" value="" style="width:120px; margin-right:12px;">
+        <label style="margin-right:12px;">
+            <input type="checkbox" name="awi_listing_single_force_regenerate" value="1">
+            <?php esc_html_e('Force regenerate', 'allegro-woo-importer'); ?>
+        </label>
+        <?php submit_button(__('Regeneruj zdjęcie listingowe dla produktu', 'allegro-woo-importer'), 'secondary', 'submit', false); ?>
+    </form>
+    <?php if (isset($single_listing_regen_result) && is_array($single_listing_regen_result)) : ?>
+        <h4><?php esc_html_e('Wynik regeneracji pojedynczego produktu (JSON):', 'allegro-woo-importer'); ?></h4>
+        <pre style="max-height:520px; overflow:auto; background:#fff; border:1px solid #ccd0d4; padding:12px; white-space:pre-wrap;"><?php echo esc_html((string) wp_json_encode($single_listing_regen_result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)); ?></pre>
+    <?php endif; ?>
 
     <h2><?php esc_html_e('4. Diagnostyka renderingu zdjęć listingowych (ostatni batch)', 'allegro-woo-importer'); ?></h2>
     <p><?php esc_html_e('Uruchamia diagnostykę dokładnie dla produktów z ostatniego batcha regeneracji i zapisuje szczegóły do logu.', 'allegro-woo-importer'); ?></p>
