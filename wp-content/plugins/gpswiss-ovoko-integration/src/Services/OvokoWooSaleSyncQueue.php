@@ -48,6 +48,11 @@ class OvokoWooSaleSyncQueue
 
     private OvokoIntegrationService $integrationService;
 
+    /** @var array<int,array<string,mixed>> */
+    private array $stockSnapshotsBeforeSave = [];
+
+    private static int $ovokoToWooStockSuppressionDepth = 0;
+
     public function __construct(OvokoIntegrationService $integrationService)
     {
         $this->integrationService = $integrationService;
@@ -59,6 +64,170 @@ class OvokoWooSaleSyncQueue
         add_action('woocommerce_order_status_processing', [$this, 'enqueue_order'], 20, 1);
         add_action('woocommerce_order_status_completed', [$this, 'enqueue_order'], 20, 1);
         add_filter('gpswiss_ovoko_enqueue_sale_job_result', [$this, 'enqueue_external_sale_job'], 10, 2);
+        add_action('woocommerce_before_product_object_save', [$this, 'capture_product_stock_before_save'], 5, 1);
+        add_action('woocommerce_after_product_object_save', [$this, 'enqueue_manual_stock_change_if_sold_out'], 20, 1);
+    }
+
+
+    public static function suppress_ovoko_to_woo_stock_hooks(bool $suppressed = true): void
+    {
+        self::$ovokoToWooStockSuppressionDepth = max(0, self::$ovokoToWooStockSuppressionDepth + ($suppressed ? 1 : -1));
+    }
+
+    public static function ovoko_to_woo_stock_hooks_suppressed(): bool
+    {
+        return self::$ovokoToWooStockSuppressionDepth > 0;
+    }
+
+    public static function with_ovoko_to_woo_stock_suppression(callable $callback)
+    {
+        self::suppress_ovoko_to_woo_stock_hooks(true);
+        try {
+            return $callback();
+        } finally {
+            self::suppress_ovoko_to_woo_stock_hooks(false);
+        }
+    }
+
+    public function capture_product_stock_before_save($product): void
+    {
+        if (self::ovoko_to_woo_stock_hooks_suppressed() || !is_object($product) || !method_exists($product, 'get_id')) {
+            return;
+        }
+
+        $productId = (int) $product->get_id();
+        if ($productId <= 0) {
+            return;
+        }
+
+        $this->stockSnapshotsBeforeSave[$productId] = $this->read_product_stock_snapshot($productId);
+    }
+
+    public function enqueue_manual_stock_change_if_sold_out($product): array
+    {
+        $emptyResult = ['ok' => true, 'queued' => false, 'skipped' => true, 'reason' => 'not_applicable'];
+        if (self::ovoko_to_woo_stock_hooks_suppressed() || !is_object($product) || !method_exists($product, 'get_id')) {
+            return array_merge($emptyResult, ['reason' => 'ovoko_to_woo_stock_sync_suppressed']);
+        }
+
+        $productId = (int) $product->get_id();
+        if ($productId <= 0) {
+            return array_merge($emptyResult, ['reason' => 'missing_product_id']);
+        }
+
+        $previous = $this->stockSnapshotsBeforeSave[$productId] ?? $this->read_product_stock_snapshot($productId);
+        unset($this->stockSnapshotsBeforeSave[$productId]);
+
+        $newQuantity = method_exists($product, 'get_stock_quantity') ? $product->get_stock_quantity('edit') : get_post_meta($productId, '_stock', true);
+        $newStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status('edit') : (string) get_post_meta($productId, '_stock_status', true);
+        $current = [
+            'stock_quantity' => $this->normalize_stock_quantity($newQuantity),
+            'stock_status' => $newStatus,
+        ];
+
+        if (!$this->stock_changed_to_unavailable($previous, $current)) {
+            return array_merge($emptyResult, ['reason' => 'stock_not_changed_to_unavailable']);
+        }
+
+        $partId = $this->resolve_product_part_id($productId);
+        if ($partId === '') {
+            return array_merge($emptyResult, ['reason' => 'missing_or_invalid_ovoko_part_id_product_meta']);
+        }
+
+        $queueResult = $this->enqueue_manual_stock_change_job([
+            'product_id' => $productId,
+            'part_id' => $partId,
+            'previous_stock_quantity' => $previous['stock_quantity'],
+            'new_stock_quantity' => $current['stock_quantity'],
+            'previous_stock_status' => (string) ($previous['stock_status'] ?? ''),
+            'new_stock_status' => (string) ($current['stock_status'] ?? ''),
+            'changed_by_user_id' => function_exists('get_current_user_id') ? (int) get_current_user_id() : 0,
+        ]);
+
+        $this->integrationService->log_event('WOO_MANUAL_STOCK_CHANGE_DETECTED_FOR_OVOKO', [
+            'product_id' => $productId,
+            'part_id' => $partId,
+            'previous_stock_quantity' => $previous['stock_quantity'],
+            'new_stock_quantity' => $current['stock_quantity'],
+            'previous_stock_status' => (string) ($previous['stock_status'] ?? ''),
+            'new_stock_status' => (string) ($current['stock_status'] ?? ''),
+            'queue_result' => $queueResult,
+        ]);
+
+        return $queueResult;
+    }
+
+    public function enqueue_manual_stock_change_job(array $payload): array
+    {
+        $source = 'woo_manual_stock_change';
+        $productId = max(0, (int) ($payload['product_id'] ?? 0));
+        $partId = trim((string) ($payload['part_id'] ?? ''));
+        $previousQuantity = $this->normalize_stock_quantity($payload['previous_stock_quantity'] ?? null);
+        $newQuantity = $this->normalize_stock_quantity($payload['new_stock_quantity'] ?? null);
+        $previousStatus = (string) ($payload['previous_stock_status'] ?? '');
+        $newStatus = (string) ($payload['new_stock_status'] ?? '');
+        $changedByUserId = max(0, (int) ($payload['changed_by_user_id'] ?? 0));
+        $response = [
+            'ok' => false,
+            'source' => $source,
+            'product_id' => $productId,
+            'part_id' => $partId,
+            'status_sent_to_ovoko' => 2,
+            'queued' => false,
+            'skipped' => false,
+            'reason' => '',
+        ];
+
+        if (!$this->queue_enabled()) {
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'queue_paused_by_setting']);
+        }
+        if ($productId <= 0) {
+            return array_merge($response, ['reason' => 'missing_product_id']);
+        }
+        if ($partId === '') {
+            $partId = $this->resolve_product_part_id($productId);
+            $response['part_id'] = $partId;
+        }
+        if ($partId === '' || !preg_match('/^\d+$/', $partId)) {
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'missing_or_invalid_ovoko_part_id_product_meta']);
+        }
+
+        $jobId = $this->build_manual_stock_change_job_id($productId, $partId, $previousQuantity, $newQuantity, $previousStatus, $newStatus);
+        $jobs = $this->external_jobs();
+        $existing = is_array($jobs[$jobId] ?? null) ? (array) $jobs[$jobId] : [];
+        if (($existing['status'] ?? '') === self::STATUS_SUCCESS) {
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'already_success', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')]);
+        }
+        if (in_array((string) ($existing['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED], true)) {
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'already_queued', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')]);
+        }
+
+        $createdAt = gmdate('c');
+        $requestId = 'woo-manual-stock-product-' . $productId . '-part-' . $partId . '-' . substr(md5($jobId), 0, 10);
+        $job = [
+            'job_id' => $jobId,
+            'status' => self::STATUS_PENDING,
+            'source' => $source,
+            'source_order_id' => '',
+            'external_order_id' => '',
+            'source_item_id' => '',
+            'product_id' => $productId,
+            'part_id' => $partId,
+            'previous_stock_quantity' => $previousQuantity,
+            'new_stock_quantity' => $newQuantity,
+            'previous_stock_status' => $previousStatus,
+            'new_stock_status' => $newStatus,
+            'changed_by_user_id' => $changedByUserId,
+            'request_id' => $requestId,
+            'retry_count' => 0,
+            'error' => '',
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+            'status_sent_to_ovoko' => 2,
+        ];
+        $this->store_external_job($jobId, $job);
+
+        return array_merge($response, ['ok' => true, 'queued' => true, 'reason' => 'queued', 'job_id' => $jobId, 'request_id' => $requestId]);
     }
 
     public function enqueue_order(int $orderId): array
@@ -186,10 +355,10 @@ class OvokoWooSaleSyncQueue
         $jobs = $this->external_jobs();
         $existing = is_array($jobs[$jobId] ?? null) ? (array) $jobs[$jobId] : [];
         if (($existing['status'] ?? '') === self::STATUS_SUCCESS) {
-            return $response + ['ok' => true, 'skipped' => true, 'reason' => 'already_success', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')];
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'already_success', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')]);
         }
         if (in_array((string) ($existing['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED], true)) {
-            return $response + ['ok' => true, 'skipped' => true, 'reason' => 'already_queued', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')];
+            return array_merge($response, ['ok' => true, 'skipped' => true, 'reason' => 'already_queued', 'job_id' => $jobId, 'request_id' => (string) ($existing['request_id'] ?? '')]);
         }
 
         $requestId = 'ebay-' . $sourceOrderId . '-item-' . ($sourceItemId !== '' ? $sourceItemId : 'line') . '-part-' . $partId;
@@ -211,7 +380,7 @@ class OvokoWooSaleSyncQueue
         ];
         $this->store_external_job($jobId, $job);
 
-        return $response + ['ok' => true, 'queued' => true, 'reason' => 'queued', 'job_id' => $jobId, 'request_id' => $requestId];
+        return array_merge($response, ['ok' => true, 'queued' => true, 'reason' => 'queued', 'job_id' => $jobId, 'request_id' => $requestId]);
     }
 
     public function process_queue(array $options = []): array
@@ -252,7 +421,7 @@ class OvokoWooSaleSyncQueue
             $requestId = (string) ($job['request_id'] ?? '');
             $source = (string) ($job['source'] ?? 'woo_order') ?: 'woo_order';
             $externalOrderId = (string) ($job['external_order_id'] ?? '');
-            $row = ['source' => $source, 'order_item_id' => $itemId, 'order_id' => $orderId, 'external_order_id' => $externalOrderId, 'part_id' => $partId, 'status_sent_to_ovoko' => 2, 'request_id' => $requestId];
+            $row = ['source' => $source, 'order_item_id' => $itemId, 'order_id' => $orderId, 'external_order_id' => $externalOrderId, 'part_id' => $partId, 'status_sent_to_ovoko' => 2, 'status_sent' => 2, 'request_id' => $requestId];
 
             if ($itemId <= 0 || $orderId <= 0 || $partId === '' || !preg_match('/^\d+$/', $partId)) {
                 $this->write_item_meta($itemId, [self::META_STATUS => self::STATUS_SKIPPED, self::META_ERROR => 'invalid_order_item_or_part_id']);
@@ -264,7 +433,7 @@ class OvokoWooSaleSyncQueue
             $existingStatus = function_exists('wc_get_order_item_meta') ? (string) wc_get_order_item_meta($itemId, self::META_STATUS, true) : '';
             if ($existingStatus === self::STATUS_SUCCESS) {
                 $result['skipped']++;
-                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'already_success'];
+                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'already_success', 'http_status' => null, 'status_code' => '', 'error' => ''];
                 continue;
             }
 
@@ -311,19 +480,25 @@ class OvokoWooSaleSyncQueue
                 'product_id' => (int) ($job['product_id'] ?? 0),
                 'part_id' => (string) ($job['part_id'] ?? ''),
                 'status_sent_to_ovoko' => 2,
+                'status_sent' => 2,
                 'request_id' => (string) ($job['request_id'] ?? ''),
+                'previous_stock_quantity' => $job['previous_stock_quantity'] ?? null,
+                'new_stock_quantity' => $job['new_stock_quantity'] ?? null,
+                'previous_stock_status' => (string) ($job['previous_stock_status'] ?? ''),
+                'new_stock_status' => (string) ($job['new_stock_status'] ?? ''),
+                'changed_by_user_id' => (int) ($job['changed_by_user_id'] ?? 0),
             ];
 
             if ($row['job_id'] === '' || $row['product_id'] <= 0 || $row['part_id'] === '' || !preg_match('/^\d+$/', $row['part_id'])) {
                 $this->update_external_job_status($row['job_id'], self::STATUS_SKIPPED, 'invalid_external_sale_job');
                 $result['skipped']++;
-                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'invalid_external_sale_job'];
+                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'invalid_external_sale_job', 'http_status' => null, 'status_code' => '', 'error' => 'invalid_external_sale_job'];
                 continue;
             }
 
             if ((string) ($job['status'] ?? '') === self::STATUS_SUCCESS) {
                 $result['skipped']++;
-                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'already_success'];
+                $result['items'][] = $row + ['status' => self::STATUS_SKIPPED, 'reason' => 'already_success', 'http_status' => null, 'status_code' => '', 'error' => ''];
                 continue;
             }
 
@@ -355,6 +530,7 @@ class OvokoWooSaleSyncQueue
                 'retry_count' => $nextRetryCount,
                 'http_status' => $apiResponse['http_status'] ?? null,
                 'status_code' => (string) ($apiResponse['status_code'] ?? ''),
+                'error' => $error,
                 'shared_service' => 'OvokoAutoSyncDryRunService::mark_product_sold_in_ovoko',
             ];
         }
@@ -400,10 +576,10 @@ class OvokoWooSaleSyncQueue
             'meta_keys' => self::META_KEYS,
             'worker_endpoint' => '/crm/changePartStatus',
             'worker_payload' => ['part_id' => '{ovoko_sale_sync_part_id}', 'status' => 2],
-            'shared_live_path' => 'OvokoAutoSyncDryRunService::mark_order_item_sold_in_ovoko for Woo order items; OvokoAutoSyncDryRunService::mark_product_sold_in_ovoko for eBay order product jobs.',
+            'shared_live_path' => 'OvokoAutoSyncDryRunService::mark_order_item_sold_in_ovoko for Woo order items; OvokoAutoSyncDryRunService::mark_product_sold_in_ovoko for eBay order and Woo manual stock product jobs.',
             'external_queue_storage' => self::EXTERNAL_JOBS_OPTION,
-            'external_sources' => ['ebay_order'],
-            'idempotency' => 'Skip if order item ovoko_sale_sync_status is success; external eBay jobs are keyed by source + source_order_id + source_item_id + product_id + part_id and skipped after success.',
+            'external_sources' => ['ebay_order', 'woo_manual_stock_change'],
+            'idempotency' => 'Skip if order item ovoko_sale_sync_status is success; external eBay jobs are keyed by source + source_order_id + source_item_id + product_id + part_id; Woo manual stock change jobs are keyed by source + product_id + part_id + previous/new quantity/status and skipped after success.',
             'retry_policy' => 'Retry network/timeout/5xx/rate-limit failures only; do not retry missing part_id, already-success, invalid item, or validation errors.',
             'checkout_live_send' => false,
             'cancel_refund_policy' => 'Design only; do not automatically restore status in Ovoko without separate business decision.',
@@ -551,6 +727,49 @@ class OvokoWooSaleSyncQueue
             }
         }
         return '';
+    }
+
+
+    private function read_product_stock_snapshot(int $productId): array
+    {
+        return [
+            'stock_quantity' => $this->normalize_stock_quantity(get_post_meta($productId, '_stock', true)),
+            'stock_status' => (string) get_post_meta($productId, '_stock_status', true),
+        ];
+    }
+
+    private function normalize_stock_quantity($quantity): ?int
+    {
+        if ($quantity === null || $quantity === '') {
+            return null;
+        }
+        return is_numeric($quantity) ? (int) $quantity : null;
+    }
+
+    private function stock_changed_to_unavailable(array $previous, array $current): bool
+    {
+        $previousQuantity = $this->normalize_stock_quantity($previous['stock_quantity'] ?? null);
+        $newQuantity = $this->normalize_stock_quantity($current['stock_quantity'] ?? null);
+        $previousStatus = (string) ($previous['stock_status'] ?? '');
+        $newStatus = (string) ($current['stock_status'] ?? '');
+
+        $quantityDroppedToZero = $previousQuantity !== null && $previousQuantity > 0 && $newQuantity !== null && $newQuantity === 0;
+        $statusChangedToOutOfStock = $previousStatus === 'instock' && $newStatus === 'outofstock';
+
+        return $quantityDroppedToZero || $statusChangedToOutOfStock;
+    }
+
+    private function build_manual_stock_change_job_id(int $productId, string $partId, ?int $previousQuantity, ?int $newQuantity, string $previousStatus, string $newStatus): string
+    {
+        return 'manual-stock-' . md5(implode('|', [
+            'woo_manual_stock_change',
+            (string) $productId,
+            $partId,
+            $previousQuantity === null ? 'null' : (string) $previousQuantity,
+            $newQuantity === null ? 'null' : (string) $newQuantity,
+            $previousStatus,
+            $newStatus,
+        ]));
     }
 
     private function build_external_job_id(string $source, string $sourceOrderId, string $sourceItemId, int $productId, string $partId): string
