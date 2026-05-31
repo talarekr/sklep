@@ -200,6 +200,10 @@ class EbayGermanContentTranslator
             'translated_fields' => array_values($keys),
             'untranslated_fields' => [],
             'google_api_called' => true,
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+            'modified_woo_product' => false,
             'generated_at' => gmdate('c'),
         ];
 

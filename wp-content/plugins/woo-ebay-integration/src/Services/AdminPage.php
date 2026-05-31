@@ -34,6 +34,7 @@ class AdminPage
         add_action('admin_post_wei_description_template_preview', [$this, 'description_template_preview']);
         add_action('admin_post_wei_description_template_publish_dry_run', [$this, 'description_template_publish_dry_run']);
         add_action('admin_post_wei_description_template_single', [$this, 'description_template_single']);
+        add_action('admin_post_wei_ebay_regenerate_german_content', [$this, 'regenerate_german_content']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -2346,6 +2347,25 @@ class AdminPage
         echo '<h2>Raw HTML</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['html'] ?? '')) . '</pre>';
         echo '</div>';
         exit;
+    }
+
+
+    public function regenerate_german_content(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_ebay_regenerate_german_content');
+
+        $productId = (int) ($_POST['product_id'] ?? 0);
+        $res = $this->adapter->generate_german_content_meta_only($productId, true);
+        $res = array_merge($res, [
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+            'modified_woo_product' => false,
+        ]);
+
+        $this->set_status('eBay.de German content regenerated meta-only: ' . wp_json_encode($res));
+        wp_send_json($res);
     }
 
     public function description_template_single(): void

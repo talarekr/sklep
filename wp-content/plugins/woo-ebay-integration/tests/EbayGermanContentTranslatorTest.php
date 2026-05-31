@@ -85,10 +85,15 @@ if (($payload['aspects']['Farbe'][0] ?? '') !== 'Grau' || ($payload['aspects']['
 
 $cached = $translator->cached(10907, $source);
 if (!empty($cached['stale'])) {
-    $failures[] = 'Expected freshly cached payload to be non-stale.';
+    $failures[] = 'Expected freshly cached payload to be non-stale after admin regeneration refresh.';
 }
 if (($cached['source_hash'] ?? '') !== ($cached['cached_translation_hash'] ?? '')) {
-    $failures[] = 'Expected cached translation hash to match current source hash.';
+    $failures[] = 'Expected admin regeneration to write a fresh cached content hash that matches the current source hash.';
+}
+foreach (['called_ebay_api', 'updated_ebay_listing', 'created_ebay_listing', 'modified_woo_product'] as $safetyFlag) {
+    if (!array_key_exists($safetyFlag, $payload) || $payload[$safetyFlag] !== false) {
+        $failures[] = 'Expected German content refresh safety flag ' . $safetyFlag . ' to be false.';
+    }
 }
 
 $changed = $source;
