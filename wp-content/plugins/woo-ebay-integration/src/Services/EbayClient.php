@@ -122,6 +122,33 @@ class EbayClient
         return $this->taxonomy_request('GET', '/commerce/taxonomy/v1/category_tree/' . rawurlencode($category_tree_id) . '/get_item_aspects_for_category', null, ['category_id' => $category_id]);
     }
 
+
+
+    public function browse_search(array $query = [], string $marketplace_id = 'EBAY_DE')
+    {
+        $marketplace_id = trim($marketplace_id) !== '' ? trim($marketplace_id) : 'EBAY_DE';
+        return $this->request('GET', '/buy/browse/v1/item_summary/search', null, $query, [
+            'stage' => 'buy_browse_search',
+            'marketplace_id' => $marketplace_id,
+            'ebay_marketplace_header' => $marketplace_id,
+        ], 'application');
+    }
+
+    public function browse_get_item(string $item_id, string $marketplace_id = 'EBAY_DE')
+    {
+        $item_id = trim($item_id);
+        if ($item_id === '') {
+            return new \WP_Error('wei_browse_item_id_missing', 'item_id is required when loading an eBay Browse item');
+        }
+
+        $marketplace_id = trim($marketplace_id) !== '' ? trim($marketplace_id) : 'EBAY_DE';
+        return $this->request('GET', '/buy/browse/v1/item/' . rawurlencode($item_id), null, [], [
+            'stage' => 'buy_browse_get_item',
+            'marketplace_id' => $marketplace_id,
+            'ebay_marketplace_header' => $marketplace_id,
+        ], 'application');
+    }
+
     public function get_orders(array $query = [])
     {
         return $this->request('GET', '/sell/fulfillment/v1/order', null, $query);
@@ -181,6 +208,9 @@ class EbayClient
             'Content-Type' => 'application/json',
             'Accept' => 'application/json',
         ];
+        if (!empty($context['ebay_marketplace_header'])) {
+            $headers['X-EBAY-C-MARKETPLACE-ID'] = (string) $context['ebay_marketplace_header'];
+        }
 
         $contentLanguage = $this->resolve_content_language($path, $body, $query, $context);
         if ($contentLanguage !== '') {
