@@ -23,13 +23,21 @@ class EbayAuth
         $state = wp_generate_password(20, false, false);
         set_transient('wei_oauth_state_' . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
 
+        $oauthRedirectParam = $this->oauth_redirect_param($s);
+
         $params = [
             'client_id' => $s['client_id'] ?? '',
             'response_type' => 'code',
-            'redirect_uri' => $this->redirect_uri($s),
+            'redirect_uri' => $oauthRedirectParam,
             'scope' => self::SCOPES,
             'state' => $state,
         ];
+
+        $this->store_oauth_diagnostics([
+            'oauth_status' => ((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected',
+            'oauth_redirect_param_used' => $oauthRedirectParam,
+            'token_exchange_attempted' => false,
+        ], false);
 
         return self::AUTH_URL . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
@@ -54,12 +62,23 @@ class EbayAuth
             return;
         }
 
-        $this->process_oauth_callback();
+        $this->store_oauth_diagnostics([
+            'callback_intercepted_by_admin_init' => true,
+            'page_param' => $page,
+        ], false);
+
+        $this->process_oauth_callback(true);
+        exit;
     }
 
     public function handle_admin_post_oauth_callback(): void
     {
-        $this->process_oauth_callback();
+        $this->process_oauth_callback(false);
+    }
+
+    public function mark_callback_page_registered(): void
+    {
+        $this->store_oauth_diagnostics(['callback_page_registered' => true], false);
     }
 
     public function callback_url(): string
@@ -74,13 +93,22 @@ class EbayAuth
 
     public function configured_redirect_uri(): string
     {
-        return $this->redirect_uri($this->settings());
+        return $this->oauth_redirect_param($this->settings());
     }
 
-    private function process_oauth_callback(): void
+    private function process_oauth_callback(bool $interceptedByAdminInit = false): void
     {
         if (!current_user_can('manage_options')) {
-            wp_die(__('Insufficient permissions to access this page.'));
+            $this->store_oauth_diagnostics([
+                'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
+                'page_param' => sanitize_text_field((string) ($_GET['page'] ?? '')),
+                'code_received' => isset($_GET['code']) && (string) $_GET['code'] !== '',
+                'state_received' => isset($_GET['state']) && (string) $_GET['state'] !== '',
+                'token_exchange_attempted' => false,
+                'token_exchange_success' => false,
+                'token_exchange_error' => 'not_wordpress_administrator',
+            ]);
+            wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
         }
 
         $state = sanitize_text_field((string) ($_GET['state'] ?? ''));
@@ -88,16 +116,26 @@ class EbayAuth
         $stateValid = is_array($statePayload);
         $error = sanitize_text_field((string) ($_GET['error'] ?? ''));
         $errorDescription = sanitize_text_field((string) ($_GET['error_description'] ?? ''));
+        $expiresIn = sanitize_text_field((string) ($_GET['expires_in'] ?? ''));
+        $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
         $redirectUri = $this->configured_redirect_uri();
 
         $this->store_oauth_diagnostics([
             'oauth_status' => $error !== '' ? 'callback_error' : 'callback_received',
+            'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
+            'page_param' => sanitize_text_field((string) ($_GET['page'] ?? '')),
+            'code_received' => $code !== '',
+            'state_received' => $state !== '',
+            'expires_in_received' => $expiresIn,
             'state_valid' => $stateValid,
+            'token_exchange_attempted' => false,
             'token_exchange_success' => false,
             'token_exchange_error' => '',
+            'refresh_token_saved' => false,
             'oauth_error' => $error,
             'error_description' => $errorDescription,
             'redirect_uri_used' => $redirectUri,
+            'oauth_redirect_param_used' => $redirectUri,
         ]);
 
         if (!$stateValid) {
@@ -120,7 +158,6 @@ class EbayAuth
             ]);
         }
 
-        $code = sanitize_text_field((string) ($_GET['code'] ?? ''));
         if ($code === '') {
             $this->redirect_with_error('missing_code', [
                 'oauth_error' => 'missing_code',
@@ -166,18 +203,33 @@ class EbayAuth
     public function get_diagnostic_oauth_context(): array
     {
         $s = $this->settings();
+        $hasRefreshToken = (string) ($s['refresh_token'] ?? '') !== '';
+        $callbackUrl = $this->callback_url();
+        $ebayRuname = $this->ebay_runame($s);
+        $oauthRedirectParam = $this->oauth_redirect_param($s);
+
         return [
             'client_id_configured' => (string) ($s['client_id'] ?? '') !== '',
-            'runame_configured' => (string) ($s['runame'] ?? '') !== '',
-            'oauth_status' => (string) ($s['oauth_status'] ?? (((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected')),
-            'has_refresh_token' => (string) ($s['refresh_token'] ?? '') !== '',
-            'callback_url' => $this->callback_url(),
+            'runame_configured' => $ebayRuname !== '',
+            'oauth_status' => (string) ($s['oauth_status'] ?? ($hasRefreshToken ? 'connected' : 'not_connected')),
+            'has_refresh_token' => $hasRefreshToken,
+            'callback_intercepted_by_admin_init' => $s['callback_intercepted_by_admin_init'] ?? null,
+            'callback_page_registered' => $s['callback_page_registered'] ?? false,
+            'page_param' => (string) ($s['page_param'] ?? ''),
+            'code_received' => $s['code_received'] ?? null,
+            'state_received' => $s['state_received'] ?? null,
+            'callback_url' => $callbackUrl,
+            'browser_callback_url' => $callbackUrl,
             'admin_post_callback_url' => $this->admin_post_callback_url(),
-            'redirect_uri_configured' => $this->redirect_uri($s),
+            'ebay_runame' => $ebayRuname,
+            'oauth_redirect_param_used' => (string) ($s['oauth_redirect_param_used'] ?? $oauthRedirectParam),
+            'redirect_uri_configured' => $oauthRedirectParam,
             'state_valid' => $s['state_valid'] ?? null,
+            'token_exchange_attempted' => $s['token_exchange_attempted'] ?? null,
             'token_exchange_success' => $s['token_exchange_success'] ?? null,
             'token_exchange_error' => (string) ($s['token_exchange_error'] ?? ''),
-            'refresh_token_present' => (string) ($s['refresh_token'] ?? '') !== '',
+            'refresh_token_saved' => $s['refresh_token_saved'] ?? null,
+            'refresh_token_present' => $hasRefreshToken,
             'access_token_present' => (string) ($s['access_token'] ?? '') !== '',
             'access_token_expires_at' => (int) ($s['expires_at'] ?? 0),
             'scope_requested' => self::SCOPES,
@@ -202,7 +254,15 @@ class EbayAuth
     private function exchange_code(string $code, ?string $redirectUri = null): void
     {
         $s = $this->settings();
-        $redirectUri = $redirectUri !== null && $redirectUri !== '' ? $redirectUri : $this->redirect_uri($s);
+        $redirectUri = $redirectUri !== null && $redirectUri !== '' ? $redirectUri : $this->oauth_redirect_param($s);
+        $this->store_oauth_diagnostics([
+            'oauth_status' => 'token_exchange_attempted',
+            'token_exchange_attempted' => true,
+            'token_exchange_success' => false,
+            'token_exchange_error' => '',
+            'oauth_redirect_param_used' => $redirectUri,
+            'redirect_uri_used' => $redirectUri,
+        ]);
         $auth = base64_encode(($s['client_id'] ?? '') . ':' . ($s['client_secret'] ?? ''));
         $r = wp_remote_post(self::TOKEN_URL, [
             'timeout' => 20,
@@ -219,8 +279,8 @@ class EbayAuth
 
         if (is_wp_error($r)) {
             $message = $r->get_error_message();
-            $this->logger->error('OAuth code exchange failed', ['error' => $message, 'redirect_uri_used' => $redirectUri]);
-            $this->store_oauth_diagnostics(['oauth_status' => 'token_exchange_failed', 'token_exchange_success' => false, 'token_exchange_error' => $message, 'state_valid' => true, 'redirect_uri_used' => $redirectUri]);
+            $this->logger->error('OAuth code exchange failed', ['error' => $message, 'oauth_redirect_param_used' => $redirectUri]);
+            $this->store_oauth_diagnostics(['oauth_status' => 'token_exchange_failed', 'token_exchange_attempted' => true, 'token_exchange_success' => false, 'token_exchange_error' => $message, 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => false]);
             $this->redirect_with_error('token_exchange_failed', ['oauth_error' => 'token_exchange_failed', 'error_description' => $message, 'state_valid' => '1', 'redirect_uri_used' => $redirectUri]);
         }
 
@@ -228,13 +288,14 @@ class EbayAuth
         $data = (array) json_decode((string) wp_remote_retrieve_body($r), true);
         if ($status < 200 || $status >= 300 || empty($data['access_token'])) {
             $message = (string) ($data['error_description'] ?? $data['error'] ?? ('HTTP ' . $status));
-            $this->logger->error('OAuth code exchange HTTP error', ['status' => $status, 'response' => $data, 'redirect_uri_used' => $redirectUri]);
-            $this->store_oauth_diagnostics(['oauth_status' => 'token_exchange_failed', 'token_exchange_success' => false, 'token_exchange_error' => $message, 'state_valid' => true, 'redirect_uri_used' => $redirectUri]);
+            $this->logger->error('OAuth code exchange HTTP error', ['status' => $status, 'response' => $data, 'oauth_redirect_param_used' => $redirectUri]);
+            $this->store_oauth_diagnostics(['oauth_status' => 'token_exchange_failed', 'token_exchange_attempted' => true, 'token_exchange_success' => false, 'token_exchange_error' => $message, 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => false]);
             $this->redirect_with_error('token_exchange_http_error', ['oauth_error' => (string) ($data['error'] ?? 'token_exchange_http_error'), 'error_description' => $message, 'state_valid' => '1', 'redirect_uri_used' => $redirectUri]);
         }
 
         $this->persist_token($data);
-        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri]);
+        $refreshTokenSaved = (string) ($data['refresh_token'] ?? '') !== '' || (string) ($this->settings()['refresh_token'] ?? '') !== '';
+        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_attempted' => true, 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => $refreshTokenSaved]);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&ebay_connected=1&oauth_status=connected'));
         exit;
     }
@@ -343,24 +404,43 @@ class EbayAuth
 
     private function redirect_uri(array $settings): string
     {
-        $redirectUri = trim((string) ($settings['runame'] ?? ''));
-        if ($redirectUri === '') {
-            $redirectUri = trim((string) ($settings['redirect_uri'] ?? ''));
-        }
-
-        return $redirectUri !== '' ? $redirectUri : $this->callback_url();
+        return $this->oauth_redirect_param($settings);
     }
 
-    private function store_oauth_diagnostics(array $diagnostics): void
+    private function oauth_redirect_param(array $settings): string
+    {
+        $runame = $this->ebay_runame($settings);
+        if ($runame !== '') {
+            return $runame;
+        }
+
+        $legacyRedirectUri = trim((string) ($settings['redirect_uri'] ?? ''));
+        return $legacyRedirectUri !== '' ? $legacyRedirectUri : $this->callback_url();
+    }
+
+    private function ebay_runame(array $settings): string
+    {
+        $runame = trim((string) ($settings['runame'] ?? ''));
+        if ($runame !== '') {
+            return $runame;
+        }
+
+        $legacyRedirectUri = trim((string) ($settings['redirect_uri'] ?? ''));
+        return filter_var($legacyRedirectUri, FILTER_VALIDATE_URL) ? '' : $legacyRedirectUri;
+    }
+
+    private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['oauth_status', 'state_valid', 'token_exchange_success', 'token_exchange_error', 'oauth_error', 'error_description', 'redirect_uri_used'];
+        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];
             }
         }
-        $s['last_oauth_callback_at'] = current_time('mysql');
+        if ($touchCallbackTime) {
+            $s['last_oauth_callback_at'] = current_time('mysql');
+        }
         update_option(Plugin::OPTION_KEY, $s, false);
     }
 

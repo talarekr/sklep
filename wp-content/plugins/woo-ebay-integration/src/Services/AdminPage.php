@@ -94,6 +94,7 @@ class AdminPage
         // under WooCommerce with a real slug, then remove the submenu entry so
         // the callback remains hidden without sending null into WordPress core.
         $this->add_traced_submenu_page('woocommerce', 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [$this, 'render_oauth_callback'], 'oauth callback menu');
+        $this->auth->mark_callback_page_registered();
         remove_submenu_page('woocommerce', EbayAuth::CALLBACK_PAGE_SLUG);
     }
 
@@ -381,9 +382,10 @@ class AdminPage
         if ($postedClientSecret !== '') {
             $s['client_secret'] = $postedClientSecret;
         }
-        $postedRedirectUri = esc_url_raw((string) ($_POST['redirect_uri'] ?? $_POST['runame'] ?? ''));
-        $s['redirect_uri'] = $postedRedirectUri;
-        $s['runame'] = $postedRedirectUri;
+        $postedCallbackUrl = esc_url_raw((string) ($_POST['redirect_uri'] ?? ''));
+        $postedRuname = sanitize_text_field((string) ($_POST['runame'] ?? ''));
+        $s['redirect_uri'] = $postedCallbackUrl !== '' ? $postedCallbackUrl : admin_url('admin.php?page=' . EbayAuth::CALLBACK_PAGE_SLUG);
+        $s['runame'] = $postedRuname;
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $defaultItemCondition = strtoupper(sanitize_text_field((string) ($_POST['default_item_condition'] ?? EbayConditionResolver::DEFAULT_ITEM_CONDITION)));
