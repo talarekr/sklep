@@ -179,6 +179,18 @@ final class Plugin
         return $instance->mapper->get_listing_image_diagnostics($product_id);
     }
 
+    public static function compare_listing_image_input_output(array $product_ids, int $force_regenerate_runs = 0): array
+    {
+        $instance = self::instance();
+        return $instance->mapper->compare_listing_image_input_output($product_ids, $force_regenerate_runs);
+    }
+
+    public static function diagnose_listing_image_for_product(int $product_id, int $force_regenerate_runs = 0): array
+    {
+        $instance = self::instance();
+        return $instance->mapper->diagnose_listing_image_for_product($product_id, $force_regenerate_runs);
+    }
+
     public static function select_best_listing_source_image(int $product_id): array
     {
         $instance = self::instance();

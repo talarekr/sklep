@@ -1420,7 +1420,7 @@ class OvokoIntegrationService
         $this->upsert_custom_product_attributes($productId, $this->build_ovoko_technical_attributes_from_normalized($normalized));
         wp_set_object_terms($productId, 'simple', 'product_type');
         $imageImportResult = $this->import_ovoko_images_for_product($productId, $normalized, $partId);
-        $listingImageResult = $this->generate_listing_image_for_ovoko_product($productId);
+        $listingImageResult = $this->generate_listing_image_for_ovoko_product($productId, true);
 
         return [
             'ok' => true,
@@ -1649,15 +1649,15 @@ class OvokoIntegrationService
             if ($syncHash !== '') {
                 update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
             }
-            $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId, false) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
-            if ($created) {
-                $this->log_ovoko_listing_image_generation_after_import($productId, $listingImageResult, $imageImportResult);
-            }
             if (function_exists('wc_get_product')) {
                 $product = wc_get_product($productId);
                 if ($product && method_exists($product, 'save')) {
                     $product->save();
                 }
+            }
+            $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId, true) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
+            if ($created) {
+                $this->log_ovoko_listing_image_generation_after_import($productId, $listingImageResult, $imageImportResult);
             }
         } finally {
             OvokoWooSaleSyncQueue::suppress_ovoko_to_woo_stock_hooks(false);
@@ -1952,8 +1952,9 @@ class OvokoIntegrationService
         return is_string($newPath) && $newPath !== '' ? ($scheme . '://' . $host . $newPath) : '';
     }
 
-    public function generate_listing_image_for_ovoko_product(int $productId, bool $force = false): array
+    public function generate_listing_image_for_ovoko_product(int $productId, bool $force = true): array
     {
+        $force = true;
         $allegroListingRenderProfile = 'standard';
         $result = [
             'ok' => false,
@@ -1983,7 +1984,25 @@ class OvokoIntegrationService
             return $result;
         }
 
-        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, $force);
+        $thumbnailIdAfterSave = (int) get_post_thumbnail_id($productId);
+        $galleryIdsAfterSave = [];
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if ($product instanceof \WC_Product) {
+                $galleryIdsAfterSave = array_values(array_map('intval', $product->get_gallery_image_ids()));
+            }
+        }
+        if ($galleryIdsAfterSave === []) {
+            $galleryIdsAfterSave = array_values(array_filter(array_map('intval', array_map('trim', explode(',', (string) get_post_meta($productId, '_product_image_gallery', true))))));
+        }
+        $this->log('Ovoko AWI listing image generation using Allegro-compatible flow', [
+            'product_id' => $productId,
+            'force' => $force,
+            'thumbnail_id_after_save' => $thumbnailIdAfterSave,
+            'gallery_ids_after_save' => $galleryIdsAfterSave,
+        ]);
+
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, true);
         $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
         $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
         $status = (string) ($awiResult['status'] ?? 'unknown');
@@ -2227,10 +2246,31 @@ class OvokoIntegrationService
         $featuredId = (int) ($attachmentIdsInOrder[0] ?? 0);
         $galleryIds = array_values(array_slice($attachmentIdsInOrder, 1));
 
+        $usedWooProductApi = false;
+        $productSaved = false;
+        if ($featuredId > 0 && function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if ($product instanceof \WC_Product) {
+                $product->set_image_id($featuredId);
+                $product->set_gallery_image_ids($galleryIds);
+                $product->save();
+                $usedWooProductApi = true;
+                $productSaved = true;
+            }
+        }
+
         if ($featuredId > 0) {
             update_post_meta($productId, '_thumbnail_id', $featuredId);
         }
         update_post_meta($productId, '_product_image_gallery', implode(',', $galleryIds));
+
+        $this->log('Ovoko images persisted using Allegro-compatible Woo image flow', [
+            'product_id' => $productId,
+            'featured_id' => $featuredId,
+            'gallery_ids' => $galleryIds,
+            'used_wc_product_api' => $usedWooProductApi,
+            'product_saved' => $productSaved,
+        ]);
 
         return [
             'images_count' => count($urls),
@@ -2240,6 +2280,8 @@ class OvokoIntegrationService
             'failed_urls' => $failedUrls,
             'featured_attachment_id' => $featuredId,
             'gallery_attachment_ids' => $galleryIds,
+            'used_wc_product_api' => $usedWooProductApi,
+            'product_saved' => $productSaved,
         ];
     }
 

@@ -27,6 +27,7 @@ class Cli
 
         \WP_CLI::add_command('awi listing-images regenerate', [$this, 'regenerate_listing_images']);
         \WP_CLI::add_command('awi listing-images inspect-front', [$this, 'inspect_front_listing_images']);
+        \WP_CLI::add_command('awi listing-images compare', [$this, 'compare_listing_image_input_output']);
     }
 
     /**
@@ -124,6 +125,40 @@ class Cli
             $error_total,
             $last_product_id
         ));
+    }
+
+    /**
+     * Porównuje wejście i wyjście AWI listing image dla produktów Allegro/Ovoko.
+     *
+     * [--product-id=<id>]
+     * : Pojedynczy product_id do diagnostyki.
+     *
+     * [--allegro-product-id=<id>]
+     * : Product_id produktu Allegro do porównania.
+     *
+     * [--ovoko-product-id=<id>]
+     * : Product_id produktu Ovoko do porównania.
+     *
+     * [--force-runs=<n>]
+     * : Uruchom force regenerate n razy i porównaj deterministyczność (np. 3).
+     */
+    public function compare_listing_image_input_output(array $args, array $assoc_args): void
+    {
+        $product_ids = [];
+        foreach (['product-id', 'allegro-product-id', 'ovoko-product-id'] as $key) {
+            if (!empty($assoc_args[$key])) {
+                $product_ids[] = (int) $assoc_args[$key];
+            }
+        }
+
+        if ($product_ids === []) {
+            \WP_CLI::error('Podaj --product-id, --allegro-product-id lub --ovoko-product-id.');
+            return;
+        }
+
+        $force_runs = isset($assoc_args['force-runs']) ? max(0, (int) $assoc_args['force-runs']) : 0;
+        $report = $this->mapper->compare_listing_image_input_output($product_ids, $force_runs);
+        \WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     /**
