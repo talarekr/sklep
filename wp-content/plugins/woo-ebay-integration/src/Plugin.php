@@ -44,7 +44,11 @@ class Plugin
         $scheduler->hooks();
 
         add_action('admin_init', [$auth, 'handle_oauth_callback'], 0);
+        add_action('current_screen', [$auth, 'handle_current_screen_oauth_callback'], 0);
+        add_action('load-admin_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [$auth, 'handle_load_oauth_callback'], 0);
+        add_action('load-woocommerce_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [$auth, 'handle_woocommerce_load_oauth_callback'], 0);
         add_action('admin_post_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION, [$auth, 'handle_admin_post_oauth_callback']);
+        add_action('admin_post_nopriv_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION, [$auth, 'handle_admin_post_oauth_callback']);
         add_action('wei_ebay_sync_stock_batch', [$sync, 'sync_stock_batch']);
         add_action('wei_ebay_import_orders', [$orders, 'import_once']);
 

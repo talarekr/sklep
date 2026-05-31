@@ -33,6 +33,11 @@ spl_autoload_register(function (string $class): void {
 register_activation_hook(WEI_PLUGIN_FILE, ['WEI\\Database\\Migrations', 'activate']);
 
 add_action('plugins_loaded', static function (): void {
+    $auth = new WEI\Services\EbayAuth(new WEI\Services\Logger());
+    $auth->handle_admin_bootstrap_oauth_callback();
+}, 0);
+
+add_action('plugins_loaded', static function (): void {
     if (!class_exists('WooCommerce')) {
         return;
     }
