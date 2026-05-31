@@ -802,30 +802,32 @@ class OvokoBidirectionalSyncOrchestrator
 
     private function set_woo_product_outofstock_zero(int $productId): bool
     {
-        if (function_exists('wc_get_product')) {
-            $product = wc_get_product($productId);
-            if (!$product) {
-                return false;
+        return (bool) OvokoWooSaleSyncQueue::with_ovoko_to_woo_stock_suppression(function () use ($productId): bool {
+            if (function_exists('wc_get_product')) {
+                $product = wc_get_product($productId);
+                if (!$product) {
+                    return false;
+                }
+                if (method_exists($product, 'set_stock_quantity')) {
+                    $product->set_stock_quantity(0);
+                }
+                if (method_exists($product, 'set_stock_status')) {
+                    $product->set_stock_status('outofstock');
+                }
+                if (method_exists($product, 'save')) {
+                    $product->save();
+                }
+            } else {
+                update_post_meta($productId, '_stock', '0');
+                update_post_meta($productId, '_stock_status', 'outofstock');
             }
-            if (method_exists($product, 'set_stock_quantity')) {
-                $product->set_stock_quantity(0);
-            }
-            if (method_exists($product, 'set_stock_status')) {
-                $product->set_stock_status('outofstock');
-            }
-            if (method_exists($product, 'save')) {
-                $product->save();
-            }
-        } else {
-            update_post_meta($productId, '_stock', '0');
-            update_post_meta($productId, '_stock_status', 'outofstock');
-        }
 
-        if (function_exists('wc_delete_product_transients')) {
-            wc_delete_product_transients($productId);
-        }
+            if (function_exists('wc_delete_product_transients')) {
+                wc_delete_product_transients($productId);
+            }
 
-        return true;
+            return true;
+        });
     }
 
     private function build_date_from_window(array $status): array
