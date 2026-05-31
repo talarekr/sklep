@@ -442,7 +442,13 @@ class OvokoWooSaleSyncQueue
                 'read_before_after' => false,
             ]);
             $apiResponse = (array) ($itemResult['api_response'] ?? []);
-            $retryable = empty($itemResult['ok']) && $this->is_retryable_response($apiResponse);
+            $alreadySold = (string) ($itemResult['idempotency_status'] ?? '') === 'already_sold';
+            if ($alreadySold) {
+                $this->log_already_sold_sale_job($row + [
+                    'product_id' => (int) (((array) ($itemResult['item'] ?? []))['product_id'] ?? 0),
+                ], $apiResponse);
+            }
+            $retryable = empty($itemResult['ok']) && !$alreadySold && $this->is_retryable_response($apiResponse);
             $syncMetaAfter = (array) ($itemResult['sync_meta_after'] ?? []);
             $nextRetryCount = (int) ($syncMetaAfter[self::META_RETRY_COUNT] ?? $job['retry_count'] ?? 0);
             $status = !empty($itemResult['ok']) ? self::STATUS_SUCCESS : self::STATUS_FAILED;
@@ -462,10 +468,12 @@ class OvokoWooSaleSyncQueue
             }
             $result['items'][] = $row + [
                 'status' => $status,
+                'idempotency_status' => $alreadySold ? 'already_sold' : '',
                 'retryable' => $retryable,
                 'retry_count' => $nextRetryCount,
                 'http_status' => $apiResponse['http_status'] ?? null,
                 'status_code' => (string) ($apiResponse['status_code'] ?? ''),
+                'original_message' => $alreadySold ? (string) ($apiResponse['message'] ?? '') : '',
                 'shared_service' => 'OvokoAutoSyncDryRunService::mark_order_item_sold_in_ovoko',
             ];
         }
@@ -510,7 +518,11 @@ class OvokoWooSaleSyncQueue
                 'request_id' => $row['request_id'],
             ]);
             $apiResponse = (array) ($itemResult['api_response'] ?? []);
-            $retryable = empty($itemResult['ok']) && $this->is_retryable_response($apiResponse);
+            $alreadySold = (string) ($itemResult['idempotency_status'] ?? '') === 'already_sold';
+            if ($alreadySold) {
+                $this->log_already_sold_sale_job($row, $apiResponse);
+            }
+            $retryable = empty($itemResult['ok']) && !$alreadySold && $this->is_retryable_response($apiResponse);
             $status = !empty($itemResult['ok']) ? self::STATUS_SUCCESS : self::STATUS_FAILED;
             $error = $status === self::STATUS_SUCCESS ? '' : (string) (((array) ($itemResult['errors'] ?? []))[0] ?? 'changePartStatus failed');
             $nextRetryCount = $status === self::STATUS_SUCCESS ? (int) ($job['retry_count'] ?? 0) : ((int) ($job['retry_count'] ?? 0) + 1);
@@ -526,16 +538,29 @@ class OvokoWooSaleSyncQueue
             }
             $result['items'][] = $row + [
                 'status' => $status,
+                'idempotency_status' => $alreadySold ? 'already_sold' : '',
                 'retryable' => $retryable,
                 'retry_count' => $nextRetryCount,
                 'http_status' => $apiResponse['http_status'] ?? null,
                 'status_code' => (string) ($apiResponse['status_code'] ?? ''),
                 'error' => $error,
+                'original_message' => $alreadySold ? (string) ($apiResponse['message'] ?? '') : '',
                 'shared_service' => 'OvokoAutoSyncDryRunService::mark_product_sold_in_ovoko',
             ];
         }
 
         return $result;
+    }
+
+    private function log_already_sold_sale_job(array $row, array $apiResponse): void
+    {
+        $this->integrationService->log_event('Woo → Ovoko sale job already sold in Ovoko', [
+            'source' => (string) ($row['source'] ?? ''),
+            'product_id' => (int) ($row['product_id'] ?? 0),
+            'part_id' => (string) ($row['part_id'] ?? ''),
+            'status_code' => (string) ($apiResponse['status_code'] ?? ''),
+            'original_message' => (string) ($apiResponse['message'] ?? ''),
+        ]);
     }
 
     public function status_counts(): array

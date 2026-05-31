@@ -1316,7 +1316,13 @@ class OvokoAutoSyncDryRunService
         $result['api_response'] = $apiResponse;
 
         $success = !empty($apiResponse['ok']) && (int) ($apiResponse['http_status'] ?? 0) === 200 && (string) ($apiResponse['status_code'] ?? '') === 'R200';
-        $error = $success ? '' : (string) ($apiResponse['message'] ?? 'changePartStatus failed');
+        $alreadySold = !$success && $this->is_already_sold_api_response($apiResponse);
+        $idempotentSuccess = $success || $alreadySold;
+        $error = $idempotentSuccess ? '' : (string) ($apiResponse['message'] ?? 'changePartStatus failed');
+        if ($alreadySold) {
+            $result['idempotency_status'] = 'already_sold';
+            $result['warnings'][] = 'already_sold_in_ovoko_treated_as_success';
+        }
 
         if ($readBeforeAfter) {
             $afterFetch = $success ? $client->preview_fetch_single_part((int) $ovokoId) : ['ok' => false, 'message' => 'Skipped read-after because changePartStatus did not succeed.'];
@@ -1328,19 +1334,19 @@ class OvokoAutoSyncDryRunService
         }
 
         if (function_exists('wc_update_order_item_meta')) {
-            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_status', $success ? 'success' : 'failed');
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_status', $idempotentSuccess ? 'success' : 'failed');
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_attempted_at', $attemptedAt);
-            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_success_at', $success ? gmdate('c') : '');
+            wc_update_order_item_meta($itemId, 'ovoko_sale_sync_success_at', $idempotentSuccess ? gmdate('c') : '');
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_error', $error);
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_request_id', $requestId);
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_part_id', $ovokoId);
             wc_update_order_item_meta($itemId, 'ovoko_sale_sync_order_id', (string) $orderId);
-            wc_update_order_item_meta($itemId, 'retry_count', (string) ($success ? (int) ($syncMeta['retry_count'] ?? 0) : ((int) ($syncMeta['retry_count'] ?? 0) + 1)));
+            wc_update_order_item_meta($itemId, 'retry_count', (string) ($idempotentSuccess ? (int) ($syncMeta['retry_count'] ?? 0) : ((int) ($syncMeta['retry_count'] ?? 0) + 1)));
         } else {
             $result['warnings'][] = 'wc_update_order_item_meta_unavailable_meta_not_written';
         }
 
-        $result['ok'] = $success;
+        $result['ok'] = $idempotentSuccess;
         $result['meta_written'] = function_exists('wc_update_order_item_meta');
         $result['sync_meta_after'] = $this->get_order_item_sale_sync_meta($itemId);
         if (!$success && $error !== '') {
@@ -1395,12 +1401,33 @@ class OvokoAutoSyncDryRunService
         $apiResponse = $client->change_part_status($ovokoId, 2);
         $result['api_response'] = $apiResponse;
         $success = !empty($apiResponse['ok']) && (int) ($apiResponse['http_status'] ?? 0) === 200 && (string) ($apiResponse['status_code'] ?? '') === 'R200';
-        $result['ok'] = $success;
-        if (!$success) {
+        $alreadySold = !$success && $this->is_already_sold_api_response($apiResponse);
+        $result['ok'] = $success || $alreadySold;
+        if ($alreadySold) {
+            $result['idempotency_status'] = 'already_sold';
+            $result['warnings'][] = 'already_sold_in_ovoko_treated_as_success';
+        }
+        if (!$result['ok']) {
             $result['errors'][] = (string) ($apiResponse['message'] ?? 'changePartStatus failed');
         }
 
         return $result;
+    }
+
+    private function is_already_sold_api_response(array $apiResponse): bool
+    {
+        $message = strtolower(trim((string) ($apiResponse['message'] ?? '')));
+        if ($message === '') {
+            return false;
+        }
+
+        $normalized = str_replace(["'", '’'], '', $message);
+        return str_contains($normalized, 'already sold')
+            || str_contains($normalized, 'cannot edit sold part')
+            || str_contains($normalized, 'can not edit sold part')
+            || str_contains($normalized, 'sold part')
+            || ((str_contains($normalized, 'cannot be edited') || str_contains($normalized, 'can not be edited')) && str_contains($normalized, 'sold'))
+            || (str_contains($normalized, 'part') && str_contains($normalized, 'is sold'));
     }
 
     private function summarize_ovoko_part_fetch(RrrApiClient $client, array $fetch): array
