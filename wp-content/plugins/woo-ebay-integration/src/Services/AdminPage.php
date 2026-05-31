@@ -2325,8 +2325,14 @@ class AdminPage
             'sku' => (string) ($res['sku'] ?? ''),
             'title' => (string) ($res['title'] ?? ''),
             'description_source' => (string) ($res['description_source'] ?? 'post_content'),
+            'source_hash' => (string) ($res['source_hash'] ?? ''),
+            'cached_translation_hash' => (string) ($res['cached_translation_hash'] ?? ''),
+            'stale' => !empty($res['stale']),
             'translation_source' => (array) ($res['translation_source'] ?? []),
+            'translated_fields' => (array) ($res['translated_fields'] ?? []),
             'untranslated_fields' => (array) ($res['untranslated_fields'] ?? []),
+            'google_api_called_during_regeneration' => !empty($res['google_api_called_during_regeneration']),
+            'preview_called_google_api' => !empty($res['preview_called_google_api']),
             'same_vehicle_url' => (string) ($res['same_vehicle_url'] ?? ''),
             'warnings' => (array) ($res['warnings'] ?? []),
             'safety' => (array) ($res['safety'] ?? []),
@@ -2335,6 +2341,7 @@ class AdminPage
         echo '<h2>Missing fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['missing_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Field mapping</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['field_mapping'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Source description</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['source_description'] ?? '')) . '</pre>';
+        echo '<h2>Translated description</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['translated_description'] ?? '')) . '</pre>';
         echo '<h2>Rendered HTML</h2><div style="background:#fff;border:1px solid #dcdcde;padding:12px;overflow:auto;">' . wp_kses_post((string) ($res['html'] ?? '')) . '</div>';
         echo '<h2>Raw HTML</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['html'] ?? '')) . '</pre>';
         echo '</div>';
