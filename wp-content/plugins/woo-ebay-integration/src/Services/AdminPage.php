@@ -53,6 +53,8 @@ class AdminPage
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_generate_ebay_de_category_suggestions', [$this, 'generate_ebay_de_category_suggestions']);
+        add_action('admin_post_wei_generate_all_ebay_de_category_suggestions', [$this, 'generate_all_ebay_de_category_suggestions']);
+        add_action('admin_post_wei_reset_ebay_de_category_suggestions_progress', [$this, 'reset_ebay_de_category_suggestions_progress']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
@@ -928,6 +930,51 @@ class AdminPage
         }
 
         $this->set_status('eBay.de category suggestions: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+
+    public function generate_all_ebay_de_category_suggestions(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_all_ebay_de_category_suggestions');
+
+        $mode = sanitize_text_field((string) ($_POST['mode'] ?? 'leaf_with_products'));
+        $forceRefresh = !empty($_POST['force_refresh']);
+        $continueFromProgress = !empty($_POST['continue_from_progress']);
+        $reporter = new EbayCategorySuggestionReportService($this->categoryRepo, $this->taxonomy, $this->logger);
+        try {
+            $res = $reporter->generate_all([
+                'mode' => $mode,
+                'force_refresh' => $forceRefresh,
+                'continue_from_progress' => $continueFromProgress,
+                'restart' => !$continueFromProgress,
+            ]);
+        } catch (\Throwable $e) {
+            $progress = get_option(EbayCategorySuggestionReportService::CHECKPOINT_OPTION, []);
+            $progress = is_array($progress) ? $progress : [];
+            $summary = is_array($progress['summary'] ?? null) ? $progress['summary'] : [];
+            $summary['status'] = 'interrupted';
+            $summary['error'] = $e->getMessage();
+            $summary['processed'] = (int) ($progress['processed'] ?? 0);
+            $summary['total'] = (int) ($progress['total'] ?? 0);
+            $summary['last_update_at'] = gmdate('c');
+            update_option(EbayCategorySuggestionReportService::LAST_SUMMARY_OPTION, $summary, false);
+            update_option(EbayCategorySuggestionReportService::CHECKPOINT_OPTION, array_merge($progress, ['status' => 'interrupted', 'summary' => $summary, 'last_update_at' => gmdate('c')]), false);
+            $res = $summary + ['status' => 'interrupted', 'error' => $e->getMessage(), 'marketplace_id' => EbayCategorySuggestionReportService::MARKETPLACE_ID];
+        }
+
+        $this->set_status('Generate all eBay.de category suggestions: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    public function reset_ebay_de_category_suggestions_progress(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_reset_ebay_de_category_suggestions_progress');
+        $reporter = new EbayCategorySuggestionReportService($this->categoryRepo, $this->taxonomy, $this->logger);
+        $res = $reporter->reset_progress();
+        $this->set_status('Reset eBay.de category suggestions progress: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 
