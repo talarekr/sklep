@@ -612,7 +612,7 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                     'sku_category_overrides', 'product_category_overrides', 'sku_aspect_overrides', 'category_aspect_fallbacks',
                     'default_hersteller_fallback', 'ebay_sku_prefix', 'stock_sync_mode', 'auto_sync_frequency',
                     'auto_sync_preflight_batch_size', 'ebay_stock_sync_mode', 'ebay_order_stock_update_mode', 'translation_provider',
-                    'ebay_de_delivery_map_url', 'inventory_location_name', 'inventory_location_country', 'inventory_location_postal_code',
+                    'ebay_de_delivery_map_url', 'ebay_seller_username', 'inventory_location_name', 'inventory_location_country', 'inventory_location_postal_code',
                     'inventory_location_city', 'inventory_location_address_line_1', 'shipping_category_ids_50_eur', 'shipping_category_ids_100_eur',
                 ] as $preserveKey): ?>
                     <input type="hidden" name="<?php echo esc_attr($preserveKey); ?>" value="<?php echo esc_attr((string) $setting($preserveKey)); ?>" />
@@ -629,6 +629,7 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                     <tr><th><label for="wei-payment-policy">Payment policy ID</label></th><td><input id="wei-payment-policy" class="regular-text" name="ebay_payment_policy_id" value="<?php echo esc_attr($paymentId); ?>" /></td></tr>
                     <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /></td></tr>
                     <tr><th><label for="wei-markup">Default markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
+                    <tr><th><label for="wei-ebay-seller-username">eBay seller username</label></th><td><input id="wei-ebay-seller-username" class="regular-text" name="ebay_seller_username" value="<?php echo esc_attr((string) $setting('ebay_seller_username')); ?>" /> <span class="description">Used for eBay.de same-vehicle token search CTA.</span></td></tr>
                     <tr><th>Auto publish</th><td><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> enabled</label></td></tr>
                     <tr><th>Auto export</th><td><label><input type="checkbox" name="auto_export_enabled" value="1" <?php checked(!empty($s['auto_export_enabled'])); ?> /> enabled</label></td></tr>
                     <tr><th>Auto sync mode</th><td><select name="auto_sync_mode"><?php foreach ($autoModeLabels as $mode => $label): ?><option value="<?php echo esc_attr($mode); ?>" <?php selected((string) $setting('auto_sync_mode', 'disabled'), $mode); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?></select></td></tr>
