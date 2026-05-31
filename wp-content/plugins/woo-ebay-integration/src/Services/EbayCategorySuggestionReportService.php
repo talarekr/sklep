@@ -9,11 +9,20 @@ use WEI\Services\Translation\GoogleCloudTranslateProvider;
 class EbayCategorySuggestionReportService
 {
     private const AUTOMOTIVE_CONTEXT = 'Autoteile';
+    private const MIN_SEMANTIC_SCORE = 0.30;
+    private const HIGH_SEMANTIC_SCORE = 0.62;
     private const PL_DE_AUTO_PHRASES = [
         'Wąż / Przewód klimatyzacji A/C' => 'Klimaanlagenschlauch Klimaleitung',
+        'Wąż' => 'Schlauch',
+        'Przewód' => 'Leitung Kabel',
         'Przewód klimatyzacji' => 'Klimaleitung',
         'Wąż klimatyzacji' => 'Klimaanlagenschlauch',
         'Czujnik' => 'Sensor',
+        'Kamera cofania' => 'Rückfahrkamera Einparkhilfe Kamera',
+        'Panel klimatyzacji' => 'Klimabedienteil Klima Bedienteil',
+        'Sterownik' => 'Steuergerät Modul',
+        'Moduł komfortu' => 'Komfortsteuergerät Komfortmodul',
+        'Wentylator' => 'Lüfter Gebläse Kühlerlüfter',
         'Zderzak' => 'Stoßstange',
         'Reflektor' => 'Scheinwerfer',
         'Lampa tylna' => 'Rückleuchte',
@@ -93,6 +102,10 @@ class EbayCategorySuggestionReportService
             $suggestions = [];
             $rejectedSuggestions = [];
 
+            if (self::is_uncategorized_woo_category((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''))) {
+                $queries = [];
+            }
+
             foreach ($queries as $queryEntry) {
                 $query = is_array($queryEntry) ? (string) ($queryEntry['query'] ?? '') : (string) $queryEntry;
                 if ($query === '') {
@@ -140,14 +153,22 @@ class EbayCategorySuggestionReportService
 
             $status = self::mapping_status($currentId, $currentValidation, $suggestions);
             $confidence = self::confidence($currentId, $currentValidation, $suggestions, $status, $chosenQuery);
-            if ($confidence === 'high') {
+            if (self::is_uncategorized_woo_category((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''))) {
+                $status = 'needs_manual_review';
+                $confidence = 'low';
+                $suggestions = [];
+            }
+            if ($status === 'needs_manual_review') {
+                $summary['needs_manual_review']++;
+                if ($confidence === 'low') {
+                    $summary['low_confidence']++;
+                }
+            } elseif ($confidence === 'high') {
                 $summary['high_confidence']++;
             } elseif ($confidence === 'medium') {
                 $summary['medium_confidence']++;
             } elseif ($confidence === 'low') {
                 $summary['low_confidence']++;
-            } else {
-                $summary['needs_manual_review']++;
             }
 
             $best = $suggestions[0] ?? [];
@@ -324,6 +345,10 @@ class EbayCategorySuggestionReportService
         $suggestions = [];
         $rejectedSuggestions = [];
 
+        if (self::is_uncategorized_woo_category((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''))) {
+            $queries = [];
+        }
+
         foreach ($queries as $queryEntry) {
             $query = is_array($queryEntry) ? (string) ($queryEntry['query'] ?? '') : (string) $queryEntry;
             if ($query === '') {
@@ -377,14 +402,22 @@ class EbayCategorySuggestionReportService
         }
         $status = self::mapping_status($currentId, $currentValidation, $suggestions);
         $confidence = self::confidence($currentId, $currentValidation, $suggestions, $status, $chosenQuery);
-        if ($confidence === 'high') {
+        if (self::is_uncategorized_woo_category((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''))) {
+            $status = 'needs_manual_review';
+            $confidence = 'low';
+            $suggestions = [];
+        }
+        if ($status === 'needs_manual_review') {
+            $counts['needs_manual_review']++;
+            if ($confidence === 'low') {
+                $counts['low_confidence']++;
+            }
+        } elseif ($confidence === 'high') {
             $counts['high_confidence']++;
         } elseif ($confidence === 'medium') {
             $counts['medium_confidence']++;
         } elseif ($confidence === 'low') {
             $counts['low_confidence']++;
-        } else {
-            $counts['needs_manual_review']++;
         }
         $best = $suggestions[0] ?? [];
         $report = $this->build_report_row($row, $samples, $currentValidation, $status, $suggestions, $best, $confidence, $chosenQuery, $taxonomyError, $queryPlan, $chosenQuerySource, $rejectedSuggestions);
@@ -670,8 +703,17 @@ class EbayCategorySuggestionReportService
         return preg_match('/[ąćęłńóśźż]/iu', $text) === 1 || str_contains($normalized, 'czesci') || str_contains($normalized, 'samochod') || str_contains($normalized, 'przewod') || str_contains($normalized, 'waz');
     }
 
+    public static function is_uncategorized_woo_category(string $wooName, string $wooPath = ''): bool
+    {
+        $text = self::normalize_lookup_text(trim($wooName . ' ' . $wooPath));
+        return $text === 'bez kategorii' || str_contains($text, 'bez kategorii');
+    }
+
     public static function is_automotive_woo_category(string $wooName, string $wooPath): bool
     {
+        if (self::is_uncategorized_woo_category($wooName, $wooPath)) {
+            return true;
+        }
         $text = self::normalize_lookup_text($wooName . ' ' . $wooPath);
         if ($text === '') {
             return false;
@@ -679,7 +721,7 @@ class EbayCategorySuggestionReportService
         if (self::local_auto_phrase_translation($wooName . ' ' . $wooPath) !== '') {
             return true;
         }
-        foreach (['czesci', 'samochod', 'auto', 'motoryz', 'klima', 'zderzak', 'reflektor', 'lampa', 'lusterko', 'drzwi', 'maska', 'blotnik', 'alternator', 'rozrusznik', 'turbosprezarka', 'czujnik'] as $keyword) {
+        foreach (['czesci', 'samochod', 'auto', 'motoryz', 'klima', 'zderzak', 'reflektor', 'lampa', 'lusterko', 'drzwi', 'maska', 'blotnik', 'alternator', 'rozrusznik', 'turbosprezarka', 'czujnik', 'kamera cofania', 'sterownik', 'modul', 'wentylator', 'panel'] as $keyword) {
             if (str_contains($text, $keyword)) {
                 return true;
             }
@@ -690,7 +732,7 @@ class EbayCategorySuggestionReportService
     public static function is_automotive_suggestion(array $suggestion): bool
     {
         $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
-        foreach (['auto & motorrad', 'autoteile', 'autoersatz', 'auto ersatz', 'fahrzeugteile', 'kfz', 'pkw', 'motorteile', 'karosserie', 'klimaanlage'] as $keyword) {
+        foreach (['auto & motorrad: teile', 'autoteile & zubehör', 'autoteile & zubehor', 'autoteile', 'autoersatz', 'auto ersatz', 'fahrzeugteile', 'fahrzeug teile', 'kfz', 'pkw', 'motorteile', 'karosserie', 'klimaanlage'] as $keyword) {
             if (str_contains($text, $keyword)) {
                 return true;
             }
@@ -701,7 +743,7 @@ class EbayCategorySuggestionReportService
     public static function is_bad_generic_suggestion(array $suggestion): bool
     {
         $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
-        foreach (['sonstige', 'cds', 'bucher', 'bücher', 'dvds', 'filme', 'musik', 'computer', 'elektronik'] as $keyword) {
+        foreach (['kunst', 'kunstdrucke', 'cds', 'bucher', 'bücher', 'dvds', 'filme', 'musik', 'heimwerker', 'haushaltsgerate', 'haushaltsgeräte', 'computer', 'elektronik', 'kleidung', 'mobel', 'möbel', 'sammeln & seltenes'] as $keyword) {
             if (str_contains($text, $keyword)) {
                 return true;
             }
@@ -712,7 +754,6 @@ class EbayCategorySuggestionReportService
     public static function filter_and_rank_suggestions(array $suggestions, string $wooName, string $wooPath, string $query, int $limit = 5, ?array &$rejected = null): array
     {
         $isAuto = self::is_automotive_woo_category($wooName, $wooPath);
-        $queryTokens = self::query_match_tokens($query);
         $accepted = [];
         $rejected = [];
         foreach ($suggestions as $suggestion) {
@@ -720,23 +761,37 @@ class EbayCategorySuggestionReportService
                 continue;
             }
             $isAutomotiveSuggestion = self::is_automotive_suggestion($suggestion);
+            $suggestion['automotive_path_match'] = $isAutomotiveSuggestion ? '1' : '0';
+            $semantic = self::semantic_match_details($wooName, $wooPath, $query, $suggestion);
+            $suggestion['semantic_match_score'] = (string) $semantic['score'];
+            $suggestion['primary_keywords'] = implode(' ', (array) $semantic['primary_keywords']);
+            $suggestion['suggestion_keywords'] = implode(' ', (array) $semantic['suggestion_keywords']);
+
             if ($isAuto && !$isAutomotiveSuggestion) {
                 $suggestion['rejected_reason'] = 'rejected_non_automotive';
                 $rejected[] = $suggestion;
                 continue;
             }
-            $score = is_numeric($suggestion['score'] ?? null) ? (float) $suggestion['score'] : 0.0;
-            $text = mb_strtolower(remove_accents((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? ''))));
-            foreach ($queryTokens as $token) {
-                if ($token !== '' && str_contains($text, $token)) {
-                    $score += 0.20;
-                }
+            if (self::negative_rule_reason($wooName, $wooPath, $query, $suggestion) !== '') {
+                $suggestion['rejected_reason'] = self::negative_rule_reason($wooName, $wooPath, $query, $suggestion);
+                $rejected[] = $suggestion;
+                continue;
             }
+            if ($isAuto && (float) $semantic['score'] < self::MIN_SEMANTIC_SCORE) {
+                $suggestion['rejected_reason'] = 'rejected_semantic_mismatch';
+                $rejected[] = $suggestion;
+                continue;
+            }
+            $score = is_numeric($suggestion['score'] ?? null) ? (float) $suggestion['score'] : 0.0;
+            $score += (float) $semantic['score'];
             if ($isAutomotiveSuggestion) {
                 $score += 0.35;
             }
             if (self::is_bad_generic_suggestion($suggestion)) {
-                $score -= 0.80;
+                $score -= 1.20;
+            }
+            if (isset($suggestion['leaf']) && !$suggestion['leaf']) {
+                $score -= 0.25;
             }
             $suggestion['score'] = (string) round($score, 4);
             $accepted[] = $suggestion;
@@ -745,12 +800,72 @@ class EbayCategorySuggestionReportService
         return array_slice($accepted, 0, max(1, $limit));
     }
 
+    private static function negative_rule_reason(string $wooName, string $wooPath, string $query, array $suggestion): string
+    {
+        $source = self::normalize_lookup_text($wooName . ' ' . $wooPath . ' ' . $query);
+        $target = self::normalize_lookup_text((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? '')));
+        if ((str_contains($source, 'kamera cofania') || str_contains($source, 'ruckfahrkamera')) && str_contains($target, 'klimaleitungen')) {
+            return 'negative_rule_reverse_camera_to_ac_hoses';
+        }
+        if ((str_contains($source, 'panel klimatyzacji') || str_contains($source, 'klimabedienteil')) && str_contains($target, 'klimaleitungen')) {
+            return 'negative_rule_ac_panel_to_ac_hoses';
+        }
+        if ((str_contains($source, 'sterownik') || str_contains($source, 'modul') || str_contains($source, 'steuergerat')) && str_contains($target, 'heimwerker')) {
+            return 'negative_rule_control_module_to_diy';
+        }
+        if ((str_contains($source, 'wentylator') || str_contains($source, 'lufter')) && str_contains($target, 'haushaltsgerate')) {
+            return 'negative_rule_fan_to_household_appliances';
+        }
+        return '';
+    }
+
+    public static function semantic_match_details(string $wooName, string $wooPath, string $query, array $suggestion): array
+    {
+        $primary = self::semantic_keywords(trim($query . ' ' . self::local_auto_phrase_translation($wooName . ' ' . $wooPath) . ' ' . $wooName . ' ' . $wooPath));
+        $suggestionKeywords = self::semantic_keywords((string) (($suggestion['category_path'] ?? '') . ' ' . ($suggestion['category_name'] ?? '')));
+        if ($primary === []) {
+            return ['score' => 0.0, 'primary_keywords' => [], 'suggestion_keywords' => $suggestionKeywords, 'matched_keywords' => []];
+        }
+        $matched = [];
+        foreach ($primary as $keyword) {
+            foreach ($suggestionKeywords as $candidate) {
+                if ($keyword === $candidate || str_contains($candidate, $keyword) || str_contains($keyword, $candidate)) {
+                    $matched[] = $keyword;
+                    break;
+                }
+            }
+        }
+        $score = count(array_unique($matched)) / max(1, min(5, count($primary)));
+        return ['score' => round(min(1.0, $score), 4), 'primary_keywords' => $primary, 'suggestion_keywords' => $suggestionKeywords, 'matched_keywords' => array_values(array_unique($matched))];
+    }
+
+    private static function semantic_keywords(string $text): array
+    {
+        $text = mb_strtolower(remove_accents($text));
+        $text = str_replace(['ß', 'ü', 'ö', 'ä'], ['ss', 'u', 'o', 'a'], $text);
+        $parts = preg_split('/[^a-z0-9]+/u', $text) ?: [];
+        $stop = ['autoteile', 'auto', 'ersatzteile', 'gebraucht', 'teile', 'zubehor', 'zubehör', 'czesci', 'samochodowe', 'samochod', 'komplet', 'oraz', 'und', 'oder', 'mit', 'fur', 'für', 'der', 'die', 'das', 'eine', 'einer', 'category', 'product', 'a', 'c'];
+        $aliases = [
+            'klimatyzacji' => 'klima', 'klimaanlage' => 'klima', 'klimaanlagen' => 'klima', 'klimaleitung' => 'klimaleitungen', 'kaeltemittel' => 'klima',
+            'przewod' => 'leitung', 'przewody' => 'leitung', 'waz' => 'schlauch', 'weze' => 'schlauch', 'schlauche' => 'schlauch', 'schläuche' => 'schlauch',
+            'kamera' => 'kamera', 'ruckfahrkamera' => 'kamera', 'rueckfahrkamera' => 'kamera', 'cofania' => 'ruckfahr', 'einparkhilfe' => 'einparkhilfe',
+            'panel' => 'bedienteil', 'klimabedienteil' => 'bedienteil', 'sterownik' => 'steuergerat', 'steuergeraet' => 'steuergerat', 'modul' => 'modul',
+            'wentylator' => 'lufter', 'lüfter' => 'lufter', 'geblaese' => 'geblase', 'gebläse' => 'geblase',
+        ];
+        $keywords = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if (mb_strlen($part) < 4 || in_array($part, $stop, true)) {
+                continue;
+            }
+            $keywords[] = $aliases[$part] ?? $part;
+        }
+        return array_values(array_unique(array_slice($keywords, 0, 12)));
+    }
+
     private static function query_match_tokens(string $query): array
     {
-        $query = mb_strtolower(remove_accents($query));
-        $parts = preg_split('/[^a-z0-9]+/u', $query) ?: [];
-        $stop = ['autoteile', 'auto', 'ersatzteile', 'gebraucht', 'teile'];
-        return array_values(array_unique(array_filter($parts, static fn(string $token): bool => mb_strlen($token) >= 5 && !in_array($token, $stop, true))));
+        return self::semantic_keywords($query);
     }
 
     public static function parse_suggestions(array $rawSuggestions, int $limit = 5): array
@@ -779,11 +894,13 @@ class EbayCategorySuggestionReportService
             if ($name !== '') {
                 $pathNames[] = $name;
             }
+            $node = is_array($suggestion['categoryTreeNode'] ?? null) ? $suggestion['categoryTreeNode'] : (is_array($suggestion['category'] ?? null) ? $suggestion['category'] : []);
             $parsed[] = [
                 'category_id' => $id,
                 'category_name' => $name,
                 'category_path' => $pathNames !== [] ? implode(' > ', array_values(array_unique($pathNames))) : $name,
                 'score' => isset($suggestion['relevancy']) ? (string) $suggestion['relevancy'] : (isset($suggestion['score']) ? (string) $suggestion['score'] : ''),
+                'leaf' => isset($node['leafCategoryTreeNode']) ? (bool) $node['leafCategoryTreeNode'] : true,
                 'raw' => $suggestion,
             ];
         }
@@ -792,6 +909,9 @@ class EbayCategorySuggestionReportService
 
     public static function mapping_status(string $currentId, array $validation, array $suggestions): string
     {
+        if ($suggestions === []) {
+            return 'needs_manual_review';
+        }
         if ($currentId !== '' && (empty($validation['valid']) || empty($validation['leaf']))) {
             return 'invalid_current';
         }
@@ -808,27 +928,39 @@ class EbayCategorySuggestionReportService
     public static function confidence(string $currentId, array $validation, array $suggestions, string $status, string $query = ''): string
     {
         if ($suggestions === []) {
-            return 'manual_review';
-        }
-        $top = $suggestions[0];
-        if (self::is_bad_generic_suggestion($top)) {
             return 'low';
         }
-        $automotive = self::is_automotive_suggestion($top);
-        $matchedTokens = 0;
-        $text = mb_strtolower(remove_accents((string) (($top['category_path'] ?? '') . ' ' . ($top['category_name'] ?? ''))));
-        foreach (self::query_match_tokens($query) as $token) {
-            if ($token !== '' && str_contains($text, $token)) {
-                $matchedTokens++;
-            }
+        $top = $suggestions[0];
+        if (self::is_bad_generic_suggestion($top) || !self::is_automotive_suggestion($top)) {
+            return 'low';
         }
-        if ($status === 'likely_ok' || ($automotive && $matchedTokens > 0 && ($status === 'review_suggested' || empty($validation['valid'])))) {
+        $semanticScore = isset($top['semantic_match_score']) && is_numeric($top['semantic_match_score'])
+            ? (float) $top['semantic_match_score']
+            : (float) self::semantic_match_details('', '', $query, $top)['score'];
+        $isLeaf = !isset($top['leaf']) || (bool) $top['leaf'];
+        if ($isLeaf && $semanticScore >= self::HIGH_SEMANTIC_SCORE && ($status === 'likely_ok' || $status === 'review_suggested' || empty($validation['valid']))) {
             return 'high';
         }
-        if ($automotive && ($status === 'review_suggested' || $matchedTokens > 0)) {
+        if ($semanticScore >= self::MIN_SEMANTIC_SCORE && ($status === 'likely_ok' || $status === 'review_suggested' || empty($validation['valid']))) {
             return 'medium';
         }
         return 'low';
+    }
+
+    private static function confidence_reason(array $best, string $confidence, string $status): string
+    {
+        if ($best === []) {
+            return 'no_accepted_automotive_semantic_suggestion';
+        }
+        if (!self::is_automotive_suggestion($best)) {
+            return 'low_non_automotive_suggestion';
+        }
+        if (self::is_bad_generic_suggestion($best)) {
+            return 'low_bad_generic_suggestion';
+        }
+        $semantic = (string) ($best['semantic_match_score'] ?? '0');
+        $leaf = !isset($best['leaf']) || (bool) $best['leaf'];
+        return $confidence . '_semantic_score_' . $semantic . '_leaf_' . ($leaf ? '1' : '0') . '_status_' . $status;
     }
 
     public static function suggestion_report_columns(): array
@@ -837,7 +969,7 @@ class EbayCategorySuggestionReportService
         for ($i = 1; $i <= 3; $i++) {
             array_push($columns, "suggested_ebay_category_id_{$i}", "suggested_ebay_category_name_{$i}", "suggested_ebay_category_path_{$i}", "suggested_ebay_category_score_{$i}");
         }
-        return array_merge($columns, ['suggested_ebay_category_id','suggested_ebay_category_path','confidence','raw_polish_query','translated_german_query','query_used','query_source','translation_source','sample_product_ids','sample_product_titles','sample_translated_titles','rejected_suggestions','taxonomy_error','note']);
+        return array_merge($columns, ['suggested_ebay_category_id','suggested_ebay_category_path','confidence','raw_polish_query','translated_german_query','query_used','query_source','translation_source','sample_product_ids','sample_product_titles','sample_translated_titles','rejected_suggestions','rejected_reason','automotive_path_match','semantic_match_score','primary_keywords','suggestion_keywords','confidence_reason','taxonomy_error','note']);
     }
 
     public static function ready_to_import_columns(): array
@@ -892,13 +1024,38 @@ class EbayCategorySuggestionReportService
         $report['sample_product_titles'] = implode(' | ', array_filter($sampleTitles));
         $report['sample_translated_titles'] = (string) ($queryPlan['sample_translated_titles'] ?? '');
         $report['rejected_suggestions'] = implode(' | ', array_map(static fn(array $suggestion): string => trim((string) ($suggestion['category_id'] ?? '') . ':' . (string) ($suggestion['category_name'] ?? '') . ':' . (string) ($suggestion['rejected_reason'] ?? '')), array_slice($rejectedSuggestions, 0, 10)));
+        $report['rejected_reason'] = implode('|', array_values(array_unique(array_filter(array_map(static fn(array $suggestion): string => (string) ($suggestion['rejected_reason'] ?? ''), $rejectedSuggestions)))));
+        $report['automotive_path_match'] = $best !== [] && self::is_automotive_suggestion($best) ? '1' : '0';
+        $report['semantic_match_score'] = (string) ($best['semantic_match_score'] ?? '');
+        $report['primary_keywords'] = (string) ($best['primary_keywords'] ?? '');
+        $report['suggestion_keywords'] = (string) ($best['suggestion_keywords'] ?? '');
+        $report['confidence_reason'] = self::confidence_reason($best, $confidence, $status);
         $report['taxonomy_error'] = trim($error);
-        $report['note'] = $status === 'invalid_current' ? 'Current eBay category is invalid/not found or non-leaf for EBAY_DE; review before import.' : 'Suggestion only; no production mapping was changed.';
+        if (self::is_uncategorized_woo_category((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''))) {
+            $report['note'] = 'uncategorized_woo_category';
+        } elseif ($suggestions === [] && $rejectedSuggestions !== [] && $report['rejected_reason'] === 'rejected_non_automotive') {
+            $report['note'] = 'only_non_automotive_suggestions_rejected';
+        } elseif ($suggestions === [] && $rejectedSuggestions !== []) {
+            $report['note'] = 'suggestions_rejected:' . $report['rejected_reason'];
+        } elseif ($status === 'invalid_current') {
+            $report['note'] = 'Current eBay category is invalid/not found or non-leaf for EBAY_DE; review before import.';
+        } else {
+            $report['note'] = 'Suggestion only; no production mapping was changed.';
+        }
         return $report;
     }
 
     private function build_ready_row(array $report, string $currentId, array $best): array
     {
+        $safe = in_array((string) ($report['confidence'] ?? ''), ['high', 'medium'], true)
+            && (string) ($report['mapping_status'] ?? '') !== 'needs_manual_review'
+            && (string) ($report['automotive_path_match'] ?? '') === '1'
+            && (float) ($report['semantic_match_score'] ?? 0) >= self::MIN_SEMANTIC_SCORE
+            && $best !== []
+            && !self::is_bad_generic_suggestion($best)
+            && self::is_automotive_suggestion($best)
+            && !self::is_uncategorized_woo_category((string) ($report['woo_subcategory_name'] ?? ''), (string) ($report['woo_category_path'] ?? ''));
+
         return [
             'woo_subcategory_id' => $report['woo_subcategory_id'],
             'woo_category_id' => $report['woo_category_id'],
@@ -906,11 +1063,11 @@ class EbayCategorySuggestionReportService
             'woo_category_path' => $report['woo_category_path'],
             'products_count' => $report['products_count'],
             'old_ebay_category_id' => $currentId,
-            'ebay_category_id' => (string) ($best['category_id'] ?? ''),
-            'suggested_ebay_category_path' => (string) ($best['category_path'] ?? ''),
+            'ebay_category_id' => $safe ? (string) ($best['category_id'] ?? '') : '',
+            'suggested_ebay_category_path' => $safe ? (string) ($best['category_path'] ?? '') : '',
             'confidence' => $report['confidence'],
-            'mapping_status' => $report['mapping_status'],
-            'note' => $report['note'],
+            'mapping_status' => $safe ? $report['mapping_status'] : 'needs_manual_review',
+            'note' => $safe ? $report['note'] : ((string) ($report['note'] ?? '') !== '' ? (string) $report['note'] : 'not_safe_for_ready_import'),
         ];
     }
 
@@ -923,6 +1080,7 @@ class EbayCategorySuggestionReportService
         $suggestionsPath = $baseDir . '/ebay_de_category_suggestions_' . $stamp . '.csv';
         $readyPath = $baseDir . '/ready_to_import_suggestions.csv';
         $this->write_csv($suggestionsPath, self::suggestion_report_columns(), $reportRows);
+        $readyRows = array_values(array_filter($readyRows, static fn(array $row): bool => (string) ($row['ebay_category_id'] ?? '') !== '' && in_array((string) ($row['confidence'] ?? ''), ['high', 'medium'], true) && (string) ($row['mapping_status'] ?? '') !== 'needs_manual_review'));
         $this->write_csv($readyPath, self::ready_to_import_columns(), $readyRows);
         $baseUrl = trailingslashit((string) $upload['baseurl']) . 'woo-ebay-integration/category-suggestions';
         return [
