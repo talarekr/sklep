@@ -292,7 +292,7 @@ class AdminPage
         $status = get_option('wei_last_status', []);
         $status = is_array($status) ? $status : [];
         $logs = get_option('wei_logs', []);
-        $logs = array_slice(is_array($logs) ? $logs : [], 0, 20);
+        $logs = array_slice(is_array($logs) ? $logs : [], 0, 50);
         $admin_section = isset($_GET['wei_section']) ? sanitize_key(wp_unslash((string) $_GET['wei_section'])) : '';
         $load_category_mapping_rows = $admin_section === 'category-mappings'
             || isset($_GET['category_status'])

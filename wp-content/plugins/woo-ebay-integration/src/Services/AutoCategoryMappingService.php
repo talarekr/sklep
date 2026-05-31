@@ -106,6 +106,9 @@ class AutoCategoryMappingService
         $rows = $this->read_csv_assoc($csvPath);
         $summary = [
             'source_csv' => $csvPath,
+            'source_csv_format' => 'manual_mapping_or_teaching',
+            'imported_at' => gmdate('Y-m-d H:i:s'),
+            'supported_minimum_columns' => ['woo_category_id', 'ebay_category_id'],
             'marketplace_id' => $marketplaceId,
             'rows_read' => count($rows),
             'rows_with_manual_category_id' => 0,
@@ -127,7 +130,7 @@ class AutoCategoryMappingService
 
         foreach ($rows as $index => $row) {
             $rowNumber = $index + 2;
-            $manualId = trim((string) ($row['manual_ebay_category_id'] ?? $row['suggested_manual_ebay_category_id'] ?? ''));
+            $manualId = trim((string) ($row['manual_ebay_category_id'] ?? $row['suggested_manual_ebay_category_id'] ?? $row['ebay_category_id'] ?? ''));
             if ($manualId === '') {
                 $summary['rows_skipped']++;
                 $this->append_validation_error($summary, "row {$rowNumber}: missing manual_ebay_category_id");
@@ -136,6 +139,9 @@ class AutoCategoryMappingService
             $summary['rows_with_manual_category_id']++;
 
             $wooPath = trim((string) ($row['woo_category_path'] ?? ''));
+            if ($wooPath === '' && isset($row['woo_category_id'])) {
+                $wooPath = $this->categoryRepo->woo_category_path((int) $row['woo_category_id']);
+            }
             if ($wooPath === '') {
                 $summary['rows_skipped']++;
                 $this->append_validation_error($summary, "row {$rowNumber}: missing woo_category_path for manual category {$manualId}");
@@ -172,7 +178,7 @@ class AutoCategoryMappingService
                 'ebay_category_id' => $manualId,
                 'ebay_category_path' => $manualPath,
                 'source' => 'manual_woo_category_mapping',
-                'rule_note' => (string) ($row['rule_note'] ?? ''),
+                'rule_note' => (string) ($row['rule_note'] ?? $row['note'] ?? $row['mapping_status'] ?? ''),
                 'import_group_id' => (string) ($row['group_id'] ?? ''),
                 'sample_product_ids' => (string) ($row['sample_product_ids'] ?? ''),
             ]);
