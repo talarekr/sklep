@@ -42,6 +42,7 @@ class Settings
         add_action('admin_post_awi_clear_import_lock', [$this, 'handle_clear_import_lock']);
         add_action('admin_post_awi_restore_active_offers', [$this, 'handle_restore_active_offers']);
         add_action('admin_post_awi_listing_images_regenerate_batch', [$this, 'handle_listing_images_regenerate_batch']);
+        add_action('admin_post_awi_listing_image_regenerate_single', [$this, 'handle_listing_image_regenerate_single']);
         add_action('admin_post_awi_listing_images_inspect_front', [$this, 'handle_listing_images_inspect_front']);
     }
 
@@ -433,6 +434,16 @@ class Settings
             );
         }
 
+        $single_listing_regen_result = $this->consume_single_listing_regen_result();
+        if ($single_listing_regen_result !== null) {
+            add_settings_error(
+                'awi_messages',
+                'awi_listing_single_regen_done',
+                __('Regeneracja zdjęcia listingowego dla pojedynczego produktu zakończona — pełny JSON poniżej.', 'allegro-woo-importer'),
+                !empty($single_listing_regen_result['error']) ? 'error' : 'updated'
+            );
+        }
+
         if (isset($_GET['awi_listing_inspect_done'])) {
             add_settings_error(
                 'awi_messages',
@@ -578,6 +589,54 @@ class Settings
         exit;
     }
 
+    public function handle_listing_image_regenerate_single(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Brak uprawnień.', 'allegro-woo-importer'));
+        }
+
+        check_admin_referer('awi_listing_image_regenerate_single');
+        if ($this->block_heavy_operation('listing_image_regenerate_single')) {
+            return;
+        }
+
+        $product_id = isset($_POST['awi_listing_single_product_id']) ? absint($_POST['awi_listing_single_product_id']) : 0;
+        $force_regenerate = !empty($_POST['awi_listing_single_force_regenerate']);
+        if ($product_id <= 0) {
+            $result = [
+                'error' => true,
+                'message' => __('Podaj prawidłowy Woo product ID.', 'allegro-woo-importer'),
+                'product_id' => $product_id,
+                'force' => $force_regenerate,
+            ];
+        } elseif (!function_exists('wc_get_product') || !wc_get_product($product_id) instanceof \WC_Product) {
+            $result = [
+                'error' => true,
+                'message' => __('Nie znaleziono produktu WooCommerce dla podanego ID.', 'allegro-woo-importer'),
+                'product_id' => $product_id,
+                'force' => $force_regenerate,
+            ];
+        } else {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(300);
+            }
+            $result = $this->mapper->regenerate_listing_image_for_product_with_diagnostics($product_id, $force_regenerate);
+        }
+
+        $this->logger->info('AWI single product listing image regenerate diagnostics', $result);
+        $json = wp_json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (is_string($json)) {
+            error_log('AWI single product listing image regenerate diagnostics ' . $json);
+        }
+        $this->store_single_listing_regen_result($result);
+
+        wp_safe_redirect(add_query_arg([
+            'page' => 'awi-settings',
+            'awi_listing_single_regen_done' => '1',
+        ], admin_url('admin.php')));
+        exit;
+    }
+
     public function handle_listing_images_inspect_front(): void
     {
         if (!current_user_can('manage_woocommerce')) {
@@ -626,6 +685,25 @@ class Settings
 
         wp_safe_redirect($redirect);
         exit;
+    }
+
+    private function store_single_listing_regen_result(array $result): void
+    {
+        $user_id = get_current_user_id();
+        set_transient('awi_listing_single_regen_result_' . $user_id, $result, 10 * MINUTE_IN_SECONDS);
+    }
+
+    private function consume_single_listing_regen_result(): ?array
+    {
+        $user_id = get_current_user_id();
+        $key = 'awi_listing_single_regen_result_' . $user_id;
+        $result = get_transient($key);
+        if (!is_array($result)) {
+            return null;
+        }
+
+        delete_transient($key);
+        return $result;
     }
 
     private function run_front_listing_images_diagnostics_for_products(array $product_ids): array
