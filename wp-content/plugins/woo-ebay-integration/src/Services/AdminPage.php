@@ -425,6 +425,7 @@ class AdminPage
         $s['auto_generate_german_content_preflight'] = !empty($_POST['auto_generate_german_content_preflight']) ? 1 : 0;
         $s['enable_ebay_de_description_template'] = !empty($_POST['enable_ebay_de_description_template']) ? 1 : 0;
         $s['ebay_de_delivery_map_url'] = esc_url_raw((string) ($_POST['ebay_de_delivery_map_url'] ?? ''));
+        $s['ebay_seller_username'] = sanitize_text_field((string) ($_POST['ebay_seller_username'] ?? ($s['ebay_seller_username'] ?? '')));
         $s['regenerate_german_content_on_hash_change'] = !empty($_POST['regenerate_german_content_on_hash_change']) ? 1 : 0;
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
@@ -2330,11 +2331,20 @@ class AdminPage
             'cached_translation_hash' => (string) ($res['cached_translation_hash'] ?? ''),
             'stale' => !empty($res['stale']),
             'translation_source' => (array) ($res['translation_source'] ?? []),
+            'target_language' => (string) ($res['target_language'] ?? 'de'),
+            'translated_raw_html' => !empty($res['translated_raw_html']),
+            'html_css_protected' => !empty($res['html_css_protected']),
+            'translated_text_nodes' => (array) ($res['translated_text_nodes'] ?? []),
+            'protected_technical_values' => (array) ($res['protected_technical_values'] ?? []),
             'translated_fields' => (array) ($res['translated_fields'] ?? []),
             'untranslated_fields' => (array) ($res['untranslated_fields'] ?? []),
             'google_api_called_during_regeneration' => !empty($res['google_api_called_during_regeneration']),
             'preview_called_google_api' => !empty($res['preview_called_google_api']),
             'same_vehicle_url' => (string) ($res['same_vehicle_url'] ?? ''),
+            'same_vehicle_cta' => (array) ($res['same_vehicle_cta'] ?? []),
+            'same_vehicle_cta_visible' => !empty($res['same_vehicle_cta_visible']),
+            'same_vehicle_token' => (string) ($res['same_vehicle_token'] ?? ''),
+            'same_vehicle_ebay_url' => (string) ($res['same_vehicle_ebay_url'] ?? ''),
             'warnings' => (array) ($res['warnings'] ?? []),
             'safety' => (array) ($res['safety'] ?? []),
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
@@ -2645,6 +2655,9 @@ class AdminPage
         }
         if (!isset($s['ebay_de_delivery_map_url'])) {
             $s['ebay_de_delivery_map_url'] = '';
+        }
+        if (!isset($s['ebay_seller_username'])) {
+            $s['ebay_seller_username'] = '';
         }
         if (!isset($s['verbose_debug'])) {
             $s['verbose_debug'] = 0;

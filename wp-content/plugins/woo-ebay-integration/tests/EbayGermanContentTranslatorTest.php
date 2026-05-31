@@ -29,6 +29,8 @@ class WeiFakeGoogleProvider implements TranslationProviderInterface
 {
     public int $calls = 0;
     public array $texts = [];
+    public array $targets = [];
+    public array $formats = [];
 
     public function is_configured(): bool { return true; }
     public function provider_key(): string { return 'google_cloud_translate'; }
@@ -46,6 +48,8 @@ class WeiFakeGoogleProvider implements TranslationProviderInterface
             'Typ skrzyni biegów' => 'Getriebeart',
             'Automatyczny' => 'Automatik',
         ];
+        $this->targets[] = $target;
+        $this->formats[] = $format;
         return array_map(function ($text) use ($map) {
             $this->texts[] = (string) $text;
             return $map[(string) $text] ?? ('DE ' . $text);
@@ -63,22 +67,56 @@ $source = [
         ['polish_label' => 'Kolor', 'german_label' => 'Farbe', 'value' => 'Szary'],
         ['polish_label' => 'Rodzaj paliwa', 'german_label' => 'Kraftstoffart', 'value' => 'Benzyna'],
         ['polish_label' => 'Typ skrzyni biegów', 'german_label' => 'Getriebeart', 'value' => 'Automatyczny'],
+        ['polish_label' => 'Numer części', 'german_label' => 'Teilenummer', 'value' => '80B816720'],
+        ['polish_label' => 'Kod silnika', 'german_label' => 'Motorcode', 'value' => 'DPU'],
+        ['polish_label' => 'Kod koloru', 'german_label' => 'Farbcode', 'value' => 'LZ7S'],
+        ['polish_label' => 'Model', 'german_label' => 'Modell', 'value' => 'Q5 SQ5 FY'],
+        ['polish_label' => 'Fahrzeugreferenz', 'german_label' => 'Fahrzeugreferenz', 'value' => 'GPSWCarID:456'],
     ],
     'aspects_source' => [
         'Kolor' => ['Szary'],
         'Rodzaj paliwa' => ['Benzyna'],
         'Typ skrzyni biegów' => ['Automatyczny'],
+        'Numer części' => ['80B816720'],
+        'Kod silnika' => ['DPU'],
+        'Kod koloru' => ['LZ7S'],
+        'Model' => ['Q5 SQ5 FY'],
+        'Fahrzeugreferenz' => ['GPSWCarID:456'],
     ],
 ];
 $provider = new WeiFakeGoogleProvider();
 $payload = $translator->refresh(10907, $source, $provider);
 
+if (($payload['target_language'] ?? '') !== 'de' || ($payload['translated_raw_html'] ?? true) !== false || ($payload['html_css_protected'] ?? false) !== true) {
+    $failures[] = 'Expected payload metadata to force German target and mark raw HTML/CSS as protected.';
+}
+if (array_unique($provider->targets) !== ['de']) {
+    $failures[] = 'Expected every Google provider call to use target language de.';
+}
+if (in_array('html', $provider->formats, true)) {
+    $failures[] = 'Expected raw HTML/CSS never to be sent to Google Translate as html format.';
+}
 if (($payload['description'] ?? '') !== 'RAHMEN HALTER KORB RADIO 2 DIN SCHALTER') {
     $failures[] = 'Expected translated description to come from current Woo source description, not old Allegro cache.';
 }
 if (($payload['fields'][0]['value'] ?? '') !== 'Grau' || ($payload['fields'][1]['value'] ?? '') !== 'Benzin' || ($payload['fields'][2]['value'] ?? '') !== 'Automatik') {
     $failures[] = 'Expected HTML specification values to be translated to German.';
 }
+
+if (($payload['fields'][3]['value'] ?? '') !== '80B816720' || ($payload['fields'][4]['value'] ?? '') !== 'DPU' || ($payload['fields'][5]['value'] ?? '') !== 'LZ7S' || ($payload['fields'][6]['value'] ?? '') !== 'Q5 SQ5 FY' || ($payload['fields'][7]['value'] ?? '') !== 'GPSWCarID:456') {
+    $failures[] = 'Expected technical values, model names, and same-vehicle token to stay untranslated.';
+}
+foreach (['80B816720', 'DPU', 'LZ7S', 'Q5 SQ5 FY', 'GPSWCarID:456'] as $protectedText) {
+    if (in_array($protectedText, $provider->texts, true)) {
+        $failures[] = 'Expected protected value not to be sent to Google Translate: ' . $protectedText;
+    }
+}
+foreach (['80B816720', 'DPU', 'LZ7S', 'Q5 SQ5 FY', 'GPSWCarID:456'] as $protectedText) {
+    if (!in_array($protectedText, $payload['protected_technical_values'] ?? [], true)) {
+        $failures[] = 'Expected protected technical values metadata to include ' . $protectedText;
+    }
+}
+
 if (($payload['aspects']['Farbe'][0] ?? '') !== 'Grau' || ($payload['aspects']['Kraftstoffart'][0] ?? '') !== 'Benzin' || ($payload['aspects']['Getriebeart'][0] ?? '') !== 'Automatik') {
     $failures[] = 'Expected eBay item specifics/aspects to use the same German translations.';
 }
@@ -109,6 +147,24 @@ if ($provider->calls <= 0) {
 $mergedAspects = $translator->translate_aspects_from_cache(10907, $source, ['MPN' => ['8P0'], 'Producent' => ['AUDI'], 'Kolor' => ['Szary']]);
 if (($mergedAspects['MPN'][0] ?? '') !== '8P0' || ($mergedAspects['Hersteller'][0] ?? '') !== 'AUDI' || ($mergedAspects['Farbe'][0] ?? '') !== 'Grau') {
     $failures[] = 'Expected translated cached aspects to preserve required fallback aspects and translated values.';
+}
+
+// Additional override coverage.
+$GLOBALS['wei_test_meta'] = [];
+$provider2 = new WeiFakeGoogleProvider();
+$payload2 = $translator->refresh(10908, ['product_id' => 10908, 'title' => 'Test title', 'description' => 'Opis', 'fields' => [
+    ['polish_label' => 'Pozycja kierownicy', 'value' => 'Lewa strona'],
+    ['polish_label' => 'Kolor', 'value' => 'Biały'],
+    ['polish_label' => 'Kolor', 'value' => 'Srebrny'],
+    ['polish_label' => 'Stan', 'value' => 'Nowy'],
+    ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Manualny'],
+    ['polish_label' => 'Koła napędowe', 'value' => 'AWD'],
+]], $provider2);
+$overrideValues = array_column($payload2['fields'], 'value');
+foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Allradantrieb'] as $expectedOverride) {
+    if (!in_array($expectedOverride, $overrideValues, true)) {
+        $failures[] = 'Expected PL -> DE override value: ' . $expectedOverride;
+    }
 }
 
 if ($failures !== []) {

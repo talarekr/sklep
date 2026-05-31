@@ -1703,6 +1703,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'values' => !empty($germanContent['fields']) ? 'cached_google_german_content_values' : 'source_values_no_preview_google_call',
             'preview_called_google_api' => false,
             'regeneration_called_google_api' => !empty($germanContent['google_api_called']),
+            'target_language' => 'de',
+            'translated_raw_html' => false,
+            'html_css_protected' => true,
         ];
         $descriptionHtml = $this->sanitize_ebay_template_description_html($rawDescription);
 
@@ -1718,12 +1721,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $untranslatedFields = $this->detect_likely_polish_template_fields($details['fields']);
         $sameVehicle = $this->resolve_ebay_same_vehicle_url_for_product($productId);
         $sameVehicleUrl = (string) ($sameVehicle['url'] ?? '');
+        $sameVehicleToken = (string) ($sameVehicle['token'] ?? '');
+        $sameVehicleCta = (array) ($sameVehicle['metadata'] ?? []);
         $warnings = array_merge($details['warnings'], (array) ($sameVehicle['warnings'] ?? []));
 
         $specRows = $this->render_ebay_template_specification_rows($details['fields']);
 
-        $buttonHtml = $sameVehicleUrl !== ''
-            ? '<div style="text-align:center;margin:20px 0 24px;"><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">Andere Teile aus diesem Fahrzeug ansehen</a></div>'
+        $buttonHtml = $sameVehicleUrl !== '' && $sameVehicleToken !== ''
+            ? '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:18px 0 24px;border-radius:8px;padding:18px 20px;text-align:center;"><div style="color:#06275d;font-size:18px;font-weight:900;margin-bottom:8px;">Weitere Teile aus diesem Fahrzeug ansehen</div><p style="margin:0 0 12px;color:#1f2937;line-height:1.6;">Entdecken Sie weitere verfügbare Teile aus demselben Fahrzeug.</p><p style="margin:0 0 14px;color:#4b5563;font-size:13px;line-height:1.5;">Fahrzeugreferenz: ' . esc_html($sameVehicleToken) . '</p><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">Weitere Teile ansehen</a></div>'
             : '';
 
         $descriptionBlock = $descriptionHtml !== ''
@@ -1769,12 +1774,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<div style="font-size:15px;font-weight:700;color:#dbeafe;">Geprüfte gebrauchte Teile | Sorgfältig kontrolliert | Professionell verpackt</div>'
             . '</div></div>';
 
+        $htmlValidation = self::validate_ebay_de_rendered_html($html);
+
         return [
             'html' => $html,
             'title' => $title,
             'source_description' => $rawDescription,
             'description_source' => $descriptionSource,
             'translation_source' => $translationSource,
+            'target_language' => 'de',
+            'translated_raw_html' => false,
+            'html_css_protected' => true,
+            'html_validation' => $htmlValidation,
             'translated_description' => $translatedDescription,
             'source_hash' => (string) ($germanContent['source_hash'] ?? $this->ebay_german_content_translator()->source_hash($source)),
             'cached_translation_hash' => (string) ($germanContent['cached_translation_hash'] ?? $germanContent['content_hash'] ?? ''),
@@ -1782,75 +1793,133 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'google_api_called_during_regeneration' => !empty($germanContent['google_api_called']),
             'preview_called_google_api' => false,
             'translated_fields' => (array) ($germanContent['translated_fields'] ?? []),
+            'translated_text_nodes' => (array) ($germanContent['translated_text_nodes'] ?? $germanContent['translated_fields'] ?? []),
+            'protected_technical_values' => array_values(array_unique(array_merge((array) ($germanContent['protected_technical_values'] ?? []), $sameVehicleToken !== '' ? [$sameVehicleToken] : []))),
             'untranslated_fields' => array_merge($untranslatedFields, (array) ($germanContent['untranslated_fields'] ?? [])),
             'used_fields' => $details['used_fields'],
             'missing_fields' => $details['missing_fields'],
             'field_mapping' => $details['field_mapping'],
             'same_vehicle_url' => $sameVehicleUrl,
-            'warnings' => $warnings,
+            'same_vehicle_cta' => $sameVehicleCta,
+            'warnings' => array_merge($warnings, empty($htmlValidation['valid']) ? [['code' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])]] : []),
         ];
+    }
+
+    public static function validate_ebay_de_rendered_html(string $html): array
+    {
+        $forbidden = [
+            'szerokość',
+            'wysokość',
+            'tło',
+            'waga czcionki',
+            'wyrównanie tekstu',
+            'promień obramowania',
+            'kolor:#',
+            'wypełnienie',
+            'margines',
+        ];
+        $matches = [];
+        $lower = mb_strtolower($html);
+        foreach ($forbidden as $term) {
+            if (str_contains($lower, mb_strtolower($term))) {
+                $matches[] = $term;
+            }
+        }
+        return $matches === []
+            ? ['valid' => true, 'error' => '']
+            : ['valid' => false, 'error' => 'invalid_translated_html_css', 'matches' => array_values(array_unique($matches))];
     }
 
     private function resolve_ebay_same_vehicle_url_for_product(int $productId): array
     {
         $warnings = [];
-        $candidates = [];
         foreach (['wei_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_vehicle_parts_url_for_product'] as $helper) {
             if (!function_exists($helper)) {
                 continue;
             }
             $url = trim((string) $helper($productId));
             if ($url !== '') {
-                $candidates[] = ['source' => $helper, 'url' => $url];
+                $warnings[] = [
+                    'code' => $this->is_ebay_public_url($url) ? 'legacy_ebay_same_vehicle_url_ignored' : 'legacy_woo_same_vehicle_url_ignored',
+                    'source' => $helper,
+                    'message' => 'Legacy same-vehicle URL helper is intentionally ignored; eBay.de token search URL is used instead when possible.',
+                ];
             }
         }
 
         foreach (['_wei_ebay_same_vehicle_url', '_wei_ebay_vehicle_parts_url', '_ebay_same_vehicle_url'] as $metaKey) {
             $url = trim((string) get_post_meta($productId, $metaKey, true));
             if ($url !== '') {
-                $candidates[] = ['source' => $metaKey, 'url' => $url];
+                $warnings[] = [
+                    'code' => $this->is_ebay_public_url($url) ? 'legacy_ebay_same_vehicle_url_meta_ignored' : 'legacy_same_vehicle_url_meta_ignored',
+                    'source' => $metaKey,
+                    'message' => 'Legacy same-vehicle URL meta is intentionally ignored; eBay.de token search URL is used instead when possible.',
+                ];
             }
         }
 
-        foreach ($candidates as $candidate) {
-            $url = (string) ($candidate['url'] ?? '');
-            if ($this->is_ebay_public_url($url)) {
-                return ['url' => esc_url_raw($url), 'source' => (string) ($candidate['source'] ?? 'unknown'), 'warnings' => $warnings];
-            }
-            $warnings[] = [
-                'code' => 'same_vehicle_url_not_ebay',
-                'source' => (string) ($candidate['source'] ?? 'unknown'),
-                'message' => 'Same-vehicle CTA URL was ignored because it is not an eBay URL.',
-            ];
-        }
-
-        $legacyWooUrl = function_exists('gp_get_vehicle_parts_url_for_product') ? trim((string) gp_get_vehicle_parts_url_for_product($productId)) : '';
-        if ($legacyWooUrl !== '') {
-            $warnings[] = [
-                'code' => 'legacy_woo_same_vehicle_url_ignored',
-                'source' => 'gp_get_vehicle_parts_url_for_product',
-                'message' => 'Legacy same-vehicle URL points to Woo/gpswiss.pl and is intentionally not used for the eBay CTA.',
-            ];
-        }
-
-        $ovokoCarId = trim((string) get_post_meta($productId, '_ovoko_car_id', true));
-        $vehicleSlug = trim((string) get_post_meta($productId, '_gpswiss_vehicle_slug', true));
-        $vehicleLabel = trim((string) get_post_meta($productId, '_gpswiss_vehicle_label', true));
-        $sku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
-        $warnings[] = [
-            'code' => 'missing_ebay_same_vehicle_url',
-            'message' => 'No eBay same-vehicle URL/helper/meta is available; CTA is hidden and no gpswiss.pl URL is used.',
-            'checked' => [
-                'helpers' => ['wei_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_same_vehicle_url_for_product', 'gp_get_ebay_vehicle_parts_url_for_product'],
-                'meta_keys' => ['_wei_ebay_same_vehicle_url', '_wei_ebay_vehicle_parts_url', '_ebay_same_vehicle_url'],
-                'ovoko_car_id' => $ovokoCarId,
-                'vehicle_slug' => $vehicleSlug,
-                'vehicle_label' => $vehicleLabel,
-                'ebay_sku' => $sku,
-            ],
+        $ovokoCarId = $this->resolve_ovoko_car_id($productId);
+        $settings = $this->settings();
+        $sellerUsername = $this->resolve_ebay_seller_username($settings);
+        $strategy = 'ebay_search_title_description_token';
+        $metadata = [
+            'same_vehicle_cta_visible' => false,
+            'reason' => '',
+            'ovoko_car_id' => $ovokoCarId,
+            'seller_username' => $sellerUsername,
+            'checked_url_strategy' => $strategy,
         ];
 
-        return ['url' => '', 'source' => '', 'warnings' => $warnings];
+        if ($ovokoCarId === '') {
+            $metadata['reason'] = 'missing_ovoko_car_id';
+            return ['url' => '', 'source' => '', 'token' => '', 'warnings' => $warnings, 'metadata' => $metadata];
+        }
+        if ($sellerUsername === '') {
+            $metadata['reason'] = 'missing_ebay_seller_username_for_same_vehicle_url';
+            $warnings[] = ['code' => 'missing_ebay_seller_username_for_same_vehicle_url', 'message' => 'Cannot build eBay.de same-vehicle CTA URL without seller username in plugin settings.'];
+            return ['url' => '', 'source' => '', 'token' => 'GPSWCarID:' . $ovokoCarId, 'warnings' => $warnings, 'metadata' => $metadata];
+        }
+
+        $token = 'GPSWCarID:' . $ovokoCarId;
+        $url = 'https://www.ebay.de/sch/i.html?_ssn=' . rawurlencode($sellerUsername) . '&LH_TitleDesc=1&_nkw=' . rawurlencode($token);
+        if (!str_starts_with($url, 'https://www.ebay.de/')) {
+            $metadata['reason'] = 'invalid_same_vehicle_ebay_url';
+            return ['url' => '', 'source' => '', 'token' => $token, 'warnings' => $warnings, 'metadata' => $metadata];
+        }
+
+        $metadata = [
+            'same_vehicle_cta_visible' => true,
+            'ovoko_car_id' => $ovokoCarId,
+            'same_vehicle_token' => $token,
+            'same_vehicle_ebay_url' => $url,
+            'url_strategy' => $strategy,
+            'seller_username' => $sellerUsername,
+            'checked_url_strategy' => $strategy,
+        ];
+
+        return ['url' => esc_url_raw($url), 'source' => $strategy, 'token' => $token, 'warnings' => $warnings, 'metadata' => $metadata];
+    }
+
+    private function resolve_ovoko_car_id(int $productId): string
+    {
+        foreach (['_ovoko_car_id', 'ovoko_car_id'] as $metaKey) {
+            $value = trim((string) get_post_meta($productId, $metaKey, true));
+            if ($value !== '') {
+                return preg_replace('/[^A-Za-z0-9_-]/', '', $value) ?: '';
+            }
+        }
+        return '';
+    }
+
+    private function resolve_ebay_seller_username(array $settings): string
+    {
+        foreach (['ebay_seller_username', 'seller_username', 'ebay_username', 'ebay_store_username'] as $key) {
+            $value = trim((string) ($settings[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
     }
 
     private function is_ebay_public_url(string $url): bool
@@ -2250,6 +2319,25 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $content = $this->resolve_german_content($product, $productId, 'EBAY_DE', $settings);
             $preview = $this->build_ebay_de_description_preview_data($product, $productId, $content);
             $html = (string) ($preview['html'] ?? '');
+            $htmlValidation = (array) ($preview['html_validation'] ?? self::validate_ebay_de_rendered_html($html));
+            if (empty($htmlValidation['valid'])) {
+                return [
+                    'result' => 'error',
+                    'error' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'),
+                    'matches' => (array) ($htmlValidation['matches'] ?? []),
+                    'product_id' => $productId,
+                    'sku' => (string) $product->get_sku(),
+                    'html' => $html,
+                    'warnings' => (array) ($preview['warnings'] ?? []),
+                    'safety' => [
+                        'called_ebay_api' => false,
+                        'called_ovoko_api' => false,
+                        'updated_ebay_listing' => false,
+                        'created_ebay_listing' => false,
+                        'modified_woo_product' => false,
+                    ],
+                ];
+            }
             $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html), 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
             return [
                 'result' => 'success',
@@ -2263,6 +2351,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'cached_translation_hash' => (string) ($preview['cached_translation_hash'] ?? ''),
                 'stale' => !empty($preview['stale']),
                 'translation_source' => (array) ($preview['translation_source'] ?? []),
+                'target_language' => (string) ($preview['target_language'] ?? 'de'),
+                'translated_raw_html' => false,
+                'html_css_protected' => true,
+                'translated_text_nodes' => (array) ($preview['translated_text_nodes'] ?? []),
+                'protected_technical_values' => (array) ($preview['protected_technical_values'] ?? []),
                 'translated_fields' => (array) ($preview['translated_fields'] ?? []),
                 'untranslated_fields' => (array) ($preview['untranslated_fields'] ?? []),
                 'google_api_called_during_regeneration' => !empty($preview['google_api_called_during_regeneration']),
@@ -2271,6 +2364,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'missing_fields' => (array) ($preview['missing_fields'] ?? []),
                 'field_mapping' => (array) ($preview['field_mapping'] ?? []),
                 'same_vehicle_url' => (string) ($preview['same_vehicle_url'] ?? ''),
+                'same_vehicle_cta' => (array) ($preview['same_vehicle_cta'] ?? []),
+                'same_vehicle_cta_visible' => !empty($preview['same_vehicle_cta']['same_vehicle_cta_visible']),
+                'same_vehicle_token' => (string) ($preview['same_vehicle_cta']['same_vehicle_token'] ?? ''),
+                'same_vehicle_ebay_url' => (string) ($preview['same_vehicle_cta']['same_vehicle_ebay_url'] ?? ''),
                 'warnings' => (array) ($preview['warnings'] ?? []),
                 'safety' => [
                     'called_ebay_api' => false,
@@ -3230,6 +3327,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $category = $this->resolve_category($product, $productId, $sku, $this->marketplace_id(), $settings);
             $aspects = $this->resolve_product_aspects($product, $productId, $sku, $settings, (string) ($category['category_id'] ?? ''), $content);
             $html = $this->build_ebay_de_description_template($product, $productId, $content, $aspects, $category);
+            $htmlValidation = self::validate_ebay_de_rendered_html($html);
+            if (empty($htmlValidation['valid'])) {
+                return ['result' => 'error', 'error' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])];
+            }
             $this->logger->info('EBAY_DESCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
             $inventory = $this->client->get_inventory_item($sku, ['stage' => 'description_template_single', 'product_id' => $productId, 'sku' => $sku]);
             if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
@@ -4287,6 +4388,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if (!isset($settings['auto_generate_german_content_preflight'])) {
             $settings['auto_generate_german_content_preflight'] = 1;
+        }
+        if (!isset($settings['ebay_seller_username'])) {
+            $settings['ebay_seller_username'] = '';
         }
         if (!isset($settings['verbose_debug'])) {
             $settings['verbose_debug'] = 0;

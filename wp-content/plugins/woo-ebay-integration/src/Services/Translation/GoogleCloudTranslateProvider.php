@@ -25,7 +25,7 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
     {
         $sourceTitle = (string) ($context['source_title'] ?? $product->get_name());
         $sourceDescription = (string) ($context['source_description'] ?? $product->get_description());
-        $translations = $this->translate_texts([$sourceTitle, $sourceDescription], 'pl', 'de', 'html');
+        $translations = $this->translate_texts([$sourceTitle, $this->sanitize_title($sourceDescription)], 'pl', 'de', 'text');
 
         if (count($translations) < 2) {
             throw new \RuntimeException('Google Translation API response was missing translated title or description.');
@@ -59,8 +59,8 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
         $payload = [
             'q' => $texts,
             'source' => $source,
-            'target' => $target,
-            'format' => $format === 'html' ? 'html' : 'text',
+            'target' => 'de',
+            'format' => 'text',
         ];
 
         $response = wp_remote_post(
