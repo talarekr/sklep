@@ -291,6 +291,360 @@ class ProductMapper
         ];
     }
 
+    public function compare_listing_image_input_output(array $product_ids, int $force_regenerate_runs = 0): array
+    {
+        $product_ids = array_values(array_unique(array_filter(array_map('intval', $product_ids), static fn(int $id): bool => $id > 0)));
+        $reports = [];
+
+        foreach ($product_ids as $product_id) {
+            $reports[] = $this->diagnose_listing_image_for_product($product_id, $force_regenerate_runs);
+        }
+
+        return [
+            'tool' => 'Compare AWI listing image input/output',
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'product_ids' => $product_ids,
+            'products' => $reports,
+            'flow_notes' => $this->get_listing_image_import_flow_notes(),
+        ];
+    }
+
+    public function diagnose_listing_image_for_product(int $product_id, int $force_regenerate_runs = 0): array
+    {
+        $product = function_exists('wc_get_product') ? wc_get_product($product_id) : null;
+        $featured_id = (int) get_post_thumbnail_id($product_id);
+        $gallery_ids = $product instanceof \WC_Product ? array_values(array_map('intval', $product->get_gallery_image_ids())) : $this->parse_gallery_meta_ids($product_id);
+        $raw_candidate_ids = [];
+        if ($featured_id > 0) {
+            $raw_candidate_ids[] = $featured_id;
+        }
+        foreach ($gallery_ids as $gallery_id) {
+            if ($gallery_id > 0) {
+                $raw_candidate_ids[] = $gallery_id;
+            }
+        }
+        $candidate_ids = $this->get_listing_source_candidate_image_ids($product_id);
+        $selected_source_id = (int) get_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, true);
+        $gallery_position = $selected_source_id > 0 ? array_search($selected_source_id, $gallery_ids, true) : false;
+        $listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $single_main_id = $featured_id;
+        $listing_card_id = $this->get_preferred_listing_image_id($product_id);
+
+        $report = [
+            'product_id' => $product_id,
+            'product_exists' => get_post_type($product_id) === 'product',
+            'product_title' => get_the_title($product_id),
+            'A_source' => $this->diagnose_product_source($product_id),
+            'B_woo_images' => [
+                'featured_image_id' => $featured_id,
+                '_thumbnail_id' => (int) get_post_meta($product_id, '_thumbnail_id', true),
+                'gallery_ids' => $gallery_ids,
+                '_product_image_gallery' => (string) get_post_meta($product_id, '_product_image_gallery', true),
+                'attachments' => $this->diagnose_attachments(array_values(array_unique(array_filter(array_merge([$featured_id], $gallery_ids), static fn(int $id): bool => $id > 0)))),
+            ],
+            'C_awi_candidate_input' => [
+                'raw_featured_plus_gallery_ids' => $raw_candidate_ids,
+                'candidate_source_image_ids' => $candidate_ids,
+                'candidate_order_is_featured_first_plus_gallery_order' => $candidate_ids === array_values(array_unique(array_filter($raw_candidate_ids, static fn(int $id): bool => $id > 0 && get_post($id) instanceof \WP_Post))),
+                'duplicates_in_raw_input' => $this->find_duplicate_ints($raw_candidate_ids),
+                'missing_attachment_ids_in_raw_input' => array_values(array_filter(array_map('intval', $raw_candidate_ids), static fn(int $id): bool => $id > 0 && !(get_post($id) instanceof \WP_Post))),
+            ],
+            'D_awi_scoring_per_candidate' => $this->diagnose_listing_candidate_scoring($candidate_ids),
+            'E_selected_source' => [
+                'selected_source_image_id' => $selected_source_id,
+                'selected_source_url' => $selected_source_id > 0 ? (string) wp_get_attachment_url($selected_source_id) : '',
+                'selected_source_is_featured' => $selected_source_id > 0 && $selected_source_id === $featured_id,
+                'selected_source_position_in_gallery' => $gallery_position === false ? null : (int) $gallery_position,
+                '_gp_listing_selected_source_image_id' => $selected_source_id,
+                '_gp_listing_source_selection_reason' => (string) get_post_meta($product_id, self::LISTING_SOURCE_SELECTION_REASON_META_KEY, true),
+                '_awi_listing_image_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
+            ],
+            'F_render_output' => $this->diagnose_listing_render_output($listing_image_id),
+            'G_frontend_expectation' => [
+                'listing_card_image_id' => $listing_card_id,
+                'single_product_main_image_id' => $single_main_id,
+                'listing_card_image_differs_from_featured_image' => $listing_card_id > 0 && $featured_id > 0 && $listing_card_id !== $featured_id,
+            ],
+        ];
+
+        if ($force_regenerate_runs > 0) {
+            $report['determinism_force_regenerate'] = $this->run_listing_image_determinism_check($product_id, $force_regenerate_runs);
+        }
+
+        return $report;
+    }
+
+    private function diagnose_product_source(int $product_id): array
+    {
+        $ovoko_part_id = (string) get_post_meta($product_id, '_ovoko_part_id', true);
+        $allegro_offer_id = (string) get_post_meta($product_id, '_allegro_offer_id', true);
+        $gearboxes_offer_id = (string) get_post_meta($product_id, '_secondary_allegro_offer_id', true);
+        $source = 'unknown';
+        if ($ovoko_part_id !== '') {
+            $source = 'ovoko';
+        } elseif ($allegro_offer_id !== '' || $gearboxes_offer_id !== '') {
+            $source = 'allegro';
+        }
+
+        return [
+            'source' => $source,
+            'meta' => [
+                '_ovoko_part_id' => $ovoko_part_id,
+                '_ovoko_car_id' => (string) get_post_meta($product_id, '_ovoko_car_id', true),
+                '_ovoko_source_url' => (string) get_post_meta($product_id, '_ovoko_source_url', true),
+                '_allegro_offer_id' => $allegro_offer_id,
+                '_secondary_allegro_offer_id' => $gearboxes_offer_id,
+                '_allegro_offer_url' => (string) get_post_meta($product_id, '_allegro_offer_url', true),
+                '_allegro_category_id' => (string) get_post_meta($product_id, '_allegro_category_id', true),
+            ],
+        ];
+    }
+
+    private function diagnose_attachments(array $attachment_ids): array
+    {
+        $rows = [];
+        foreach ($attachment_ids as $attachment_id) {
+            $path = $attachment_id > 0 ? (string) get_attached_file($attachment_id) : '';
+            $dimensions = $this->get_attachment_dimensions($attachment_id, $path);
+            $rows[] = [
+                'attachment_id' => (int) $attachment_id,
+                'exists' => $attachment_id > 0 && get_post($attachment_id) instanceof \WP_Post,
+                'url' => $attachment_id > 0 ? (string) wp_get_attachment_url($attachment_id) : '',
+                'file_path' => $path,
+                'file_exists' => $path !== '' && file_exists($path),
+                'width' => (int) ($dimensions['width'] ?? 0),
+                'height' => (int) ($dimensions['height'] ?? 0),
+                'source_meta' => [
+                    '_awi_source_url' => (string) get_post_meta($attachment_id, '_awi_source_url', true),
+                    '_ovoko_source_url' => (string) get_post_meta($attachment_id, '_ovoko_source_url', true),
+                    '_ovoko_imported_image' => (string) get_post_meta($attachment_id, '_ovoko_imported_image', true),
+                ],
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function diagnose_listing_candidate_scoring(array $candidate_ids): array
+    {
+        $rows = [];
+        $best_id = 0;
+        $best_candidate = null;
+        $best_score = null;
+        $metrics_by_id = [];
+        foreach ($candidate_ids as $candidate_id) {
+            $metrics = $this->get_attachment_trim_metrics_for_listing_selection((int) $candidate_id);
+            if ($metrics === null) {
+                continue;
+            }
+
+            $metrics['listing_quality_score'] = $this->calculate_listing_source_quality_score($metrics);
+            $metrics['quality_tier'] = $this->determine_listing_source_quality_tier($metrics);
+            $metrics_by_id[(int) $candidate_id] = $metrics;
+
+            if ($best_candidate === null) {
+                $best_candidate = $metrics;
+                $best_score = (float) $metrics['listing_quality_score'];
+                $best_id = (int) $candidate_id;
+                continue;
+            }
+
+            $current_score = (float) $metrics['listing_quality_score'];
+            $score_delta = $current_score - (float) $best_score;
+            $is_significantly_better = $score_delta > 0.000001;
+            $is_score_tie = abs($score_delta) < 0.000001;
+            $is_better_fill = $metrics['square_fill_ratio'] > $best_candidate['square_fill_ratio'];
+            $is_tie_fill = abs($metrics['square_fill_ratio'] - $best_candidate['square_fill_ratio']) < 0.000001;
+            $is_better_area = $metrics['object_area_ratio'] > $best_candidate['object_area_ratio'];
+            $is_better_aspect = $metrics['aspect_distance_from_square'] < $best_candidate['aspect_distance_from_square'];
+
+            if (
+                $is_significantly_better
+                || ($is_score_tie && $is_better_fill)
+                || ($is_score_tie && $is_tie_fill && $is_better_area)
+                || ($is_score_tie && $is_tie_fill && !$is_better_area && $is_better_aspect)
+            ) {
+                $best_candidate = $metrics;
+                $best_score = $current_score;
+                $best_id = (int) $candidate_id;
+            }
+        }
+
+        foreach ($candidate_ids as $candidate_id) {
+            $metrics = $metrics_by_id[(int) $candidate_id] ?? null;
+            if ($metrics === null) {
+                $rows[] = [
+                    'attachment_id' => (int) $candidate_id,
+                    'selection_reason' => 'metrics_unavailable_attachment_missing_or_unreadable',
+                ];
+                continue;
+            }
+            $path = (string) get_attached_file((int) $candidate_id);
+            $dimensions = $this->get_attachment_dimensions((int) $candidate_id, $path);
+            $rows[] = [
+                'attachment_id' => (int) $candidate_id,
+                'width' => (int) ($dimensions['width'] ?? 0),
+                'height' => (int) ($dimensions['height'] ?? 0),
+                'aspect_ratio' => round((float) ($metrics['aspect_ratio'] ?? 0), 6),
+                'object_width' => (int) ($metrics['object_width'] ?? 0),
+                'object_height' => (int) ($metrics['object_height'] ?? 0),
+                'object_area_ratio' => round((float) ($metrics['object_area_ratio'] ?? 0), 6),
+                'square_fill_ratio' => round((float) ($metrics['square_fill_ratio'] ?? 0), 6),
+                'listing_quality_score' => round((float) ($metrics['listing_quality_score'] ?? 0), 6),
+                'listing_quality_tier' => (string) ($metrics['quality_tier'] ?? 'unknown'),
+                'aspect_distance' => round((float) ($metrics['aspect_distance_from_square'] ?? 0), 6),
+                'selection_reason' => (int) $candidate_id === $best_id ? 'selected_by_recomputed_awi_scoring' : 'not_selected_by_recomputed_awi_scoring',
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function diagnose_listing_render_output(int $listing_image_id): array
+    {
+        $path = $listing_image_id > 0 ? (string) get_attached_file($listing_image_id) : '';
+        $dimensions = $this->get_attachment_dimensions($listing_image_id, $path);
+        return [
+            '_awi_listing_image_id' => $listing_image_id,
+            'listing_image_url' => $listing_image_id > 0 ? (string) wp_get_attachment_url($listing_image_id) : '',
+            'listing_image_width' => (int) ($dimensions['width'] ?? 0),
+            'listing_image_height' => (int) ($dimensions['height'] ?? 0),
+            '_awi_listing_target_fill_ratio' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_TARGET_FILL_RATIO_META_KEY, true),
+            '_awi_listing_fill_ratio' => (float) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, true),
+            '_awi_listing_render_profile' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true),
+            '_awi_listing_final_fit_mode' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, true),
+            '_awi_listing_used_crop' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_USED_CROP_META_KEY, true) === 1,
+            '_awi_listing_rendered_width' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_META_KEY, true),
+            '_awi_listing_rendered_height' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY, true),
+            'fallback_used' => (string) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, true) === 'contain_full',
+            'quality_boost_applied' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_APPLIED_META_KEY, true) === 1,
+            'quality_boost_upgraded' => (int) get_post_meta($listing_image_id, self::LISTING_IMAGE_ATTACHMENT_QUALITY_BOOST_UPGRADED_META_KEY, true) === 1,
+        ];
+    }
+
+    private function run_listing_image_determinism_check(int $product_id, int $runs): array
+    {
+        $runs = max(1, min(10, $runs));
+        $snapshots = [];
+        for ($i = 1; $i <= $runs; $i++) {
+            $result = $this->ensure_listing_image_for_product($product_id, true);
+            $listing_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+            $snapshots[] = [
+                'run' => $i,
+                'ensure_result_status' => (string) ($result['status'] ?? ''),
+                'candidate_source_image_ids' => $this->get_listing_source_candidate_image_ids($product_id),
+                'selected_source_image_id' => (int) ($result['selected_source_image_id'] ?? get_post_meta($product_id, self::LISTING_SELECTED_SOURCE_IMAGE_ID_META_KEY, true)),
+                'listing_image_source_id' => (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true),
+                'render_profile' => (string) get_post_meta($listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true),
+                'final_fit_mode' => (string) get_post_meta($listing_id, self::LISTING_IMAGE_ATTACHMENT_FINAL_FIT_MODE_META_KEY, true),
+                'fill_ratio' => (float) get_post_meta($listing_id, self::LISTING_IMAGE_ATTACHMENT_FILL_RATIO_META_KEY, true),
+                'rendered_width' => (int) get_post_meta($listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_WIDTH_META_KEY, true),
+                'rendered_height' => (int) get_post_meta($listing_id, self::LISTING_IMAGE_ATTACHMENT_RENDERED_HEIGHT_META_KEY, true),
+            ];
+        }
+
+        $differences = [];
+        $baseline = $snapshots[0] ?? [];
+        foreach ($snapshots as $snapshot) {
+            foreach (['candidate_source_image_ids', 'selected_source_image_id', 'listing_image_source_id', 'render_profile', 'final_fit_mode', 'fill_ratio', 'rendered_width', 'rendered_height'] as $key) {
+                if (($snapshot[$key] ?? null) !== ($baseline[$key] ?? null)) {
+                    $differences[] = [
+                        'run' => (int) ($snapshot['run'] ?? 0),
+                        'field' => $key,
+                        'baseline' => $baseline[$key] ?? null,
+                        'value' => $snapshot[$key] ?? null,
+                    ];
+                }
+            }
+        }
+
+        return [
+            'runs_requested' => $runs,
+            'stable' => $differences === [],
+            'differences' => $differences,
+            'snapshots' => $snapshots,
+        ];
+    }
+
+    private function get_attachment_dimensions(int $attachment_id, string $path = ''): array
+    {
+        $metadata = $attachment_id > 0 ? wp_get_attachment_metadata($attachment_id) : false;
+        if (is_array($metadata) && !empty($metadata['width']) && !empty($metadata['height'])) {
+            return ['width' => (int) $metadata['width'], 'height' => (int) $metadata['height']];
+        }
+        if ($path !== '' && file_exists($path)) {
+            $size = @getimagesize($path);
+            if (is_array($size)) {
+                return ['width' => (int) ($size[0] ?? 0), 'height' => (int) ($size[1] ?? 0)];
+            }
+        }
+        return ['width' => 0, 'height' => 0];
+    }
+
+    private function parse_gallery_meta_ids(int $product_id): array
+    {
+        $raw = (string) get_post_meta($product_id, '_product_image_gallery', true);
+        if ($raw === '') {
+            return [];
+        }
+        return array_values(array_filter(array_map('intval', explode(',', $raw)), static fn(int $id): bool => $id > 0));
+    }
+
+    private function find_duplicate_ints(array $values): array
+    {
+        $seen = [];
+        $duplicates = [];
+        foreach (array_map('intval', $values) as $value) {
+            if ($value <= 0) {
+                continue;
+            }
+            if (isset($seen[$value])) {
+                $duplicates[$value] = $value;
+            }
+            $seen[$value] = true;
+        }
+        return array_values($duplicates);
+    }
+
+    private function get_listing_image_import_flow_notes(): array
+    {
+        return [
+            'allegro' => [
+                'imports_images_in_offer_order' => true,
+                'sets_featured_via_woo_api' => true,
+                'sets_gallery_via_woo_api' => true,
+                'generates_after_product_save_after_all_images' => true,
+                'force_regenerate_on_import' => true,
+                'code_reference' => 'allegro-woo-importer/includes/class-product-mapper.php::sync_product_images()',
+            ],
+            'ovoko' => [
+                'imports_images_in_plan_order' => true,
+                'sets_featured_via_woo_api' => false,
+                'sets_gallery_via_woo_api' => false,
+                'writes_thumbnail_and_gallery_meta_directly' => true,
+                'generates_after_import_loop_but_before_final_wc_product_save_in_some_paths' => true,
+                'force_regenerate_on_create_default' => false,
+                'code_reference' => 'gpswiss-ovoko-integration/src/Services/OvokoIntegrationService.php::import_ovoko_images_for_product()/generate_listing_image_for_ovoko_product()',
+            ],
+            'known_differences' => [
+                [
+                    'difference' => 'Ovoko writes _thumbnail_id and _product_image_gallery directly instead of set_image_id()/set_gallery_image_ids() before listing generation.',
+                    'file_method' => 'gpswiss-ovoko-integration/src/Services/OvokoIntegrationService.php::import_ovoko_images_for_product()',
+                    'impact_on_listing_image' => 'AWI usually reads these values via Woo, but object/cache timing can differ from Allegro, which saves through Woo before AWI regeneration.',
+                    'minimal_proposed_fix' => 'After Ovoko image import, set image_id and gallery_image_ids on WC_Product and save/clear cache before AWI generation.',
+                    'risk' => 'Low to medium: changes image persistence timing and may affect existing products if not limited to newly imported images.',
+                ],
+                [
+                    'difference' => 'Ovoko default creation calls AWI with force=false; Allegro import calls force=true.',
+                    'file_method' => 'gpswiss-ovoko-integration/src/Services/OvokoIntegrationService.php::generate_listing_image_for_ovoko_product()',
+                    'impact_on_listing_image' => 'A matching old _awi_listing_image_id/_awi_listing_image_source_id can be reused instead of freshly rendered.',
+                    'minimal_proposed_fix' => 'Use force=true for newly imported Ovoko products after the full gallery has been persisted.',
+                    'risk' => 'Low: more CPU/storage churn during import; may delete/recreate existing listing attachment.',
+                ],
+            ],
+        ];
+    }
+
     public function select_best_listing_source_image(int $product_id): array
     {
         $candidate_ids = $this->get_listing_source_candidate_image_ids($product_id);
@@ -2702,6 +3056,10 @@ class ProductMapper
 
         return [
             'attachment_id' => $attachment_id,
+            'source_width' => $source_width,
+            'source_height' => $source_height,
+            'object_width' => $object_width,
+            'object_height' => $object_height,
             'aspect_ratio' => $aspect_ratio,
             'aspect_distance_from_square' => $aspect_distance_from_square,
             'square_fill_ratio' => $square_fill_ratio,
