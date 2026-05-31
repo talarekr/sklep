@@ -817,6 +817,14 @@ class RrrApiClient
         return $this->post_form('/get/part/' . $partId, [], true);
     }
 
+    public function fetch_orders_v2(string $fromDate, string $toDate): array
+    {
+        $fromDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $fromDate) ? $fromDate : gmdate('Y-m-d');
+        $toDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $toDate) ? $toDate : $fromDate;
+
+        return $this->post_form('/v2/get/orders/' . rawurlencode($fromDate) . '/' . rawurlencode($toDate), [], true);
+    }
+
     public function extract_single_part_record(array $payload): array
     {
         $candidates = [];

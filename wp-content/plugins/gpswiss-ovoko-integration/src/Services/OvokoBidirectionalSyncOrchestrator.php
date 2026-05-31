@@ -161,20 +161,21 @@ class OvokoBidirectionalSyncOrchestrator
             update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'running', 'last_error' => '', 'last_warning' => '', 'lock_started_at' => $startedAt]), false);
 
             $ovokoResult = $this->run_ovoko_to_woo_delta();
+            $ordersStockResult = $this->run_ovoko_orders_to_woo_stock($ovokoResult);
             $saleResult = $this->saleQueue->process_queue(['retry_failed_only' => false, 'force' => $trigger !== 'cron']);
-            $ok = !empty($ovokoResult['ok']) && !empty($saleResult['ok']);
+            $ok = !empty($ovokoResult['ok']) && !empty($ordersStockResult['ok']) && !empty($saleResult['ok']);
             $now = gmdate('c');
             $status = array_merge($this->dashboard_status(), [
                 'status' => $ok ? 'idle' : 'error',
                 'last_attempted_sync_at' => $now,
                 'last_successful_sync_at' => $ok ? $now : (string) ($this->dashboard_status()['last_successful_sync_at'] ?? ''),
-                'last_error' => $ok ? '' : $this->first_error_message([$ovokoResult, $saleResult]),
-                'last_warning' => $this->first_warning_message([$ovokoResult, $saleResult]),
+                'last_error' => $ok ? '' : $this->first_error_message([$ovokoResult, $ordersStockResult, $saleResult]),
+                'last_warning' => $this->first_warning_message([$ovokoResult, $ordersStockResult, $saleResult]),
             ]);
             update_option(self::STATUS_OPTION, $status, false);
-            $this->append_recent_run($this->build_recent_run_entry($startedAt, $now, $startedAtFloat, $trigger, $ok ? 'success' : 'error', $ovokoResult, $saleResult, (string) $status['last_warning'], (string) $status['last_error']));
+            $this->append_recent_run($this->build_recent_run_entry($startedAt, $now, $startedAtFloat, $trigger, $ok ? 'success' : 'error', $ovokoResult, $saleResult, (string) $status['last_warning'], (string) $status['last_error'], $ordersStockResult));
 
-            return ['ok' => $ok, 'status' => $status['status'], 'trigger' => $trigger, 'sequence' => ['ovoko_to_woo_date_from_delta' => $ovokoResult, 'woo_to_ovoko_sale_queue' => $saleResult]];
+            return ['ok' => $ok, 'status' => $status['status'], 'trigger' => $trigger, 'sequence' => ['ovoko_to_woo_date_from_delta' => $ovokoResult, 'ovoko_orders_to_woo_stock' => $ordersStockResult, 'woo_to_ovoko_sale_queue' => $saleResult]];
         } catch (\Throwable $e) {
             $finishedAt = gmdate('c');
             update_option(self::STATUS_OPTION, array_merge($this->dashboard_status(), ['status' => 'error', 'last_error' => $e->getMessage(), 'last_attempted_sync_at' => $finishedAt]), false);
@@ -199,7 +200,14 @@ class OvokoBidirectionalSyncOrchestrator
                     'new_products' => ['require valid internal_notes price', 'price from internal_notes only', 'categories from category_id + /get/categories/tree', 'images may import', 'missing price skip'],
                     'idempotency_meta' => ['_gpswiss_ovoko_last_synced_updated_at', '_gpswiss_ovoko_last_synced_hash'],
                 ],
-                '2_woo_to_ovoko' => $this->saleQueue->design_summary(),
+                '2_ovoko_orders_to_woo_stock' => [
+                    'endpoint' => 'POST /v2/get/orders/{from_date}/{to_date}',
+                    'source' => 'RRR API CRM Export Orders V2 item_list sold part IDs',
+                    'woo_lookup' => '_ovoko_part_id only',
+                    'writes' => ['stock_status=outofstock', 'stock_quantity=0'],
+                    'guardrails' => ['price untouched', 'images untouched', 'categories untouched', 'title/description untouched', 'listing image untouched', 'Woo → Ovoko untouched'],
+                ],
+                '3_woo_to_ovoko' => $this->saleQueue->design_summary(),
             ],
             'auto_cron_enabled_now' => $this->auto_cron_enabled(),
         ];
@@ -277,6 +285,291 @@ class OvokoBidirectionalSyncOrchestrator
             'next_page' => $nextPage,
             'has_more_pages' => $hasMorePages,
         ];
+    }
+
+    private function run_ovoko_orders_to_woo_stock(array $ovokoResult): array
+    {
+        $fromDate = (string) ($ovokoResult['computed_effective_date_from'] ?? $ovokoResult['date_from_used'] ?? $ovokoResult['date_from'] ?? '');
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fromDate)) {
+            $fromDate = (string) $this->build_date_from_window($this->dashboard_status())['date_from'];
+        }
+        $toDate = gmdate('Y-m-d');
+        $endpoint = '/v2/get/orders/{from_date}/{to_date}';
+        $errors = [];
+        $warnings = [];
+        $changedProductIds = [];
+        $missingPartIds = [];
+        $matchedProductIds = [];
+
+        $client = new RrrApiClient($this->integrationService->get_settings());
+        $fetch = $client->fetch_orders_v2($fromDate, $toDate);
+        if (empty($fetch['ok'])) {
+            $errors[] = [
+                'code' => 'ovoko_orders_fetch_failed',
+                'message' => (string) ($fetch['msg'] ?? $fetch['message'] ?? 'Ovoko orders fetch failed'),
+                'http_code' => $fetch['http_code'] ?? null,
+                'status_code' => (string) ($fetch['status_code'] ?? ''),
+            ];
+        }
+
+        $orders = $this->extract_orders_from_response($fetch);
+        $itemRowsCount = $this->count_order_item_rows($orders);
+        $soldItems = $this->extract_sold_part_items_from_orders($orders);
+        $uniquePartIds = [];
+        foreach ($soldItems as $item) {
+            $partId = (string) ($item['part_id'] ?? '');
+            if ($partId !== '') {
+                $uniquePartIds[$partId] = true;
+            }
+        }
+
+        $changed = 0;
+        $skippedNoChange = 0;
+        $missingProduct = 0;
+        $failed = 0;
+
+        if ($errors === []) {
+            foreach (array_keys($uniquePartIds) as $partId) {
+                $orderId = $this->first_order_id_for_part($soldItems, $partId);
+                $productId = $this->find_woo_product_id_by_ovoko_part_id($partId);
+                if ($productId <= 0) {
+                    $missingProduct++;
+                    $missingPartIds[] = $partId;
+                    $warnings[] = ['code' => 'woo_product_missing_for_ovoko_order_part', 'part_id' => $partId, 'order_id' => $orderId];
+                    continue;
+                }
+
+                $matchedProductIds[$productId] = true;
+                $previous = $this->read_woo_stock_snapshot($productId);
+                $previousStatus = (string) ($previous['stock_status'] ?? '');
+                $previousQuantityRaw = $previous['stock_quantity'] ?? null;
+                $previousQuantity = is_numeric($previousQuantityRaw) ? (int) $previousQuantityRaw : null;
+
+                if ($previousStatus === 'outofstock' && $previousQuantity === 0) {
+                    $skippedNoChange++;
+                    continue;
+                }
+
+                $writeOk = $this->set_woo_product_outofstock_zero($productId);
+                if (!$writeOk) {
+                    $failed++;
+                    $errors[] = ['code' => 'woo_stock_update_failed', 'part_id' => $partId, 'product_id' => $productId, 'order_id' => $orderId];
+                    continue;
+                }
+
+                $changed++;
+                $changedProductIds[] = $productId;
+                $this->integrationService->log_event('Ovoko order sold part marked outofstock in Woo', [
+                    'order_id' => $orderId !== '' ? $orderId : null,
+                    'part_id' => $partId,
+                    'product_id' => $productId,
+                    'previous_stock_status' => $previousStatus,
+                    'previous_stock_quantity' => $previousQuantityRaw,
+                    'new_stock_status' => 'outofstock',
+                    'new_stock_quantity' => 0,
+                ]);
+            }
+        }
+
+        return [
+            'ok' => $errors === [],
+            'endpoint' => $endpoint,
+            'path' => '/v2/get/orders/' . $fromDate . '/' . $toDate,
+            'from_date' => $fromDate,
+            'to_date' => $toDate,
+            'orders_count' => count($orders),
+            'item_rows_count' => $itemRowsCount,
+            'part_ids_found' => count($uniquePartIds),
+            'matched_products' => count($matchedProductIds),
+            'changed' => $changed,
+            'skipped_no_change' => $skippedNoChange,
+            'missing_product' => $missingProduct,
+            'failed' => $failed,
+            'errors_count' => count($errors),
+            'warnings_count' => count($warnings),
+            'changed_product_ids' => array_values(array_unique(array_map('intval', $changedProductIds))),
+            'missing_part_ids' => array_values(array_unique($missingPartIds)),
+            'errors' => $errors,
+            'warnings' => $warnings,
+            'http_code' => $fetch['http_code'] ?? null,
+            'status_code' => (string) ($fetch['status_code'] ?? ''),
+            'guardrails' => [
+                'no_price_change' => true,
+                'no_images_change' => true,
+                'no_categories_change' => true,
+                'no_title_change' => true,
+                'no_description_change' => true,
+                'no_listing_image_change' => true,
+                'no_woo_to_ovoko_write' => true,
+                'no_woo_package_scan' => true,
+                'date_from_parts_logic_unchanged' => true,
+            ],
+        ];
+    }
+
+    private function extract_orders_from_response(array $fetch): array
+    {
+        $payload = is_array($fetch['payload'] ?? null) ? (array) $fetch['payload'] : [];
+        foreach (['data', 'list', 'orders'] as $key) {
+            if (is_array($payload[$key] ?? null)) {
+                return array_values(array_filter((array) $payload[$key], 'is_array'));
+            }
+        }
+
+        return array_values(array_filter((array) ($fetch['raw_records'] ?? []), 'is_array'));
+    }
+
+    private function count_order_item_rows(array $orders): int
+    {
+        $count = 0;
+        foreach ($orders as $order) {
+            if (!is_array($order)) {
+                continue;
+            }
+            $rows = [];
+            foreach (['item_list', 'items', 'products', 'parts'] as $key) {
+                if (is_array($order[$key] ?? null)) {
+                    $rows = (array) $order[$key];
+                    break;
+                }
+            }
+            $count += $rows === [] ? 1 : count(array_filter($rows, 'is_array'));
+        }
+
+        return $count;
+    }
+
+    private function extract_sold_part_items_from_orders(array $orders): array
+    {
+        $items = [];
+        foreach ($orders as $order) {
+            if (!is_array($order)) {
+                continue;
+            }
+            $orderId = $this->extract_order_id($order);
+            $rows = [];
+            foreach (['item_list', 'items', 'products', 'parts'] as $key) {
+                if (is_array($order[$key] ?? null)) {
+                    $rows = (array) $order[$key];
+                    break;
+                }
+            }
+            if ($rows === []) {
+                $rows = [$order];
+            }
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $partId = $this->extract_part_id_from_order_item($row);
+                if ($partId === '') {
+                    continue;
+                }
+                $items[] = ['order_id' => $orderId, 'part_id' => $partId];
+            }
+        }
+
+        return $items;
+    }
+
+    private function extract_order_id(array $order): string
+    {
+        foreach (['order_id', 'id', 'orderId', 'order_number', 'number'] as $key) {
+            $value = trim((string) ($order[$key] ?? ''));
+            if ($value !== '') {
+                return sanitize_text_field($value);
+            }
+        }
+
+        return '';
+    }
+
+    private function extract_part_id_from_order_item(array $item): string
+    {
+        foreach (['_ovoko_part_id', 'ovoko_part_id', 'part_id', 'partId', 'rrr_part_id', 'rrrPartId'] as $key) {
+            $value = trim((string) ($item[$key] ?? ''));
+            if ($value !== '' && preg_match('/^\d+$/', $value)) {
+                return sanitize_text_field($value);
+            }
+        }
+
+        return '';
+    }
+
+    private function first_order_id_for_part(array $soldItems, string $partId): string
+    {
+        foreach ($soldItems as $item) {
+            if ((string) ($item['part_id'] ?? '') === $partId) {
+                return (string) ($item['order_id'] ?? '');
+            }
+        }
+
+        return '';
+    }
+
+    private function find_woo_product_id_by_ovoko_part_id(string $partId): int
+    {
+        if ($partId === '' || !post_type_exists('product')) {
+            return 0;
+        }
+
+        $ids = get_posts([
+            'post_type' => 'product',
+            'post_status' => 'any',
+            'numberposts' => 1,
+            'fields' => 'ids',
+            'meta_key' => '_ovoko_part_id',
+            'meta_value' => $partId,
+        ]);
+
+        return (int) ($ids[0] ?? 0);
+    }
+
+    private function read_woo_stock_snapshot(int $productId): array
+    {
+        if ($productId <= 0) {
+            return ['stock_status' => '', 'stock_quantity' => null];
+        }
+
+        $stockStatus = (string) get_post_meta($productId, '_stock_status', true);
+        $stockQuantity = get_post_meta($productId, '_stock', true);
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if ($product) {
+                $stockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : $stockStatus;
+                $stockQuantity = method_exists($product, 'get_stock_quantity') ? $product->get_stock_quantity() : $stockQuantity;
+            }
+        }
+
+        return ['stock_status' => $stockStatus, 'stock_quantity' => $stockQuantity];
+    }
+
+    private function set_woo_product_outofstock_zero(int $productId): bool
+    {
+        if (function_exists('wc_get_product')) {
+            $product = wc_get_product($productId);
+            if (!$product) {
+                return false;
+            }
+            if (method_exists($product, 'set_stock_quantity')) {
+                $product->set_stock_quantity(0);
+            }
+            if (method_exists($product, 'set_stock_status')) {
+                $product->set_stock_status('outofstock');
+            }
+            if (method_exists($product, 'save')) {
+                $product->save();
+            }
+        } else {
+            update_post_meta($productId, '_stock', '0');
+            update_post_meta($productId, '_stock_status', 'outofstock');
+        }
+
+        if (function_exists('wc_delete_product_transients')) {
+            wc_delete_product_transients($productId);
+        }
+
+        return true;
     }
 
     private function build_date_from_window(array $status): array
@@ -374,7 +667,7 @@ class OvokoBidirectionalSyncOrchestrator
         update_option(self::RECENT_RUNS_OPTION, $runs, false);
     }
 
-    private function build_recent_run_entry(string $startedAt, string $finishedAt, float $startedAtFloat, string $trigger, string $status, array $ovokoResult = [], array $saleResult = [], string $lastWarning = '', string $lastError = ''): array
+    private function build_recent_run_entry(string $startedAt, string $finishedAt, float $startedAtFloat, string $trigger, string $status, array $ovokoResult = [], array $saleResult = [], string $lastWarning = '', string $lastError = '', array $ordersStockResult = []): array
     {
         $ovokoErrors = (array) ($ovokoResult['errors'] ?? []);
         $ovokoWarnings = (array) ($ovokoResult['warnings'] ?? []);
@@ -408,6 +701,23 @@ class OvokoBidirectionalSyncOrchestrator
                 'errors_count' => count($ovokoErrors),
                 'warnings_count' => count($ovokoWarnings),
             ],
+            'ovoko_orders_to_woo_stock' => [
+                'endpoint' => (string) ($ordersStockResult['endpoint'] ?? '/v2/get/orders/{from_date}/{to_date}'),
+                'from_date' => (string) ($ordersStockResult['from_date'] ?? ''),
+                'to_date' => (string) ($ordersStockResult['to_date'] ?? ''),
+                'orders_count' => (int) ($ordersStockResult['orders_count'] ?? 0),
+                'item_rows_count' => (int) ($ordersStockResult['item_rows_count'] ?? 0),
+                'part_ids_found' => (int) ($ordersStockResult['part_ids_found'] ?? 0),
+                'matched_products' => (int) ($ordersStockResult['matched_products'] ?? 0),
+                'changed' => (int) ($ordersStockResult['changed'] ?? 0),
+                'skipped_no_change' => (int) ($ordersStockResult['skipped_no_change'] ?? 0),
+                'missing_product' => (int) ($ordersStockResult['missing_product'] ?? 0),
+                'failed' => (int) ($ordersStockResult['failed'] ?? 0),
+                'errors_count' => (int) ($ordersStockResult['errors_count'] ?? count((array) ($ordersStockResult['errors'] ?? []))),
+                'warnings_count' => (int) ($ordersStockResult['warnings_count'] ?? count((array) ($ordersStockResult['warnings'] ?? []))),
+                'changed_product_ids' => array_values(array_map('intval', (array) ($ordersStockResult['changed_product_ids'] ?? []))),
+                'missing_part_ids' => array_values(array_map('strval', (array) ($ordersStockResult['missing_part_ids'] ?? []))),
+            ],
             'woo_to_ovoko' => [
                 'processed' => (int) ($saleResult['processed'] ?? 0),
                 'success' => (int) ($saleResult['success'] ?? 0),
@@ -418,6 +728,7 @@ class OvokoBidirectionalSyncOrchestrator
             'last_warning' => $lastWarning,
             'raw' => [
                 'ovoko_to_woo_date_from_delta' => $ovokoResult,
+                'ovoko_orders_to_woo_stock' => $ordersStockResult,
                 'woo_to_ovoko_sale_queue' => $saleResult,
             ],
         ];
