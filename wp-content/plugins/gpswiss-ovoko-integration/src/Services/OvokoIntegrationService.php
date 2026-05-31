@@ -2010,7 +2010,7 @@ class OvokoIntegrationService
             'gallery_ids_after_save' => $galleryIdsAfterSave,
         ]);
 
-        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, true, 'ovoko_safe_zoom');
+        $awiResult = \AWI\Plugin::ensure_listing_image_for_product($productId, true, $allegroListingRenderProfile);
         $listingImageId = (int) ($awiResult['listing_image_id'] ?? get_post_meta($productId, '_awi_listing_image_id', true));
         $sourceImageId = (int) ($awiResult['selected_source_image_id'] ?? get_post_meta($productId, '_awi_listing_image_source_id', true));
         $status = (string) ($awiResult['status'] ?? 'unknown');

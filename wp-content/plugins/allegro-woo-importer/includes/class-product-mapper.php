@@ -2860,7 +2860,7 @@ class ProductMapper
         $is_ovoko_listing_context = $this->is_ovoko_listing_image_context($product_id, $render_profile);
 
         $use_quality_boost_profile = in_array($render_profile, ['boost_wide', 'boost_tall', 'boost_generic'], true);
-        if (($is_extreme_object_ratio && !$is_ovoko_listing_context) || $use_quality_boost_profile) {
+        if ($is_extreme_object_ratio || $use_quality_boost_profile) {
             $fit_mode = $use_quality_boost_profile ? ('quality_boost_' . $render_profile) : 'smart_crop_square';
             $used_crop = 1;
             if ($render_profile === 'boost_wide') {
@@ -2891,8 +2891,22 @@ class ProductMapper
                 $crop_y = $source_height - $crop_side;
             }
 
-            $crop_width = max(1, $crop_side);
-            $crop_height = max(1, $crop_side);
+            $crop_can_contain_object_bbox = $crop_side >= $object_width && $crop_side >= $object_height;
+            $crop_contains_object_bbox = $crop_x <= $object_x
+                && $crop_y <= $object_y
+                && ($crop_x + $crop_side) >= ($object_x + $object_width)
+                && ($crop_y + $crop_side) >= ($object_y + $object_height);
+            if ($crop_can_contain_object_bbox && !$crop_contains_object_bbox) {
+                $fit_mode = 'contain_full';
+                $used_crop = 0;
+                $crop_x = $object_x;
+                $crop_y = $object_y;
+                $crop_width = $object_width;
+                $crop_height = $object_height;
+            } else {
+                $crop_width = max(1, $crop_side);
+                $crop_height = max(1, $crop_side);
+            }
         }
 
         $render_source_max_size = max($crop_width, $crop_height);
