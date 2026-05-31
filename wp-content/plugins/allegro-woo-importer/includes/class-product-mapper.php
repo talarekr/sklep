@@ -435,6 +435,521 @@ class ProductMapper
         ];
     }
 
+    public function audit_listing_image_crop(array $product_ids, bool $write_debug_images = false): array
+    {
+        $product_ids = array_values(array_unique(array_filter(array_map('intval', $product_ids), static fn(int $id): bool => $id > 0)));
+        $reports = [];
+
+        foreach ($product_ids as $product_id) {
+            $reports[] = $this->audit_listing_image_crop_for_product($product_id, $write_debug_images);
+        }
+
+        return [
+            'tool' => 'AWI listing image crop audit',
+            'mode' => $write_debug_images ? 'read_only_with_debug_image_files' : 'read_only',
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'write_debug_images' => $write_debug_images,
+            'product_ids' => $product_ids,
+            'products' => $reports,
+        ];
+    }
+
+    private function audit_listing_image_crop_for_product(int $product_id, bool $write_debug_images): array
+    {
+        $source = $this->diagnose_product_source($product_id);
+        $selection = $this->select_best_listing_source_image_read_only($product_id);
+        $current_listing_image_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_META_KEY, true);
+        $current_listing_source_id = (int) get_post_meta($product_id, self::LISTING_IMAGE_SOURCE_META_KEY, true);
+        $selected_source_id = (int) ($selection['selected_source_image_id'] ?? 0);
+        $source_attachment_id = $current_listing_source_id > 0 && get_post($current_listing_source_id) instanceof \WP_Post
+            ? $current_listing_source_id
+            : $selected_source_id;
+        $source_selection_basis = $current_listing_source_id > 0 && $source_attachment_id === $current_listing_source_id
+            ? 'current__awi_listing_image_source_id_meta'
+            : 'read_only_awi_candidate_scoring';
+
+        $source_path = $source_attachment_id > 0 ? (string) get_attached_file($source_attachment_id) : '';
+        $source_exists = $source_path !== '' && file_exists($source_path);
+        $listing_render_profile = $current_listing_image_id > 0 ? (string) get_post_meta($current_listing_image_id, self::LISTING_IMAGE_ATTACHMENT_RENDER_PROFILE_META_KEY, true) : '';
+        $render_profile = $this->normalize_listing_render_profile($listing_render_profile !== '' ? $listing_render_profile : $this->determine_listing_quality_boost_profile((float) ($selection['selected_source_aspect_ratio'] ?? 1.0)));
+        $render_profile_source = $listing_render_profile !== '' ? 'current_listing_attachment_meta' : 'read_only_selected_source_aspect_ratio_fallback';
+
+        $base_report = [
+            'product_id' => $product_id,
+            'product_exists' => get_post_type($product_id) === 'product',
+            'product_title' => get_the_title($product_id),
+            'source_type' => $this->format_listing_source_type((string) ($source['source'] ?? 'unknown')),
+            'source_attachment_id' => $source_attachment_id,
+            'source_selection_basis' => $source_selection_basis,
+            'read_only_selected_source_attachment_id' => $selected_source_id,
+            'current_listing_source_attachment_id' => $current_listing_source_id,
+            'source_file_path' => $source_path,
+            'source_file_exists' => $source_exists,
+            'selected_render_profile' => $render_profile,
+            'render_profile_source' => $render_profile_source,
+            'current_listing_image_id' => $current_listing_image_id,
+            'listing_image_url' => $current_listing_image_id > 0 ? (string) wp_get_attachment_url($current_listing_image_id) : '',
+            'selection' => $selection,
+        ];
+
+        if ($source_attachment_id <= 0) {
+            return $base_report + [
+                'status' => 'error',
+                'error_code' => 'missing_source_attachment_id',
+                'error_message' => 'No current AWI source attachment and no read-only selected candidate.',
+            ];
+        }
+
+        if (!$source_exists) {
+            return $base_report + [
+                'status' => 'error',
+                'error_code' => 'missing_source_file',
+                'error_message' => 'Source attachment file is missing on disk.',
+            ];
+        }
+
+        $source_blob = file_get_contents($source_path);
+        if (!is_string($source_blob) || $source_blob === '') {
+            return $base_report + [
+                'status' => 'error',
+                'error_code' => 'source_read_failed',
+                'error_message' => 'Unable to read source attachment file.',
+            ];
+        }
+
+        $source_image = @imagecreatefromstring($source_blob);
+        if (!$source_image) {
+            return $base_report + [
+                'status' => 'error',
+                'error_code' => 'source_decode_failed',
+                'error_message' => 'Unable to decode source attachment image.',
+            ];
+        }
+
+        $audit = $this->calculate_listing_crop_audit_metrics($product_id, $source_attachment_id, $source_image, $render_profile);
+        $debug_images = $write_debug_images
+            ? $this->write_listing_crop_audit_debug_images($product_id, $source_attachment_id, $source_path, $source_blob, $audit)
+            : [
+                'source_image_url' => $source_attachment_id > 0 ? (string) wp_get_attachment_url($source_attachment_id) : '',
+                'object_bbox_image_url' => '',
+                'crop_box_image_url' => '',
+                'final_preview_900_url' => '',
+                'note' => 'Pass --write-debug-images=1 to write overlay/preview JPG files to uploads/awi-debug/.',
+            ];
+        imagedestroy($source_image);
+
+        return $base_report + $audit + [
+            'status' => 'ok',
+            'debug_images' => $debug_images,
+        ];
+    }
+
+    private function select_best_listing_source_image_read_only(int $product_id): array
+    {
+        $candidate_ids = $this->get_listing_source_candidate_image_ids($product_id);
+        if ($candidate_ids === []) {
+            return [
+                'candidate_source_image_ids' => [],
+                'gallery_images_count' => 0,
+                'selected_source_image_id' => 0,
+                'selected_source_aspect_ratio' => 0.0,
+                'selected_source_quality_tier' => 'unknown',
+                'selected_source_selection_reason' => 'no_valid_image_candidates',
+            ];
+        }
+
+        $best_candidate = null;
+        $best_score = null;
+        $candidate_reports = [];
+        foreach ($candidate_ids as $candidate_id) {
+            $metrics = $this->get_attachment_trim_metrics_for_listing_selection((int) $candidate_id);
+            if ($metrics === null) {
+                $candidate_reports[] = [
+                    'attachment_id' => (int) $candidate_id,
+                    'metrics_available' => false,
+                ];
+                continue;
+            }
+
+            $metrics['listing_quality_score'] = $this->calculate_listing_source_quality_score($metrics);
+            $metrics['quality_tier'] = $this->determine_listing_source_quality_tier($metrics);
+            $candidate_reports[] = [
+                'attachment_id' => (int) $candidate_id,
+                'metrics_available' => true,
+                'source_width' => (int) ($metrics['source_width'] ?? 0),
+                'source_height' => (int) ($metrics['source_height'] ?? 0),
+                'object_width' => (int) ($metrics['object_width'] ?? 0),
+                'object_height' => (int) ($metrics['object_height'] ?? 0),
+                'aspect_ratio' => round((float) ($metrics['aspect_ratio'] ?? 0), 6),
+                'object_area_ratio' => round((float) ($metrics['object_area_ratio'] ?? 0), 6),
+                'square_fill_ratio' => round((float) ($metrics['square_fill_ratio'] ?? 0), 6),
+                'listing_quality_score' => round((float) ($metrics['listing_quality_score'] ?? 0), 6),
+                'quality_tier' => (string) ($metrics['quality_tier'] ?? 'unknown'),
+            ];
+
+            if ($best_candidate === null) {
+                $best_candidate = $metrics;
+                $best_score = (float) $metrics['listing_quality_score'];
+                continue;
+            }
+
+            $current_score = (float) $metrics['listing_quality_score'];
+            $score_delta = $current_score - (float) $best_score;
+            $is_significantly_better = $score_delta > 0.000001;
+            $is_score_tie = abs($score_delta) < 0.000001;
+            $is_better_fill = $metrics['square_fill_ratio'] > $best_candidate['square_fill_ratio'];
+            $is_tie_fill = abs($metrics['square_fill_ratio'] - $best_candidate['square_fill_ratio']) < 0.000001;
+            $is_better_area = $metrics['object_area_ratio'] > $best_candidate['object_area_ratio'];
+            $is_better_aspect = $metrics['aspect_distance_from_square'] < $best_candidate['aspect_distance_from_square'];
+
+            if (
+                $is_significantly_better
+                || ($is_score_tie && $is_better_fill)
+                || ($is_score_tie && $is_tie_fill && $is_better_area)
+                || ($is_score_tie && $is_tie_fill && !$is_better_area && $is_better_aspect)
+            ) {
+                $best_candidate = $metrics;
+                $best_score = $current_score;
+            }
+        }
+
+        if ($best_candidate === null) {
+            return [
+                'candidate_source_image_ids' => $candidate_ids,
+                'gallery_images_count' => count($candidate_ids),
+                'selected_source_image_id' => (int) $candidate_ids[0],
+                'selected_source_aspect_ratio' => 0.0,
+                'selected_source_square_fill_ratio' => 0.0,
+                'selected_source_selection_reason' => 'fallback_first_candidate_missing_metrics',
+                'candidate_reports' => $candidate_reports,
+            ];
+        }
+
+        $selection_reason = sprintf(
+            'listing_first_quality_score:score=%.6f;tier=%s;aspect_ratio=%.6f;aspect_distance=%.6f;object_area_ratio=%.6f;square_fill_ratio=%.6f',
+            (float) ($best_candidate['listing_quality_score'] ?? 0.0),
+            (string) ($best_candidate['quality_tier'] ?? 'unknown'),
+            $best_candidate['aspect_ratio'],
+            $best_candidate['aspect_distance_from_square'],
+            $best_candidate['object_area_ratio'],
+            $best_candidate['square_fill_ratio']
+        );
+
+        return [
+            'candidate_source_image_ids' => $candidate_ids,
+            'gallery_images_count' => count($candidate_ids),
+            'selected_source_image_id' => (int) $best_candidate['attachment_id'],
+            'selected_source_aspect_ratio' => round((float) $best_candidate['aspect_ratio'], 6),
+            'selected_source_square_fill_ratio' => round((float) $best_candidate['square_fill_ratio'], 6),
+            'selected_source_selection_reason' => $selection_reason,
+            'candidate_reports' => $candidate_reports,
+        ];
+    }
+
+    private function calculate_listing_crop_audit_metrics(int $product_id, int $source_attachment_id, $source_image, string $render_profile): array
+    {
+        $source_width = imagesx($source_image);
+        $source_height = imagesy($source_image);
+        $canvas_size = self::LISTING_IMAGE_CANVAS_SIZE;
+        $target_ratio = 0.96;
+        $safe_margin_ratio = 0.02;
+        $crop_padding_ratio = 0.08;
+        if ($render_profile === 'boost_wide') {
+            $target_ratio = 0.995;
+            $safe_margin_ratio = 0.002;
+            $crop_padding_ratio = 0.02;
+        } elseif ($render_profile === 'boost_tall') {
+            $target_ratio = 0.995;
+            $safe_margin_ratio = 0.002;
+            $crop_padding_ratio = 0.02;
+        } elseif ($render_profile === 'boost_generic') {
+            $target_ratio = 0.99;
+            $safe_margin_ratio = 0.005;
+            $crop_padding_ratio = 0.03;
+        }
+
+        $usable_canvas_size = max(1, (int) floor($canvas_size * (1 - (2 * $safe_margin_ratio))));
+        $target_object_size = max(1, (int) round($usable_canvas_size * $target_ratio));
+        $bbox = $this->detect_non_white_bbox($source_image, $source_width, $source_height);
+        $object_x = 0;
+        $object_y = 0;
+        $object_width = $source_width;
+        $object_height = $source_height;
+        if (is_array($bbox)) {
+            $object_x = (int) $bbox['x'];
+            $object_y = (int) $bbox['y'];
+            $object_width = (int) $bbox['width'];
+            $object_height = (int) $bbox['height'];
+        }
+
+        $object_min_size = max(1, min($object_width, $object_height));
+        $object_aspect_ratio = $object_width / max(1, $object_height);
+        $is_extreme_object_ratio = ($object_aspect_ratio < 0.65 || $object_aspect_ratio > 1.55);
+        $object_center_x = $object_x + ($object_width / 2);
+        $object_center_y = $object_y + ($object_height / 2);
+
+        $fit_mode = 'contain_full';
+        $used_crop = 0;
+        $crop_x = $object_x;
+        $crop_y = $object_y;
+        $crop_width = $object_width;
+        $crop_height = $object_height;
+        $desired_side = null;
+        $crop_side = null;
+        $crop_x_before_bounds = $crop_x;
+        $crop_y_before_bounds = $crop_y;
+        $crop_x_after_bounds = $crop_x;
+        $crop_y_after_bounds = $crop_y;
+        $crop_contains_before = true;
+        $crop_contains_after = true;
+        $fallback_reason = '';
+        $use_quality_boost_profile = in_array($render_profile, ['boost_wide', 'boost_tall', 'boost_generic'], true);
+
+        if ($is_extreme_object_ratio || $use_quality_boost_profile) {
+            $fit_mode = $use_quality_boost_profile ? ('quality_boost_' . $render_profile) : 'smart_crop_square';
+            $used_crop = 1;
+            if ($render_profile === 'boost_wide') {
+                $desired_side = (int) round($object_height * (1 + $crop_padding_ratio));
+            } elseif ($render_profile === 'boost_tall') {
+                $desired_side = (int) round($object_width * (1 + $crop_padding_ratio));
+            } else {
+                $desired_side = (int) round(max($object_width, $object_height) * (1 + $crop_padding_ratio));
+            }
+            $crop_side = max($object_min_size, min($desired_side, min($source_width, $source_height)));
+
+            $crop_x_before_bounds = (int) round($object_center_x - ($crop_side / 2));
+            $crop_y_before_bounds = (int) round($object_center_y - ($crop_side / 2));
+            $crop_x_after_bounds = $crop_x_before_bounds;
+            $crop_y_after_bounds = $crop_y_before_bounds;
+
+            if ($crop_x_after_bounds < 0) {
+                $crop_x_after_bounds = 0;
+            }
+            if ($crop_y_after_bounds < 0) {
+                $crop_y_after_bounds = 0;
+            }
+            if (($crop_x_after_bounds + $crop_side) > $source_width) {
+                $crop_x_after_bounds = $source_width - $crop_side;
+            }
+            if (($crop_y_after_bounds + $crop_side) > $source_height) {
+                $crop_y_after_bounds = $source_height - $crop_side;
+            }
+
+            $crop_contains_before = $this->listing_crop_contains_object_bbox($crop_x_before_bounds, $crop_y_before_bounds, $crop_side, $crop_side, $object_x, $object_y, $object_width, $object_height);
+            $crop_contains_after = $this->listing_crop_contains_object_bbox($crop_x_after_bounds, $crop_y_after_bounds, $crop_side, $crop_side, $object_x, $object_y, $object_width, $object_height);
+            $crop_can_contain_object_bbox = $crop_side >= $object_width && $crop_side >= $object_height;
+            if ($crop_can_contain_object_bbox && !$crop_contains_after) {
+                $fallback_reason = 'crop_can_contain_detected_bbox_but_bounds_corrected_crop_does_not_contain_it';
+                $fit_mode = 'contain_full';
+                $used_crop = 0;
+                $crop_x = $object_x;
+                $crop_y = $object_y;
+                $crop_width = $object_width;
+                $crop_height = $object_height;
+            } else {
+                $crop_x = $crop_x_after_bounds;
+                $crop_y = $crop_y_after_bounds;
+                $crop_width = max(1, $crop_side);
+                $crop_height = max(1, $crop_side);
+            }
+        }
+
+        $render_source_max_size = max($crop_width, $crop_height);
+        $scale = $target_object_size / max(1, $render_source_max_size);
+        if (!is_finite($scale) || $scale <= 0) {
+            $scale = 1.0;
+        }
+        $target_width = max(1, (int) round($crop_width * $scale));
+        $target_height = max(1, (int) round($crop_height * $scale));
+        $dst_x = (int) floor(($canvas_size - $target_width) / 2);
+        $dst_y = (int) floor(($canvas_size - $target_height) / 2);
+        $crop_center_x = $crop_x + ($crop_width / 2);
+        $crop_center_y = $crop_y + ($crop_height / 2);
+
+        return [
+            'source_width' => $source_width,
+            'source_height' => $source_height,
+            'object_x' => $object_x,
+            'object_y' => $object_y,
+            'object_width' => $object_width,
+            'object_height' => $object_height,
+            'object_aspect_ratio' => round($object_aspect_ratio, 6),
+            'object_center_x' => round($object_center_x, 3),
+            'object_center_y' => round($object_center_y, 3),
+            'is_extreme_object_ratio' => $is_extreme_object_ratio,
+            'selected_render_profile' => $render_profile,
+            'boost_profile_selected' => $use_quality_boost_profile,
+            'target_ratio' => $target_ratio,
+            'safe_margin_ratio' => $safe_margin_ratio,
+            'crop_padding_ratio' => $crop_padding_ratio,
+            'desired_side' => $desired_side,
+            'object_min_size' => $object_min_size,
+            'crop_side' => $crop_side,
+            'crop_x_before_bounds' => $crop_x_before_bounds,
+            'crop_y_before_bounds' => $crop_y_before_bounds,
+            'crop_x_after_bounds' => $crop_x_after_bounds,
+            'crop_y_after_bounds' => $crop_y_after_bounds,
+            'crop_width' => $crop_width,
+            'crop_height' => $crop_height,
+            'final_crop_x' => $crop_x,
+            'final_crop_y' => $crop_y,
+            'crop_center_x' => round($crop_center_x, 3),
+            'crop_center_y' => round($crop_center_y, 3),
+            'crop_contains_object_bbox_before_bounds' => $crop_contains_before,
+            'crop_contains_object_bbox_after_bounds' => $crop_contains_after,
+            'object_overflow_left' => max(0, $crop_x - $object_x),
+            'object_overflow_right' => max(0, ($object_x + $object_width) - ($crop_x + $crop_width)),
+            'object_overflow_top' => max(0, $crop_y - $object_y),
+            'object_overflow_bottom' => max(0, ($object_y + $object_height) - ($crop_y + $crop_height)),
+            'distance_object_to_source_left' => $object_x,
+            'distance_object_to_source_right' => $source_width - ($object_x + $object_width),
+            'distance_object_to_source_top' => $object_y,
+            'distance_object_to_source_bottom' => $source_height - ($object_y + $object_height),
+            'distance_crop_to_source_left' => $crop_x,
+            'distance_crop_to_source_right' => $source_width - ($crop_x + $crop_width),
+            'distance_crop_to_source_top' => $crop_y,
+            'distance_crop_to_source_bottom' => $source_height - ($crop_y + $crop_height),
+            'scale_factor' => round($scale, 6),
+            'rendered_width' => $target_width,
+            'rendered_height' => $target_height,
+            'dst_x' => $dst_x,
+            'dst_y' => $dst_y,
+            'final_fit_mode' => $fit_mode,
+            'used_crop' => $used_crop === 1,
+            'fallback_reason' => $fallback_reason,
+            'debug_geometry' => [
+                'source_attachment_id' => $source_attachment_id,
+                'canvas_size' => $canvas_size,
+                'usable_canvas_size' => $usable_canvas_size,
+                'target_object_size' => $target_object_size,
+            ],
+        ];
+    }
+
+    private function listing_crop_contains_object_bbox(int $crop_x, int $crop_y, int $crop_width, int $crop_height, int $object_x, int $object_y, int $object_width, int $object_height): bool
+    {
+        return $crop_x <= $object_x
+            && $crop_y <= $object_y
+            && ($crop_x + $crop_width) >= ($object_x + $object_width)
+            && ($crop_y + $crop_height) >= ($object_y + $object_height);
+    }
+
+    private function format_listing_source_type(string $source): string
+    {
+        if ($source === 'ovoko') {
+            return 'Ovoko';
+        }
+
+        if ($source === 'allegro') {
+            return 'Allegro';
+        }
+
+        return 'unknown';
+    }
+
+    private function write_listing_crop_audit_debug_images(int $product_id, int $source_attachment_id, string $source_path, string $source_blob, array $audit): array
+    {
+        $upload_dir = wp_upload_dir();
+        if (!empty($upload_dir['error'])) {
+            return [
+                'source_image_url' => $source_attachment_id > 0 ? (string) wp_get_attachment_url($source_attachment_id) : '',
+                'error' => (string) $upload_dir['error'],
+            ];
+        }
+
+        $timestamp = gmdate('Ymd-His');
+        $debug_subdir = trailingslashit((string) $upload_dir['basedir']) . 'awi-debug/' . $timestamp . '-product-' . $product_id;
+        $debug_baseurl = trailingslashit((string) $upload_dir['baseurl']) . 'awi-debug/' . $timestamp . '-product-' . $product_id;
+        if (!wp_mkdir_p($debug_subdir)) {
+            return [
+                'source_image_url' => $source_attachment_id > 0 ? (string) wp_get_attachment_url($source_attachment_id) : '',
+                'error' => 'Unable to create uploads/awi-debug directory.',
+            ];
+        }
+
+        $saved = [];
+        $source_copy_path = trailingslashit($debug_subdir) . '01-source.jpg';
+        $source_copy_image = @imagecreatefromstring($source_blob);
+        if ($source_copy_image) {
+            if (imagejpeg($source_copy_image, $source_copy_path, 90)) {
+                $saved['source_image_url'] = trailingslashit($debug_baseurl) . '01-source.jpg';
+            }
+            imagedestroy($source_copy_image);
+        }
+        if (empty($saved['source_image_url'])) {
+            $saved['source_image_url'] = $source_attachment_id > 0 ? (string) wp_get_attachment_url($source_attachment_id) : '';
+        }
+
+        $bbox_path = trailingslashit($debug_subdir) . '02-object-bbox.jpg';
+        $bbox_image = @imagecreatefromstring($source_blob);
+        if ($bbox_image) {
+            $this->draw_listing_audit_rectangle($bbox_image, (int) $audit['object_x'], (int) $audit['object_y'], (int) $audit['object_width'], (int) $audit['object_height'], [255, 0, 0]);
+            if (imagejpeg($bbox_image, $bbox_path, 90)) {
+                $saved['object_bbox_image_url'] = trailingslashit($debug_baseurl) . '02-object-bbox.jpg';
+            }
+            imagedestroy($bbox_image);
+        }
+
+        $crop_path = trailingslashit($debug_subdir) . '03-crop-box.jpg';
+        $crop_image = @imagecreatefromstring($source_blob);
+        if ($crop_image) {
+            $this->draw_listing_audit_rectangle($crop_image, (int) $audit['object_x'], (int) $audit['object_y'], (int) $audit['object_width'], (int) $audit['object_height'], [255, 0, 0]);
+            $this->draw_listing_audit_rectangle($crop_image, (int) $audit['final_crop_x'], (int) $audit['final_crop_y'], (int) $audit['crop_width'], (int) $audit['crop_height'], [0, 128, 255]);
+            if (imagejpeg($crop_image, $crop_path, 90)) {
+                $saved['crop_box_image_url'] = trailingslashit($debug_baseurl) . '03-crop-box.jpg';
+            }
+            imagedestroy($crop_image);
+        }
+
+        $preview_path = trailingslashit($debug_subdir) . '04-final-preview-900.jpg';
+        $preview_source = @imagecreatefromstring($source_blob);
+        if ($preview_source) {
+            $canvas = imagecreatetruecolor(self::LISTING_IMAGE_CANVAS_SIZE, self::LISTING_IMAGE_CANVAS_SIZE);
+            if ($canvas) {
+                $white = imagecolorallocate($canvas, 255, 255, 255);
+                imagefill($canvas, 0, 0, $white);
+                imagecopyresampled(
+                    $canvas,
+                    $preview_source,
+                    (int) $audit['dst_x'],
+                    (int) $audit['dst_y'],
+                    (int) $audit['final_crop_x'],
+                    (int) $audit['final_crop_y'],
+                    (int) $audit['rendered_width'],
+                    (int) $audit['rendered_height'],
+                    (int) $audit['crop_width'],
+                    (int) $audit['crop_height']
+                );
+                if (imagejpeg($canvas, $preview_path, 90)) {
+                    $saved['final_preview_900_url'] = trailingslashit($debug_baseurl) . '04-final-preview-900.jpg';
+                }
+                imagedestroy($canvas);
+            }
+            imagedestroy($preview_source);
+        }
+
+        return [
+            'debug_directory' => $debug_subdir,
+            'debug_base_url' => $debug_baseurl,
+            'source_image_url' => (string) ($saved['source_image_url'] ?? ''),
+            'object_bbox_image_url' => (string) ($saved['object_bbox_image_url'] ?? ''),
+            'crop_box_image_url' => (string) ($saved['crop_box_image_url'] ?? ''),
+            'final_preview_900_url' => (string) ($saved['final_preview_900_url'] ?? ''),
+            'legend' => 'object bbox = red; final crop box = blue',
+            'source_file_path' => $source_path,
+        ];
+    }
+
+    private function draw_listing_audit_rectangle($image, int $x, int $y, int $width, int $height, array $rgb): void
+    {
+        $color = imagecolorallocate($image, (int) ($rgb[0] ?? 255), (int) ($rgb[1] ?? 0), (int) ($rgb[2] ?? 0));
+        $x2 = $x + max(1, $width) - 1;
+        $y2 = $y + max(1, $height) - 1;
+        for ($offset = 0; $offset < 4; $offset++) {
+            imagerectangle($image, $x + $offset, $y + $offset, $x2 - $offset, $y2 - $offset, $color);
+        }
+    }
+
     public function diagnose_listing_image_for_product(int $product_id, int $force_regenerate_runs = 0): array
     {
         $product = function_exists('wc_get_product') ? wc_get_product($product_id) : null;
