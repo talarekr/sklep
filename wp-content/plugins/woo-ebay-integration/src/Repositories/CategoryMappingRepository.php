@@ -96,7 +96,7 @@ class CategoryMappingRepository
         $posts = $wpdb->posts;
         $mappings = $wpdb->prefix . 'wei_ebay_category_mappings';
 
-        $limit = max(1, min(500, $limit));
+        $limit = max(1, min(10000, $limit));
         $offset = max(0, $offset);
         $where = ["tt.taxonomy = 'product_cat'"];
         if ($mode === 'leaf_with_products') {

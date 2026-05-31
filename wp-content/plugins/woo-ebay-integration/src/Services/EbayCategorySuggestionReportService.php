@@ -165,6 +165,294 @@ class EbayCategorySuggestionReportService
         return $summary;
     }
 
+
+    public function generate_all(array $args = []): array
+    {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+
+        $started = microtime(true);
+        $startedAt = gmdate('c');
+        $marketplaceId = self::MARKETPLACE_ID;
+        $sampleLimit = max(1, min(5, (int) ($args['sample_limit'] ?? 5)));
+        $topLimit = max(3, min(5, (int) ($args['top_limit'] ?? 5)));
+        $mode = in_array((string) ($args['mode'] ?? 'leaf_with_products'), ['leaf_with_products', 'with_products', 'all_categories'], true) ? (string) $args['mode'] : 'leaf_with_products';
+        $forceRefresh = !empty($args['force_refresh']);
+        $continueFromProgress = !empty($args['continue_from_progress']);
+        $restart = !empty($args['restart']) || !$continueFromProgress;
+
+        if ($restart) {
+            delete_option(self::CHECKPOINT_OPTION);
+        }
+
+        $checkpoint = get_option(self::CHECKPOINT_OPTION, []);
+        $checkpoint = is_array($checkpoint) ? $checkpoint : [];
+        if (!$continueFromProgress || (string) ($checkpoint['mode'] ?? '') !== $mode) {
+            $checkpoint = [];
+        }
+
+        $tree = $this->taxonomy->get_default_category_tree_id_result($marketplaceId, $forceRefresh);
+        $categoryTreeId = (string) ($tree['category_tree_id'] ?? '');
+        $categories = $this->categoryRepo->list_woo_categories_for_suggestions($marketplaceId, 10000, 0, $mode);
+        $total = count($categories);
+        $processedIds = array_map('intval', (array) ($checkpoint['processed_category_ids'] ?? []));
+        $processedMap = array_fill_keys($processedIds, true);
+        $reportRows = is_array($checkpoint['report_rows'] ?? null) ? (array) $checkpoint['report_rows'] : [];
+        $readyRows = is_array($checkpoint['ready_rows'] ?? null) ? (array) $checkpoint['ready_rows'] : [];
+        $summary = is_array($checkpoint['summary'] ?? null) ? (array) $checkpoint['summary'] : [];
+        $summary = array_merge($this->empty_summary($marketplaceId, $categoryTreeId, $mode, $total), $summary, [
+            'status' => 'running',
+            'marketplace_id' => $marketplaceId,
+            'category_tree_id' => $categoryTreeId,
+            'started_at' => (string) ($checkpoint['started_at'] ?? $startedAt),
+        ]);
+        $summary['total_categories_processed'] = count($processedMap);
+        $summary['woo_categories_processed'] = count($processedMap);
+
+        $existingValidation = get_option(self::VALIDATION_OPTION, []);
+        $existingValidation = is_array($existingValidation) ? $existingValidation : [];
+        $validationByCategoryId = is_array($existingValidation['by_category_id'] ?? null) ? $existingValidation['by_category_id'] : [];
+        $validationByWooTerm = is_array($existingValidation['by_woo_term_id'] ?? null) ? $existingValidation['by_woo_term_id'] : [];
+        $lastWrite = 0;
+
+        foreach ($categories as $row) {
+            $termId = (int) ($row['term_id'] ?? 0);
+            if ($termId <= 0 || isset($processedMap[$termId])) {
+                continue;
+            }
+            $summary['current_category_id'] = $termId;
+            $summary['current_category_name'] = (string) ($row['name'] ?? '');
+            $this->save_progress($summary, $total, $processedMap, $reportRows, $readyRows, $mode, 'running');
+            $this->flush_progress();
+
+            try {
+                $result = $this->process_category_row($row, $marketplaceId, $sampleLimit, $topLimit, $forceRefresh, $validationByCategoryId, $validationByWooTerm);
+            } catch (\Throwable $e) {
+                $result = $this->category_error_result($row, 'taxonomy_api_error:' . $e->getMessage());
+                $this->logger->warning('eBay.de category suggestion failed for one category; continuing', ['woo_term_id' => $termId, 'error' => $e->getMessage()]);
+            }
+            $reportRows[] = $result['report'];
+            $readyRows[] = $result['ready'];
+            $this->merge_category_counts($summary, $result['counts']);
+            $processedMap[$termId] = true;
+            $summary['total_categories_processed'] = count($processedMap);
+            $summary['woo_categories_processed'] = count($processedMap);
+            $summary['last_update_at'] = gmdate('c');
+
+            $lastWrite++;
+            if ($lastWrite >= 10) {
+                $paths = $this->write_reports($reportRows, $readyRows);
+                $summary['reports'] = $paths;
+                $summary['report_url'] = (string) ($paths['suggestions_csv']['url'] ?? '');
+                $summary['ready_to_import_csv_url'] = (string) ($paths['ready_to_import_csv']['url'] ?? '');
+                $lastWrite = 0;
+            }
+            $this->save_progress($summary, $total, $processedMap, $reportRows, $readyRows, $mode, 'running');
+            $this->flush_progress();
+        }
+
+        $paths = $this->write_reports($reportRows, $readyRows);
+        $finishedAt = gmdate('c');
+        $summary['status'] = count($processedMap) >= $total ? 'completed' : 'partial';
+        $summary['finished_at'] = $finishedAt;
+        $summary['last_update_at'] = $finishedAt;
+        $summary['duration_seconds'] = round(microtime(true) - $started, 3);
+        $summary['reports'] = $paths;
+        $summary['report_url'] = (string) ($paths['suggestions_csv']['url'] ?? '');
+        $summary['ready_to_import_csv_url'] = (string) ($paths['ready_to_import_csv']['url'] ?? '');
+        $summary['processed'] = count($processedMap);
+        $summary['total'] = $total;
+        update_option(self::VALIDATION_OPTION, ['by_category_id' => $validationByCategoryId, 'by_woo_term_id' => $validationByWooTerm, 'updated_at' => gmdate('c'), 'marketplace_id' => $marketplaceId, 'category_tree_id' => $categoryTreeId], false);
+        update_option(self::LAST_SUMMARY_OPTION, $summary, false);
+        $this->save_progress($summary, $total, $processedMap, $reportRows, $readyRows, $mode, $summary['status']);
+        return $summary;
+    }
+
+    public function reset_progress(): array
+    {
+        delete_option(self::CHECKPOINT_OPTION);
+        return ['status' => 'reset', 'reset_at' => gmdate('c'), 'marketplace_id' => self::MARKETPLACE_ID];
+    }
+
+    private function empty_summary(string $marketplaceId, string $categoryTreeId, string $mode, int $total): array
+    {
+        return [
+            'status' => 'running',
+            'marketplace_id' => $marketplaceId,
+            'category_tree_id' => $categoryTreeId,
+            'total' => $total,
+            'processed' => 0,
+            'current_category_id' => 0,
+            'current_category_name' => '',
+            'started_at' => gmdate('c'),
+            'last_update_at' => gmdate('c'),
+            'finished_at' => '',
+            'duration_seconds' => 0,
+            'total_categories_processed' => 0,
+            'woo_categories_processed' => 0,
+            'valid_current_mappings' => 0,
+            'invalid_current_mappings' => 0,
+            'non_leaf_current_mappings' => 0,
+            'suggestions_found' => 0,
+            'high_confidence' => 0,
+            'medium_confidence' => 0,
+            'low_confidence' => 0,
+            'needs_manual_review' => 0,
+            'api_errors' => 0,
+            'mode' => $mode,
+            'report_url' => '',
+            'ready_to_import_csv_url' => '',
+            'reports' => ['suggestions_csv' => ['path' => '', 'url' => ''], 'ready_to_import_csv' => ['path' => '', 'url' => '']],
+        ];
+    }
+
+    private function process_category_row(array $row, string $marketplaceId, int $sampleLimit, int $topLimit, bool $forceRefresh, array &$validationByCategoryId, array &$validationByWooTerm): array
+    {
+        $counts = ['valid_current_mappings' => 0, 'invalid_current_mappings' => 0, 'non_leaf_current_mappings' => 0, 'suggestions_found' => 0, 'high_confidence' => 0, 'medium_confidence' => 0, 'low_confidence' => 0, 'needs_manual_review' => 0, 'api_errors' => 0];
+        $termId = (int) ($row['term_id'] ?? 0);
+        $currentId = trim((string) ($row['ebay_category_id'] ?? ''));
+        $samples = $this->categoryRepo->sample_products_for_category($termId, $sampleLimit);
+        $queryPlan = $this->build_german_query_plan((string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''), $samples);
+        $queries = (array) ($queryPlan['queries'] ?? []);
+        $taxonomyError = '';
+        $chosenQuery = '';
+        $chosenQuerySource = '';
+        $suggestions = [];
+        $rejectedSuggestions = [];
+
+        foreach ($queries as $queryEntry) {
+            $query = is_array($queryEntry) ? (string) ($queryEntry['query'] ?? '') : (string) $queryEntry;
+            if ($query === '') {
+                continue;
+            }
+            $result = [];
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                try {
+                    $result = $this->taxonomy->get_category_suggestions_result($marketplaceId, $query, $forceRefresh);
+                } catch (\Throwable $e) {
+                    $result = ['status' => 'taxonomy_api_error', 'error' => $e->getMessage()];
+                }
+                if (($result['status'] ?? '') === 'ok') {
+                    break;
+                }
+                if ($attempt < 3) {
+                    usleep(200000 * $attempt);
+                }
+            }
+            if (($result['status'] ?? '') !== 'ok') {
+                $taxonomyError = trim($taxonomyError . ' taxonomy_api_error:' . (string) ($result['error'] ?? $result['status'] ?? 'suggestion_failed'));
+                $counts['api_errors']++;
+                continue;
+            }
+            $parsed = self::parse_suggestions((array) ($result['suggestions'] ?? []), $topLimit * 4);
+            $queryRejected = [];
+            $parsed = self::filter_and_rank_suggestions($parsed, (string) ($row['name'] ?? ''), (string) ($row['woo_category_path'] ?? ''), $query, $topLimit, $queryRejected);
+            $rejectedSuggestions = array_merge($rejectedSuggestions, $queryRejected);
+            if ($parsed !== []) {
+                $suggestions = $parsed;
+                $chosenQuery = $query;
+                $chosenQuerySource = is_array($queryEntry) ? (string) ($queryEntry['source'] ?? '') : '';
+                break;
+            }
+        }
+
+        $currentValidation = $this->validate_current_category($marketplaceId, $currentId, $forceRefresh);
+        if ($currentId !== '') {
+            $validationByCategoryId[$currentId] = $currentValidation;
+        }
+        $validationByWooTerm[(string) $termId] = $currentValidation + ['woo_term_id' => $termId, 'woo_category_path' => (string) ($row['woo_category_path'] ?? '')];
+        if (!empty($currentValidation['valid']) && !empty($currentValidation['leaf'])) {
+            $counts['valid_current_mappings']++;
+        } elseif ($currentId !== '' && empty($currentValidation['valid'])) {
+            $counts['invalid_current_mappings']++;
+        } elseif ($currentId !== '' && empty($currentValidation['leaf'])) {
+            $counts['non_leaf_current_mappings']++;
+        }
+        if ($suggestions !== []) {
+            $counts['suggestions_found']++;
+        }
+        $status = self::mapping_status($currentId, $currentValidation, $suggestions);
+        $confidence = self::confidence($currentId, $currentValidation, $suggestions, $status, $chosenQuery);
+        if ($confidence === 'high') {
+            $counts['high_confidence']++;
+        } elseif ($confidence === 'medium') {
+            $counts['medium_confidence']++;
+        } elseif ($confidence === 'low') {
+            $counts['low_confidence']++;
+        } else {
+            $counts['needs_manual_review']++;
+        }
+        $best = $suggestions[0] ?? [];
+        $report = $this->build_report_row($row, $samples, $currentValidation, $status, $suggestions, $best, $confidence, $chosenQuery, $taxonomyError, $queryPlan, $chosenQuerySource, $rejectedSuggestions);
+        return ['report' => $report, 'ready' => $this->build_ready_row($report, $currentId, $best), 'counts' => $counts];
+    }
+
+
+    private function category_error_result(array $row, string $error): array
+    {
+        $currentId = trim((string) ($row['ebay_category_id'] ?? ''));
+        $report = $this->build_report_row(
+            $row,
+            [],
+            ['category_id' => $currentId, 'valid' => false, 'leaf' => false, 'category_path' => '', 'validation_status' => 'taxonomy_api_error'],
+            'needs_manual_review',
+            [],
+            [],
+            'manual_review',
+            '',
+            $error,
+            ['raw_polish_query' => (string) (($row['name'] ?? '') . ' ' . ($row['woo_category_path'] ?? '')), 'translated_german_query' => '', 'translation_source' => 'not_run_after_error', 'sample_translated_titles' => ''],
+            '',
+            []
+        );
+        return [
+            'report' => $report,
+            'ready' => $this->build_ready_row($report, $currentId, []),
+            'counts' => ['valid_current_mappings' => 0, 'invalid_current_mappings' => $currentId !== '' ? 1 : 0, 'non_leaf_current_mappings' => 0, 'suggestions_found' => 0, 'high_confidence' => 0, 'medium_confidence' => 0, 'low_confidence' => 0, 'needs_manual_review' => 1, 'api_errors' => 1],
+        ];
+    }
+
+    private function merge_category_counts(array &$summary, array $counts): void
+    {
+        foreach ($counts as $key => $value) {
+            $summary[$key] = (int) ($summary[$key] ?? 0) + (int) $value;
+        }
+    }
+
+    private function save_progress(array $summary, int $total, array $processedMap, array $reportRows, array $readyRows, string $mode, string $status): void
+    {
+        $progress = [
+            'status' => $status,
+            'processed' => count($processedMap),
+            'total' => $total,
+            'current_category_id' => (int) ($summary['current_category_id'] ?? 0),
+            'current_category_name' => (string) ($summary['current_category_name'] ?? ''),
+            'started_at' => (string) ($summary['started_at'] ?? ''),
+            'last_update_at' => gmdate('c'),
+            'api_errors' => (int) ($summary['api_errors'] ?? 0),
+            'high_confidence' => (int) ($summary['high_confidence'] ?? 0),
+            'medium_confidence' => (int) ($summary['medium_confidence'] ?? 0),
+            'low_confidence' => (int) ($summary['low_confidence'] ?? 0),
+            'mode' => $mode,
+            'processed_category_ids' => array_map('intval', array_keys($processedMap)),
+            'summary' => $summary,
+            'report_rows' => $reportRows,
+            'ready_rows' => $readyRows,
+        ];
+        update_option(self::CHECKPOINT_OPTION, $progress, false);
+    }
+
+    private function flush_progress(): void
+    {
+        if (function_exists('flush') && headers_sent()) {
+            @flush();
+        }
+    }
+
     public function build_german_query_plan(string $wooName, string $wooPath, array $samples = []): array
     {
         $sampleTitles = array_values(array_filter(array_map(static fn(array $sample): string => trim((string) ($sample['title'] ?? '')), $samples)));
