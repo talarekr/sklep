@@ -3071,11 +3071,13 @@ class ProductMapper
 
     private function detect_non_white_bbox($image, int $width, int $height): ?array
     {
-        $threshold = 245;
-        $min_x = $width;
-        $min_y = $height;
-        $max_x = -1;
-        $max_y = -1;
+        $legacy_threshold = 245;
+        $legacy_min_x = $width;
+        $legacy_min_y = $height;
+        $legacy_max_x = -1;
+        $legacy_max_y = -1;
+        $column_counts = array_fill(0, max(0, $width), 0);
+        $row_counts = array_fill(0, max(0, $height), 0);
 
         for ($y = 0; $y < $height; $y++) {
             for ($x = 0; $x < $width; $x++) {
@@ -3089,35 +3091,106 @@ class ProductMapper
                     continue;
                 }
 
-                if ($red >= $threshold && $green >= $threshold && $blue >= $threshold) {
+                if ($red < $legacy_threshold || $green < $legacy_threshold || $blue < $legacy_threshold) {
+                    if ($x < $legacy_min_x) {
+                        $legacy_min_x = $x;
+                    }
+                    if ($y < $legacy_min_y) {
+                        $legacy_min_y = $y;
+                    }
+                    if ($x > $legacy_max_x) {
+                        $legacy_max_x = $x;
+                    }
+                    if ($y > $legacy_max_y) {
+                        $legacy_max_y = $y;
+                    }
+                }
+
+                if (!$this->is_listing_foreground_pixel($red, $green, $blue)) {
                     continue;
                 }
 
-                if ($x < $min_x) {
-                    $min_x = $x;
-                }
-                if ($y < $min_y) {
-                    $min_y = $y;
-                }
-                if ($x > $max_x) {
-                    $max_x = $x;
-                }
-                if ($y > $max_y) {
-                    $max_y = $y;
-                }
+                $column_counts[$x]++;
+                $row_counts[$y]++;
             }
         }
 
-        if ($max_x < 0 || $max_y < 0 || $min_x > $max_x || $min_y > $max_y) {
+        if ($legacy_max_x < 0 || $legacy_max_y < 0 || $legacy_min_x > $legacy_max_x || $legacy_min_y > $legacy_max_y) {
             return null;
         }
 
-        return [
-            'x' => $min_x,
-            'y' => $min_y,
-            'width' => ($max_x - $min_x) + 1,
-            'height' => ($max_y - $min_y) + 1,
+        $legacy_bbox = [
+            'x' => $legacy_min_x,
+            'y' => $legacy_min_y,
+            'width' => ($legacy_max_x - $legacy_min_x) + 1,
+            'height' => ($legacy_max_y - $legacy_min_y) + 1,
         ];
+
+        $column_threshold = max(2, (int) floor($height * 0.003));
+        $row_threshold = max(2, (int) floor($width * 0.003));
+        $dense_min_x = $this->find_first_dense_listing_axis_index($column_counts, $column_threshold, true);
+        $dense_max_x = $this->find_first_dense_listing_axis_index($column_counts, $column_threshold, false);
+        $dense_min_y = $this->find_first_dense_listing_axis_index($row_counts, $row_threshold, true);
+        $dense_max_y = $this->find_first_dense_listing_axis_index($row_counts, $row_threshold, false);
+
+        if ($dense_min_x === null || $dense_max_x === null || $dense_min_y === null || $dense_max_y === null || $dense_min_x > $dense_max_x || $dense_min_y > $dense_max_y) {
+            return $legacy_bbox;
+        }
+
+        $dense_bbox = [
+            'x' => $dense_min_x,
+            'y' => $dense_min_y,
+            'width' => ($dense_max_x - $dense_min_x) + 1,
+            'height' => ($dense_max_y - $dense_min_y) + 1,
+        ];
+        $dense_area_ratio = ($dense_bbox['width'] * $dense_bbox['height']) / max(1, ($legacy_bbox['width'] * $legacy_bbox['height']));
+
+        if ($dense_area_ratio < 0.08) {
+            return $legacy_bbox;
+        }
+
+        return $dense_bbox;
+    }
+
+    private function is_listing_foreground_pixel(int $red, int $green, int $blue): bool
+    {
+        $max_channel = max($red, $green, $blue);
+        $min_channel = min($red, $green, $blue);
+        $chroma = $max_channel - $min_channel;
+        $luma = (0.299 * $red) + (0.587 * $green) + (0.114 * $blue);
+
+        if ($red >= 245 && $green >= 245 && $blue >= 245) {
+            return false;
+        }
+
+        if ($luma >= 238 && $chroma <= 18) {
+            return false;
+        }
+
+        if ($luma >= 232 && $chroma <= 8) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function find_first_dense_listing_axis_index(array $counts, int $threshold, bool $from_start): ?int
+    {
+        $length = count($counts);
+        if ($length <= 0) {
+            return null;
+        }
+
+        $start = $from_start ? 0 : $length - 1;
+        $end = $from_start ? $length : -1;
+        $step = $from_start ? 1 : -1;
+        for ($i = $start; $i !== $end; $i += $step) {
+            if ((int) $counts[$i] >= $threshold) {
+                return $i;
+            }
+        }
+
+        return null;
     }
 
     private function get_listing_source_candidate_image_ids(int $product_id): array
