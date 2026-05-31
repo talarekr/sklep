@@ -93,8 +93,8 @@ class AdminPage
         // wp_is_stream()/str_replace() in wp-includes/functions.php. Register
         // under WooCommerce with a real slug, then remove the submenu entry so
         // the callback remains hidden without sending null into WordPress core.
-        $this->add_traced_submenu_page('woocommerce', 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_woocommerce', 'ebay-auth-callback', [$this, 'render_oauth_callback'], 'oauth callback menu');
-        remove_submenu_page('woocommerce', 'ebay-auth-callback');
+        $this->add_traced_submenu_page('woocommerce', 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [$this, 'render_oauth_callback'], 'oauth callback menu');
+        remove_submenu_page('woocommerce', EbayAuth::CALLBACK_PAGE_SLUG);
     }
 
 
@@ -282,8 +282,10 @@ class AdminPage
 
     public function render_oauth_callback(): void
     {
-        // Callback is handled in WEI\Services\EbayAuth::handle_oauth_callback.
-        wp_die('OAuth callback page.');
+        // Callback is handled before render in WEI\Services\EbayAuth::handle_oauth_callback.
+        // If WordPress reaches this callback directly, run the same handler so
+        // administrators never see the generic "no permissions" admin page.
+        $this->auth->handle_admin_post_oauth_callback();
     }
 
     public function render(): void
@@ -313,6 +315,7 @@ class AdminPage
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
         $nbp_rate_status = $this->cached_nbp_rate_status();
         $connect_url = (string) $this->auth->get_authorize_url();
+        $oauth_diagnostics = $this->auth->get_diagnostic_oauth_context();
         $auto_sync_status = $this->light_auto_sync_status($s);
         $initial_publish_candidate_summary = $this->initial_publish_candidate_summary();
         $initial_publish_status = $this->initial_publish_status();
@@ -378,7 +381,9 @@ class AdminPage
         if ($postedClientSecret !== '') {
             $s['client_secret'] = $postedClientSecret;
         }
-        $s['runame'] = sanitize_text_field((string) ($_POST['runame'] ?? ''));
+        $postedRedirectUri = esc_url_raw((string) ($_POST['redirect_uri'] ?? $_POST['runame'] ?? ''));
+        $s['redirect_uri'] = $postedRedirectUri;
+        $s['runame'] = $postedRedirectUri;
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $defaultItemCondition = strtoupper(sanitize_text_field((string) ($_POST['default_item_condition'] ?? EbayConditionResolver::DEFAULT_ITEM_CONDITION)));
