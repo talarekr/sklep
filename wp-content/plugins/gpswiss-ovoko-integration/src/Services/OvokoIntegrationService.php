@@ -745,24 +745,29 @@ class OvokoIntegrationService
             $previousQuantity = is_numeric($previousQuantityRaw) ? (int) $previousQuantityRaw : null;
             $changed = $previousStatus !== $targetStatus || $previousQuantity !== $targetQuantity;
 
-            if (function_exists('wc_get_product')) {
-                $wooProduct = wc_get_product($productId);
-                if ($wooProduct) {
-                    if (method_exists($wooProduct, 'set_stock_quantity')) {
-                        $wooProduct->set_stock_quantity($targetQuantity);
-                    }
-                    if (method_exists($wooProduct, 'set_stock_status')) {
-                        $wooProduct->set_stock_status($targetStatus);
-                    }
-                    if (method_exists($wooProduct, 'save')) {
-                        $wooProduct->save();
+            OvokoWooSaleSyncQueue::suppress_ovoko_to_woo_stock_hooks(true);
+            try {
+                if (function_exists('wc_get_product')) {
+                    $wooProduct = wc_get_product($productId);
+                    if ($wooProduct) {
+                        if (method_exists($wooProduct, 'set_stock_quantity')) {
+                            $wooProduct->set_stock_quantity($targetQuantity);
+                        }
+                        if (method_exists($wooProduct, 'set_stock_status')) {
+                            $wooProduct->set_stock_status($targetStatus);
+                        }
+                        if (method_exists($wooProduct, 'save')) {
+                            $wooProduct->save();
+                        }
+                    } else {
+                        $errors[] = 'wc_product_not_found';
                     }
                 } else {
-                    $errors[] = 'wc_product_not_found';
+                    update_post_meta($productId, '_stock', (string) $targetQuantity);
+                    update_post_meta($productId, '_stock_status', $targetStatus);
                 }
-            } else {
-                update_post_meta($productId, '_stock', (string) $targetQuantity);
-                update_post_meta($productId, '_stock_status', $targetStatus);
+            } finally {
+                OvokoWooSaleSyncQueue::suppress_ovoko_to_woo_stock_hooks(false);
             }
 
             if ($errors === [] && function_exists('wc_delete_product_transients')) {
@@ -1614,43 +1619,48 @@ class OvokoIntegrationService
             $updated = true;
         }
 
-        wp_set_object_terms($productId, 'simple', 'product_type');
-        update_post_meta($productId, '_manage_stock', 'yes');
-        update_post_meta($productId, '_stock', (string) $stockQty);
-        update_post_meta($productId, '_stock_status', $stockStatus);
-        update_post_meta($productId, '_ovoko_part_id', $partId);
-        $sameVehicleMeta = $this->write_same_vehicle_meta_for_ovoko_product($productId, $normalized);
-        update_post_meta($productId, '_ovoko_status', (string) (($record['status'] ?? '') ?: ($normalized['status'] ?? '')));
-        update_post_meta($productId, '_ovoko_updated_at', $updatedAt);
-        update_post_meta($productId, '_ovoko_category_id', $categoryId);
-        update_post_meta($productId, '_ovoko_category', $categoryPath);
-        update_post_meta($productId, '_ovoko_source_url', (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')));
-        update_post_meta($productId, '_ovoko_images', (array) ($normalized['part_photo_gallery'] ?? []));
-        update_post_meta($productId, '_ovoko_internal_notes_price_source', !empty($price['ok']) ? 'internal_notes' : '');
-        update_post_meta($productId, '_ovoko_woo_target_currency', 'PLN');
-        update_post_meta($productId, '_ovoko_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
-        update_post_meta($productId, '_mpn', (string) ($normalized['manufacturer_code'] ?? ''));
-        update_post_meta($productId, 'mpn', (string) ($normalized['manufacturer_code'] ?? ''));
-        update_post_meta($productId, '_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
-        update_post_meta($productId, '_gpswiss_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
-        update_post_meta($productId, '_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
-        $this->upsert_custom_product_attributes($productId, $attributes);
-        $this->write_ovoko_table_meta_from_attributes($productId, $attributes);
-        if ($updatedAt !== '') {
-            update_post_meta($productId, '_gpswiss_ovoko_last_synced_updated_at', $updatedAt);
-        }
-        if ($syncHash !== '') {
-            update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
-        }
-        $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId, false) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
-        if ($created) {
-            $this->log_ovoko_listing_image_generation_after_import($productId, $listingImageResult, $imageImportResult);
-        }
-        if (function_exists('wc_get_product')) {
-            $product = wc_get_product($productId);
-            if ($product && method_exists($product, 'save')) {
-                $product->save();
+        OvokoWooSaleSyncQueue::suppress_ovoko_to_woo_stock_hooks(true);
+        try {
+            wp_set_object_terms($productId, 'simple', 'product_type');
+            update_post_meta($productId, '_manage_stock', 'yes');
+            update_post_meta($productId, '_stock', (string) $stockQty);
+            update_post_meta($productId, '_stock_status', $stockStatus);
+            update_post_meta($productId, '_ovoko_part_id', $partId);
+            $sameVehicleMeta = $this->write_same_vehicle_meta_for_ovoko_product($productId, $normalized);
+            update_post_meta($productId, '_ovoko_status', (string) (($record['status'] ?? '') ?: ($normalized['status'] ?? '')));
+            update_post_meta($productId, '_ovoko_updated_at', $updatedAt);
+            update_post_meta($productId, '_ovoko_category_id', $categoryId);
+            update_post_meta($productId, '_ovoko_category', $categoryPath);
+            update_post_meta($productId, '_ovoko_source_url', (string) (($normalized['show_url'] ?? '') ?: ($normalized['shop_url'] ?? '')));
+            update_post_meta($productId, '_ovoko_images', (array) ($normalized['part_photo_gallery'] ?? []));
+            update_post_meta($productId, '_ovoko_internal_notes_price_source', !empty($price['ok']) ? 'internal_notes' : '');
+            update_post_meta($productId, '_ovoko_woo_target_currency', 'PLN');
+            update_post_meta($productId, '_ovoko_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
+            update_post_meta($productId, '_mpn', (string) ($normalized['manufacturer_code'] ?? ''));
+            update_post_meta($productId, 'mpn', (string) ($normalized['manufacturer_code'] ?? ''));
+            update_post_meta($productId, '_manufacturer_code', (string) ($normalized['manufacturer_code'] ?? ''));
+            update_post_meta($productId, '_gpswiss_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
+            update_post_meta($productId, '_part_number', (string) ($normalized['manufacturer_code'] ?? ''));
+            $this->upsert_custom_product_attributes($productId, $attributes);
+            $this->write_ovoko_table_meta_from_attributes($productId, $attributes);
+            if ($updatedAt !== '') {
+                update_post_meta($productId, '_gpswiss_ovoko_last_synced_updated_at', $updatedAt);
             }
+            if ($syncHash !== '') {
+                update_post_meta($productId, '_gpswiss_ovoko_last_synced_hash', $syncHash);
+            }
+            $listingImageResult = $created ? $this->generate_listing_image_for_ovoko_product($productId, false) : ['listing_image_attempted' => false, 'listing_image_generated' => false, 'listing_image_id' => 0, 'listing_image_source_id' => 0, 'errors' => []];
+            if ($created) {
+                $this->log_ovoko_listing_image_generation_after_import($productId, $listingImageResult, $imageImportResult);
+            }
+            if (function_exists('wc_get_product')) {
+                $product = wc_get_product($productId);
+                if ($product && method_exists($product, 'save')) {
+                    $product->save();
+                }
+            }
+        } finally {
+            OvokoWooSaleSyncQueue::suppress_ovoko_to_woo_stock_hooks(false);
         }
 
         return [
