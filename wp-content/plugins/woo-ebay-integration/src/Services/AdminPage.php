@@ -54,6 +54,8 @@ class AdminPage
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
         add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
+        add_action('admin_post_wei_export_category_template_csv', [$this, 'export_category_template_csv']);
+        add_action('admin_post_wei_export_ovoko_category_suggestions_csv', [$this, 'export_ovoko_category_suggestions_csv']);
         add_action('admin_post_wei_import_category_teaching_csv', [$this, 'import_category_teaching_csv']);
         add_action('admin_post_wei_test_category_teaching_rule_match', [$this, 'test_category_teaching_rule_match']);
         add_action('admin_post_wei_generate_missing_german_content_audit', [$this, 'generate_missing_german_content_audit']);
@@ -323,7 +325,11 @@ class AdminPage
         $manual_woo_category_apply_summary = is_array($manual_woo_category_apply_summary) ? $manual_woo_category_apply_summary : [];
         $category_teaching_export_summary = get_option('wei_ebay_category_mapping_teaching_export', []);
         $category_teaching_export_summary = is_array($category_teaching_export_summary) ? $category_teaching_export_summary : [];
-        $category_teaching_import_summary = get_option('wei_ebay_category_mapping_teaching_import', []);
+        $category_template_export_summary = get_option('wei_ebay_category_template_export_summary', []);
+        $category_template_export_summary = is_array($category_template_export_summary) ? $category_template_export_summary : [];
+        $ovoko_category_suggestions_summary = get_option('wei_ebay_ovoko_category_suggestions_summary', []);
+        $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
+        $category_teaching_import_summary = get_option('wei_ebay_category_mapping_import_summary', []);
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
         $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
@@ -966,6 +972,46 @@ class AdminPage
         $this->go();
     }
 
+    public function export_category_template_csv(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_export_category_template_csv');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $leafOnly = empty($_POST['export_all_categories']);
+        $res = $this->autoCategoryMapper->export_woo_category_template_csv($marketplaceId, $leafOnly);
+        $this->set_status('Category template CSV export: ' . wp_json_encode([
+            'woo_categories_processed' => (int) ($res['woo_categories_processed'] ?? 0),
+            'leaf_only' => !empty($res['leaf_only']),
+            'reports' => (array) ($res['reports'] ?? []),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    public function export_ovoko_category_suggestions_csv(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_export_ovoko_category_suggestions_csv');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $limit = absint($_POST['limit'] ?? 500);
+        $leafOnly = empty($_POST['export_all_categories']);
+        $forceRefresh = !empty($_POST['force_refresh']);
+        $res = $this->autoCategoryMapper->export_ovoko_category_suggestions_csv($marketplaceId, $limit, $leafOnly, $forceRefresh);
+        $this->set_status('Ovoko/eBay category CSV export: ' . wp_json_encode([
+            'woo_categories_processed' => (int) ($res['woo_categories_processed'] ?? 0),
+            'mapped_categories' => (int) ($res['mapped_categories'] ?? 0),
+            'unmapped_categories' => (int) ($res['unmapped_categories'] ?? 0),
+            'ovoko_listings_fetched' => (int) ($res['ovoko_listings_fetched'] ?? 0),
+            'seller_username_detected' => (string) ($res['seller_username_detected'] ?? ''),
+            'category_id_returned_by_browse' => !empty($res['category_id_returned_by_browse']),
+            'taxonomy_lookup_built' => !empty($res['taxonomy_lookup_built']),
+            'confidence' => (array) ($res['confidence'] ?? []),
+            'reports' => (array) ($res['reports'] ?? []),
+            'error' => (string) ($res['browse_api_error'] ?? ''),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+
     public function import_category_teaching_csv(): void
     {
         $this->require_manage_options();
@@ -985,17 +1031,16 @@ class AdminPage
             $this->set_status('Category teaching import failed: could not store uploaded CSV.');
             $this->go();
         }
-        $res = $this->autoCategoryMapper->import_category_mapping_teaching_csv($dest, $marketplaceId);
-        $this->set_status('Category teaching import: ' . wp_json_encode([
-            'rows_read' => (int) ($res['rows_read'] ?? $res['rows'] ?? 0),
-            'rows_with_manual_category_id' => (int) ($res['rows_with_manual_category_id'] ?? 0),
-            'rules_inserted' => (int) ($res['rules_inserted'] ?? 0),
-            'rules_updated' => (int) ($res['rules_updated'] ?? 0),
-            'rows_skipped' => (int) ($res['rows_skipped'] ?? $res['skipped_rows'] ?? 0),
-            'rows_rejected_by_safety' => (int) ($res['rows_rejected_by_safety'] ?? $res['safety_failed_rows'] ?? 0),
-            'top_hard_safety_reasons' => (array) ($res['top_hard_safety_reasons'] ?? []),
-            'skipped_sample_rows' => (array) ($res['skipped_sample_rows'] ?? []),
-        ]));
+        $res = $this->autoCategoryMapper->import_production_category_mapping_csv($dest, $marketplaceId);
+        $this->set_status('Category mapping CSV import: ' . wp_json_encode([
+            'total_rows' => (int) ($res['total_rows'] ?? 0),
+            'inserted' => (int) ($res['inserted'] ?? 0),
+            'updated' => (int) ($res['updated'] ?? 0),
+            'skipped' => (int) ($res['skipped'] ?? 0),
+            'skipped_empty_ebay_id' => (int) ($res['skipped_empty_ebay_id'] ?? 0),
+            'invalid' => (int) ($res['invalid'] ?? 0),
+            'errors' => (array) ($res['errors'] ?? []),
+        ], JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 

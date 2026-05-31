@@ -492,14 +492,22 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
     </div>
 
     <div class="wei-box">
-        <h2>Category mapping</h2>
-        <p class="description">Ręczny import CSV jest na wierzchu. Automapping i naprawy zostały schowane do Advanced diagnostics.</p>
+        <h2>Kategorie eBay</h2>
+        <p class="description">Sekcja mapowania WooCommerce → eBay. Generowanie CSV z Ovoko tylko pobiera dane i tworzy plik diagnostyczny — nie zmienia produktów, kategorii Woo ani aktywnych listingów.</p>
+        <?php $ovokoConfidence = is_array($ovoko_category_suggestions_summary['confidence'] ?? null) ? $ovoko_category_suggestions_summary['confidence'] : []; ?>
         <div class="wei-grid">
-            <div class="wei-card"><span>Mapped categories</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
-            <div class="wei-card"><span>Unmapped / needs review</span><strong><?php echo esc_html((string) $categoryMissingCount); ?></strong></div>
-            <div class="wei-card"><span>Blocked categories</span><strong><?php echo esc_html((string) $categoryBlockedCount); ?></strong></div>
-            <div class="wei-card"><span>Last mapping import</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['imported_at'] ?? $category_teaching_import_summary['generated_at'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Last import inserted/updated</span><strong><?php echo esc_html((string) ((int) ($category_teaching_import_summary['rules_inserted'] ?? 0) + (int) ($category_teaching_import_summary['rules_updated'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Liczba kategorii WooCommerce</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_categories_total'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Liczba końcowych podkategorii</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_leaf_categories'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Zmapowane kategorie</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
+            <div class="wei-card"><span>Niezmapowane / review</span><strong><?php echo esc_html((string) $categoryMissingCount); ?></strong></div>
+            <div class="wei-card"><span>Ovoko: listingi pobrane</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['ovoko_listings_fetched'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Ovoko: dostały ebay_category_id</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['mapped_categories'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Ovoko: bez dopasowania</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_categories'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Confidence high/medium/low/none</span><strong><?php echo esc_html((string) (($ovokoConfidence['high'] ?? 0) . '/' . ($ovokoConfidence['medium'] ?? 0) . '/' . ($ovokoConfidence['low'] ?? 0) . '/' . ($ovokoConfidence['none'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Różne kategorie eBay</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['distinct_ebay_categories_detected'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Produkty w niezmapowanych</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Ostatnie generowanie</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['generated_at'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Ostatni import CSV</span><strong><?php echo esc_html((string) ($category_teaching_import_summary['imported_at'] ?? '-')); ?></strong></div>
         </div>
         <div class="wei-actions">
             <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>">
@@ -507,19 +515,31 @@ $sectionLayout = ['Dashboard / Status', 'Main actions', 'Category mapping', 'Bul
                 <input type="hidden" name="action" value="wei_import_category_teaching_csv" />
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
                 <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
-                <button class="button button-primary">Import category mapping CSV</button>
+                <button class="button button-primary">Importuj CSV jako mapping produkcyjny</button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
+                <?php wp_nonce_field('wei_export_category_template_csv'); ?>
+                <input type="hidden" name="action" value="wei_export_category_template_csv" />
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <button class="button">Export current Woo/Ovoko categories CSV</button>
+                <label><input type="checkbox" name="export_all_categories" value="1" /> eksportuj wszystkie kategorie</label>
+                <button class="button">Eksportuj szablon CSV kategorii</button>
             </form>
-            <a class="button" href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => 'blocked_by_category'], $adminPageUrl)); ?>">Products blocked_by_category</a>
-            <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Category mapping table</a>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_export_ovoko_category_suggestions_csv'); ?>
+                <input type="hidden" name="action" value="wei_export_ovoko_category_suggestions_csv" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
+                <label>Limit listingów Ovoko <input type="number" name="limit" min="1" max="10000" value="500" /></label>
+                <label><input type="checkbox" name="export_all_categories" value="1" /> wszystkie kategorie</label>
+                <label><input type="checkbox" name="force_refresh" value="1" /> odśwież cache</label>
+                <button class="button">Auto-uzupełnij CSV z Ovoko/eBay</button>
+            </form>
+            <?php $ovokoCsv = is_array($ovoko_category_suggestions_summary['reports']['ovoko_suggestions_csv'] ?? null) ? $ovoko_category_suggestions_summary['reports']['ovoko_suggestions_csv'] : []; ?>
+            <?php if (!empty($ovokoCsv['url'])): ?><a class="button button-primary" href="<?php echo esc_url((string) $ovokoCsv['url']); ?>">Pobierz ostatni CSV Ovoko</a><?php endif; ?>
+            <a class="button" href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay', 'readiness_filter' => 'blocked_by_category'], $adminPageUrl)); ?>">Produkty blocked_by_category</a>
+            <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Tabela mapowań</a>
         </div>
-        <p class="description">CSV minimum: <code>woo_category_id</code>, <code>ebay_category_id</code>. Opcjonalnie: <code>woo_category_path</code>, <code>mapping_status</code>, <code>note</code>. Aktualny importer używa istniejącego handlera CSV i nie uruchamia automappingu.</p>
-        <details><summary>Last import/export status JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_import' => $category_teaching_import_summary, 'last_export' => $category_teaching_export_summary, 'last_manual_apply' => $manual_woo_category_apply_summary], 6000)); ?></pre></details>
+        <p class="description">Importowane minimum CSV: <code>woo_subcategory_id</code> albo <code>woo_category_id</code> oraz <code>ebay_category_id</code>. Puste <code>ebay_category_id</code> są pomijane i raportowane jako <code>skipped_empty_ebay_id</code>.</p>
+        <details><summary>Last import/export status JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_import' => $category_teaching_import_summary, 'last_template_export' => $category_template_export_summary, 'last_ovoko_export' => $ovoko_category_suggestions_summary, 'legacy_teaching_export' => $category_teaching_export_summary, 'last_manual_apply' => $manual_woo_category_apply_summary], 9000)); ?></pre></details>
         <?php if ($categoryRowsLoaded): ?>
             <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Status</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
         <?php endif; ?>

@@ -12,7 +12,7 @@ class AutoCategoryMappingService
     private const TOP_CANDIDATE_LIMIT = 10;
 
 
-    public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
+    public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger, private ?EbayClient $client = null)
     {
     }
 
@@ -1655,6 +1655,404 @@ class AutoCategoryMappingService
             'source' => (string) ($rule['source'] ?? ''),
             'updated_at' => (string) ($rule['updated_at'] ?? ''),
         ];
+    }
+
+
+    public function export_woo_category_template_csv(string $marketplaceId = 'EBAY_DE', bool $leafOnly = true): array
+    {
+        $categories = $this->woo_category_export_rows($marketplaceId, $leafOnly);
+        $headers = ['woo_subcategory_id', 'woo_category_id', 'woo_subcategory_name', 'woo_category_path', 'woo_category_slug', 'woo_category_url', 'products_count', 'ebay_category_id'];
+        $reports = $this->write_category_csv_report('wei-ebay-category-template-', $headers, $categories);
+        $summary = [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'marketplace_id' => $marketplaceId,
+            'leaf_only' => $leafOnly,
+            'woo_categories_processed' => count($categories),
+            'reports' => $reports,
+        ];
+        update_option('wei_ebay_category_template_export_summary', $summary, false);
+        return $summary;
+    }
+
+    public function export_ovoko_category_suggestions_csv(string $marketplaceId = 'EBAY_DE', int $limit = 500, bool $leafOnly = true, bool $forceRefresh = false): array
+    {
+        $started = microtime(true);
+        $limit = max(1, min(10000, $limit));
+        $categories = $this->woo_category_export_rows($marketplaceId, $leafOnly);
+        $ovoko = $this->load_ovoko_listings($marketplaceId, $limit, $forceRefresh);
+        $listings = is_array($ovoko['items'] ?? null) ? $ovoko['items'] : [];
+        $taxonomyLookup = $this->category_path_lookup_from_listings($marketplaceId, $listings);
+        foreach ($listings as &$listing) {
+            $cid = (string) ($listing['category_id'] ?? '');
+            if ($cid !== '' && (string) ($listing['category_path'] ?? '') === '') {
+                $listing['category_path'] = (string) ($taxonomyLookup[$cid] ?? '');
+            }
+        }
+        unset($listing);
+
+        $headers = ['woo_subcategory_id', 'woo_subcategory_name', 'woo_category_path', 'woo_category_slug', 'woo_category_url', 'products_count', 'matched_alias', 'ebay_category_id', 'ebay_category_path', 'ovoko_examples_count', 'confidence', 'sample_ovoko_item_title', 'sample_ovoko_item_url', 'note'];
+        $rows = [];
+        $unmatched = [];
+        $confidenceCounts = ['high' => 0, 'medium' => 0, 'low' => 0, 'none' => 0];
+        $mapped = 0;
+        $detectedCategories = [];
+        $examples = [];
+        foreach ($categories as $category) {
+            $match = $this->match_category_to_ovoko_listings($category, $listings);
+            $confidence = (string) ($match['confidence'] ?? 'none');
+            $confidenceCounts[$confidence] = (int) ($confidenceCounts[$confidence] ?? 0) + 1;
+            $ebayCategoryId = (string) ($match['ebay_category_id'] ?? '');
+            if ($ebayCategoryId !== '') {
+                $mapped++;
+                $detectedCategories[$ebayCategoryId] = true;
+            }
+            $row = [
+                'woo_subcategory_id' => (string) ($category['woo_subcategory_id'] ?? ''),
+                'woo_subcategory_name' => (string) ($category['woo_subcategory_name'] ?? ''),
+                'woo_category_path' => (string) ($category['woo_category_path'] ?? ''),
+                'woo_category_slug' => (string) ($category['woo_category_slug'] ?? ''),
+                'woo_category_url' => (string) ($category['woo_category_url'] ?? ''),
+                'products_count' => (string) ($category['products_count'] ?? '0'),
+                'matched_alias' => (string) ($match['matched_alias'] ?? ''),
+                'ebay_category_id' => $ebayCategoryId,
+                'ebay_category_path' => (string) ($match['ebay_category_path'] ?? ''),
+                'ovoko_examples_count' => (string) ($match['ovoko_examples_count'] ?? '0'),
+                'confidence' => $confidence,
+                'sample_ovoko_item_title' => (string) ($match['sample_ovoko_item_title'] ?? ''),
+                'sample_ovoko_item_url' => (string) ($match['sample_ovoko_item_url'] ?? ''),
+                'note' => (string) ($match['note'] ?? ''),
+            ];
+            $rows[] = $row;
+            if ($ebayCategoryId === '') {
+                $unmatched[] = [
+                    'woo_subcategory_id' => $row['woo_subcategory_id'],
+                    'woo_subcategory_name' => $row['woo_subcategory_name'],
+                    'woo_category_path' => $row['woo_category_path'],
+                    'products_count' => $row['products_count'],
+                    'note' => 'no ovoko match',
+                ];
+            } elseif (count($examples) < 10) {
+                $examples[] = $row;
+            }
+        }
+
+        $reports = $this->write_category_csv_report('wei-ebay-ovoko-category-suggestions-', $headers, $rows);
+        $unmatchedReports = $this->write_category_csv_report('wei-ebay-ovoko-unmatched-categories-', ['woo_subcategory_id', 'woo_subcategory_name', 'woo_category_path', 'products_count', 'note'], $unmatched);
+        $summary = [
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'marketplace_id' => $marketplaceId,
+            'seller_username_requested' => 'ovoko_germany',
+            'seller_username_detected' => (string) ($ovoko['seller_username_detected'] ?? ''),
+            'browse_api_status' => (string) ($ovoko['status'] ?? ''),
+            'browse_api_error' => (string) ($ovoko['error'] ?? ''),
+            'browse_api_get_item_used' => false,
+            'category_id_returned_by_browse' => $this->listings_have_category_id($listings),
+            'item_url_returned_by_browse' => $this->listings_have_item_url($listings),
+            'taxonomy_lookup_built' => $taxonomyLookup !== [],
+            'taxonomy_category_paths_cached' => count($taxonomyLookup),
+            'woo_categories_processed' => count($categories),
+            'woo_categories_total' => $this->count_product_categories(),
+            'woo_leaf_categories' => $this->count_leaf_product_categories(),
+            'mapped_categories' => $mapped,
+            'unmapped_categories' => count($categories) - $mapped,
+            'unmapped_products_count' => array_sum(array_map(static fn(array $r): int => (int) ($r['products_count'] ?? 0), $unmatched)),
+            'confidence' => $confidenceCounts,
+            'ovoko_listings_fetched' => count($listings),
+            'distinct_ebay_categories_detected' => count($detectedCategories),
+            'limit' => $limit,
+            'cache_source' => (string) ($ovoko['source'] ?? ''),
+            'elapsed_seconds' => round(microtime(true) - $started, 3),
+            'reports' => array_merge($reports, $unmatchedReports),
+            'sample_matches' => $examples,
+        ];
+        update_option('wei_ebay_ovoko_category_suggestions_summary', $summary, false);
+        return $summary;
+    }
+
+    public function import_production_category_mapping_csv(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
+    {
+        $rows = $this->read_csv_assoc($csvPath);
+        $summary = ['imported_at' => gmdate('Y-m-d H:i:s'), 'source_csv' => $csvPath, 'total_rows' => count($rows), 'inserted' => 0, 'updated' => 0, 'skipped' => 0, 'skipped_empty_ebay_id' => 0, 'invalid' => 0, 'errors' => []];
+        foreach ($rows as $index => $row) {
+            $rowNumber = $index + 2;
+            $allEmpty = true;
+            foreach ($row as $value) {
+                if (trim((string) $value) !== '') { $allEmpty = false; break; }
+            }
+            if ($allEmpty) { $summary['skipped']++; continue; }
+            $wooIdRaw = trim((string) ($row['woo_subcategory_id'] ?? $row['woo_category_id'] ?? ''));
+            $ebayId = trim((string) ($row['ebay_category_id'] ?? ''));
+            if ($ebayId === '') { $summary['skipped_empty_ebay_id']++; $summary['skipped']++; continue; }
+            if ($wooIdRaw === '' || !ctype_digit($wooIdRaw) || !ctype_digit($ebayId)) {
+                $summary['invalid']++;
+                if (count($summary['errors']) < 25) { $summary['errors'][] = 'row ' . $rowNumber . ': invalid woo/category id'; }
+                continue;
+            }
+            $wooId = (int) $wooIdRaw;
+            $term = get_term($wooId, 'product_cat');
+            if (!$term || is_wp_error($term)) {
+                $summary['invalid']++;
+                if (count($summary['errors']) < 25) { $summary['errors'][] = 'row ' . $rowNumber . ': Woo product_cat not found'; }
+                continue;
+            }
+            $existing = $this->categoryRepo->find($marketplaceId, $wooId);
+            $path = trim((string) ($row['woo_category_path'] ?? ''));
+            if ($path === '') { $path = $this->categoryRepo->woo_category_path($wooId); }
+            $ebayPath = trim((string) ($row['ebay_category_path'] ?? ''));
+            if ($ebayPath === '') {
+                $details = $this->taxonomy->get_category_details_result($marketplaceId, $ebayId);
+                $ebayPath = (string) ($details['category_path'] ?? '');
+            }
+            $this->categoryRepo->upsert([
+                'marketplace_id' => $marketplaceId,
+                'woo_term_id' => $wooId,
+                'woo_category_path' => $path,
+                'ebay_category_id' => $ebayId,
+                'ebay_category_name' => basename(str_replace(' > ', '/', $ebayPath)),
+                'ebay_category_path' => $ebayPath,
+                'source' => 'csv_import',
+                'confidence' => $this->confidence_decimal((string) ($row['confidence'] ?? '')),
+                'status' => 'mapped_manual',
+                'sample_product_ids' => '',
+                'suggestion_payload' => wp_json_encode(['import_row' => $row], JSON_UNESCAPED_UNICODE),
+                'error_reason' => (string) ($row['note'] ?? ''),
+            ]);
+            if ($existing) { $summary['updated']++; } else { $summary['inserted']++; }
+        }
+        update_option('wei_ebay_category_mapping_import_summary', $summary, false);
+        return $summary;
+    }
+
+    private function woo_category_export_rows(string $marketplaceId, bool $leafOnly): array
+    {
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        if (!is_array($terms)) { return []; }
+        $childrenByParent = [];
+        foreach ($terms as $term) { $childrenByParent[(int) $term->parent][] = (int) $term->term_id; }
+        $rows = [];
+        foreach ($terms as $term) {
+            $termId = (int) $term->term_id;
+            $count = $this->direct_product_count_for_category($termId);
+            $isLeaf = empty($childrenByParent[$termId]);
+            if ($leafOnly && !$isLeaf && $count <= 0) { continue; }
+            $mapping = $this->categoryRepo->find($marketplaceId, $termId);
+            $rows[] = [
+                'woo_subcategory_id' => (string) $termId,
+                'woo_category_id' => (string) $termId,
+                'woo_subcategory_name' => (string) $term->name,
+                'woo_category_path' => $this->categoryRepo->woo_category_path($termId),
+                'woo_category_slug' => (string) $term->slug,
+                'woo_category_url' => function_exists('get_term_link') && !is_wp_error(get_term_link($term)) ? (string) get_term_link($term) : '',
+                'products_count' => (string) $count,
+                'ebay_category_id' => (string) ($mapping['ebay_category_id'] ?? ''),
+                'ovoko_meta_text' => $this->category_source_meta_text($termId),
+            ];
+        }
+        usort($rows, static fn(array $a, array $b): int => strcmp((string) $a['woo_category_path'], (string) $b['woo_category_path']));
+        return $rows;
+    }
+
+
+    private function category_source_meta_text(int $termId): string
+    {
+        $query = new \WP_Query(['post_type' => 'product', 'post_status' => ['publish', 'draft', 'private'], 'posts_per_page' => 20, 'fields' => 'ids', 'tax_query' => [['taxonomy' => 'product_cat', 'field' => 'term_id', 'terms' => [$termId], 'include_children' => false]], 'no_found_rows' => true]);
+        $values = [];
+        $keys = ['_ovoko_category_id', '_ovoko_category_name', '_ovoko_category_path', '_ovoko_part_id', 'ovoko_category_id', 'ovoko_category_name', 'ovoko_category_path', 'ovoko_part_id', 'part_id', 'source_part_id', 'external_part_id'];
+        foreach ((array) $query->posts as $productId) {
+            foreach ($keys as $key) {
+                $value = trim((string) get_post_meta((int) $productId, $key, true));
+                if ($value !== '') { $values[] = $value; }
+            }
+        }
+        return implode(' ', array_slice(array_values(array_unique($values)), 0, 50));
+    }
+
+    private function load_ovoko_listings(string $marketplaceId, int $limit, bool $forceRefresh): array
+    {
+        $cacheKey = 'wei_ovoko_browse_' . sanitize_key($marketplaceId) . '_' . $limit . '_v1';
+        if (!$forceRefresh) {
+            $cached = get_transient($cacheKey);
+            if (is_array($cached)) { return $cached + ['source' => 'cache']; }
+        }
+        if (!$this->client) { return ['status' => 'client_missing', 'items' => [], 'error' => 'EbayClient not injected']; }
+        $items = [];
+        $sellerDetected = '';
+        $errors = [];
+        $pageSize = min(200, max(1, $limit));
+        foreach (['ovoko_germany', 'ovokogermany'] as $sellerFilter) {
+            for ($offset = 0; $offset < $limit; $offset += $pageSize) {
+                $res = $this->client->browse_search(['category_ids' => '131090', 'filter' => 'sellers:{' . $sellerFilter . '}', 'limit' => $pageSize, 'offset' => $offset], $marketplaceId);
+                if (is_wp_error($res)) { $errors[] = $sellerFilter . ': ' . $res->get_error_message(); break; }
+                $summaries = is_array($res['itemSummaries'] ?? null) ? $res['itemSummaries'] : [];
+                if ($summaries === []) { break; }
+                foreach ($summaries as $summary) {
+                    if (!is_array($summary)) { continue; }
+                    $seller = is_array($summary['seller'] ?? null) ? $summary['seller'] : [];
+                    $sellerUsername = (string) ($seller['username'] ?? '');
+                    if ($sellerDetected === '' && $sellerUsername !== '') { $sellerDetected = $sellerUsername; }
+                    $items[] = [
+                        'item_id' => (string) ($summary['itemId'] ?? $summary['legacyItemId'] ?? ''),
+                        'title' => (string) ($summary['title'] ?? ''),
+                        'seller_username' => $sellerUsername,
+                        'item_url' => (string) ($summary['itemWebUrl'] ?? ''),
+                        'category_id' => (string) ($summary['categoryId'] ?? ''),
+                        'category_path' => '',
+                        'price' => is_array($summary['price'] ?? null) ? (string) (($summary['price']['value'] ?? '') . ' ' . ($summary['price']['currency'] ?? '')) : '',
+                        'condition' => (string) ($summary['condition'] ?? ''),
+                    ];
+                    if (count($items) >= $limit) { break 3; }
+                }
+                if (count($summaries) < $pageSize) { break; }
+            }
+            if ($items !== []) { break; }
+        }
+        $result = ['status' => $errors === [] ? 'ok' : 'partial_or_failed', 'items' => $items, 'seller_username_detected' => $sellerDetected, 'error' => implode('; ', $errors), 'source' => 'api'];
+        set_transient($cacheKey, $result, HOUR_IN_SECONDS * 6);
+        return $result;
+    }
+
+    private function category_path_lookup_from_listings(string $marketplaceId, array $listings): array
+    {
+        $lookup = [];
+        foreach ($listings as $listing) {
+            $cid = (string) ($listing['category_id'] ?? '');
+            if ($cid === '' || isset($lookup[$cid])) { continue; }
+            $details = $this->taxonomy->get_category_details_result($marketplaceId, $cid);
+            $lookup[$cid] = (string) ($details['category_path'] ?? $details['category_name'] ?? '');
+        }
+        return $lookup;
+    }
+
+    private function match_category_to_ovoko_listings(array $category, array $listings): array
+    {
+        $aliases = $this->aliases_for_category($category);
+        $matches = [];
+        $matchedAlias = '';
+        foreach ($aliases as $alias) {
+            $needle = $this->normalize_match_text($alias);
+            foreach ($listings as $listing) {
+                $title = $this->normalize_match_text((string) ($listing['title'] ?? ''));
+                if ($needle !== '' && str_contains($title, $needle) && (string) ($listing['category_id'] ?? '') !== '') {
+                    $matches[] = ['alias' => $alias, 'listing' => $listing, 'score' => substr_count($needle, ' ') + 1];
+                    if ($matchedAlias === '') { $matchedAlias = $alias; }
+                }
+            }
+            if ($matches !== []) { break; }
+        }
+        if ($matches === []) { return ['confidence' => 'none', 'note' => 'no ovoko match', 'ovoko_examples_count' => 0]; }
+        $counts = [];
+        foreach ($matches as $match) { $cid = (string) ($match['listing']['category_id'] ?? ''); $counts[$cid] = (int) ($counts[$cid] ?? 0) + 1; }
+        arsort($counts);
+        $selected = (string) array_key_first($counts);
+        $selectedMatches = array_values(array_filter($matches, static fn(array $m): bool => (string) ($m['listing']['category_id'] ?? '') === $selected));
+        $sample = $selectedMatches[0]['listing'] ?? $matches[0]['listing'];
+        $total = count($matches);
+        $top = (int) ($counts[$selected] ?? 0);
+        $conflicts = count($counts) > 1;
+        $path = (string) ($sample['category_path'] ?? '');
+        $pathBoost = $this->alias_in_text($matchedAlias, $path) ? 1 : 0;
+        $confidence = 'low';
+        if ($total === 1) { $confidence = 'low'; }
+        elseif (!$conflicts && ($total + $pathBoost) >= 3) { $confidence = 'high'; }
+        elseif ($top >= 2) { $confidence = 'medium'; }
+        $note = '';
+        if ($total === 1) { $note = 'single example'; }
+        elseif ($conflicts) { $note = 'multiple ebay categories found; selected most frequent'; }
+        return ['matched_alias' => $matchedAlias, 'ebay_category_id' => $selected, 'ebay_category_path' => $path, 'ovoko_examples_count' => $total, 'confidence' => $confidence, 'sample_ovoko_item_title' => (string) ($sample['title'] ?? ''), 'sample_ovoko_item_url' => (string) ($sample['item_url'] ?? ''), 'note' => $note];
+    }
+
+    private function aliases_for_category(array $category): array
+    {
+        $haystack = $this->normalize_match_text(implode(' ', [(string) ($category['woo_subcategory_name'] ?? ''), (string) ($category['woo_category_path'] ?? ''), (string) ($category['woo_category_slug'] ?? ''), (string) ($category['ovoko_meta_text'] ?? '')]));
+        $aliases = [];
+        foreach ($this->ovoko_alias_dictionary() as $pl => $foreign) {
+            if (str_contains($haystack, $this->normalize_match_text((string) $pl))) {
+                foreach ((array) $foreign as $alias) { $aliases[] = (string) $alias; }
+            }
+        }
+        if ($aliases === []) { $aliases[] = (string) ($category['woo_subcategory_name'] ?? ''); }
+        usort($aliases, fn(string $a, string $b): int => substr_count($b, ' ') <=> substr_count($a, ' ') ?: strlen($b) <=> strlen($a));
+        return array_values(array_unique(array_filter($aliases)));
+    }
+
+    private function ovoko_alias_dictionary(): array
+    {
+        $path = defined('WEI_PLUGIN_DIR') ? WEI_PLUGIN_DIR . 'config/ovoko-category-aliases.php' : dirname(__DIR__, 2) . '/config/ovoko-category-aliases.php';
+        $aliases = is_readable($path) ? require $path : [];
+        return is_array($aliases) ? $aliases : [];
+    }
+
+    private function normalize_match_text(string $text): string
+    {
+        $text = str_replace(['ß', 'ẞ'], ['ss', 'ss'], $text);
+        $text = function_exists('remove_accents') ? remove_accents($text) : (string) iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+        $text = strtolower($text);
+        $text = preg_replace('/[^a-z0-9]+/u', ' ', $text) ?: $text;
+        return trim(preg_replace('/\s+/', ' ', $text) ?: $text);
+    }
+
+    private function alias_in_text(string $alias, string $text): bool
+    {
+        $alias = $this->normalize_match_text($alias);
+        return $alias !== '' && str_contains($this->normalize_match_text($text), $alias);
+    }
+
+    private function direct_product_count_for_category(int $termId): int
+    {
+        $query = new \WP_Query(['post_type' => 'product', 'post_status' => ['publish', 'draft', 'private'], 'posts_per_page' => 1, 'fields' => 'ids', 'tax_query' => [['taxonomy' => 'product_cat', 'field' => 'term_id', 'terms' => [$termId], 'include_children' => false]], 'no_found_rows' => false]);
+        return (int) ($query->found_posts ?? 0);
+    }
+
+    private function count_product_categories(): int
+    {
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'fields' => 'ids']);
+        return is_array($terms) ? count($terms) : 0;
+    }
+
+    private function count_leaf_product_categories(): int
+    {
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        if (!is_array($terms)) { return 0; }
+        $parents = [];
+        foreach ($terms as $term) { if ((int) $term->parent > 0) { $parents[(int) $term->parent] = true; } }
+        $count = 0;
+        foreach ($terms as $term) { if (empty($parents[(int) $term->term_id])) { $count++; } }
+        return $count;
+    }
+
+    private function write_category_csv_report(string $prefix, array $headers, array $rows): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $filename = $prefix . gmdate('Ymd-His') . '.csv';
+        $path = trailingslashit($baseDir) . $filename;
+        $fh = fopen($path, 'wb');
+        if ($fh) {
+            fputcsv($fh, $headers);
+            foreach ($rows as $row) { fputcsv($fh, array_map(static fn($header): string => (string) ($row[$header] ?? ''), $headers)); }
+            fclose($fh);
+        }
+        $key = str_contains($prefix, 'unmatched') ? 'unmatched_csv' : (str_contains($prefix, 'template') ? 'template_csv' : 'ovoko_suggestions_csv');
+        return [$key => ['path' => $path, 'url' => trailingslashit($baseUrl) . $filename, 'rows' => count($rows), 'headers' => $headers]];
+    }
+
+    private function listings_have_category_id(array $listings): bool
+    {
+        foreach ($listings as $listing) { if ((string) ($listing['category_id'] ?? '') !== '') { return true; } }
+        return false;
+    }
+
+    private function listings_have_item_url(array $listings): bool
+    {
+        foreach ($listings as $listing) { if ((string) ($listing['item_url'] ?? '') !== '') { return true; } }
+        return false;
+    }
+
+    private function confidence_decimal(string $confidence): float
+    {
+        return ['high' => 0.95, 'medium' => 0.75, 'low' => 0.45, 'none' => 0.0][$confidence] ?? 1.0;
     }
 
     private function read_csv_assoc(string $path): array
