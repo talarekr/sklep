@@ -131,7 +131,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $summary['total_products_counted'] += $productCount;
             $evaluation = $this->evaluate_category_mapping_row($row, $settings);
             $currentValidation = $this->known_category_validation((string) ($row['ebay_category_id'] ?? ''), (int) ($row['term_id'] ?? 0));
-            if (!empty($currentValidation) && (($currentValidation['validation_status'] ?? '') === 'invalid_ebay_category_id' || ($currentValidation['validation_status'] ?? '') === 'non_leaf_ebay_category_id' || empty($currentValidation['valid']) || empty($currentValidation['leaf']))) {
+            if ($this->known_category_validation_blocks_readiness($currentValidation)) {
                 $summary['ready'] = false;
                 if (!empty($currentValidation['valid']) && empty($currentValidation['leaf'])) {
                     $summary['non_leaf_current_mappings'] += $productCount;
@@ -186,6 +186,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $summary;
     }
 
+
+    private function known_category_validation_blocks_readiness(array $validation): bool
+    {
+        if ($validation === []) {
+            return false;
+        }
+        $status = (string) ($validation['cache_validation_status'] ?? $validation['validation_status'] ?? '');
+        $trustedManual = (string) ($validation['validation_confidence'] ?? '') === 'trusted_manual'
+            || ((string) ($validation['source'] ?? '') === 'manual_worklist_import' && !empty($validation['needs_cache_validation']));
+        if ($trustedManual && in_array($status, ['cache_missing', 'cache_incomplete'], true)) {
+            return false;
+        }
+        return (($validation['validation_status'] ?? '') === 'invalid_ebay_category_id'
+            || ($validation['validation_status'] ?? '') === 'non_leaf_ebay_category_id'
+            || empty($validation['valid'])
+            || empty($validation['leaf']));
+    }
 
     private function known_category_validation(string $categoryId, int $wooTermId = 0): array
     {
@@ -3264,7 +3281,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!empty($content['title']) && mb_strlen((string) $content['title']) > 80) $errors[] = 'German title is longer than 80 characters';
         if ($categoryId === '') { $errors[] = 'Category mapping requires review'; $categoryStatus = (string) ($category['status'] ?? ''); $status = in_array($categoryStatus, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true) ? $categoryStatus : 'needs_category_review'; }
         $knownCategoryValidation = $this->known_category_validation($categoryId, (int) ($category['woo_term_id'] ?? $category['mapping']['woo_term_id'] ?? 0));
-        if ($categoryId !== '' && !empty($knownCategoryValidation) && (($knownCategoryValidation['validation_status'] ?? '') === 'invalid_ebay_category_id' || ($knownCategoryValidation['validation_status'] ?? '') === 'non_leaf_ebay_category_id' || empty($knownCategoryValidation['valid']) || empty($knownCategoryValidation['leaf']))) {
+        if ($categoryId !== '' && $this->known_category_validation_blocks_readiness($knownCategoryValidation)) {
             $errors[] = 'Known invalid/non-leaf eBay category ID for Woo category';
             $status = (string) ($knownCategoryValidation['validation_status'] ?? 'invalid_ebay_category_id');
             if ($status === 'non_leaf_ebay_category_id') {

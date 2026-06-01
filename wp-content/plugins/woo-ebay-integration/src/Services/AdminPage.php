@@ -402,9 +402,15 @@ class AdminPage
         $auditStatus = 'missing_category';
         $blockedReason = 'missing_category_mapping';
         if ($selectedId !== '') {
-            if (!$exists) {
+            $trustedManualCacheMissing = (string) ($selected['source'] ?? '') === 'manual_worklist'
+                && in_array((string) ($selected['cache_validation_status'] ?? ''), ['cache_missing', 'cache_incomplete'], true)
+                && (string) ($selected['validation_confidence'] ?? '') === 'trusted_manual';
+            if (!$exists && !$trustedManualCacheMissing) {
                 $auditStatus = 'blocked_by_category';
                 $blockedReason = 'invalid_ebay_category_id_not_in_local_cache';
+            } elseif (!$exists && $trustedManualCacheMissing) {
+                $auditStatus = 'ready';
+                $blockedReason = '';
             } elseif (!$leaf) {
                 $auditStatus = 'blocked_by_category';
                 $blockedReason = 'non_leaf_category';
