@@ -58,6 +58,7 @@ class AdminPage
         add_action('admin_post_wei_reset_ebay_de_category_suggestions_progress', [$this, 'reset_ebay_de_category_suggestions_progress']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_generate_blocked_category_fix_report', [$this, 'generate_blocked_category_fix_report']);
+        add_action('admin_post_download_wei_report', [$this, 'download_wei_report']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
         add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
@@ -341,6 +342,8 @@ class AdminPage
         $category_teaching_export_summary = is_array($category_teaching_export_summary) ? $category_teaching_export_summary : [];
         $category_template_export_summary = get_option('wei_ebay_category_template_export_summary', []);
         $category_template_export_summary = is_array($category_template_export_summary) ? $category_template_export_summary : [];
+        $blocked_category_fix_report_summary = get_option('wei_ebay_blocked_category_fix_report_summary', []);
+        $blocked_category_fix_report_summary = is_array($blocked_category_fix_report_summary) ? $blocked_category_fix_report_summary : [];
         $ovoko_category_suggestions_summary = get_option('wei_ebay_ovoko_category_suggestions_summary', []);
         $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
         $category_teaching_import_summary = get_option('wei_ebay_category_mapping_import_summary', []);
@@ -997,23 +1000,67 @@ class AdminPage
         $this->require_manage_options();
         check_admin_referer('wei_generate_blocked_category_fix_report');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $categoryDashboardSummary = $this->category_dashboard_summary_for_report($marketplaceId);
         $path = $this->latest_audit_report_path('problems_only_csv');
         if ($path === '') {
-            $this->set_status('Blocked category fix report failed: problems CSV not found. Run the full category audit first.');
+            $res = [
+                'action' => 'generate_blocked_category_fix_report',
+                'result' => 'error',
+                'blocked_by_category_rows' => 0,
+                'recommended_products' => 0,
+                'recommended_categories' => 0,
+                'high_confidence_products' => 0,
+                'high_confidence_categories' => 0,
+                'fix_import_rows' => 0,
+                'source_problems_csv' => '',
+                'recommendations_csv_path' => '',
+                'recommendations_csv_url' => '',
+                'recommendations_csv_exists' => false,
+                'recommendations_csv_size' => 0,
+                'fix_import_csv_path' => '',
+                'fix_import_csv_url' => '',
+                'fix_import_csv_exists' => false,
+                'fix_import_csv_size' => 0,
+                'upload_dir' => $this->blocked_category_report_upload_dir(),
+                'upload_dir_writable' => is_dir($this->blocked_category_report_upload_dir()) && is_writable($this->blocked_category_report_upload_dir()),
+                'error' => 'missing_problems_only_csv_run_category_audit_first',
+                'category_dashboard_summary' => $categoryDashboardSummary,
+            ];
+            update_option('wei_ebay_blocked_category_fix_report_summary', $res, false);
+            $this->set_status('Blocked category fix report: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
             $this->go();
         }
+
         $reporter = new BlockedCategoryFixReportService($this->categoryRepo, $this->taxonomy, $this->logger);
         $res = $reporter->generate_from_audit($path, $marketplaceId);
-        $this->set_status('Blocked category fix report: ' . wp_json_encode([
-            'blocked_by_category_rows' => (int) ($res['blocked_by_category_rows'] ?? 0),
-            'recommended_products' => (int) ($res['recommended_products'] ?? 0),
-            'recommended_categories' => (int) ($res['recommended_categories'] ?? 0),
-            'high_confidence_products' => (int) ($res['high_confidence_products'] ?? 0),
-            'high_confidence_categories' => (int) ($res['high_confidence_categories'] ?? 0),
-            'fix_import_rows' => (int) ($res['fix_import_rows'] ?? 0),
-            'reports' => (array) ($res['reports'] ?? []),
-        ], JSON_UNESCAPED_UNICODE));
+        $res['category_dashboard_summary'] = $categoryDashboardSummary;
+        update_option('wei_ebay_blocked_category_fix_report_summary', $res, false);
+        $this->set_status('Blocked category fix report: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
         $this->go();
+    }
+
+    public function download_wei_report(): void
+    {
+        $this->require_manage_options();
+        $file = sanitize_file_name((string) ($_GET['file'] ?? ''));
+        $allowed = [
+            BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME,
+            BlockedCategoryFixReportService::FIX_IMPORT_FILENAME,
+        ];
+        if (!in_array($file, $allowed, true)) {
+            wp_die('Invalid report file');
+        }
+        $path = trailingslashit($this->blocked_category_report_upload_dir()) . $file;
+        if (!is_file($path) || !is_readable($path)) {
+            wp_die('Report file not found');
+        }
+
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $file . '"');
+        header('Content-Length: ' . (string) filesize($path));
+        readfile($path);
+        exit;
     }
 
     public function repair_blocked_category_mappings(): void
@@ -2751,6 +2798,28 @@ class AdminPage
         if (!preg_match('/\bgebraucht\b/iu', $title)) $title .= ' gebraucht';
         return mb_substr(trim($title),0,80);
     }
+
+    private function category_dashboard_summary_for_report(string $marketplaceId): array
+    {
+        $categoryTeachingImportSummary = get_option('wei_ebay_category_mapping_import_summary', []);
+        $categoryTeachingImportSummary = is_array($categoryTeachingImportSummary) ? $categoryTeachingImportSummary : [];
+        $categoryValidationStatuses = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
+        $categoryValidationStatuses = is_array($categoryValidationStatuses) ? $categoryValidationStatuses : [];
+
+        return $this->categoryRepo->production_mapping_summary(
+            $marketplaceId,
+            $categoryTeachingImportSummary,
+            $categoryValidationStatuses,
+            $this->light_readiness_summary()
+        );
+    }
+
+    private function blocked_category_report_upload_dir(): string
+    {
+        $upload = wp_upload_dir();
+        return trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+    }
+
     private function go(): void
     {
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay'));

@@ -108,11 +108,11 @@ class BlockedCategoryFixReportService
         $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
         $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
         wp_mkdir_p($baseDir);
-        $reports = [
-            'recommendations_csv' => $this->write_csv($baseDir, $baseUrl, self::RECOMMENDATIONS_FILENAME, $recommendationRows, $this->recommendation_headers()),
-            'fix_import_csv' => $this->write_csv($baseDir, $baseUrl, self::FIX_IMPORT_FILENAME, array_values($fixRowsByWooTerm), $this->fix_headers()),
-        ];
+        $uploadDirWritable = is_dir($baseDir) && is_writable($baseDir);
+
         $summary = [
+            'action' => 'generate_blocked_category_fix_report',
+            'result' => 'success',
             'generated_at' => gmdate('Y-m-d H:i:s'),
             'source_problems_csv' => $problemsCsv,
             'blocked_by_category_rows' => $blockedRows,
@@ -121,9 +121,52 @@ class BlockedCategoryFixReportService
             'high_confidence_products' => $highConfidenceProducts,
             'high_confidence_categories' => count($highConfidenceCategories),
             'fix_import_rows' => count($fixRowsByWooTerm),
+            'upload_dir' => $baseDir,
+            'upload_dir_writable' => $uploadDirWritable,
+            'recommendations_csv_path' => trailingslashit($baseDir) . self::RECOMMENDATIONS_FILENAME,
+            'recommendations_csv_url' => trailingslashit($baseUrl) . self::RECOMMENDATIONS_FILENAME,
+            'recommendations_csv_exists' => false,
+            'recommendations_csv_size' => 0,
+            'fix_import_csv_path' => trailingslashit($baseDir) . self::FIX_IMPORT_FILENAME,
+            'fix_import_csv_url' => trailingslashit($baseUrl) . self::FIX_IMPORT_FILENAME,
+            'fix_import_csv_exists' => false,
+            'fix_import_csv_size' => 0,
+            'error' => '',
             'supported_intents' => EbayDeCategoryRuleMapper::supported_intents(),
-            'reports' => $reports,
         ];
+
+        if (!$uploadDirWritable) {
+            $summary['result'] = 'error';
+            $summary['error'] = 'upload_dir_not_writable';
+            update_option('wei_ebay_blocked_category_fix_report_summary', $summary, false);
+            $this->logger->warning('Blocked category mapping fix report upload directory is not writable', $summary);
+            return $summary;
+        }
+
+        $reports = [
+            'recommendations_csv' => $this->write_csv($baseDir, $baseUrl, self::RECOMMENDATIONS_FILENAME, $recommendationRows, $this->recommendation_headers()),
+            'fix_import_csv' => $this->write_csv($baseDir, $baseUrl, self::FIX_IMPORT_FILENAME, array_values($fixRowsByWooTerm), $this->fix_headers()),
+        ];
+
+        $recommendationsState = $this->csv_state($baseDir, $baseUrl, self::RECOMMENDATIONS_FILENAME);
+        $fixImportState = $this->csv_state($baseDir, $baseUrl, self::FIX_IMPORT_FILENAME);
+        $summary = array_merge($summary, [
+            'recommendations_csv_path' => $recommendationsState['path'],
+            'recommendations_csv_url' => $recommendationsState['url'],
+            'recommendations_csv_exists' => $recommendationsState['exists'],
+            'recommendations_csv_size' => $recommendationsState['size'],
+            'fix_import_csv_path' => $fixImportState['path'],
+            'fix_import_csv_url' => $fixImportState['url'],
+            'fix_import_csv_exists' => $fixImportState['exists'],
+            'fix_import_csv_size' => $fixImportState['size'],
+            'reports' => $reports,
+        ]);
+
+        if (empty($summary['fix_import_csv_exists']) || (int) $summary['fix_import_csv_size'] <= 0) {
+            $summary['result'] = 'error';
+            $summary['error'] = 'fix_import_csv_not_written';
+        }
+
         update_option('wei_ebay_blocked_category_fix_report_summary', $summary, false);
         $this->logger->info('Blocked category mapping fix report generated', $summary);
         return $summary;
@@ -192,6 +235,19 @@ class BlockedCategoryFixReportService
         }
         fclose($fh);
         return ['path' => $path, 'url' => trailingslashit($baseUrl) . $filename, 'rows' => count($rows)];
+    }
+
+
+    private function csv_state(string $baseDir, string $baseUrl, string $filename): array
+    {
+        $path = trailingslashit($baseDir) . $filename;
+        $exists = is_file($path);
+        return [
+            'path' => $path,
+            'url' => trailingslashit($baseUrl) . $filename,
+            'exists' => $exists,
+            'size' => $exists ? (int) filesize($path) : 0,
+        ];
     }
 
     private function recommendation_headers(): array
