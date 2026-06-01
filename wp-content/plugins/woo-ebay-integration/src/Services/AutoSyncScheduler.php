@@ -346,6 +346,8 @@ class AutoSyncScheduler
             'missing_image' => 0,
             'missing_stock' => 0,
             'missing_policies_location' => 0,
+            'blocked_by_shipping_policy' => 0,
+            'missing_shipping_policy_mapping' => 0,
             'excluded_from_ebay' => 0,
             'excluded_no_woo_category' => 0,
             'excluded_bez_kategorii' => 0,
@@ -360,6 +362,7 @@ class AutoSyncScheduler
             'missing_image_items' => [],
             'missing_stock_items' => [],
             'missing_policies_location_items' => [],
+            'blocked_by_shipping_policy_items' => [],
             'excluded_from_ebay_items' => [],
             'not_ready_sample_ids' => [],
             'blocked_by_category_sample_ids' => [],
@@ -451,6 +454,13 @@ class AutoSyncScheduler
             $state['missing_policies_location'] = (int) ($state['missing_policies_location'] ?? 0) + 1;
             $this->append_limited($state['missing_policies_location_items'], $item, self::READINESS_BUCKET_LIMIT);
         }
+        if (!empty($blockedBy['shipping_policy'])) {
+            $state['blocked_by_shipping_policy'] = (int) ($state['blocked_by_shipping_policy'] ?? 0) + 1;
+            if ($status === 'missing_shipping_policy_mapping') {
+                $state['missing_shipping_policy_mapping'] = (int) ($state['missing_shipping_policy_mapping'] ?? 0) + 1;
+            }
+            $this->append_limited($state['blocked_by_shipping_policy_items'], $item, self::READINESS_BUCKET_LIMIT);
+        }
 
         $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
         $this->append_publish_readiness_csv_row((string) $paths['problems'], $headers, $row);
@@ -535,6 +545,13 @@ class AutoSyncScheduler
             'blocked_by_images',
             'blocked_by_german_content',
             'blocked_by_required_aspects',
+            'blocked_by_shipping_policy',
+            'shipping_group',
+            'matched_woo_category_id',
+            'shipping_policy_id',
+            'shipping_policy_name',
+            'shipping_default_used',
+            'shipping_reason',
             'excluded_reason',
             'woo_category_path',
             'category_id',
@@ -573,6 +590,13 @@ class AutoSyncScheduler
             'blocked_by_images' => !empty($blockedBy['images']) ? '1' : '0',
             'blocked_by_german_content' => !empty($blockedBy['german_content']) ? '1' : '0',
             'blocked_by_required_aspects' => !empty($blockedBy['required_aspects']) ? '1' : '0',
+            'blocked_by_shipping_policy' => !empty($blockedBy['shipping_policy']) ? '1' : '0',
+            'shipping_group' => (string) ($item['shipping_group'] ?? ''),
+            'matched_woo_category_id' => (string) ($item['matched_woo_category_id'] ?? ''),
+            'shipping_policy_id' => (string) ($item['shipping_policy_id'] ?? ''),
+            'shipping_policy_name' => (string) ($item['shipping_policy_name'] ?? ''),
+            'shipping_default_used' => !empty($item['shipping_default_used']) ? '1' : '0',
+            'shipping_reason' => (string) ($item['shipping_reason'] ?? ''),
             'excluded_reason' => $excludedReason,
             'woo_category_path' => (string) ($item['woo_category_path'] ?? ''),
             'category_id' => (string) ($item['category_id'] ?? ''),
@@ -615,6 +639,7 @@ class AutoSyncScheduler
             'german_content' => in_array($status, ['not_ready_missing_german_content', 'stale_german_content'], true) || str_contains($errorText, 'german'),
             'required_aspects' => $status === 'missing_required_aspects' || (array) ($result['missing_aspects'] ?? []) !== [] || str_contains($errorText, 'missing required aspect'),
             'policies_location' => str_contains($errorText, 'polic') || str_contains($errorText, 'location'),
+            'shipping_policy' => in_array($status, ['missing_shipping_policy_mapping', 'blocked_by_shipping_policy'], true) || str_contains($errorText, 'missing_shipping_policy_mapping'),
         ];
     }
 
@@ -626,6 +651,7 @@ class AutoSyncScheduler
         $content = is_array($result['content'] ?? null) ? $result['content'] : [];
         $skuResolution = is_array($result['sku_resolution'] ?? null) ? $result['sku_resolution'] : [];
         $priceResolution = is_array($result['price_resolution'] ?? null) ? $result['price_resolution'] : [];
+        $shippingResolution = is_array($result['shipping_policy_resolution'] ?? null) ? $result['shipping_policy_resolution'] : [];
         $status = (string) ($result['status'] ?? 'not_ready');
         $errors = array_values(array_map('strval', (array) ($result['errors'] ?? [])));
         $missingAspects = array_values(array_map('strval', (array) ($result['missing_aspects'] ?? [])));
@@ -681,6 +707,12 @@ class AutoSyncScheduler
             'content_ready' => !empty($content['title']) && !empty($content['description']),
             'sku' => $product ? (string) $product->get_sku() : '',
             'ebay_sku' => (string) ($skuResolution['sku'] ?? ''),
+            'shipping_group' => (string) ($shippingResolution['group'] ?? ''),
+            'matched_woo_category_id' => (int) ($shippingResolution['matched_woo_category_id'] ?? 0),
+            'shipping_policy_id' => (string) ($shippingResolution['policy_id'] ?? ''),
+            'shipping_policy_name' => (string) ($shippingResolution['policy_name'] ?? ''),
+            'shipping_default_used' => !empty($shippingResolution['default_used']),
+            'shipping_reason' => (string) ($shippingResolution['reason'] ?? ''),
         ];
     }
 
@@ -760,6 +792,9 @@ class AutoSyncScheduler
         }
         if ($status === 'missing_required_aspects') {
             return 'missing_required_aspects' . ($missingAspects !== [] ? ': ' . implode(', ', $missingAspects) : '');
+        }
+        if ($status === 'missing_shipping_policy_mapping' || $status === 'blocked_by_shipping_policy') {
+            return $status;
         }
         if ($status === 'not_ready_missing_german_content') {
             return 'missing_german_content';

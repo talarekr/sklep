@@ -61,14 +61,47 @@ $findPolicyName = static function (array $policies, string $id, string $idKey): 
 
     return $id;
 };
+$renderFulfillmentPolicyControl = static function (string $field, string $selectedId, string $manualId, string $placeholder) use ($fulfillmentPolicies): void {
+    $selectedId = trim($selectedId);
+    $idInCachedPolicies = false;
+    foreach ($fulfillmentPolicies as $policy) {
+        if ((string) ($policy['fulfillmentPolicyId'] ?? '') === $selectedId) {
+            $idInCachedPolicies = true;
+            break;
+        }
+    }
+    $manualValue = '';
+    ?>
+    <select name="<?php echo esc_attr($field); ?>">
+        <option value=""><?php echo esc_html($placeholder); ?></option>
+        <?php foreach ($fulfillmentPolicies as $policy): ?>
+            <?php
+            $policyId = (string) ($policy['fulfillmentPolicyId'] ?? '');
+            if ($policyId === '') {
+                continue;
+            }
+            $policyName = (string) ($policy['name'] ?? $policyId);
+            $label = $policyName . ' — ' . $policyId;
+            ?>
+            <option value="<?php echo esc_attr($policyId); ?>" <?php selected($selectedId, $policyId); ?>><?php echo esc_html($label); ?></option>
+        <?php endforeach; ?>
+    </select>
+    <input type="hidden" name="<?php echo esc_attr($field . '_existing'); ?>" value="<?php echo esc_attr($selectedId); ?>" />
+    <input class="regular-text" name="<?php echo esc_attr($field . '_manual'); ?>" value="<?php echo esc_attr($manualValue); ?>" placeholder="or paste exact fulfillment policy ID" />
+    <?php if ($selectedId !== '' && !$idInCachedPolicies): ?><span class="description">Current saved ID: <code><?php echo esc_html($selectedId); ?></code> (not in cached policy list)</span><?php endif; ?>
+    <?php
+};
 $locationKey = (string) ($s['inventory_location_key'] ?? 'gpswiss-pl');
 $fulfillmentId = (string) ($s['ebay_fulfillment_policy_id'] ?? '');
-$fulfillmentId30 = (string) ($s['fulfillment_policy_id_30_eur'] ?? $fulfillmentId);
-$fulfillmentId50 = (string) ($s['fulfillment_policy_id_50_eur'] ?? '');
-$fulfillmentId100 = (string) ($s['fulfillment_policy_id_100_eur'] ?? '');
+$fulfillmentId30 = (string) ($s['shipping_policy_30'] ?? $s['fulfillment_policy_id_30_eur'] ?? $fulfillmentId);
+$fulfillmentId50 = (string) ($s['shipping_policy_50'] ?? $s['fulfillment_policy_id_50_eur'] ?? '');
+$fulfillmentId130 = (string) ($s['shipping_policy_130'] ?? $s['fulfillment_policy_id_130_eur'] ?? '');
+$defaultShippingPolicyId = (string) ($s['default_shipping_policy_id'] ?? '');
+$shippingMappingWarnings = get_option('wei_ebay_shipping_mapping_warnings', []);
+$shippingMappingWarnings = is_array($shippingMappingWarnings) ? $shippingMappingWarnings : [];
 $paymentId = (string) ($s['ebay_payment_policy_id'] ?? '');
 $returnId = (string) ($s['ebay_return_policy_id'] ?? '');
-$accountSetupConfigured = $locationKey !== '' && $fulfillmentId30 !== '' && $fulfillmentId50 !== '' && $fulfillmentId100 !== '' && $paymentId !== '' && $returnId !== '';
+$accountSetupConfigured = $locationKey !== '' && $fulfillmentId30 !== '' && $fulfillmentId50 !== '' && $fulfillmentId130 !== '' && $paymentId !== '' && $returnId !== '';
 
 $provider = (string) ($s['translation_provider'] ?? 'disabled');
 $translationConfigured = $provider === 'google_cloud_translate' && (string) ($s['translation_api_key'] ?? '') !== '';
@@ -322,7 +355,7 @@ $categoryMissingCount = (int) $categorySummary['needs_category_review'];
 $teachingManualMappingsCount = (int) $categorySummary['mapped_manual'];
 $latestLogMessage = (string) ($logs[0]['message'] ?? '');
 $latestLogHasError = str_contains(strtolower($latestLogMessage), 'error') || str_contains(strtolower($latestLogMessage), 'failed');
-$accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId30 === '' ? 1 : 0) + ($fulfillmentId50 === '' ? 1 : 0) + ($fulfillmentId100 === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
+$accountSetupMissingCount = ($locationKey === '' ? 1 : 0) + ($fulfillmentId30 === '' ? 1 : 0) + ($fulfillmentId50 === '' ? 1 : 0) + ($fulfillmentId130 === '' ? 1 : 0) + ($paymentId === '' ? 1 : 0) + ($returnId === '' ? 1 : 0);
 $toScalarString = static function ($value, string $default = ''): string {
     if ($value === null) {
         return $default;
@@ -485,6 +518,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
     </style>
 
     <?php if (!empty($_GET['saved'])): ?><div class="notice notice-success"><p>eBay settings saved.</p></div><?php endif; ?>
+    <?php if (!empty($shippingMappingWarnings['conflicts'])): ?><div class="notice notice-warning"><p><strong>eBay shipping category mapping conflict:</strong> Woo category IDs appear in multiple groups. Runtime priority is Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30.</p><pre><?php echo esc_html(wp_json_encode($shippingMappingWarnings['conflicts'], JSON_PRETTY_PRINT)); ?></pre></div><?php endif; ?>
 
     <div class="wei-box">
         <h2>Dashboard / Status</h2>
@@ -720,7 +754,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
                 <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
                 <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="200" /></label>
-                <button class="button">Run full publish readiness audit (new checkpointed run)</button>
+                <button class="button">Run readiness scan / full publish readiness audit (new checkpointed run)</button>
             </form>
             <?php if (!$publishAuditComplete && $publishAuditRunId !== ''): ?>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
@@ -826,7 +860,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                     'default_hersteller_fallback', 'ebay_sku_prefix', 'stock_sync_mode', 'auto_sync_frequency',
                     'auto_sync_preflight_batch_size', 'ebay_stock_sync_mode', 'ebay_order_stock_update_mode', 'translation_provider',
                     'ebay_de_delivery_map_url', 'ebay_seller_username', 'inventory_location_name', 'inventory_location_country', 'inventory_location_postal_code',
-                    'inventory_location_city', 'inventory_location_address_line_1', 'shipping_category_ids_50_eur', 'shipping_category_ids_100_eur',
+                    'inventory_location_city', 'inventory_location_address_line_1',
                 ] as $preserveKey): ?>
                     <input type="hidden" name="<?php echo esc_attr($preserveKey); ?>" value="<?php echo esc_attr((string) $setting($preserveKey)); ?>" />
                 <?php endforeach; ?>
@@ -836,9 +870,14 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <table class="form-table" role="presentation">
                     <tr><th><label for="wei-marketplace-id">Marketplace</label></th><td><input id="wei-marketplace-id" class="regular-text" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" placeholder="EBAY_DE" /></td></tr>
                     <tr><th><label for="wei-location-key">Merchant location key</label></th><td><input id="wei-location-key" class="regular-text" name="inventory_location_key" value="<?php echo esc_attr((string) $setting('inventory_location_key', 'gpswiss-pl')); ?>" /></td></tr>
-                    <tr><th><label for="wei-fulfillment-policy-30">Fulfillment policy ID 30 EUR</label></th><td><input id="wei-fulfillment-policy-30" class="regular-text" name="fulfillment_policy_id_30_eur" value="<?php echo esc_attr($fulfillmentId30); ?>" /></td></tr>
-                    <tr><th><label for="wei-fulfillment-policy-50">Fulfillment policy ID 50 EUR</label></th><td><input id="wei-fulfillment-policy-50" class="regular-text" name="fulfillment_policy_id_50_eur" value="<?php echo esc_attr($fulfillmentId50); ?>" /></td></tr>
-                    <tr><th><label for="wei-fulfillment-policy-100">Fulfillment policy ID 100 EUR</label></th><td><input id="wei-fulfillment-policy-100" class="regular-text" name="fulfillment_policy_id_100_eur" value="<?php echo esc_attr($fulfillmentId100); ?>" /></td></tr>
+                    <tr><th colspan="2"><h3>eBay shipping category mapping</h3><p class="description">Paste Woo <code>product_cat</code> IDs, not eBay category IDs. Select existing eBay fulfillment policies only; this plugin does not create shipping policies. Conflicts are allowed but warned; runtime priority is Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30.</p></th></tr>
+                    <tr><th><label for="wei-shipping-policy-30">Wysyłka 30 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select exact Wysyłka 30 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_30" value="<?php echo esc_attr((string) ($s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Choose the exact existing eBay fulfillment policy; duplicate names are disambiguated by policy ID.</p></td></tr>
+                    <tr><th><label for="wei-shipping-policy-50">Wysyłka 50 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_50', $fulfillmentId50, $fulfillmentId50, 'Select exact Wysyłka 50 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_50" value="<?php echo esc_attr((string) ($s['shipping_policy_name_50'] ?? '')); ?>" placeholder="optional policy name" /></td></tr>
+                    <tr><th><label for="wei-shipping-policy-130">Wysyłka 130 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_130', $fulfillmentId130, $fulfillmentId130, 'Select exact Wysyłka 130 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_130" value="<?php echo esc_attr((string) ($s['shipping_policy_name_130'] ?? '')); ?>" placeholder="optional policy name" /></td></tr>
+                    <tr><th><label for="wei-default-shipping-policy">Default shipping policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('default_shipping_policy_id', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Used only when no Woo category ID matches any shipping group.</p></td></tr>
+                    <tr><th><label for="wei-shipping-category-ids-30">Wysyłka 30</label></th><td><textarea id="wei-shipping-category-ids-30" class="large-text code" rows="2" name="shipping_category_ids_30" placeholder="5063,5066,5069,5122"><?php echo esc_textarea((string) ($s['shipping_category_ids_30'] ?? '')); ?></textarea></td></tr>
+                    <tr><th><label for="wei-shipping-category-ids-50">Wysyłka 50</label></th><td><textarea id="wei-shipping-category-ids-50" class="large-text code" rows="2" name="shipping_category_ids_50"><?php echo esc_textarea((string) ($s['shipping_category_ids_50'] ?? '')); ?></textarea></td></tr>
+                    <tr><th><label for="wei-shipping-category-ids-130">Wysyłka 130</label></th><td><textarea id="wei-shipping-category-ids-130" class="large-text code" rows="2" name="shipping_category_ids_130"><?php echo esc_textarea((string) ($s['shipping_category_ids_130'] ?? '')); ?></textarea></td></tr>
                     <tr><th><label for="wei-payment-policy">Payment policy ID</label></th><td><input id="wei-payment-policy" class="regular-text" name="ebay_payment_policy_id" value="<?php echo esc_attr($paymentId); ?>" /></td></tr>
                     <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /></td></tr>
                     <tr><th><label for="wei-markup">Default markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
@@ -896,7 +935,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <?php if (!empty($listing_quality_audit)): ?><pre class="wei-scroll"><?php echo esc_html($technicalPreview($listing_quality_audit, 8000)); ?></pre><?php endif; ?>
         </details>
         <details><summary>Shipping, queue, SKU and destructive tools</summary>
-            <div class="wei-actions"><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_shipping_mapping_report'); ?><input type="hidden" name="action" value="wei_generate_shipping_mapping_report" /><button class="button">Generate shipping mapping report</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_update_shipping_policy_one'); ?><input type="hidden" name="action" value="wei_update_shipping_policy_one" /><input type="number" min="1" name="product_id" placeholder="Product ID" /><input name="sku" placeholder="or SKU" /><button class="button">Update shipping policy for one product</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_process_queue_now'); ?><input type="hidden" name="action" value="wei_ebay_process_queue_now" /><input type="number" min="1" max="100" name="batch_size" value="50" /><button class="button">Process eBay queue now</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_rebuild_ready_queue'); ?><input type="hidden" name="action" value="wei_ebay_rebuild_ready_queue" /><input type="number" min="1" max="100" name="batch_size" value="50" /><button class="button">Rebuild ready queue</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_ebay_skus'); ?><input type="hidden" name="action" value="wei_generate_ebay_skus" /><input type="number" name="batch_size" value="200" min="1" max="1000" /><button class="button">Generate missing eBay SKUs</button></form></div>
+            <div class="wei-actions"><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_shipping_mapping_report'); ?><input type="hidden" name="action" value="wei_generate_shipping_mapping_report" /><button class="button">Generate shipping mapping report</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_shipping_mapping_diagnostics'); ?><input type="hidden" name="action" value="wei_shipping_mapping_diagnostics" /><input type="number" min="1" name="product_id" placeholder="Product ID" required /><button class="button">Preview shipping mapping</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_update_shipping_policy_one'); ?><input type="hidden" name="action" value="wei_update_shipping_policy_one" /><input type="number" min="1" name="product_id" placeholder="Product ID" /><input name="sku" placeholder="or SKU" /><button class="button">Update shipping policy for one product</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_process_queue_now'); ?><input type="hidden" name="action" value="wei_ebay_process_queue_now" /><input type="number" min="1" max="100" name="batch_size" value="50" /><button class="button">Process eBay queue now</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_ebay_rebuild_ready_queue'); ?><input type="hidden" name="action" value="wei_ebay_rebuild_ready_queue" /><input type="number" min="1" max="100" name="batch_size" value="50" /><button class="button">Rebuild ready queue</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_ebay_skus'); ?><input type="hidden" name="action" value="wei_generate_ebay_skus" /><input type="number" name="batch_size" value="200" min="1" max="1000" /><button class="button">Generate missing eBay SKUs</button></form></div>
             <div class="wei-actions"><form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset progress initial publish? Wpisz RESET w polu potwierdzenia.');"><?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?><input type="hidden" name="action" value="wei_ebay_initial_publish_reset" /><input type="text" name="confirm_reset" placeholder="RESET" size="8" /><button class="button button-link-delete">Reset bulk publish progress</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_sync'); ?><input type="hidden" name="action" value="wei_sync_stock" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Sync stock for one product</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_import_order'); ?><input type="hidden" name="action" value="wei_import_order" /><input class="regular-text" name="order_id" placeholder="optional eBay order ID" /><button class="button">Import one eBay order</button></form><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_verify_api_publishing_readiness'); ?><input type="hidden" name="action" value="wei_verify_api_publishing_readiness" /><input type="number" name="product_id" placeholder="Woo product ID" required /><label><input type="checkbox" name="write_diagnostic_offer" value="1" /> write diagnostic offer</label><button class="button">Verify API publishing readiness</button></form></div>
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['shipping_mapping_report' => $shipping_mapping_report, 'shipping_policy_bulk_status' => $shipping_policy_bulk_status, 'basic_specifics_bulk_status' => $basic_specifics_bulk_status, 'sku_status' => $ebay_sku_status, 'sku_generation' => $ebay_sku_generation_status], 8000)); ?></pre>
         </details>
