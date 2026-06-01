@@ -134,6 +134,7 @@ final class CategoryMappingWorklistTestTaxonomy extends EbayTaxonomyService
             '33516' => ['category_id' => '33516', 'category_name' => 'Old cached category', 'category_path' => 'Old > Cached', 'leaf' => true],
             '12345' => ['category_id' => '12345', 'category_name' => 'Manual category', 'category_path' => 'Auto > Manual', 'leaf' => true],
             '99999' => ['category_id' => '99999', 'category_name' => 'Other manual category', 'category_path' => 'Auto > Other', 'leaf' => true],
+            '33566' => ['category_id' => '33566', 'category_name' => 'Pompa ABS', 'category_path' => 'Auto > Brakes > ABS pumps', 'leaf' => true],
         ];
         return $categories[$category_id] ?? null;
     }
@@ -154,6 +155,7 @@ final class CategoryMappingWorklistTestTaxonomy extends EbayTaxonomyService
 final class CategoryMappingWorklistTestRepository extends CategoryMappingRepository
 {
     public array $savedMappings = [];
+    public array $mappingRows = [];
 
     public function __construct() {}
 
@@ -162,10 +164,43 @@ final class CategoryMappingWorklistTestRepository extends CategoryMappingReposit
         return 'Woo path ' . $termId;
     }
 
+    public function list_mapping_rows_for_woo_category(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): array
+    {
+        $rows = $this->mappingRows[$wooCategoryId] ?? [];
+        usort($rows, static function (array $a, array $b): int {
+            return [(int) ($a['resolver_priority'] ?? 99), (string) ($b['reviewed_at'] ?? $b['updated_at'] ?? ''), (int) ($b['id'] ?? 0)] <=> [(int) ($b['resolver_priority'] ?? 99), (string) ($a['reviewed_at'] ?? $a['updated_at'] ?? ''), (int) ($a['id'] ?? 0)];
+        });
+        return $rows;
+    }
+
+    public function resolveProductionCategoryMapping(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): ?array
+    {
+        foreach ($this->list_mapping_rows_for_woo_category($wooCategoryId, $marketplaceId) as $row) {
+            if ((int) ($row['resolver_priority'] ?? 99) < 90) {
+                $row['resolver_reason'] = $this->resolver_reason_for_row($row);
+                return $row;
+            }
+        }
+        return null;
+    }
+
     public function save_manual_worklist_mapping(int $wooCategoryId, string $marketplaceId, array $category): array
     {
+        $selectedId = count($this->savedMappings) + 100;
+        $duplicatesDisabled = 0;
+        foreach ($this->mappingRows[$wooCategoryId] ?? [] as &$row) {
+            if (($row['source'] ?? '') !== 'manual') {
+                $row['active'] = 0;
+                $row['status'] = 'disabled_duplicate';
+                $row['resolver_priority'] = 90;
+                $duplicatesDisabled++;
+            }
+        }
+        unset($row);
+        $mapping = ['id' => $selectedId, 'woo_term_id' => $wooCategoryId, 'marketplace_id' => $marketplaceId, 'ebay_category_id' => (string) $category['category_id'], 'source' => 'manual_worklist', 'status' => 'mapped_manual', 'active' => 1, 'reviewed_at' => '2026-06-01 00:00:00', 'updated_at' => '2026-06-01 00:00:00', 'resolver_priority' => 20];
+        $this->mappingRows[$wooCategoryId][] = $mapping;
         $this->savedMappings[] = ['woo_category_id' => $wooCategoryId, 'marketplace_id' => $marketplaceId, 'category' => $category];
-        return ['selected_id' => count($this->savedMappings), 'duplicates_disabled' => 0, 'mapping' => []];
+        return ['selected_id' => $selectedId, 'duplicates_disabled' => $duplicatesDisabled, 'operation' => 'inserted', 'mapping' => $this->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId)];
     }
 }
 
@@ -272,6 +307,32 @@ $assert($taxonomy->apiCalls === 0, 'Worklist export/import tests must not call e
 $assert(($importResult['ebay_api_called'] ?? null) === false, 'Import summary must report no eBay API calls.');
 $assert(($importResult['products_modified'] ?? null) === false, 'Import summary must report no product modifications.');
 $assert(($importResult['listings_modified'] ?? null) === false, 'Import summary must report no listing modifications.');
+$assert(array_key_exists('inserted_mappings', $importResult), 'Import summary must include inserted_mappings.');
+$assert(array_key_exists('updated_mappings', $importResult), 'Import summary must include updated_mappings.');
+$assert(array_key_exists('deactivated_duplicate_mappings', $importResult), 'Import summary must include deactivated_duplicate_mappings.');
+$assert(array_key_exists('unchanged_mappings', $importResult), 'Import summary must include unchanged_mappings.');
+
+$repo->mappingRows[5197] = [[
+    'id' => 1,
+    'woo_term_id' => 5197,
+    'marketplace_id' => 'EBAY_DE',
+    'ebay_category_id' => '262084',
+    'source' => 'legacy',
+    'status' => 'mapped_auto',
+    'active' => 1,
+    'updated_at' => '2025-01-01 00:00:00',
+    'resolver_priority' => 60,
+]];
+$pompaCsv = trailingslashit($GLOBALS['wei_test_upload_dir']) . 'pompa-abs-worklist.csv';
+$fh = fopen($pompaCsv, 'wb');
+fputcsv($fh, ['final_ebay_category_id', 'sample_product_title', 'woo_category_id', 'woo_category_name']);
+fputcsv($fh, ['33566', 'Pompa ABS', '5197', 'Pompa ABS']);
+fclose($fh);
+$importResult = $service->import_category_mapping_worklist($pompaCsv, 'EBAY_DE');
+$resolved = $repo->resolveProductionCategoryMapping(5197, 'EBAY_DE');
+$assert(($resolved['ebay_category_id'] ?? '') === '33566', 'Resolver diagnostic case 5197 must select manual_worklist category 33566, not legacy 262084.');
+$assert(($resolved['source'] ?? '') === 'manual_worklist', 'Resolver diagnostic case 5197 must select manual_worklist source.');
+$assert(($importResult['deactivated_duplicate_mappings'] ?? 0) >= 1, 'Import must deactivate duplicate lower-priority mappings.');
 
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);

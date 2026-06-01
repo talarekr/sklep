@@ -25,6 +25,7 @@ class CategoryMappingRepository
             'source' => 'manual',
             'confidence' => 1.0,
             'status' => 'mapped_manual',
+            'active' => 1,
             'sample_product_ids' => '',
             'suggestion_payload' => '',
             'error_reason' => '',
@@ -54,21 +55,19 @@ class CategoryMappingRepository
 
     public function find(string $marketplace_id, int $woo_term_id): ?array
     {
-        global $wpdb;
-        $table = $wpdb->prefix . 'wei_ebay_category_mappings';
-        $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY CASE WHEN source IN ('manual','manual_woo_category_mapping','manual_teaching_csv','manual_worklist') AND status NOT LIKE 'disabled%%' THEN 1 WHEN source IN ('import','csv_import') AND status NOT LIKE 'disabled%%' THEN 2 WHEN source IN ('rule','auto_taxonomy') AND status NOT LIKE 'disabled%%' THEN 3 WHEN status NOT LIKE 'disabled%%' THEN 4 ELSE 5 END ASC, COALESCE(NULLIF(updated_at, ''), created_at) DESC, id DESC LIMIT 1",
-            $marketplace_id,
-            $woo_term_id
-        ), ARRAY_A);
-
-        return is_array($row) ? $row : null;
+        return $this->resolveProductionCategoryMapping($woo_term_id, $marketplace_id);
     }
 
     public function resolveProductionCategoryMapping(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): ?array
     {
         $rows = $this->list_mapping_rows_for_woo_category($wooCategoryId, $marketplaceId);
-        return $rows[0] ?? null;
+        foreach ($rows as $row) {
+            if ((int) ($row['resolver_priority'] ?? 99) < 90) {
+                $row['resolver_reason'] = $this->resolver_reason_for_row($row);
+                return $row;
+            }
+        }
+        return null;
     }
 
     public function list_mapping_rows_for_woo_category(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): array
@@ -76,11 +75,27 @@ class CategoryMappingRepository
         global $wpdb;
         $table = $wpdb->prefix . 'wei_ebay_category_mappings';
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT *, CASE WHEN source IN ('manual','manual_woo_category_mapping','manual_teaching_csv','manual_worklist') AND status NOT LIKE 'disabled%%' THEN 1 WHEN source IN ('import','csv_import') AND status NOT LIKE 'disabled%%' THEN 2 WHEN source IN ('rule','auto_taxonomy') AND status NOT LIKE 'disabled%%' THEN 3 WHEN status NOT LIKE 'disabled%%' THEN 4 ELSE 5 END AS resolver_priority FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY resolver_priority ASC, COALESCE(NULLIF(updated_at, ''), created_at) DESC, id DESC",
+            "SELECT *, CASE WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') THEN 10 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source='manual_worklist' THEN 20 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('ovoko_import','supplier_import') THEN 30 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('import','csv_import','normal_import') THEN 40 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('rule','auto_taxonomy') THEN 50 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('legacy','legacy_import') THEN 60 WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' THEN 70 ELSE 90 END AS resolver_priority FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY resolver_priority ASC, COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), created_at) DESC, id DESC",
             $marketplaceId,
             $wooCategoryId
         ), ARRAY_A);
         return is_array($rows) ? $rows : [];
+    }
+
+    public function resolver_reason_for_row(array $row): string
+    {
+        $priority = (int) ($row['resolver_priority'] ?? 99);
+        $source = (string) ($row['source'] ?? '');
+        return match ($priority) {
+            10 => 'selected active manual mapping by highest production priority',
+            20 => 'selected active manual_worklist mapping ahead of imports, rules, legacy and fallback',
+            30 => 'selected active ovoko_import/supplier_import mapping because no active manual mapping exists',
+            40 => 'selected active normal import mapping because no higher-priority mapping exists',
+            50 => 'selected active rule mapping because no higher-priority mapping exists',
+            60 => 'selected active legacy mapping because no higher-priority mapping exists',
+            70 => 'selected active mapping source ' . $source . ' because no known higher-priority mapping exists',
+            default => 'not selected: inactive or disabled mapping',
+        };
     }
 
     public function save_manual_mapping(int $wooCategoryId, string $marketplaceId, array $category): array
@@ -99,7 +114,9 @@ class CategoryMappingRepository
             'source' => 'manual',
             'confidence' => 1.0,
             'status' => 'mapped_manual',
+            'active' => 1,
             'error_reason' => '',
+            'reviewed_at' => $now,
             'updated_at' => $now,
         ];
 
@@ -118,7 +135,7 @@ class CategoryMappingRepository
         }
 
         $duplicatesDisabled = $wpdb->query($wpdb->prepare(
-            "UPDATE {$table} SET status=%s, error_reason=%s, updated_at=%s WHERE marketplace_id=%s AND woo_term_id=%d AND id<>%d AND status NOT LIKE 'disabled%%' AND source NOT IN ('manual','manual_woo_category_mapping','manual_teaching_csv','manual_worklist')",
+            "UPDATE {$table} SET active=0, status=%s, error_reason=%s, updated_at=%s WHERE marketplace_id=%s AND woo_term_id=%d AND id<>%d AND status NOT LIKE 'disabled%%' AND source NOT IN ('manual','manual_woo_category_mapping','manual_teaching_csv','manual_worklist')",
             'disabled_duplicate',
             'Disabled after manual EBAY_DE category mapping save; resolver uses active manual mapping first.',
             $now,
@@ -151,28 +168,56 @@ class CategoryMappingRepository
             'source' => 'manual_worklist',
             'confidence' => 1.0,
             'status' => 'mapped_manual',
+            'active' => 1,
             'error_reason' => '',
+            'reviewed_at' => $now,
             'updated_at' => $now,
         ];
 
-        $existingManual = $wpdb->get_row($wpdb->prepare(
-            "SELECT id FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d AND source IN ('manual','manual_woo_category_mapping','manual_teaching_csv','manual_worklist') ORDER BY updated_at DESC, id DESC LIMIT 1",
+        $existingWorklist = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d AND source=%s ORDER BY COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), created_at) DESC, id DESC LIMIT 1",
             $marketplaceId,
-            $wooCategoryId
+            $wooCategoryId,
+            'manual_worklist'
         ), ARRAY_A);
-        if (is_array($existingManual)) {
-            $wpdb->update($table, $row, ['id' => (int) $existingManual['id']]);
-            $selectedId = (int) $existingManual['id'];
+
+        $operation = 'inserted';
+        $unchanged = false;
+        if (is_array($existingWorklist)) {
+            $selectedId = (int) $existingWorklist['id'];
+            $unchanged = trim((string) ($existingWorklist['ebay_category_id'] ?? '')) === $categoryId
+                && (string) ($existingWorklist['source'] ?? '') === 'manual_worklist'
+                && (string) ($existingWorklist['status'] ?? '') === 'mapped_manual'
+                && (int) ($existingWorklist['active'] ?? 1) === 1;
+            if ($unchanged) {
+                $operation = 'unchanged';
+                $wpdb->update($table, ['active' => 1, 'status' => 'mapped_manual', 'reviewed_at' => $now, 'updated_at' => $now, 'error_reason' => ''], ['id' => $selectedId]);
+            } else {
+                $operation = 'updated';
+                $wpdb->update($table, $row, ['id' => $selectedId]);
+            }
         } else {
             $row['created_at'] = $now;
-            $wpdb->insert($table, $row);
-            $selectedId = (int) $wpdb->insert_id;
+            $inserted = $wpdb->insert($table, $row);
+            $selectedId = (int) ($wpdb->insert_id ?? 0);
+            if (!$inserted || $selectedId <= 0) {
+                $existingAny = $wpdb->get_row($wpdb->prepare(
+                    "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), created_at) DESC, id DESC LIMIT 1",
+                    $marketplaceId,
+                    $wooCategoryId
+                ), ARRAY_A);
+                if (is_array($existingAny)) {
+                    $selectedId = (int) $existingAny['id'];
+                    $operation = trim((string) ($existingAny['ebay_category_id'] ?? '')) === $categoryId && (string) ($existingAny['source'] ?? '') === 'manual_worklist' ? 'unchanged' : 'updated';
+                    $wpdb->update($table, $row, ['id' => $selectedId]);
+                }
+            }
         }
 
         $duplicatesDisabled = $wpdb->query($wpdb->prepare(
-            "UPDATE {$table} SET status=%s, error_reason=%s, updated_at=%s WHERE marketplace_id=%s AND woo_term_id=%d AND id<>%d AND status NOT LIKE 'disabled%%'",
+            "UPDATE {$table} SET active=0, status=%s, error_reason=%s, updated_at=%s WHERE marketplace_id=%s AND woo_term_id=%d AND id<>%d AND status NOT LIKE 'disabled%%' AND source NOT IN ('manual','manual_woo_category_mapping','manual_teaching_csv')",
             'disabled_duplicate',
-            'Disabled after manual_worklist EBAY_DE category mapping import; resolver uses active manual_worklist mapping first.',
+            'Disabled after manual_worklist EBAY_DE category mapping import; resolver uses active manual/manual_worklist mappings before legacy/import/rule rows.',
             $now,
             $marketplaceId,
             $wooCategoryId,
@@ -182,9 +227,12 @@ class CategoryMappingRepository
         return [
             'selected_id' => $selectedId,
             'duplicates_disabled' => is_numeric($duplicatesDisabled) ? (int) $duplicatesDisabled : 0,
+            'operation' => $operation,
+            'unchanged' => $operation === 'unchanged',
             'mapping' => $this->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId),
         ];
     }
+
 
     public function list_manual_mapping_categories(string $marketplaceId = 'EBAY_DE', array $args = []): array
     {
@@ -194,7 +242,7 @@ class CategoryMappingRepository
             $termId = (int) ($row['term_id'] ?? 0);
             $resolved = $termId > 0 ? $this->resolveProductionCategoryMapping($termId, $marketplaceId) : null;
             if ($resolved) {
-                foreach (['id','ebay_category_id','ebay_category_name','ebay_category_path','source','confidence','status','updated_at','error_reason','sample_product_ids','suggestion_payload'] as $key) {
+                foreach (['id','ebay_category_id','ebay_category_name','ebay_category_path','source','confidence','status','active','reviewed_at','updated_at','error_reason','sample_product_ids','suggestion_payload','resolver_reason'] as $key) {
                     $row[$key] = $resolved[$key] ?? ($row[$key] ?? '');
                 }
                 $row['resolver_selected_id'] = (int) ($resolved['id'] ?? 0);

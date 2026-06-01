@@ -368,6 +368,8 @@ class AdminPage
         $category_validation_statuses = is_array($category_validation_statuses) ? $category_validation_statuses : [];
         $manual_category_picker_query = isset($_GET['ebay_category_search']) ? sanitize_text_field(wp_unslash((string) $_GET['ebay_category_search'])) : '';
         $manual_category_picker_rows = $load_category_mapping_rows ? $this->taxonomy->search_cached_automotive_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), $manual_category_picker_query, 75) : [];
+        $category_mapping_diagnostics_id = isset($_GET['woo_category_diagnostics_id']) ? absint($_GET['woo_category_diagnostics_id']) : 0;
+        $category_mapping_diagnostics = $category_mapping_diagnostics_id > 0 ? $this->category_mapping_diagnostics($category_mapping_diagnostics_id, (string) ($s['marketplace_id'] ?? 'EBAY_DE')) : [];
         $category_dashboard_summary = $this->categoryRepo->production_mapping_summary(
             (string) ($s['marketplace_id'] ?? 'EBAY_DE'),
             $category_teaching_import_summary,
@@ -385,6 +387,52 @@ class AdminPage
         $basic_specifics_bulk_status = $this->basic_specifics_bulk_status();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
+
+    private function category_mapping_diagnostics(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): array
+    {
+        $term = get_term($wooCategoryId, 'product_cat');
+        $wooName = is_object($term) && isset($term->name) ? (string) $term->name : '';
+        $rows = $this->categoryRepo->list_mapping_rows_for_woo_category($wooCategoryId, $marketplaceId);
+        $selected = $this->categoryRepo->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId);
+        $selectedId = trim((string) ($selected['ebay_category_id'] ?? ''));
+        $cached = $selectedId !== '' ? $this->taxonomy->cached_category($marketplaceId, $selectedId) : null;
+        $exists = is_array($cached);
+        $leaf = $exists && !empty($cached['leaf']);
+        $auditStatus = 'missing_category';
+        $blockedReason = 'missing_category_mapping';
+        if ($selectedId !== '') {
+            if (!$exists) {
+                $auditStatus = 'blocked_by_category';
+                $blockedReason = 'invalid_ebay_category_id_not_in_local_cache';
+            } elseif (!$leaf) {
+                $auditStatus = 'blocked_by_category';
+                $blockedReason = 'non_leaf_category';
+            } else {
+                $auditStatus = 'ready';
+                $blockedReason = '';
+            }
+        }
+
+        return [
+            'woo_category_id' => $wooCategoryId,
+            'woo_category_name' => $wooName,
+            'marketplace_id' => $marketplaceId,
+            'mapping_rows' => $rows,
+            'selected_row' => $selected ?: [],
+            'selected_mapping_row_id' => (int) ($selected['id'] ?? 0),
+            'selected_ebay_category_id' => $selectedId,
+            'selected_source' => (string) ($selected['source'] ?? ''),
+            'why_selected' => (string) ($selected['resolver_reason'] ?? ($selected ? $this->categoryRepo->resolver_reason_for_row($selected) : 'no active mapping row; fallback allowed only if no mapping exists')),
+            'selected_ebay_category_exists_in_cache' => $exists,
+            'selected_ebay_category_is_leaf' => $leaf,
+            'selected_ebay_category_path' => (string) ($cached['category_path'] ?? $selected['ebay_category_path'] ?? ''),
+            'audit_category_status' => $auditStatus,
+            'blocked_by_category_reason' => $blockedReason,
+            'expected_case_5197' => $wooCategoryId === 5197 ? ['expected_manual_worklist_category_id' => '33566', 'passes' => $selectedId === '33566'] : null,
+            'ebay_api_called' => false,
+        ];
+    }
+
     public function basic_specifics_bulk_start(): void { $this->require_manage_options(); check_admin_referer('wei_basic_specifics_bulk_start'); $batchSize=max(1,min(25,absint($_POST['batch_size']??1))); $buildLimit=max(1,min(500,absint($_POST['build_limit']??250))); $summary=$this->build_basic_specifics_bulk_queue($batchSize,$buildLimit); $this->logger->info('EBAY_BASIC_SPECIFICS_BULK_QUEUE_BUILT',$summary); $this->set_status('Basic specifics bulk queue built: '.wp_json_encode($summary)); $this->go(); }
     public function basic_specifics_bulk_pause(): void { $this->require_manage_options(); check_admin_referer('wei_basic_specifics_bulk_pause'); $status=$this->basic_specifics_bulk_status(); $status['state']='paused'; $status['updated_at']=gmdate('Y-m-d H:i:s'); update_option('wei_ebay_basic_specifics_bulk_status',$status,false); $this->logger->info('EBAY_BASIC_SPECIFICS_BULK_PAUSED',$status); $this->go(); }
     public function basic_specifics_bulk_resume(): void { $this->require_manage_options(); check_admin_referer('wei_basic_specifics_bulk_resume'); $status=$this->basic_specifics_bulk_status(); $status['state']='running'; $status['updated_at']=gmdate('Y-m-d H:i:s'); update_option('wei_ebay_basic_specifics_bulk_status',$status,false); $this->logger->info('EBAY_BASIC_SPECIFICS_BULK_RESUMED',$status); $this->go(); }

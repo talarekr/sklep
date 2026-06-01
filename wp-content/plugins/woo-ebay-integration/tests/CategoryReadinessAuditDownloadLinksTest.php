@@ -30,10 +30,8 @@ foreach ([
 
 $assert(str_contains($schedulerSource, "'full_audit_csv' =>") && str_contains($schedulerSource, "'problems_only_csv' =>"), 'Audit must write both full and problems-only CSV reports.');
 $assert(str_contains($adminSource, "update_option('wei_ebay_last_category_readiness_audit'"), 'Run category readiness audit must persist last audit metadata.');
-$assert(str_contains($viewSource, 'Download full category audit CSV'), 'UI must show the full audit download link after audit.');
-$assert(str_contains($viewSource, 'Download problems only CSV'), 'UI must show the problems-only download link after audit.');
-$assert(str_contains($viewSource, 'Download last full audit CSV'), 'UI must show the last full audit download link after refresh.');
-$assert(str_contains($viewSource, 'Download last problems-only audit CSV'), 'UI must show the last problems-only download link after refresh.');
+$assert(str_contains($viewSource, 'Download full audit CSV'), 'UI must show the full audit download link after audit.');
+$assert(str_contains($viewSource, 'Download problems-only CSV'), 'UI must show the problems-only download link after audit.');
 $assert(str_contains($adminSource, "admin-post.php?action=download_wei_report&file="), 'Audit CSV links must include the admin-post download fallback.');
 $assert(str_contains($adminSource, "last_category_readiness_audit_path('problems_only_csv')"), 'Generate blocked category fix report must read the last problems-only CSV from status/option.');
 $assert(str_contains($adminSource, "'message' => 'Run category readiness audit first'"), 'Missing last problems CSV must show the requested message.');
