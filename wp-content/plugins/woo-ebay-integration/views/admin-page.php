@@ -417,6 +417,11 @@ $excludedFromEbayCount = (int) ($readinessSummary['excluded_from_ebay'] ?? 0);
 $excludedNoWooCategoryCount = (int) ($readinessSummary['excluded_no_woo_category'] ?? 0);
 $excludedBezKategoriiCount = (int) ($readinessSummary['excluded_bez_kategorii'] ?? 0);
 $missingAspectsCount = (int) ($readinessSummary['blocked_by_required_aspects'] ?? $readinessSummary['missing_required_aspects'] ?? 0);
+$publishAuditComplete = !empty($readinessSummary['complete']) || (string) ($readinessSummary['status'] ?? '') === 'completed';
+$publishAuditStatusLabel = $publishAuditComplete ? 'COMPLETE / FINAL KPI' : 'PARTIAL / IN PROGRESS';
+$publishAuditRemainingProducts = (int) ($readinessSummary['remaining_products'] ?? max(0, $readinessTotalProducts - $readinessProcessedTotal));
+$publishAuditBatchSize = (int) ($readinessSummary['batch_size'] ?? 200);
+$publishAuditRunId = (string) ($readinessSummary['audit_run_id'] ?? '');
 $initialPublishBlockedCount = (int) ($initialPublishCandidates['blocked_by_category'] ?? 0)
     + (int) ($initialPublishCandidates['missing_aspects'] ?? 0)
     + (int) ($initialPublishCandidates['content_not_ready'] ?? 0)
@@ -673,10 +678,17 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         <p class="description">Publish ready products only. Run the full publish readiness audit first; it only reads local Woo/product meta data and writes CSV diagnostics. Publish/export buttons remain separate actions.</p>
         <p class="wei-danger"><strong>Warning:</strong> Publish run counters, readiness audit counters, and eBay listing state refresh counters are intentionally separate. These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.</p>
         <h3>Latest readiness scan</h3>
+        <?php if (!$publishAuditComplete): ?><div class="notice notice-warning inline"><p><strong>PARTIAL / IN PROGRESS:</strong> These are checkpointed partial counts only. The dashboard shows final publish readiness KPI only after <code>complete=true</code>.</p></div><?php endif; ?>
         <div class="wei-grid">
+            <div class="wei-card"><span>audit status</span><strong><?php echo esc_html($publishAuditStatusLabel); ?></strong></div>
+            <div class="wei-card"><span>processed_total / total_products</span><strong><?php echo esc_html((string) $readinessProcessedTotal . ' / ' . (string) $readinessTotalProducts); ?></strong></div>
+            <div class="wei-card"><span>remaining_products</span><strong><?php echo esc_html((string) $publishAuditRemainingProducts); ?></strong></div>
+            <div class="wei-card"><span>batch_size</span><strong><?php echo esc_html((string) $publishAuditBatchSize); ?></strong></div>
+            <div class="wei-card"><span>complete</span><strong><?php echo $publishAuditComplete ? 'true' : 'false'; ?></strong></div>
+            <div class="wei-card"><span>current_offset</span><strong><?php echo esc_html((string) ($readinessSummary['current_offset'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>processed_total</span><strong><?php echo esc_html((string) $readinessProcessedTotal); ?></strong></div>
             <div class="wei-card"><span>total_products</span><strong><?php echo esc_html((string) $readinessTotalProducts); ?></strong></div>
-            <div class="wei-card"><span>ready</span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
+            <div class="wei-card"><span><?php echo $publishAuditComplete ? 'ready (final KPI)' : 'ready (partial)'; ?></span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
             <div class="wei-card"><span>blocked</span><strong><?php echo esc_html((string) $readinessBlockedCount); ?></strong></div>
             <div class="wei-card"><span>excluded_from_ebay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
             <div class="wei-card"><span>excluded_no_woo_category</span><strong><?php echo esc_html((string) $excludedNoWooCategoryCount); ?></strong></div>
@@ -708,8 +720,17 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
                 <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
                 <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="200" /></label>
-                <button class="button">Run full publish readiness audit (Run readiness scan)</button>
+                <button class="button">Run full publish readiness audit (new checkpointed run)</button>
             </form>
+            <?php if (!$publishAuditComplete && $publishAuditRunId !== ''): ?>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                    <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
+                    <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
+                    <input type="hidden" name="continue_audit" value="1" />
+                    <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="<?php echo esc_attr((string) $publishAuditBatchSize); ?>" /></label>
+                    <button class="button button-primary">Continue readiness audit</button>
+                </form>
+            <?php endif; ?>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_auto_sync_export_now'); ?>
                 <input type="hidden" name="action" value="wei_auto_sync_export_now" />
