@@ -333,6 +333,8 @@ class AdminPage
         $ebay_listing_state_summary = $this->ebay_listing_state_summary();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
+        $category_readiness_audit_summary = get_option('wei_ebay_category_readiness_audit_summary', []);
+        $category_readiness_audit_summary = is_array($category_readiness_audit_summary) ? $category_readiness_audit_summary : [];
         $german_content_audit_summary = get_option('wei_ebay_german_content_audit_summary', []);
         $german_content_audit_summary = is_array($german_content_audit_summary) ? $german_content_audit_summary : [];
         $category_group_repair_summary = get_option('wei_ebay_category_mapping_repair_audit_group_report', []);
@@ -1002,7 +1004,7 @@ class AdminPage
         check_admin_referer('wei_generate_blocked_category_fix_report');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $categoryDashboardSummary = $this->category_dashboard_summary_for_report($marketplaceId);
-        $path = $this->latest_audit_report_path('problems_only_csv');
+        $path = $this->last_category_readiness_audit_path('problems_only_csv');
         if ($path === '') {
             $res = [
                 'action' => 'generate_blocked_category_fix_report',
@@ -1025,6 +1027,7 @@ class AdminPage
                 'upload_dir' => $this->blocked_category_report_upload_dir(),
                 'upload_dir_writable' => is_dir($this->blocked_category_report_upload_dir()) && is_writable($this->blocked_category_report_upload_dir()),
                 'error' => 'missing_problems_only_csv_run_category_audit_first',
+                'message' => 'Run category readiness audit first',
                 'category_dashboard_summary' => $categoryDashboardSummary,
             ];
             update_option('wei_ebay_blocked_category_fix_report_summary', $res, false);
@@ -1044,14 +1047,22 @@ class AdminPage
     {
         $this->require_manage_options();
         $file = sanitize_file_name((string) ($_GET['file'] ?? ''));
+        $audit = get_option('wei_ebay_last_category_readiness_audit', []);
+        $audit = is_array($audit) ? $audit : [];
         $allowed = [
-            BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME,
-            BlockedCategoryFixReportService::FIX_IMPORT_FILENAME,
+            BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME,
+            BlockedCategoryFixReportService::FIX_IMPORT_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::FIX_IMPORT_FILENAME,
         ];
-        if (!in_array($file, $allowed, true)) {
+        foreach (['full_report_csv_path', 'problems_only_csv_path'] as $pathKey) {
+            $candidate = (string) ($audit[$pathKey] ?? '');
+            if ($candidate !== '') {
+                $allowed[basename($candidate)] = $candidate;
+            }
+        }
+        if (!isset($allowed[$file])) {
             wp_die('Invalid report file');
         }
-        $path = trailingslashit($this->blocked_category_report_upload_dir()) . $file;
+        $path = $allowed[$file];
         if (!is_file($path) || !is_readable($path)) {
             wp_die('Report file not found');
         }
@@ -1364,6 +1375,7 @@ class AdminPage
         }
 
         $status = $this->category_readiness_audit_status($res, $marketplaceId);
+        update_option('wei_ebay_last_category_readiness_audit', (array) ($status['last_category_readiness_audit'] ?? []), false);
         update_option('wei_ebay_category_readiness_audit_summary', $status, false);
         $this->set_status('Category readiness audit: ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
         $this->go();
@@ -1398,9 +1410,28 @@ class AdminPage
             'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
+            'full_report_csv_path' => $fullPath,
             'full_report_csv_url' => (string) ($full['url'] ?? ''),
+            'full_report_csv_exists' => $fullExists,
+            'full_report_csv_size' => (int) ($full['size'] ?? ($fullExists ? filesize($fullPath) : 0)),
+            'full_report_csv_admin_url' => $this->admin_report_download_url($fullPath),
+            'problems_only_csv_path' => $problemsPath,
             'problems_only_csv_url' => (string) ($problems['url'] ?? ''),
+            'problems_only_csv_exists' => $problemsExists,
             'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
+            'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
+            'last_category_readiness_audit' => [
+                'full_report_csv_path' => $fullPath,
+                'full_report_csv_url' => (string) ($full['url'] ?? ''),
+                'full_report_csv_exists' => $fullExists,
+                'full_report_csv_size' => (int) ($full['size'] ?? ($fullExists ? filesize($fullPath) : 0)),
+                'full_report_csv_admin_url' => $this->admin_report_download_url($fullPath),
+                'problems_only_csv_path' => $problemsPath,
+                'problems_only_csv_url' => (string) ($problems['url'] ?? ''),
+                'problems_only_csv_exists' => $problemsExists,
+                'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
+                'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
+            ],
             'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 20),
             'resume_offset' => $result === 'partial' ? (int) ($res['total_scanned'] ?? $processed) : 0,
             'partial_full_report_csv_url' => $result === 'partial' ? (string) ($full['url'] ?? '') : '',
@@ -2896,11 +2927,30 @@ class AdminPage
         update_option('wei_logs', array_slice($logs, 0, 100), false);
     }
 
+    private function admin_report_download_url(string $path): string
+    {
+        $file = basename($path);
+        return $file !== '' ? admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode($file)) : '';
+    }
+
+    private function last_category_readiness_audit_path(string $key): string
+    {
+        $audit = get_option('wei_ebay_last_category_readiness_audit', []);
+        $audit = is_array($audit) ? $audit : [];
+        $pathKey = $key === 'full_audit_csv' ? 'full_report_csv_path' : 'problems_only_csv_path';
+        $path = trim((string) ($audit[$pathKey] ?? ''));
+        return $path !== '' && is_readable($path) ? $path : '';
+    }
+
     private function latest_audit_report_path(string $key): string
     {
-        $lastPath = trim((string) get_option('wei_ebay_last_problems_only_csv_path', ''));
-        if ($key === 'problems_only_csv' && $lastPath !== '' && is_readable($lastPath)) {
+        $lastPath = $this->last_category_readiness_audit_path($key);
+        if ($lastPath !== '') {
             return $lastPath;
+        }
+        $legacyProblemsPath = trim((string) get_option('wei_ebay_last_problems_only_csv_path', ''));
+        if ($key === 'problems_only_csv' && $legacyProblemsPath !== '' && is_readable($legacyProblemsPath)) {
+            return $legacyProblemsPath;
         }
         $summary = get_option('wei_ebay_full_category_audit_summary', []);
         $summary = is_array($summary) ? $summary : [];
