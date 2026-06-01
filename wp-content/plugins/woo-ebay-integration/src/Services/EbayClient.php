@@ -47,6 +47,11 @@ class EbayClient
         return $this->request('GET', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), null, [], $context);
     }
 
+    public function get_offers(array $query = [], array $context = [])
+    {
+        return $this->request('GET', '/sell/inventory/v1/offer', null, $query, $context);
+    }
+
     public function delete_offer(string $offer_id, array $context = [])
     {
         return $this->request('DELETE', '/sell/inventory/v1/offer/' . rawurlencode($offer_id), null, [], $context);
