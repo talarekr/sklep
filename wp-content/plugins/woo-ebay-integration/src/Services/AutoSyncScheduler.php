@@ -529,11 +529,11 @@ class AutoSyncScheduler
     }
 
 
-    public function run_full_category_audit(bool $verboseDebug = false, ?int $batchSize = null): array
+    public function run_full_category_audit(bool $verboseDebug = false, ?int $batchSize = null, bool $restart = false): array
     {
         $state = get_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, []);
         $state = is_array($state) ? $state : [];
-        if (($state['status'] ?? '') !== 'in_progress') {
+        if ($restart || ($state['status'] ?? '') !== 'in_progress') {
             $state = $this->new_full_category_audit_state($verboseDebug, $batchSize);
         } else {
             $state['verbose_debug'] = $verboseDebug || !empty($state['verbose_debug']);
@@ -594,7 +594,7 @@ class AutoSyncScheduler
             return $this->complete_full_category_audit($state);
         }
 
-        $state['reports'] = $this->category_audit_streamed_reports($state);
+        $state['reports'] = $this->category_audit_streamed_reports($state, false);
         update_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, $state, false);
         $summary = $this->full_category_audit_summary_from_state($state, 'in_progress');
         update_option('wei_ebay_full_category_audit_summary', $summary, false);
@@ -628,6 +628,8 @@ class AutoSyncScheduler
             'completed_at' => '',
             'updated_at' => $startedAt,
             'run_slug' => $runSlug,
+            'audit_run_id' => $runSlug,
+            'schema_version' => 'category_readiness_audit_v2',
             'verbose_debug' => $verboseDebug,
             'batch_size' => $batchSize,
             'offset' => 0,
@@ -640,6 +642,7 @@ class AutoSyncScheduler
             'category_sanity_failed_count' => 0,
             'missing_category_count' => 0,
             'missing_required_aspects_count' => 0,
+            'needs_category_review_count' => 0,
             'content_not_ready_count' => 0,
             'price_not_ready_count' => 0,
             'sample_problem_product_ids' => [],
@@ -680,6 +683,8 @@ class AutoSyncScheduler
     private function category_audit_csv_headers(): array
     {
         return [
+            'audit_run_id',
+            'schema_version',
             'product_id',
             'product_title',
             'woo_category_id',
@@ -691,6 +696,7 @@ class AutoSyncScheduler
             'reason',
             'category_problem_reason',
             'selected_mapping_source',
+            'selected_ebay_category_id',
             'selected_mapping_row_id',
             'selected_mapping_active',
             'selected_ebay_category_is_leaf',
@@ -708,6 +714,8 @@ class AutoSyncScheduler
     private function append_category_audit_csv_row(array &$state, array $row, string $auditStatus): void
     {
         $headers = $this->category_audit_csv_headers();
+        $row['audit_run_id'] = (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? '');
+        $row['schema_version'] = (string) ($state['schema_version'] ?? 'category_readiness_audit_v2');
         if (empty($state['csv_initialized'])) {
             foreach (['full_report_csv_path', 'problems_only_csv_path'] as $pathKey) {
                 $path = (string) ($state[$pathKey] ?? '');
@@ -742,15 +750,20 @@ class AutoSyncScheduler
         fclose($fh);
     }
 
-    private function category_audit_streamed_reports(array $state): array
+    private function category_audit_streamed_reports(array $state, bool $persistCompletedAudit = false): array
     {
         $fullPath = (string) ($state['full_report_csv_path'] ?? '');
         $problemsPath = (string) ($state['problems_only_csv_path'] ?? '');
         $reports = [
-            'full_audit_csv' => $this->category_audit_file_report($fullPath, (string) ($state['full_report_csv_url'] ?? ''), (int) ($state['total_scanned'] ?? 0)),
-            'problems_only_csv' => $this->category_audit_file_report($problemsPath, (string) ($state['problems_only_csv_url'] ?? ''), max(0, (int) ($state['total_scanned'] ?? 0) - (int) ($state['ready_count'] ?? 0))),
+            'full_audit_csv' => $this->category_audit_file_report($fullPath, (string) ($state['full_report_csv_url'] ?? ''), (int) ($state['total_scanned'] ?? 0), $state),
+            'problems_only_csv' => $this->category_audit_file_report($problemsPath, (string) ($state['problems_only_csv_url'] ?? ''), max(0, (int) ($state['total_scanned'] ?? 0) - (int) ($state['ready_count'] ?? 0)), $state),
         ];
         $lastAudit = [
+            'audit_run_id' => (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? ''),
+            'schema_version' => (string) ($state['schema_version'] ?? 'category_readiness_audit_v2'),
+            'generated_at' => (string) ($state['completed_at'] ?? $state['updated_at'] ?? gmdate('Y-m-d H:i:s')),
+            'full_run' => true,
+            'complete' => (string) ($state['status'] ?? '') === 'completed',
             'full_report_csv_path' => (string) ($reports['full_audit_csv']['path'] ?? ''),
             'full_report_csv_url' => (string) ($reports['full_audit_csv']['url'] ?? ''),
             'full_report_csv_exists' => !empty($reports['full_audit_csv']['exists']),
@@ -760,17 +773,21 @@ class AutoSyncScheduler
             'problems_only_csv_exists' => !empty($reports['problems_only_csv']['exists']),
             'problems_only_csv_size' => (int) ($reports['problems_only_csv']['size'] ?? 0),
         ];
-        update_option('wei_ebay_last_category_readiness_audit', $lastAudit, false);
-        if ($problemsPath !== '' && is_readable($problemsPath)) {
-            update_option('wei_ebay_last_problems_only_csv_path', $problemsPath, false);
-            update_option('wei_ebay_last_problems_only_csv', $reports['problems_only_csv'], false);
+        if ($persistCompletedAudit) {
+            update_option('wei_ebay_last_category_readiness_audit', $lastAudit, false);
+            if ($problemsPath !== '' && is_readable($problemsPath)) {
+                update_option('wei_ebay_last_problems_only_csv_path', $problemsPath, false);
+                update_option('wei_ebay_last_problems_only_csv', $reports['problems_only_csv'], false);
+            }
         }
         return $reports;
     }
 
-    private function category_audit_file_report(string $path, string $url, int $rows): array
+    private function category_audit_file_report(string $path, string $url, int $rows, array $state = []): array
     {
         return [
+            'audit_run_id' => (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? ''),
+            'schema_version' => (string) ($state['schema_version'] ?? 'category_readiness_audit_v2'),
             'path' => $path,
             'url' => $url,
             'rows' => $rows,
@@ -799,7 +816,7 @@ class AutoSyncScheduler
         $state['status'] = 'completed';
         $state['result'] = 'success';
         $state['completed_at'] = gmdate('Y-m-d H:i:s');
-        $state['reports'] = $this->category_audit_streamed_reports($state);
+        $state['reports'] = $this->category_audit_streamed_reports($state, true);
         $summary = $this->full_category_audit_summary_from_state($state, 'success');
         update_option('wei_ebay_full_category_audit_summary', $summary, false);
         update_option(self::FULL_CATEGORY_AUDIT_STATE_OPTION, $state + ['reports' => $summary['reports']], false);
@@ -823,23 +840,41 @@ class AutoSyncScheduler
         arsort($intentProblemCounts);
         return [
             'result' => $result,
+            'audit_run_id' => (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? ''),
+            'schema_version' => (string) ($state['schema_version'] ?? 'category_readiness_audit_v2'),
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'full_run' => true,
+            'complete' => $result === 'success' && (string) ($state['status'] ?? '') === 'completed',
             'status' => (string) ($state['status'] ?? $result),
             'started_at' => (string) ($state['started_at'] ?? ''),
+            'finished_at' => (string) ($state['completed_at'] ?? ''),
             'completed_at' => (string) ($state['completed_at'] ?? ''),
             'updated_at' => (string) ($state['updated_at'] ?? ''),
             'verbose_debug' => !empty($state['verbose_debug']),
             'batch_size' => (int) ($state['batch_size'] ?? self::FULL_CATEGORY_AUDIT_BATCH_SIZE),
+            'current_offset' => (int) ($state['offset'] ?? 0),
             'processed_this_batch' => (int) ($state['processed_this_batch'] ?? 0),
+            'processed_total' => (int) ($state['total_scanned'] ?? 0),
             'processed' => (int) ($state['total_scanned'] ?? 0),
             'total_products' => (int) ($state['total_products'] ?? 0),
+            'remaining_products' => max(0, (int) ($state['total_products'] ?? 0) - (int) ($state['total_scanned'] ?? 0)),
             'total_scanned' => (int) ($state['total_scanned'] ?? 0),
+            'ready' => (int) ($state['ready_count'] ?? 0),
             'ready_count' => (int) ($state['ready_count'] ?? 0),
+            'blocked_by_category' => (int) ($state['blocked_by_category_count'] ?? 0),
             'blocked_by_category_count' => (int) ($state['blocked_by_category_count'] ?? 0),
             'invalid_ebay_category_id_count' => (int) ($state['invalid_ebay_category_id_count'] ?? 0),
             'non_leaf_category_count' => (int) ($state['non_leaf_category_count'] ?? 0),
             'category_sanity_failed_count' => (int) ($state['category_sanity_failed_count'] ?? 0),
             'missing_category_count' => (int) ($state['missing_category_count'] ?? 0),
             'missing_required_aspects_count' => (int) ($state['missing_required_aspects_count'] ?? 0),
+            'missing_category' => (int) ($state['missing_category_count'] ?? 0),
+            'invalid_ebay_category_id' => (int) ($state['invalid_ebay_category_id_count'] ?? 0),
+            'non_leaf_category' => (int) ($state['non_leaf_category_count'] ?? 0),
+            'category_sanity_failed' => (int) ($state['category_sanity_failed_count'] ?? 0),
+            'needs_category_review' => (int) ($state['needs_category_review_count'] ?? 0),
+            'needs_category_review_count' => (int) ($state['needs_category_review_count'] ?? 0),
+            'missing_required_aspects' => (int) ($state['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($state['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($state['price_not_ready_count'] ?? 0),
             'sample_problem_product_ids' => (array) ($state['sample_problem_product_ids'] ?? []),
@@ -864,6 +899,9 @@ class AutoSyncScheduler
         }
         if ($status === 'category_sanity_failed' || str_contains($reason, 'sanity')) {
             $state['category_sanity_failed_count'] = (int) ($state['category_sanity_failed_count'] ?? 0) + 1;
+        }
+        if ($status === 'needs_category_review' || str_contains($reason, 'needs_category_review')) {
+            $state['needs_category_review_count'] = (int) ($state['needs_category_review_count'] ?? 0) + 1;
         }
     }
 
@@ -967,6 +1005,7 @@ class AutoSyncScheduler
             'reason' => $reason,
             'category_problem_reason' => $categoryProblemReason,
             'selected_mapping_source' => $selectedMappingSource,
+            'selected_ebay_category_id' => $currentCategoryId,
             'selected_mapping_row_id' => $selectedMappingRowId,
             'selected_mapping_active' => $selectedMappingActive,
             'selected_ebay_category_is_leaf' => $isLeaf,

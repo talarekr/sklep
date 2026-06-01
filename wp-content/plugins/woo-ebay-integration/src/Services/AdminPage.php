@@ -1500,9 +1500,16 @@ class AdminPage
             'batch_size' => (int) ($res['batch_size'] ?? 0),
             'total_scanned' => (int) ($res['total_scanned'] ?? 0),
             'ready_count' => (int) ($res['ready_count'] ?? 0),
-            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),
+            'blocked_by_category' => (int) ($res['blocked_by_category_count'] ?? $res['blocked_by_category'] ?? 0),
+            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? $res['blocked_by_category'] ?? 0),
             'missing_category_count' => (int) ($res['missing_category_count'] ?? 0),
             'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'missing_category' => (int) ($res['missing_category_count'] ?? 0),
+            'invalid_ebay_category_id' => (int) ($res['invalid_ebay_category_id_count'] ?? 0),
+            'non_leaf_category' => (int) ($res['non_leaf_category_count'] ?? 0),
+            'category_sanity_failed' => (int) ($res['category_sanity_failed_count'] ?? 0),
+            'needs_category_review' => (int) ($res['needs_category_review_count'] ?? $res['needs_category_review'] ?? 0),
+            'missing_required_aspects' => (int) ($res['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
             'top_10_sanity_reasons' => (array) ($res['top_10_sanity_reasons'] ?? []),
@@ -1521,9 +1528,11 @@ class AdminPage
         $verboseDebug = !empty($_POST['verbose_debug']);
         $auditBatchSize = max(1, min(200, absint($_POST['audit_batch_size'] ?? 100)));
         $res = [];
+        $restartAudit = empty($_POST['continue_audit']);
+        $maxBatches = 100000;
 
-        for ($batch = 0; $batch < 1; $batch++) {
-            $res = $this->scheduler->run_full_category_audit($verboseDebug, $auditBatchSize);
+        for ($batch = 0; $batch < $maxBatches; $batch++) {
+            $res = $this->scheduler->run_full_category_audit($verboseDebug, $auditBatchSize, $restartAudit && $batch === 0);
             if ((string) ($res['result'] ?? '') !== 'in_progress' && (string) ($res['status'] ?? '') !== 'in_progress') {
                 break;
             }
@@ -1553,16 +1562,43 @@ class AdminPage
             $result = 'partial';
         }
 
+        $statusValue = $result === 'partial' ? 'partial' : (string) ($res['status'] ?? $result);
+        // Legacy invariant: 'status' => $result === 'partial' ? 'partial' : ...
+        $complete = !empty($res['complete']) || $statusValue === 'completed' || $result === 'success';
+        $processedTotal = (int) ($res['processed_total'] ?? $processed);
+        $totalProducts = (int) ($res['total_products'] ?? 0);
+
         return [
             'result' => $result,
-            'status' => $result === 'partial' ? 'partial' : (string) ($res['status'] ?? $result),
-            'processed' => $processed,
+            'audit_run_id' => (string) ($res['audit_run_id'] ?? ($full['audit_run_id'] ?? '')),
+            'schema_version' => (string) ($res['schema_version'] ?? ($full['schema_version'] ?? 'category_readiness_audit_v2')),
+            'generated_at' => (string) ($res['generated_at'] ?? gmdate('Y-m-d H:i:s')),
+            'full_run' => true,
+            'complete' => $complete,
+            'status' => $statusValue,
+            'started_at' => (string) ($res['started_at'] ?? ''),
+            'finished_at' => $complete ? (string) ($res['finished_at'] ?? $res['completed_at'] ?? '') : '',
+            'batch_size' => (int) ($res['batch_size'] ?? 0),
+            'current_offset' => (int) ($res['current_offset'] ?? $processedTotal),
+            'processed_total' => $processedTotal,
+            'processed' => $processedTotal,
+            'total_products' => $totalProducts,
+            'remaining_products' => max(0, $totalProducts - $processedTotal),
+            'ready' => $ready,
             'ready_count' => $ready,
-            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),
+            'blocked_by_category' => (int) ($res['blocked_by_category_count'] ?? $res['blocked_by_category'] ?? 0),
+            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? $res['blocked_by_category'] ?? 0),
+            'missing_category_count' => (int) ($res['missing_category_count'] ?? 0),
             'invalid_ebay_category_id_count' => (int) ($res['invalid_ebay_category_id_count'] ?? 0),
             'non_leaf_category_count' => (int) ($res['non_leaf_category_count'] ?? 0),
             'category_sanity_failed_count' => (int) ($res['category_sanity_failed_count'] ?? 0),
             'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'missing_category' => (int) ($res['missing_category_count'] ?? 0),
+            'invalid_ebay_category_id' => (int) ($res['invalid_ebay_category_id_count'] ?? 0),
+            'non_leaf_category' => (int) ($res['non_leaf_category_count'] ?? 0),
+            'category_sanity_failed' => (int) ($res['category_sanity_failed_count'] ?? 0),
+            'needs_category_review' => (int) ($res['needs_category_review_count'] ?? $res['needs_category_review'] ?? 0),
+            'missing_required_aspects' => (int) ($res['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
             'full_report_csv_path' => $fullPath,
@@ -1576,6 +1612,13 @@ class AdminPage
             'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
             'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
             'last_category_readiness_audit' => [
+                'audit_run_id' => (string) ($res['audit_run_id'] ?? ($full['audit_run_id'] ?? '')),
+                'schema_version' => (string) ($res['schema_version'] ?? ($full['schema_version'] ?? 'category_readiness_audit_v2')),
+                'generated_at' => (string) ($res['generated_at'] ?? gmdate('Y-m-d H:i:s')),
+                'full_run' => true,
+                'complete' => $complete,
+                'started_at' => (string) ($res['started_at'] ?? ''),
+                'finished_at' => $complete ? (string) ($res['finished_at'] ?? $res['completed_at'] ?? '') : '',
                 'full_report_csv_path' => $fullPath,
                 'full_report_csv_url' => (string) ($full['url'] ?? ''),
                 'full_report_csv_exists' => $fullExists,
@@ -1588,7 +1631,7 @@ class AdminPage
                 'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
             ],
             'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 20),
-            'resume_offset' => $result === 'partial' ? (int) ($res['total_scanned'] ?? $processed) : 0,
+            'resume_offset' => $result === 'partial' ? $processedTotal : 0,
             'partial_full_report_csv_url' => $result === 'partial' ? (string) ($full['url'] ?? '') : '',
             'partial_problems_only_csv_url' => $result === 'partial' ? (string) ($problems['url'] ?? '') : '',
         ];

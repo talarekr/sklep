@@ -550,7 +550,9 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
         $blockedFixRecommendationDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_recommendations.csv'));
         $blockedFixImportDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_fix_import.csv'));
-        $lastAuditTime = (string) ($lastCategoryAudit['completed_at'] ?? $lastCategoryAudit['updated_at'] ?? '');
+        $auditIsComplete = !empty($categoryAuditSummary['complete']) || (string) ($categoryAuditSummary['status'] ?? '') === 'completed';
+        $auditLabel = $auditIsComplete ? 'FULL COMPLETED AUDIT' : 'PARTIAL AUDIT / IN PROGRESS';
+        $lastAuditTime = (string) ($lastCategoryAudit['finished_at'] ?? $lastCategoryAudit['completed_at'] ?? $lastCategoryAudit['updated_at'] ?? '');
         $lastImportTime = (string) ($category_mapping_worklist_import_summary['imported_at'] ?? $category_mapping_worklist_import_summary['updated_at'] ?? '');
         $primaryNextAction = $lastAuditTime === '' ? 'Run category readiness audit' : (!$worklistReady ? 'Generate category-mapping-worklist.csv' : ($lastImportTime === '' ? 'Import filled category-mapping-worklist.csv' : 'Run category readiness audit'));
         ?>
@@ -568,13 +570,21 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         <section class="wei-card" data-wei-category-section="status-audyt"><h3>Section 1 — Status / Audyt</h3>
             <p class="description">Audit and diagnostics only. CSV output includes resolver-selected mapping details and explicit category problem reasons.</p>
             <div class="wei-actions">
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_category_readiness_audit'); ?><input type="hidden" name="action" value="wei_run_category_readiness_audit" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><label>Batch size <input type="number" name="audit_batch_size" value="100" min="1" max="200" step="1" style="width:80px" /></label><button class="button button-primary">Run category readiness audit</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_category_readiness_audit'); ?><input type="hidden" name="action" value="wei_run_category_readiness_audit" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="hidden" name="audit_full_run" value="1" /><label>Batch size <input type="number" name="audit_batch_size" value="200" min="1" max="200" step="1" style="width:80px" /></label><button class="button button-primary">Run full category readiness audit</button></form>
+                <?php if (!$auditIsComplete && !empty($categoryAuditSummary['audit_run_id'])): ?><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_category_readiness_audit'); ?><input type="hidden" name="action" value="wei_run_category_readiness_audit" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="hidden" name="continue_audit" value="1" /><label>Batch size <input type="number" name="audit_batch_size" value="<?php echo esc_attr((string) ($categoryAuditSummary['batch_size'] ?? 200)); ?>" min="1" max="200" step="1" style="width:80px" /></label><button class="button">Continue audit</button></form><?php endif; ?>
                 <?php if ($categoryAuditFullReady): ?><a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download full audit CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['full_report_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
                 <?php if ($categoryAuditProblemsReady): ?><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download problems-only CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['problems_only_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
             </div>
+            <p><strong><?php echo esc_html($auditLabel); ?></strong></p>
+            <?php if (!$auditIsComplete): ?><div class="notice notice-warning inline"><p>Do not use these KPI as final publish readiness numbers.</p></div><?php endif; ?>
             <div class="wei-grid">
-                <?php foreach (['processed' => 'total_scanned', 'ready' => 'ready_count', 'blocked_by_category' => 'blocked_by_category_count', 'missing_category' => 'missing_category_count', 'invalid_ebay_category_id' => 'invalid_ebay_category_id_count', 'non_leaf_category' => 'non_leaf_category_count', 'category_sanity_failed' => 'category_sanity_failed_count', 'needs_category_review' => 'needs_review', 'missing_required_aspects' => 'missing_required_aspects_count'] as $label => $key): ?>
-                    <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($categoryAuditSummary[$key] ?? $categoryDashboardSummary[$key] ?? 0)); ?></strong></div>
+                <?php foreach (['batch_size' => 'batch_size', 'current_offset' => 'current_offset', 'processed_total' => 'processed_total', 'total_products' => 'total_products', 'remaining_products' => 'remaining_products', 'complete' => 'complete', 'audit_run_id' => 'audit_run_id', 'started_at' => 'started_at', 'finished_at' => 'finished_at'] as $label => $key): ?>
+                    <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html(is_bool($categoryAuditSummary[$key] ?? null) ? (($categoryAuditSummary[$key] ?? false) ? 'true' : 'false') : (string) ($categoryAuditSummary[$key] ?? '—')); ?></strong></div>
+                <?php endforeach; ?>
+            </div>
+            <div class="wei-grid">
+                <?php foreach (['processed' => 'processed_total', 'ready' => 'ready', 'blocked_by_category' => 'blocked_by_category', 'missing_category' => 'missing_category', 'invalid_ebay_category_id' => 'invalid_ebay_category_id', 'non_leaf_category' => 'non_leaf_category', 'category_sanity_failed' => 'category_sanity_failed', 'needs_category_review' => 'needs_category_review', 'missing_required_aspects' => 'missing_required_aspects'] as $label => $key): ?>
+                    <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($auditIsComplete ? ($categoryAuditSummary[$key] ?? 0) : ($categoryAuditSummary[$key] ?? 0))); ?></strong></div>
                 <?php endforeach; ?>
             </div>
         </section>
