@@ -368,6 +368,7 @@ class AdminPage
         $category_validation_statuses = is_array($category_validation_statuses) ? $category_validation_statuses : [];
         $manual_category_picker_query = isset($_GET['ebay_category_search']) ? sanitize_text_field(wp_unslash((string) $_GET['ebay_category_search'])) : '';
         $manual_category_picker_rows = $load_category_mapping_rows ? $this->taxonomy->search_cached_automotive_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), $manual_category_picker_query, 75) : [];
+        $category_cache_diagnostic = $this->taxonomy->category_cache_diagnostic((string) ($s['marketplace_id'] ?? 'EBAY_DE'), ['33544', '33615', '33566', '9886', '171115']);
         $category_mapping_diagnostics_id = isset($_GET['woo_category_diagnostics_id']) ? absint($_GET['woo_category_diagnostics_id']) : 0;
         $category_mapping_diagnostics = $category_mapping_diagnostics_id > 0 ? $this->category_mapping_diagnostics($category_mapping_diagnostics_id, (string) ($s['marketplace_id'] ?? 'EBAY_DE')) : [];
         $category_dashboard_summary = $this->categoryRepo->production_mapping_summary(

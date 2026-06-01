@@ -280,7 +280,7 @@ class BlockedCategoryFixReportService
             }
             $categoryId = (string) ($group['current_ebay_category_id'] ?? '');
             if ($categoryId !== '') {
-                $cached = $this->taxonomy->cached_category('EBAY_DE', $categoryId);
+                $cached = $this->taxonomy->cached_category($marketplaceId, $categoryId);
                 if (is_array($cached)) {
                     $group['current_ebay_category_name'] = (string) ($cached['category_name'] ?? '');
                     if ((string) ($group['current_ebay_category_path'] ?? '') === '') {
@@ -321,7 +321,7 @@ class BlockedCategoryFixReportService
 
     public function import_category_mapping_worklist(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
     {
-        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
+        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'import_debug_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
         if ($marketplaceId !== 'EBAY_DE') {
             $summary['result'] = 'error';
             $summary['error'] = 'unsupported_marketplace';
@@ -341,6 +341,9 @@ class BlockedCategoryFixReportService
             return $summary;
         }
         $headers = array_map(static fn($header): string => trim((string) $header), $headers);
+        $cacheDiagnostic = $this->taxonomy->category_cache_diagnostic($marketplaceId, ['33544', '33615', '33566', '9886', '171115']);
+        $summary['category_cache_diagnostic'] = $cacheDiagnostic;
+        $cacheTotal = (int) ($cacheDiagnostic['total_cached_categories'] ?? 0);
         while (($data = fgetcsv($fh)) !== false) {
             $summary['total_rows']++;
             $row = [];
@@ -350,21 +353,29 @@ class BlockedCategoryFixReportService
             $wooCategoryId = absint($row['woo_category_id'] ?? 0);
             $finalCategoryId = trim((string) ($row['final_ebay_category_id'] ?? ''));
             if ($finalCategoryId === '') {
+                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, null, 'skipped', 'skipped_empty_final_ebay_category_id');
                 $summary['skipped_empty_final_ebay_category_id']++;
                 $summary['skipped']++;
                 continue;
             }
             if ($wooCategoryId <= 0) {
+                $category = $this->taxonomy->cached_category($marketplaceId, $finalCategoryId);
+                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', 'missing_woo_category_id');
                 $summary = $this->reject_worklist_row($summary, $row, 'missing_woo_category_id');
                 continue;
             }
             $category = $this->taxonomy->cached_category($marketplaceId, $finalCategoryId);
+            $decisionReason = '';
             if (!is_array($category)) {
-                $summary = $this->reject_worklist_row($summary, $row, 'invalid_ebay_category_id');
+                $decisionReason = $cacheTotal <= 0 ? 'cache_missing' : 'cache_incomplete';
+                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', $decisionReason);
+                $summary = $this->reject_worklist_row($summary, $row, $decisionReason);
                 continue;
             }
             if (empty($category['leaf'])) {
-                $summary = $this->reject_worklist_row($summary, $row, 'non_leaf_category');
+                $decisionReason = 'non_leaf_category';
+                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', $decisionReason);
+                $summary = $this->reject_worklist_row($summary, $row, $decisionReason);
                 continue;
             }
             $saved = $this->categoryRepo->save_manual_worklist_mapping($wooCategoryId, $marketplaceId, [
@@ -372,6 +383,9 @@ class BlockedCategoryFixReportService
                 'category_name' => (string) ($category['category_name'] ?? ''),
                 'category_path' => (string) ($category['category_path'] ?? ''),
             ]);
+            $this->record_worklist_category_validation($wooCategoryId, $marketplaceId, $finalCategoryId, $category);
+            $decisionReason = 'accepted';
+            $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'accepted', $decisionReason);
             $summary['accepted']++;
             $operation = (string) ($saved['operation'] ?? 'updated');
             if ($operation === 'inserted') {
@@ -396,12 +410,63 @@ class BlockedCategoryFixReportService
         return $summary;
     }
 
+
+    private function record_worklist_category_validation(int $wooCategoryId, string $marketplaceId, string $categoryId, array $category): void
+    {
+        if ($wooCategoryId <= 0 || $categoryId === '') {
+            return;
+        }
+        $validation = get_option('wei_ebay_category_validation_statuses', []);
+        $validation = is_array($validation) ? $validation : [];
+        $validation['by_woo_term_id'] = is_array($validation['by_woo_term_id'] ?? null) ? $validation['by_woo_term_id'] : [];
+        $validation['by_category_id'] = is_array($validation['by_category_id'] ?? null) ? $validation['by_category_id'] : [];
+        $entry = [
+            'woo_term_id' => $wooCategoryId,
+            'category_id' => $categoryId,
+            'valid' => true,
+            'leaf' => true,
+            'validation_status' => 'valid_leaf',
+            'category_name' => (string) ($category['category_name'] ?? ''),
+            'category_path' => (string) ($category['category_path'] ?? ''),
+            'source' => 'manual_worklist_import',
+            'marketplace_id' => $marketplaceId,
+            'updated_at' => gmdate('c'),
+        ];
+        $validation['by_woo_term_id'][(string) $wooCategoryId] = $entry;
+        $validation['by_category_id'][$categoryId] = $entry;
+        $validation['updated_at'] = gmdate('c');
+        $validation['marketplace_id'] = $marketplaceId;
+        update_option('wei_ebay_category_validation_statuses', $validation, false);
+    }
+
     private function reject_worklist_row(array $summary, array $row, string $reason): array
     {
         $summary['rejected']++;
         if (count($summary['rejected_rows']) < 100) {
-            $summary['rejected_rows'][] = ['woo_category_id' => (string) ($row['woo_category_id'] ?? ''), 'final_ebay_category_id' => (string) ($row['final_ebay_category_id'] ?? ''), 'reason' => $reason];
+            $summary['rejected_rows'][] = ['woo_category_id' => (string) ($row['woo_category_id'] ?? ''), 'final_ebay_category_id' => (string) ($row['final_ebay_category_id'] ?? ''), 'current_ebay_category_id' => (string) ($row['current_ebay_category_id'] ?? ''), 'reason' => $reason];
         }
+        return $summary;
+    }
+
+    private function add_worklist_import_debug_row(array $summary, array $row, string $marketplaceId, string $finalCategoryId, ?array $category, string $decision, string $reason): array
+    {
+        if (count($summary['import_debug_rows'] ?? []) >= 5) {
+            return $summary;
+        }
+        $summary['import_debug_rows'][] = [
+            'woo_category_id' => (string) ($row['woo_category_id'] ?? ''),
+            'final_ebay_category_id' => $finalCategoryId,
+            'current_ebay_category_id' => (string) ($row['current_ebay_category_id'] ?? ''),
+            'cache_lookup_marketplace_id' => $marketplaceId,
+            'cache_lookup_result' => [
+                'found' => is_array($category),
+                'leaf' => is_array($category) ? !empty($category['leaf']) : null,
+                'category_name' => is_array($category) ? (string) ($category['category_name'] ?? '') : '',
+                'category_path' => is_array($category) ? (string) ($category['category_path'] ?? '') : '',
+            ],
+            'decision' => $decision,
+            'reason' => $reason,
+        ];
         return $summary;
     }
 

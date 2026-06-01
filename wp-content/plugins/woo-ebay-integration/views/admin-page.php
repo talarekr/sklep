@@ -590,7 +590,21 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php endforeach; ?>
             </div>
             <?php if (!empty($category_mapping_worklist_import_summary['warnings'])): ?><details open><summary>Errors / warnings</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary['warnings'], 3000)); ?></pre></details><?php endif; ?>
+            <?php if (!empty($category_mapping_worklist_import_summary['import_debug_rows'])): ?><details open><summary>First 5 import debug rows</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary['import_debug_rows'], 6000)); ?></pre></details><?php endif; ?>
             <?php if (!empty($category_mapping_worklist_import_summary)): ?><details><summary>Latest import summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary, 6000)); ?></pre></details><?php endif; ?>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="category-cache-diagnostic"><h3>Category cache diagnostic</h3>
+            <p class="description">Local EBAY_DE taxonomy cache health used by the worklist validator. Sample lookups include 33544, 33615, 33566, 9886, and 171115.</p>
+            <div class="wei-grid">
+                <div class="wei-card"><span>marketplace_id</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['marketplace_id'] ?? 'EBAY_DE')); ?></strong></div>
+                <div class="wei-card"><span>total cached categories</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['total_cached_categories'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>cached leaf categories</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['cached_leaf_categories'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>cached non-leaf categories</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['cached_non_leaf_categories'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>taxonomy version</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['taxonomy_version'] ?? '')); ?></strong></div>
+                <div class="wei-card"><span>last cache refresh/import time</span><strong><?php echo esc_html((string) ($category_cache_diagnostic['last_cache_refresh_import_time'] ?? '')); ?></strong></div>
+            </div>
+            <details open><summary>Sample lookup by category ID</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_cache_diagnostic['sample_lookup_by_category_id'] ?? [], 6000)); ?></pre></details>
         </section>
 
         <section class="wei-card" data-wei-category-section="diagnostyka-mappingu"><h3>Section 3 — Diagnostyka mappingu</h3>

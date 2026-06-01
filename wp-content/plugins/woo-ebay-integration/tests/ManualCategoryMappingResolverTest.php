@@ -54,11 +54,15 @@ class ManualCategoryMappingResolverFakeWpdb
         $marketplace = $marketplaceMatch[1] ?? 'EBAY_DE';
         $termId = (int) ($termMatch[1] ?? 0);
         $rows = array_values(array_filter($this->rows, static fn (array $row): bool => $row['marketplace_id'] === $marketplace && (int) $row['woo_term_id'] === $termId));
+        if (str_contains($query, "source='manual_worklist'") && str_contains($query, 'LIMIT 1')) {
+            $rows = array_values(array_filter($rows, static fn (array $row): bool => ($row['source'] ?? '') === 'manual_worklist'));
+        }
         foreach ($rows as &$row) {
             $row['resolver_priority'] = match (true) {
                 in_array($row['source'], ['manual', 'manual_woo_category_mapping', 'manual_teaching_csv'], true) && !str_starts_with($row['status'], 'disabled') => 1,
-                in_array($row['source'], ['import', 'csv_import'], true) && !str_starts_with($row['status'], 'disabled') => 2,
-                in_array($row['source'], ['rule', 'auto_taxonomy'], true) && !str_starts_with($row['status'], 'disabled') => 3,
+                $row['source'] === 'manual_worklist' && !str_starts_with($row['status'], 'disabled') => 2,
+                in_array($row['source'], ['import', 'csv_import'], true) && !str_starts_with($row['status'], 'disabled') => 3,
+                in_array($row['source'], ['rule', 'auto_taxonomy'], true) && !str_starts_with($row['status'], 'disabled') => 4,
                 !str_starts_with($row['status'], 'disabled') => 4,
                 default => 5,
             };
@@ -98,7 +102,7 @@ class ManualCategoryMappingResolverFakeWpdb
     {
         preg_match("/marketplace_id='([^']+)'/", $query, $marketplaceMatch);
         preg_match('/woo_term_id=(\d+)/', $query, $termMatch);
-        preg_match('/id<>(\d+)/', $query, $idMatch);
+        preg_match('/id<>\s*(\d+)/', $query, $idMatch);
         $marketplace = $marketplaceMatch[1] ?? 'EBAY_DE';
         $termId = (int) ($termMatch[1] ?? 0);
         $selectedId = (int) ($idMatch[1] ?? 0);
@@ -119,6 +123,7 @@ $wpdb->rows = [
     ['id' => 11, 'marketplace_id' => 'EBAY_DE', 'woo_term_id' => 7, 'ebay_category_id' => 'import-newer', 'source' => 'import', 'status' => 'mapped_manual', 'updated_at' => '2026-02-01 00:00:00', 'created_at' => '2026-02-01 00:00:00'],
     ['id' => 12, 'marketplace_id' => 'EBAY_DE', 'woo_term_id' => 7, 'ebay_category_id' => 'manual-old', 'source' => 'manual', 'status' => 'mapped_manual', 'updated_at' => '2026-01-15 00:00:00', 'created_at' => '2026-01-15 00:00:00'],
     ['id' => 13, 'marketplace_id' => 'EBAY_DE', 'woo_term_id' => 7, 'ebay_category_id' => 'manual-new', 'source' => 'manual', 'status' => 'mapped_manual', 'updated_at' => '2026-03-01 00:00:00', 'created_at' => '2026-03-01 00:00:00'],
+    ['id' => 20, 'marketplace_id' => 'EBAY_DE', 'woo_term_id' => 5197, 'ebay_category_id' => '262084', 'source' => 'legacy', 'status' => 'mapped_auto', 'updated_at' => '2026-01-01 00:00:00', 'created_at' => '2026-01-01 00:00:00'],
 ];
 
 $repo = (new ReflectionClass(CategoryMappingRepository::class))->newInstanceWithoutConstructor();
@@ -135,6 +140,15 @@ if (($selected['ebay_category_id'] ?? '') !== '33573' || ($selected['source'] ??
 }
 if ((int) ($saved['duplicates_disabled'] ?? 0) < 2) {
     $failures[] = 'Manual save should disable duplicate non-manual legacy/import/rule rows.';
+}
+
+$savedWorklist = $repo->save_manual_worklist_mapping(5197, 'EBAY_DE', ['category_id' => '33566', 'category_name' => 'Pompa ABS', 'category_path' => 'Auto > Brakes > ABS pumps']);
+$selectedWorklist = $repo->resolveProductionCategoryMapping(5197, 'EBAY_DE');
+if (($selectedWorklist['ebay_category_id'] ?? '') !== '33566' || ($selectedWorklist['source'] ?? '') !== 'manual_worklist') {
+    $failures[] = 'Manual worklist import should update category-level production mapping so Woo category 5197 resolves to eBay category 33566.';
+}
+if ((int) ($savedWorklist['duplicates_disabled'] ?? 0) < 1) {
+    $failures[] = 'Manual worklist import should disable legacy/import/rule rows for the same Woo category.';
 }
 
 if ($failures !== []) {

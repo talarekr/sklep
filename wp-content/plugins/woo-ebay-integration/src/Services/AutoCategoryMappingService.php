@@ -1027,7 +1027,7 @@ class AutoCategoryMappingService
 
         $status = (string) ($mapping['status'] ?? '');
         $source = (string) ($mapping['source'] ?? '');
-        return in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping'], true);
+        return in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping', 'manual_worklist'], true);
     }
 
     private function reevaluate_existing_mapping(?array $mapping, array $settings): ?array
