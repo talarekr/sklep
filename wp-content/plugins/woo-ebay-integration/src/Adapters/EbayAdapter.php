@@ -2195,6 +2195,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<div style="font-size:15px;font-weight:700;color:#dbeafe;">Geprüfte gebrauchte Teile | Sorgfältig kontrolliert | Professionell verpackt</div>'
             . '</div></div>';
 
+        $html = $this->ensure_ebay_same_vehicle_cta_before_delivery_section($html, $buttonHtml);
+        $sameVehicleRendered = $buttonHtml !== '' && str_contains($html, 'Mehr Teile von diesem Fahrzeug ansehen');
+        if (!$sameVehicleRendered && $buttonHtml !== '') {
+            $sameVehicleCta['reason'] = 'missing_template_hook';
+        }
+        $sameVehicleCta['same_vehicle_cta_rendered'] = $sameVehicleRendered;
+        if (empty($sameVehicleCta['reason'])) {
+            $sameVehicleCta['reason'] = $sameVehicleRendered ? '' : $this->same_vehicle_suppression_reason($sameVehicleCta);
+        }
+
         $htmlValidation = self::validate_ebay_de_rendered_html($html);
 
         return [
@@ -2222,6 +2232,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'field_mapping' => $details['field_mapping'],
             'same_vehicle_url' => $sameVehicleUrl,
             'same_vehicle_cta' => $sameVehicleCta,
+            'same_vehicle_diagnostics' => $this->build_same_vehicle_preview_diagnostics($sameVehicleCta),
             'warnings' => array_merge($warnings, empty($htmlValidation['valid']) ? [['code' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])]] : []),
         ];
     }
@@ -2268,6 +2279,57 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '</div>';
     }
 
+    private function ensure_ebay_same_vehicle_cta_before_delivery_section(string $html, string $buttonHtml): string
+    {
+        if ($buttonHtml === '') {
+            return $html;
+        }
+        if (str_contains($html, 'Mehr Teile von diesem Fahrzeug ansehen')) {
+            return $html;
+        }
+
+        $deliveryMarker = '<h2 style="margin:0 0 10px;color:#06275d;font-size:26px;line-height:1.2;font-weight:900;text-align:center;">Wir liefern in ganz Europa</h2>';
+        $deliveryPosition = strpos($html, $deliveryMarker);
+        if ($deliveryPosition === false) {
+            return $html;
+        }
+
+        $deliveryBlockPosition = strrpos(substr($html, 0, $deliveryPosition), '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:0 0 20px;border-radius:8px;overflow:hidden;box-shadow:0 8px 20px rgba(15,23,42,.05);">');
+        if ($deliveryBlockPosition === false) {
+            return $html;
+        }
+
+        return substr($html, 0, $deliveryBlockPosition) . $buttonHtml . substr($html, $deliveryBlockPosition);
+    }
+
+    private function same_vehicle_suppression_reason(array $metadata): string
+    {
+        if (trim((string) ($metadata['ovoko_car_id'] ?? '')) === '') {
+            return 'missing_ovoko_car_id';
+        }
+        if (trim((string) ($metadata['seller_username'] ?? '')) === '') {
+            return 'missing_seller_username';
+        }
+        return 'other';
+    }
+
+    private function build_same_vehicle_preview_diagnostics(array $metadata): array
+    {
+        $rendered = !empty($metadata['same_vehicle_cta_rendered']);
+        $reason = (string) ($metadata['reason'] ?? '');
+        if (!in_array($reason, ['missing_ovoko_car_id', 'missing_seller_username', 'missing_template_hook', 'other'], true)) {
+            $reason = $this->same_vehicle_suppression_reason($metadata);
+        }
+        return [
+            'detected_ovoko_car_id' => (string) ($metadata['ovoko_car_id'] ?? ''),
+            'ovoko_car_id_source_meta_key' => (string) ($metadata['ovoko_car_id_source_meta_key'] ?? ''),
+            'detected_seller_username' => (string) ($metadata['seller_username'] ?? ''),
+            'seller_username_source' => (string) ($metadata['seller_username_source'] ?? ''),
+            'same_vehicle_cta_rendered' => $rendered,
+            'not_rendered_reason' => $rendered ? '' : $reason,
+        ];
+    }
+
     private function resolve_ebay_same_vehicle_url_for_product(int $productId): array
     {
         $warnings = [];
@@ -2296,15 +2358,19 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        $ovokoCarId = $this->resolve_ovoko_car_id($productId);
+        $ovokoCar = $this->resolve_ovoko_car_id_data($productId);
+        $ovokoCarId = (string) ($ovokoCar['value'] ?? '');
         $settings = $this->settings();
-        $sellerUsername = $this->resolve_ebay_seller_username($settings);
+        $seller = $this->resolve_ebay_seller_username_data($settings);
+        $sellerUsername = (string) ($seller['value'] ?? '');
         $strategy = 'ebay_de_seller_keyword_search_ovoko_car_id';
         $metadata = [
             'same_vehicle_cta_visible' => false,
             'reason' => '',
             'ovoko_car_id' => $ovokoCarId,
+            'ovoko_car_id_source_meta_key' => (string) ($ovokoCar['source'] ?? ''),
             'seller_username' => $sellerUsername,
+            'seller_username_source' => (string) ($seller['source'] ?? ''),
             'checked_url_strategy' => $strategy,
         ];
 
@@ -2313,8 +2379,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['url' => '', 'source' => '', 'token' => '', 'warnings' => $warnings, 'metadata' => $metadata];
         }
         if ($sellerUsername === '') {
-            $metadata['reason'] = 'missing_ebay_seller_username_for_same_vehicle_url';
-            $warnings[] = ['code' => 'missing_ebay_seller_username_for_same_vehicle_url', 'message' => 'Cannot build eBay.de same-vehicle CTA URL without seller username in plugin settings.'];
+            $metadata['reason'] = 'missing_seller_username';
+            $warnings[] = ['code' => 'missing_seller_username', 'message' => 'Cannot build eBay.de same-vehicle CTA URL without seller username in plugin settings or constants.'];
             return ['url' => '', 'source' => '', 'token' => $ovokoCarId, 'warnings' => $warnings, 'metadata' => $metadata];
         }
 
@@ -2328,10 +2394,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $metadata = [
             'same_vehicle_cta_visible' => true,
             'ovoko_car_id' => $ovokoCarId,
+            'ovoko_car_id_source_meta_key' => (string) ($ovokoCar['source'] ?? ''),
             'same_vehicle_token' => $token,
             'same_vehicle_ebay_url' => $url,
             'url_strategy' => $strategy,
             'seller_username' => $sellerUsername,
+            'seller_username_source' => (string) ($seller['source'] ?? ''),
             'checked_url_strategy' => $strategy,
         ];
 
@@ -2340,32 +2408,45 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_ovoko_car_id(int $productId): string
     {
+        return (string) ($this->resolve_ovoko_car_id_data($productId)['value'] ?? '');
+    }
+
+    private function resolve_ovoko_car_id_data(int $productId): array
+    {
         foreach (['_ovoko_car_id', 'ovoko_car_id', '_car_id', 'car_id', 'donor_vehicle_id', '_donor_vehicle_id', '_ovoko_vehicle_id', 'ovoko_vehicle_id', '_vehicle_id', 'vehicle_id'] as $metaKey) {
             $value = trim((string) get_post_meta($productId, $metaKey, true));
             if ($value !== '') {
-                return preg_replace('/[^A-Za-z0-9_:-]/', '', $value) ?: '';
+                return [
+                    'value' => preg_replace('/[^A-Za-z0-9_:-]/', '', $value) ?: '',
+                    'source' => $metaKey,
+                ];
             }
         }
-        return '';
+        return ['value' => '', 'source' => ''];
     }
 
     private function resolve_ebay_seller_username(array $settings): string
     {
+        return (string) ($this->resolve_ebay_seller_username_data($settings)['value'] ?? '');
+    }
+
+    private function resolve_ebay_seller_username_data(array $settings): array
+    {
         foreach (['ebay_seller_username', 'seller_username', 'ebay_username', 'ebay_store_username'] as $key) {
             $value = trim((string) ($settings[$key] ?? ''));
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'settings.' . $key];
             }
         }
         foreach (['WEI_EBAY_SELLER_USERNAME', 'EBAY_SELLER_USERNAME'] as $constant) {
             if (defined($constant)) {
                 $value = trim((string) constant($constant));
                 if ($value !== '') {
-                    return $value;
+                    return ['value' => $value, 'source' => 'constant.' . $constant];
                 }
             }
         }
-        return '';
+        return ['value' => '', 'source' => ''];
     }
 
     private function is_ebay_public_url(string $url): bool
@@ -2774,6 +2855,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'product_id' => $productId,
                     'sku' => (string) $product->get_sku(),
                     'html' => $html,
+                    'same_vehicle_url' => (string) ($preview['same_vehicle_url'] ?? ''),
+                    'same_vehicle_cta' => (array) ($preview['same_vehicle_cta'] ?? []),
+                    'same_vehicle_diagnostics' => (array) ($preview['same_vehicle_diagnostics'] ?? []),
+                    'same_vehicle_cta_visible' => !empty($preview['same_vehicle_cta']['same_vehicle_cta_visible']),
+                    'same_vehicle_token' => (string) ($preview['same_vehicle_cta']['same_vehicle_token'] ?? ''),
+                    'same_vehicle_ebay_url' => (string) ($preview['same_vehicle_cta']['same_vehicle_ebay_url'] ?? ''),
                     'warnings' => (array) ($preview['warnings'] ?? []),
                     'safety' => [
                         'called_ebay_api' => false,
@@ -2811,6 +2898,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'field_mapping' => (array) ($preview['field_mapping'] ?? []),
                 'same_vehicle_url' => (string) ($preview['same_vehicle_url'] ?? ''),
                 'same_vehicle_cta' => (array) ($preview['same_vehicle_cta'] ?? []),
+                'same_vehicle_diagnostics' => (array) ($preview['same_vehicle_diagnostics'] ?? []),
                 'same_vehicle_cta_visible' => !empty($preview['same_vehicle_cta']['same_vehicle_cta_visible']),
                 'same_vehicle_token' => (string) ($preview['same_vehicle_cta']['same_vehicle_token'] ?? ''),
                 'same_vehicle_ebay_url' => (string) ($preview['same_vehicle_cta']['same_vehicle_ebay_url'] ?? ''),

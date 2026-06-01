@@ -60,6 +60,12 @@ namespace {
     if (empty($sameVehicle['metadata']['same_vehicle_cta_visible'])) {
         $failures[] = 'Expected product with ovoko_car_id and seller username to show CTA metadata.';
     }
+    if (($sameVehicle['metadata']['ovoko_car_id_source_meta_key'] ?? '') !== '_ovoko_car_id') {
+        $failures[] = 'Expected same-vehicle metadata to expose the exact ovoko car ID source meta key.';
+    }
+    if (($sameVehicle['metadata']['seller_username_source'] ?? '') !== 'settings.ebay_seller_username') {
+        $failures[] = 'Expected same-vehicle metadata to expose the seller username settings source.';
+    }
 
     $html = $renderCta->invoke($adapter, (string) $sameVehicle['url'], (string) $sameVehicle['token']);
     if (!str_contains($html, 'Mehr Teile von diesem Fahrzeug ansehen') || !str_contains($html, 'Alle verfügbaren Teile aus demselben Fahrzeug anzeigen.')) {
@@ -84,6 +90,14 @@ namespace {
         $failures[] = 'Expected renderer to output no CTA when URL and ovoko_car_id are empty.';
     }
 
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = [];
+    $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'NOSELLER:1'];
+    $missingSeller = $resolveSameVehicle->invoke($adapter, 105);
+    if (($missingSeller['metadata']['reason'] ?? '') !== 'missing_seller_username') {
+        $failures[] = 'Expected missing seller username to use the preview diagnostic reason missing_seller_username.';
+    }
+
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'gpswiss'];
     $GLOBALS['wei_test_post_meta'][103] = ['donor_vehicle_id' => 'DONOR-789'];
     $donorVehicle = $resolveSameVehicle->invoke($adapter, 103);
     if (($donorVehicle['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=gpswiss&_nkw=DONOR-789') {
@@ -99,6 +113,9 @@ namespace {
     $constantSeller = $resolveSameVehicle->invoke($adapter, 104);
     if (($constantSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=constant-seller&_nkw=CONST%3A321') {
         $failures[] = 'Expected configured seller username constant fallback to build the same-vehicle URL when settings are empty.';
+    }
+    if (($constantSeller['metadata']['seller_username_source'] ?? '') !== 'constant.WEI_EBAY_SELLER_USERNAME') {
+        $failures[] = 'Expected constant seller fallback source to be exposed in same-vehicle metadata.';
     }
 
     if ($failures !== []) {

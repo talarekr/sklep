@@ -2779,6 +2779,7 @@ class AdminPage
             'preview_called_google_api' => !empty($res['preview_called_google_api']),
             'same_vehicle_url' => (string) ($res['same_vehicle_url'] ?? ''),
             'same_vehicle_cta' => (array) ($res['same_vehicle_cta'] ?? []),
+            'same_vehicle_diagnostics' => (array) ($res['same_vehicle_diagnostics'] ?? []),
             'same_vehicle_cta_visible' => !empty($res['same_vehicle_cta_visible']),
             'same_vehicle_token' => (string) ($res['same_vehicle_token'] ?? ''),
             'same_vehicle_ebay_url' => (string) ($res['same_vehicle_ebay_url'] ?? ''),
@@ -2788,6 +2789,7 @@ class AdminPage
         echo '<h2>Used fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['used_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Missing fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['missing_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Field mapping</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['field_mapping'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Same-vehicle CTA diagnostics (preview only)</h2><pre style="white-space:pre-wrap;background:#fff8e5;border:1px solid #dba617;padding:12px;">' . esc_html(wp_json_encode((array) ($res['same_vehicle_diagnostics'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
         echo '<h2>Source description</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['source_description'] ?? '')) . '</pre>';
         echo '<h2>Translated description</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html((string) ($res['translated_description'] ?? '')) . '</pre>';
         echo '<h2>Rendered HTML</h2><div style="background:#fff;border:1px solid #dcdcde;padding:12px;overflow:auto;">' . wp_kses_post((string) ($res['html'] ?? '')) . '</div>';
