@@ -27,6 +27,7 @@ class AdminPage
         add_action('admin_post_wei_upsert_inventory_location', [$this, 'upsert_inventory_location']);
         add_action('admin_post_wei_refresh_policies', [$this, 'refresh_policies']);
         add_action('admin_post_wei_generate_shipping_mapping_report', [$this, 'generate_shipping_mapping_report']);
+        add_action('admin_post_wei_shipping_mapping_diagnostics', [$this, 'shipping_mapping_diagnostics']);
         add_action('admin_post_wei_generate_listing_quality_audit', [$this, 'generate_listing_quality_audit']);
         add_action('admin_post_wei_condition_cleanup_single', [$this, 'condition_cleanup_single']);
         add_action('admin_post_wei_basic_specifics_single', [$this, 'basic_specifics_single']);
@@ -540,18 +541,80 @@ class AdminPage
         $s['inventory_location_postal_code'] = sanitize_text_field((string) ($_POST['inventory_location_postal_code'] ?? '08-460'));
         $s['inventory_location_city'] = sanitize_text_field((string) ($_POST['inventory_location_city'] ?? 'Sobolew'));
         $s['inventory_location_address_line_1'] = sanitize_text_field((string) ($_POST['inventory_location_address_line_1'] ?? ''));
-        $s['fulfillment_policy_id_30_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_30_eur'] ?? $_POST['fulfillmentPolicyId'] ?? $_POST['ebay_fulfillment_policy_id'] ?? ''));
-        $s['fulfillment_policy_id_50_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_50_eur'] ?? ''));
-        $s['fulfillment_policy_id_100_eur'] = sanitize_text_field((string) ($_POST['fulfillment_policy_id_100_eur'] ?? ''));
-        $s['ebay_fulfillment_policy_id'] = $s['fulfillment_policy_id_30_eur'];
-        $s['shipping_category_ids_50_eur'] = sanitize_textarea_field((string) ($_POST['shipping_category_ids_50_eur'] ?? ''));
-        $s['shipping_category_ids_100_eur'] = sanitize_textarea_field((string) ($_POST['shipping_category_ids_100_eur'] ?? ''));
+        $postedShippingPolicyId = static function (string $key, array $legacyKeys = []): string {
+            $manual = sanitize_text_field((string) ($_POST[$key . '_manual'] ?? ''));
+            if ($manual !== '') {
+                return $manual;
+            }
+            $selected = sanitize_text_field((string) ($_POST[$key] ?? ''));
+            if ($selected !== '') {
+                return $selected;
+            }
+            $existing = sanitize_text_field((string) ($_POST[$key . '_existing'] ?? ''));
+            if ($existing !== '') {
+                return $existing;
+            }
+            foreach ($legacyKeys as $legacyKey) {
+                $legacy = sanitize_text_field((string) ($_POST[$legacyKey] ?? ''));
+                if ($legacy !== '') {
+                    return $legacy;
+                }
+            }
+            return '';
+        };
+        $s['shipping_policy_30'] = $postedShippingPolicyId('shipping_policy_30', ['fulfillment_policy_id_30_eur', 'fulfillmentPolicyId', 'ebay_fulfillment_policy_id']);
+        $s['shipping_policy_50'] = $postedShippingPolicyId('shipping_policy_50', ['fulfillment_policy_id_50_eur']);
+        $s['shipping_policy_130'] = $postedShippingPolicyId('shipping_policy_130', ['fulfillment_policy_id_130_eur']);
+        $s['default_shipping_policy_id'] = $postedShippingPolicyId('default_shipping_policy_id');
+        $s['shipping_policy_name_30'] = sanitize_text_field((string) ($_POST['shipping_policy_name_30'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_name_50'] = sanitize_text_field((string) ($_POST['shipping_policy_name_50'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_50']);
+        $s['shipping_policy_name_130'] = sanitize_text_field((string) ($_POST['shipping_policy_name_130'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_130']);
+        $s['default_shipping_policy_name'] = sanitize_text_field((string) ($_POST['default_shipping_policy_name'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['default_shipping_policy_id']);
+        $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
+        $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
+        $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
+        $s['ebay_fulfillment_policy_id'] = $s['shipping_policy_30'];
+        $s['shipping_category_ids_30'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_30'] ?? '')));
+        $s['shipping_category_ids_50'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_50'] ?? $_POST['shipping_category_ids_50_eur'] ?? '')));
+        $s['shipping_category_ids_130'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_130'] ?? $_POST['shipping_category_ids_130_eur'] ?? '')));
+        $conflicts = EbayShippingPolicyResolver::conflict_ids($s);
+        update_option('wei_ebay_shipping_mapping_warnings', $conflicts === [] ? [] : ['conflicts' => $conflicts, 'message' => 'Woo category ID appears in multiple eBay shipping groups. Runtime priority is Wysyłka 130 > Wysyłka 50 > Wysyłka 30.'], false);
         $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['paymentPolicyId'] ?? $_POST['ebay_payment_policy_id'] ?? ''));
         $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['returnPolicyId'] ?? $_POST['ebay_return_policy_id'] ?? ''));
         $this->sync_product_category_overrides($s['product_category_overrides']);
         update_option(Plugin::OPTION_KEY, $s, false);
-        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1'));
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1' . (!empty($conflicts) ? '&shipping_mapping_conflicts=1' : '')));
         exit;
+    }
+
+    public function shipping_mapping_diagnostics(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_mapping_diagnostics');
+
+        $productId = absint($_POST['product_id'] ?? 0);
+        $settings = $this->settings();
+        $resolution = $productId > 0 ? EbayShippingPolicyResolver::resolve_for_product($productId, $settings) : [
+            'reason' => 'missing_product_id',
+            'blocked' => true,
+        ];
+        $product = $productId > 0 && function_exists('wc_get_product') ? wc_get_product($productId) : null;
+        $diagnostics = [
+            'product_id' => $productId,
+            'product_title' => $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId),
+            'woo_category_ids' => array_values(array_map('intval', (array) ($resolution['woo_category_ids'] ?? []))),
+            'matched_shipping_group' => (string) ($resolution['group'] ?? ''),
+            'matched_woo_category_id' => (int) ($resolution['matched_woo_category_id'] ?? 0),
+            'selected_shipping_policy_id' => (string) ($resolution['policy_id'] ?? ''),
+            'selected_shipping_policy_name' => (string) ($resolution['policy_name'] ?? ''),
+            'fallback_default_used' => !empty($resolution['default_used']) ? 'yes' : 'no',
+            'reason' => (string) ($resolution['reason'] ?? ''),
+            'ebay_api_called' => false,
+            'product_or_listing_modified' => false,
+        ];
+
+        $this->set_status('Shipping mapping diagnostics: ' . wp_json_encode($diagnostics));
+        $this->go();
     }
 
     public function generate_shipping_mapping_report(): void
@@ -571,8 +634,8 @@ class AdminPage
             $settings = $this->settings();
             $categoryGroups = EbayShippingPolicyResolver::category_group_maps($settings);
             $categoryIds50 = $categoryGroups[EbayShippingPolicyResolver::GROUP_PARCEL_50_EUR] ?? [];
-            $categoryIds100 = $categoryGroups[EbayShippingPolicyResolver::GROUP_PALLET_100_EUR] ?? [];
-            $allMappedCategoryIds = array_values(array_unique(array_merge($categoryIds50, $categoryIds100)));
+            $categoryIds130 = $categoryGroups[EbayShippingPolicyResolver::GROUP_SHIPPING_130] ?? [];
+            $allMappedCategoryIds = array_values(array_unique(array_merge($categoryIds50, $categoryIds130)));
 
             $this->guard_shipping_mapping_report_memory($report, 'after_settings');
 
@@ -585,11 +648,11 @@ class AdminPage
                     continue;
                 }
 
-                $group = 'default_30_eur';
-                if (in_array($termId, $categoryIds100, true)) {
-                    $group = 'pallet_100_eur';
+                $group = 'shipping_30';
+                if (in_array($termId, $categoryIds130, true)) {
+                    $group = 'shipping_130';
                 } elseif (in_array($termId, $categoryIds50, true)) {
-                    $group = 'parcel_50_eur';
+                    $group = 'shipping_50';
                 }
 
                 $sample = [
@@ -604,7 +667,7 @@ class AdminPage
                 if (count($termSamples) < 100) {
                     $termSamples[] = $sample;
                 }
-                if ($group === 'default_30_eur' && count($unmappedSamples) < 100) {
+                if ($group === 'shipping_30' && count($unmappedSamples) < 100) {
                     $unmappedSamples[] = $sample;
                 }
             }
@@ -616,11 +679,11 @@ class AdminPage
             $this->guard_shipping_mapping_report_memory($report, 'after_terms');
 
             $totalProducts = $this->count_products_for_shipping_mapping();
-            $products100 = $this->count_products_for_shipping_mapping($categoryIds100, [], true);
-            $products50 = $this->count_products_for_shipping_mapping($categoryIds50, $categoryIds100, true);
+            $products130 = $this->count_products_for_shipping_mapping($categoryIds130, [], true);
+            $products50 = $this->count_products_for_shipping_mapping($categoryIds50, $categoryIds130, true);
             $productsMapped = $this->count_products_for_shipping_mapping($allMappedCategoryIds, [], true);
             $productsDefault30 = max(0, $totalProducts - $productsMapped);
-            $estimatedProductsTotal = $products100 + $products50 + $productsDefault30;
+            $estimatedProductsTotal = $products130 + $products50 + $productsDefault30;
             $estimatedProductsDifference = $totalProducts - $estimatedProductsTotal;
             if ($estimatedProductsDifference !== 0) {
                 $warnings[] = 'Shipping mapping estimate total differs from total products by ' . $estimatedProductsDifference . '; check overlapping categories or product category assignments.';
@@ -632,11 +695,11 @@ class AdminPage
 
             $report = [
                 'generated_at' => gmdate('Y-m-d H:i:s'),
-                'category_ids_100' => $categoryIds100,
+                'category_ids_130' => $categoryIds130,
                 'category_ids_50' => $categoryIds50,
-                'count_categories_100' => count($categoryIds100),
+                'count_categories_130' => count($categoryIds130),
                 'count_categories_50' => count($categoryIds50),
-                'estimated_products_100' => $products100,
+                'estimated_products_130' => $products130,
                 'estimated_products_50' => $products50,
                 'estimated_products_default_30' => $productsDefault30,
                 'total_products' => $totalProducts,
@@ -645,8 +708,8 @@ class AdminPage
                 'counts' => [
                     '30_eur' => $productsDefault30,
                     '50_eur' => $products50,
-                    '100_eur' => $products100,
-                    'default_30_eur' => $productsDefault30,
+                    '130' => $products130,
+                    'shipping_30' => $productsDefault30,
                 ],
                 'sample_terms' => $termSamples,
                 'unmapped_categories' => $unmappedSamples,
@@ -661,7 +724,7 @@ class AdminPage
 
             $this->logger->info('EBAY_SHIPPING_MAPPING_REPORT_DONE', [
                 'total_products' => $totalProducts,
-                'estimated_products_100' => $products100,
+                'estimated_products_130' => $products130,
                 'estimated_products_50' => $products50,
                 'estimated_products_default_30' => $productsDefault30,
                 'sample_terms' => count($termSamples),
@@ -670,7 +733,7 @@ class AdminPage
             ]);
             $this->set_status('Shipping mapping report generated: ' . wp_json_encode([
                 'total_products' => $totalProducts,
-                'estimated_products_100' => $products100,
+                'estimated_products_130' => $products130,
                 'estimated_products_50' => $products50,
                 'estimated_products_default_30' => $productsDefault30,
                 'warnings' => count($warnings),
@@ -2748,15 +2811,15 @@ class AdminPage
     {
         return [
             'generated_at' => gmdate('Y-m-d H:i:s'),
-            'category_ids_100' => [],
+            'category_ids_130' => [],
             'category_ids_50' => [],
-            'count_categories_100' => 0,
+            'count_categories_130' => 0,
             'count_categories_50' => 0,
-            'estimated_products_100' => 0,
+            'estimated_products_130' => 0,
             'estimated_products_50' => 0,
             'estimated_products_default_30' => 0,
             'total_products' => 0,
-            'counts' => ['30_eur' => 0, '50_eur' => 0, '100_eur' => 0, 'default_30_eur' => 0],
+            'counts' => ['30_eur' => 0, '50_eur' => 0, '130' => 0, 'shipping_30' => 0],
             'sample_terms' => [],
             'unmapped_categories' => [],
             'warnings' => [],
@@ -3644,25 +3707,39 @@ class AdminPage
     private function with_shipping_policy_defaults(array $s): array
     {
         $legacyFulfillmentId = trim((string) ($s['ebay_fulfillment_policy_id'] ?? ''));
-        if (empty($s['fulfillment_policy_id_30_eur'])) {
-            $s['fulfillment_policy_id_30_eur'] = $legacyFulfillmentId !== '' ? $legacyFulfillmentId : EbayShippingPolicyResolver::POLICY_30_EUR;
-        }
+        $s['shipping_policy_30'] = trim((string) ($s['shipping_policy_30'] ?? $s['fulfillment_policy_id_30_eur'] ?? $legacyFulfillmentId));
+        $s['shipping_policy_50'] = trim((string) ($s['shipping_policy_50'] ?? $s['fulfillment_policy_id_50_eur'] ?? ''));
+        $s['shipping_policy_130'] = trim((string) ($s['shipping_policy_130'] ?? $s['fulfillment_policy_id_130_eur'] ?? ''));
+        $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
+        $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
+        $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
         if (empty($s['ebay_fulfillment_policy_id'])) {
-            $s['ebay_fulfillment_policy_id'] = (string) $s['fulfillment_policy_id_30_eur'];
+            $s['ebay_fulfillment_policy_id'] = (string) $s['shipping_policy_30'];
         }
-        if (empty($s['fulfillment_policy_id_50_eur'])) {
-            $s['fulfillment_policy_id_50_eur'] = EbayShippingPolicyResolver::POLICY_50_EUR;
-        }
-        if (empty($s['fulfillment_policy_id_100_eur'])) {
-            $s['fulfillment_policy_id_100_eur'] = EbayShippingPolicyResolver::POLICY_100_EUR;
-        }
-        if (!isset($s['shipping_category_ids_50_eur'])) {
-            $s['shipping_category_ids_50_eur'] = '';
-        }
-        if (!isset($s['shipping_category_ids_100_eur'])) {
-            $s['shipping_category_ids_100_eur'] = '';
+        foreach (['shipping_category_ids_30', 'shipping_category_ids_50', 'shipping_category_ids_130', 'default_shipping_policy_id', 'default_shipping_policy_name', 'shipping_policy_name_30', 'shipping_policy_name_50', 'shipping_policy_name_130'] as $key) {
+            if (!isset($s[$key])) {
+                $s[$key] = '';
+            }
         }
         return $s;
+    }
+
+    private function cached_fulfillment_policy_name(array $settings, string $policyId): string
+    {
+        $policyId = trim($policyId);
+        if ($policyId === '') {
+            return '';
+        }
+
+        $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
+        $policies = is_array($cached['fulfillmentPolicies'] ?? null) ? $cached['fulfillmentPolicies'] : [];
+        foreach ($policies as $policy) {
+            if ((string) ($policy['fulfillmentPolicyId'] ?? '') === $policyId) {
+                return (string) ($policy['name'] ?? '');
+            }
+        }
+
+        return '';
     }
 
     private function sync_product_category_overrides(string $raw): int
