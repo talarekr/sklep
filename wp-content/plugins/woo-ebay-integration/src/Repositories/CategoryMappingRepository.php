@@ -31,7 +31,18 @@ class CategoryMappingRepository
             'updated_at' => $now,
         ], $data);
 
-        $existing = $this->find((string) $row['marketplace_id'], (int) $row['woo_term_id']);
+        $existing = $this->resolveProductionCategoryMapping((int) $row['woo_term_id'], (string) $row['marketplace_id']);
+        $incomingSource = (string) $row['source'];
+        $manualSources = ['manual', 'manual_woo_category_mapping', 'manual_teaching_csv'];
+        if ($existing && in_array((string) ($existing['source'] ?? ''), $manualSources, true) && !in_array($incomingSource, $manualSources, true)) {
+            $this->logger->info('Skipped non-manual category mapping upsert because an active manual mapping has priority', [
+                'marketplace_id' => (string) $row['marketplace_id'],
+                'woo_term_id' => (int) $row['woo_term_id'],
+                'incoming_source' => $incomingSource,
+                'manual_mapping_id' => (int) ($existing['id'] ?? 0),
+            ]);
+            return;
+        }
         if ($existing) {
             $wpdb->update($table, $row, ['id' => (int) $existing['id']]);
             return;
@@ -46,13 +57,102 @@ class CategoryMappingRepository
         global $wpdb;
         $table = $wpdb->prefix . 'wei_ebay_category_mappings';
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d LIMIT 1",
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY CASE WHEN source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') AND status NOT LIKE 'disabled%%' THEN 1 WHEN source IN ('import','csv_import') AND status NOT LIKE 'disabled%%' THEN 2 WHEN source IN ('rule','auto_taxonomy') AND status NOT LIKE 'disabled%%' THEN 3 WHEN status NOT LIKE 'disabled%%' THEN 4 ELSE 5 END ASC, COALESCE(NULLIF(updated_at, ''), created_at) DESC, id DESC LIMIT 1",
             $marketplace_id,
             $woo_term_id
         ), ARRAY_A);
 
         return is_array($row) ? $row : null;
     }
+
+    public function resolveProductionCategoryMapping(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): ?array
+    {
+        $rows = $this->list_mapping_rows_for_woo_category($wooCategoryId, $marketplaceId);
+        return $rows[0] ?? null;
+    }
+
+    public function list_mapping_rows_for_woo_category(int $wooCategoryId, string $marketplaceId = 'EBAY_DE'): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_mappings';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT *, CASE WHEN source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') AND status NOT LIKE 'disabled%%' THEN 1 WHEN source IN ('import','csv_import') AND status NOT LIKE 'disabled%%' THEN 2 WHEN source IN ('rule','auto_taxonomy') AND status NOT LIKE 'disabled%%' THEN 3 WHEN status NOT LIKE 'disabled%%' THEN 4 ELSE 5 END AS resolver_priority FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d ORDER BY resolver_priority ASC, COALESCE(NULLIF(updated_at, ''), created_at) DESC, id DESC",
+            $marketplaceId,
+            $wooCategoryId
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    public function save_manual_mapping(int $wooCategoryId, string $marketplaceId, array $category): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_mappings';
+        $now = gmdate('Y-m-d H:i:s');
+        $categoryId = trim((string) ($category['category_id'] ?? ''));
+        $row = [
+            'marketplace_id' => $marketplaceId,
+            'woo_term_id' => $wooCategoryId,
+            'woo_category_path' => $this->woo_category_path($wooCategoryId),
+            'ebay_category_id' => $categoryId,
+            'ebay_category_name' => (string) ($category['category_name'] ?? ''),
+            'ebay_category_path' => (string) ($category['category_path'] ?? ''),
+            'source' => 'manual',
+            'confidence' => 1.0,
+            'status' => 'mapped_manual',
+            'error_reason' => '',
+            'updated_at' => $now,
+        ];
+
+        $existingManual = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d AND source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') ORDER BY updated_at DESC, id DESC LIMIT 1",
+            $marketplaceId,
+            $wooCategoryId
+        ), ARRAY_A);
+        if (is_array($existingManual)) {
+            $wpdb->update($table, $row, ['id' => (int) $existingManual['id']]);
+            $selectedId = (int) $existingManual['id'];
+        } else {
+            $row['created_at'] = $now;
+            $wpdb->insert($table, $row);
+            $selectedId = (int) $wpdb->insert_id;
+        }
+
+        $duplicatesDisabled = $wpdb->query($wpdb->prepare(
+            "UPDATE {$table} SET status=%s, error_reason=%s, updated_at=%s WHERE marketplace_id=%s AND woo_term_id=%d AND id<>%d AND status NOT LIKE 'disabled%%' AND source NOT IN ('manual','manual_woo_category_mapping','manual_teaching_csv')",
+            'disabled_duplicate',
+            'Disabled after manual EBAY_DE category mapping save; resolver uses active manual mapping first.',
+            $now,
+            $marketplaceId,
+            $wooCategoryId,
+            $selectedId
+        ));
+
+        return [
+            'selected_id' => $selectedId,
+            'duplicates_disabled' => is_numeric($duplicatesDisabled) ? (int) $duplicatesDisabled : 0,
+            'mapping' => $this->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId),
+        ];
+    }
+
+    public function list_manual_mapping_categories(string $marketplaceId = 'EBAY_DE', array $args = []): array
+    {
+        $rows = $this->list_used_woo_categories($marketplaceId, (int) ($args['limit'] ?? 500));
+        $includeSamples = array_key_exists('with_samples', $args) ? !empty($args['with_samples']) : true;
+        foreach ($rows as &$row) {
+            $termId = (int) ($row['term_id'] ?? 0);
+            $resolved = $termId > 0 ? $this->resolveProductionCategoryMapping($termId, $marketplaceId) : null;
+            if ($resolved) {
+                foreach (['id','ebay_category_id','ebay_category_name','ebay_category_path','source','confidence','status','updated_at','error_reason','sample_product_ids','suggestion_payload'] as $key) {
+                    $row[$key] = $resolved[$key] ?? ($row[$key] ?? '');
+                }
+                $row['resolver_selected_id'] = (int) ($resolved['id'] ?? 0);
+            }
+            $row['mapping_rows'] = $termId > 0 ? $this->list_mapping_rows_for_woo_category($termId, $marketplaceId) : [];
+            $row['sample_products'] = $includeSamples && $termId > 0 ? $this->sample_products_for_category($termId, 10) : [];
+        }
+        return $rows;
+    }
+
 
     public function list_used_woo_categories(string $marketplace_id = 'EBAY_DE', int $limit = 200): array
     {
@@ -175,6 +275,15 @@ class CategoryMappingRepository
         $mappingRowsTotal = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$mappings}");
         $mappingRowsEbayDe = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$mappings} WHERE marketplace_id = %s", $marketplaceId));
         $mappingRowsWithCategoryId = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$mappings} WHERE marketplace_id = %s AND TRIM(COALESCE(ebay_category_id, '')) <> ''", $marketplaceId));
+
+        $resolvedRowsWithProducts = $this->list_manual_mapping_categories($marketplaceId, ['limit' => 10000, 'with_samples' => false]);
+        $resolvedMappedWithProducts = 0;
+        foreach ($resolvedRowsWithProducts as $resolvedRow) {
+            if (trim((string) ($resolvedRow['ebay_category_id'] ?? '')) !== '') {
+                $resolvedMappedWithProducts++;
+            }
+        }
+        $mappedCategoriesWithProducts = $resolvedRowsWithProducts !== [] ? $resolvedMappedWithProducts : $mappedCategoriesWithProducts;
 
         $statusRows = $wpdb->get_results($wpdb->prepare(
             "SELECT COALESCE(NULLIF(status, ''), '(empty)') AS status, COUNT(*) AS count FROM {$mappings} WHERE marketplace_id = %s GROUP BY COALESCE(NULLIF(status, ''), '(empty)') ORDER BY count DESC, status ASC",

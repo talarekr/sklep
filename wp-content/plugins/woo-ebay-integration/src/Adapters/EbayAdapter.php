@@ -106,7 +106,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function category_mapping_readiness(string $marketplaceId): array
     {
         $settings = $this->settings();
-        $rows = $this->categoryRepo->list_used_woo_categories($marketplaceId, 200);
+        $rows = $this->categoryRepo->list_manual_mapping_categories($marketplaceId, ['limit' => 200]);
         $summary = [
             'ready' => true,
             'total_categories' => count($rows),
@@ -2986,7 +2986,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     $reviewCandidate ??= ['category_id' => '', 'selected_candidate_category_id' => $categoryId, 'selected_candidate_category_path' => $categoryPath, 'selected_candidate_confidence' => 1.0, 'selected_candidate_source' => 'manual_woo_category_mapping', 'category_path' => $categoryPath, 'status' => 'category_sanity_failed', 'source' => 'manual_woo_category_mapping_safety_failed', 'mapping' => $teachingRule + ['woo_category_path' => $wooPath], 'confidence' => 1.0, 'threshold' => CategoryMappingSafety::threshold($settings), 'sanity_check_pass' => false, 'sanity_reason' => (string) ($safety['reason'] ?? 'manual_woo_category_mapping_failed_safety'), 'product_override_found' => false];
                 }
 
-                $mapping = $this->categoryRepo->find($marketplaceId, $termId);
+                $mapping = $this->categoryRepo->resolveProductionCategoryMapping($termId, $marketplaceId);
                 if (!$mapping) {
                     continue;
                 }

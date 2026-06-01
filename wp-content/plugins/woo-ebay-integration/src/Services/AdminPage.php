@@ -52,6 +52,7 @@ class AdminPage
         add_action('admin_post_wei_inspect_offer_before_publish', [$this, 'inspect_offer_before_publish']);
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
         add_action('admin_post_wei_save_category_mapping', [$this, 'save_category_mapping']);
+        add_action('admin_post_wei_import_ebay_de_category_tree_cache', [$this, 'import_ebay_de_category_tree_cache']);
         add_action('admin_post_wei_auto_map_categories', [$this, 'auto_map_categories']);
         add_action('admin_post_wei_generate_ebay_de_category_suggestions', [$this, 'generate_ebay_de_category_suggestions']);
         add_action('admin_post_wei_generate_all_ebay_de_category_suggestions', [$this, 'generate_all_ebay_de_category_suggestions']);
@@ -320,7 +321,7 @@ class AdminPage
         // exchange-rate refreshes while WordPress was only trying to render the
         // page. Heavy/diagnostic data is now loaded only from explicit links.
         $category_mappings = $load_category_mapping_rows
-            ? $this->categoryRepo->list_used_woo_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), 50)
+            ? $this->categoryRepo->list_manual_mapping_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), ['limit' => 500])
             : [];
         $ebay_sku_status = $this->light_ebay_sku_status();
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
@@ -353,6 +354,8 @@ class AdminPage
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         $category_validation_statuses = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
         $category_validation_statuses = is_array($category_validation_statuses) ? $category_validation_statuses : [];
+        $manual_category_picker_query = isset($_GET['ebay_category_search']) ? sanitize_text_field(wp_unslash((string) $_GET['ebay_category_search'])) : '';
+        $manual_category_picker_rows = $load_category_mapping_rows ? $this->taxonomy->search_cached_automotive_categories((string) ($s['marketplace_id'] ?? 'EBAY_DE'), $manual_category_picker_query, 75) : [];
         $category_dashboard_summary = $this->categoryRepo->production_mapping_summary(
             (string) ($s['marketplace_id'] ?? 'EBAY_DE'),
             $category_teaching_import_summary,
@@ -2343,29 +2346,72 @@ class AdminPage
         $termId = (int) ($_POST['woo_term_id'] ?? 0);
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $ebayCategoryId = sanitize_text_field((string) ($_POST['ebay_category_id'] ?? ''));
-        if ($termId > 0 && $ebayCategoryId !== '') {
-            $postedName = sanitize_text_field((string) ($_POST['ebay_category_name'] ?? ''));
-            $postedPath = sanitize_text_field((string) ($_POST['ebay_category_path'] ?? ''));
-            $details = ($postedName === '' || $postedPath === '') ? $this->taxonomy->get_category_details_result($marketplaceId, $ebayCategoryId) : [];
-            $categoryName = $postedName !== '' ? $postedName : (string) ($details['category_name'] ?? 'unknown');
-            $categoryPath = $postedPath !== '' ? $postedPath : (string) ($details['category_path'] ?? 'unknown');
-            $this->categoryRepo->upsert([
-                'marketplace_id' => $marketplaceId,
-                'woo_term_id' => $termId,
-                'woo_category_path' => $this->categoryRepo->woo_category_path($termId),
-                'ebay_category_id' => $ebayCategoryId,
-                'ebay_category_name' => $categoryName !== '' ? $categoryName : 'unknown',
-                'ebay_category_path' => $categoryPath !== '' ? $categoryPath : 'unknown',
-                'source' => 'manual',
-                'confidence' => 1,
-                'status' => 'mapped_manual',
-                'error_reason' => '',
-            ]);
-            $this->set_status('Category mapping saved for Woo term ' . $termId . ' → eBay ' . $ebayCategoryId);
-        } else {
-            $this->set_status('Category mapping skipped: missing Woo term or eBay category ID');
+        if ($marketplaceId !== 'EBAY_DE') {
+            $this->set_status('Manual category mapping blocked: this screen only supports EBAY_DE.');
+            $this->go_category_mapping_screen();
         }
-        $this->go();
+        if ($termId <= 0 || $ebayCategoryId === '') {
+            $this->set_status('Category mapping skipped: missing Woo term or eBay category ID');
+            $this->go_category_mapping_screen();
+        }
+
+        $validation = $this->taxonomy->validate_category_result($marketplaceId, $ebayCategoryId);
+        if (empty($validation['valid'])) {
+            $this->set_status('Category mapping rejected: invalid eBay.de category ID ' . $ebayCategoryId . '. ' . (string) ($validation['taxonomy_error'] ?? ''));
+            $this->go_category_mapping_screen();
+        }
+        if (empty($validation['leaf'])) {
+            $this->set_status('Category mapping rejected: eBay.de category ID ' . $ebayCategoryId . ' is not a leaf category.');
+            $this->go_category_mapping_screen();
+        }
+
+        $saved = $this->categoryRepo->save_manual_mapping($termId, $marketplaceId, [
+            'category_id' => $ebayCategoryId,
+            'category_name' => (string) ($validation['category_name'] ?? sanitize_text_field((string) ($_POST['ebay_category_name'] ?? ''))),
+            'category_path' => (string) ($validation['category_path'] ?? sanitize_text_field((string) ($_POST['ebay_category_path'] ?? ''))),
+        ]);
+
+        $categoryValidation = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
+        $categoryValidation = is_array($categoryValidation) ? $categoryValidation : [];
+        $categoryValidation['by_woo_term_id'][(string) $termId] = [
+            'woo_term_id' => $termId,
+            'category_id' => $ebayCategoryId,
+            'valid' => true,
+            'leaf' => true,
+            'validation_status' => 'valid_leaf',
+            'category_name' => (string) ($validation['category_name'] ?? ''),
+            'category_path' => (string) ($validation['category_path'] ?? ''),
+            'source' => 'manual_mapping_save',
+            'updated_at' => gmdate('c'),
+        ];
+        $categoryValidation['by_category_id'][$ebayCategoryId] = $categoryValidation['by_woo_term_id'][(string) $termId];
+        update_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, $categoryValidation, false);
+
+        $this->set_status('Manual EBAY_DE category mapping saved: Woo term ' . $termId . ' → eBay leaf ' . $ebayCategoryId . ' (selected row ' . (int) ($saved['selected_id'] ?? 0) . ', disabled duplicates ' . (int) ($saved['duplicates_disabled'] ?? 0) . ').');
+        $this->go_category_mapping_screen();
+    }
+
+    public function import_ebay_de_category_tree_cache(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_import_ebay_de_category_tree_cache');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        if ($marketplaceId !== 'EBAY_DE') {
+            $this->set_status('Category tree cache import rejected: only EBAY_DE is supported.');
+            $this->go_category_mapping_screen();
+        }
+
+        $rows = [];
+        $raw = trim((string) ($_POST['category_tree_json'] ?? ''));
+        if ($raw !== '') {
+            $decoded = json_decode(wp_unslash($raw), true);
+            if (is_array($decoded)) {
+                $rows = array_is_list($decoded) ? $decoded : (array) ($decoded['categories'] ?? []);
+            }
+        }
+        $res = $this->taxonomy->import_cached_categories($marketplaceId, $rows);
+        $this->set_status('EBAY_DE category tree cache import: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go_category_mapping_screen();
     }
 
     public function upsert_inventory_location(): void
@@ -2911,6 +2957,12 @@ class AdminPage
     {
         $upload = wp_upload_dir();
         return trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+    }
+
+    private function go_category_mapping_screen(): void
+    {
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&wei_section=category-mappings'));
+        exit;
     }
 
     private function go(): void
