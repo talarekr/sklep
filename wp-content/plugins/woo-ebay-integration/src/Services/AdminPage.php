@@ -1476,6 +1476,9 @@ class AdminPage
             'not_ready' => (int) ($res['not_ready'] ?? 0),
             'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
             'missing_required_aspects' => (int) ($res['missing_required_aspects'] ?? 0),
+            'excluded_from_ebay' => (int) ($res['excluded_from_ebay'] ?? 0),
+            'excluded_no_woo_category' => (int) ($res['excluded_no_woo_category'] ?? 0),
+            'excluded_bez_kategorii' => (int) ($res['excluded_bez_kategorii'] ?? 0),
             'not_ready_sample_ids' => (array) ($res['not_ready_sample_ids'] ?? []),
             'blocked_by_category_sample_ids' => (array) ($res['blocked_by_category_sample_ids'] ?? []),
             'missing_required_aspects_sample_ids' => (array) ($res['missing_required_aspects_sample_ids'] ?? []),
@@ -1510,6 +1513,9 @@ class AdminPage
             'category_sanity_failed' => (int) ($res['category_sanity_failed_count'] ?? 0),
             'needs_category_review' => (int) ($res['needs_category_review_count'] ?? $res['needs_category_review'] ?? 0),
             'missing_required_aspects' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'excluded_from_ebay' => (int) ($res['excluded_from_ebay_count'] ?? $res['excluded_from_ebay'] ?? 0),
+            'excluded_no_woo_category' => (int) ($res['excluded_no_woo_category_count'] ?? $res['excluded_no_woo_category'] ?? 0),
+            'excluded_bez_kategorii' => (int) ($res['excluded_bez_kategorii_count'] ?? $res['excluded_bez_kategorii'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
             'top_10_sanity_reasons' => (array) ($res['top_10_sanity_reasons'] ?? []),
@@ -1550,10 +1556,13 @@ class AdminPage
         $reports = (array) ($res['reports'] ?? []);
         $problems = is_array($reports['problems_only_csv'] ?? null) ? $reports['problems_only_csv'] : [];
         $full = is_array($reports['full_audit_csv'] ?? null) ? $reports['full_audit_csv'] : [];
+        $excluded = is_array($reports['excluded_products_csv'] ?? null) ? $reports['excluded_products_csv'] : [];
         $problemsPath = (string) ($problems['path'] ?? '');
         $fullPath = (string) ($full['path'] ?? '');
+        $excludedPath = (string) ($excluded['path'] ?? '');
         $problemsExists = $problemsPath !== '' && is_file($problemsPath);
         $fullExists = $fullPath !== '' && is_file($fullPath);
+        $excludedExists = $excludedPath !== '' && is_file($excludedPath);
         $processed = (int) ($res['processed'] ?? $res['total_scanned'] ?? 0);
         $ready = (int) ($res['ready_count'] ?? 0);
         $result = (string) ($res['result'] ?? 'error');
@@ -1599,6 +1608,12 @@ class AdminPage
             'category_sanity_failed' => (int) ($res['category_sanity_failed_count'] ?? 0),
             'needs_category_review' => (int) ($res['needs_category_review_count'] ?? $res['needs_category_review'] ?? 0),
             'missing_required_aspects' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'excluded_from_ebay' => (int) ($res['excluded_from_ebay_count'] ?? $res['excluded_from_ebay'] ?? 0),
+            'excluded_from_ebay_count' => (int) ($res['excluded_from_ebay_count'] ?? $res['excluded_from_ebay'] ?? 0),
+            'excluded_no_woo_category' => (int) ($res['excluded_no_woo_category_count'] ?? $res['excluded_no_woo_category'] ?? 0),
+            'excluded_no_woo_category_count' => (int) ($res['excluded_no_woo_category_count'] ?? $res['excluded_no_woo_category'] ?? 0),
+            'excluded_bez_kategorii' => (int) ($res['excluded_bez_kategorii_count'] ?? $res['excluded_bez_kategorii'] ?? 0),
+            'excluded_bez_kategorii_count' => (int) ($res['excluded_bez_kategorii_count'] ?? $res['excluded_bez_kategorii'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
             'full_report_csv_path' => $fullPath,
@@ -1611,6 +1626,11 @@ class AdminPage
             'problems_only_csv_exists' => $problemsExists,
             'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
             'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
+            'excluded_products_csv_path' => $excludedPath,
+            'excluded_products_csv_url' => (string) ($excluded['url'] ?? ''),
+            'excluded_products_csv_exists' => $excludedExists,
+            'excluded_products_csv_size' => (int) ($excluded['size'] ?? ($excludedExists ? filesize($excludedPath) : 0)),
+            'excluded_products_csv_admin_url' => $this->admin_report_download_url($excludedPath),
             'last_category_readiness_audit' => [
                 'audit_run_id' => (string) ($res['audit_run_id'] ?? ($full['audit_run_id'] ?? '')),
                 'schema_version' => (string) ($res['schema_version'] ?? ($full['schema_version'] ?? 'category_readiness_audit_v2')),
@@ -1629,6 +1649,11 @@ class AdminPage
                 'problems_only_csv_exists' => $problemsExists,
                 'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
                 'problems_only_csv_admin_url' => $this->admin_report_download_url($problemsPath),
+                'excluded_products_csv_path' => $excludedPath,
+                'excluded_products_csv_url' => (string) ($excluded['url'] ?? ''),
+                'excluded_products_csv_exists' => $excludedExists,
+                'excluded_products_csv_size' => (int) ($excluded['size'] ?? ($excludedExists ? filesize($excludedPath) : 0)),
+                'excluded_products_csv_admin_url' => $this->admin_report_download_url($excludedPath),
             ],
             'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 20),
             'resume_offset' => $result === 'partial' ? $processedTotal : 0,
@@ -1921,6 +1946,14 @@ class AdminPage
                 }
 
                 $summary[$reason] = (int) ($summary[$reason] ?? 0) + 1;
+                if ($reason === 'excluded_from_ebay') {
+                    $exclusionReason = (string) ($preflight['exclusion_reason'] ?? $preflight['category']['exclusion_reason'] ?? 'excluded_from_ebay');
+                    if (isset($summary[$exclusionReason])) {
+                        $summary[$exclusionReason] = (int) ($summary[$exclusionReason] ?? 0) + 1;
+                    }
+                    $this->save_initial_publish_readiness_reason($productId, $exclusionReason, (string) ($preflight['message'] ?? 'Product intentionally excluded from eBay.'));
+                    continue;
+                }
                 $this->save_initial_publish_readiness_reason($productId, $reason, (string) ($preflight['message'] ?? 'Product not ready for eBay export.'));
             } catch (\Throwable $throwable) {
                 $summary['errors'] = (int) ($summary['errors'] ?? 0) + 1;
@@ -1950,6 +1983,9 @@ class AdminPage
             'missing_aspects' => (int) ($summary['missing_aspects'] ?? 0),
             'content_not_ready' => (int) ($summary['content_not_ready'] ?? 0),
             'price_not_ready' => (int) ($summary['price_not_ready'] ?? 0),
+            'excluded_from_ebay' => (int) ($summary['excluded_from_ebay'] ?? 0),
+            'excluded_no_woo_category' => (int) ($summary['excluded_no_woo_category'] ?? 0),
+            'excluded_bez_kategorii' => (int) ($summary['excluded_bez_kategorii'] ?? 0),
             'other' => (int) ($summary['other'] ?? 0),
         ];
         $summary['skipped_not_eligible'] = array_sum($summary['skipped_reasons']);
@@ -1972,6 +2008,9 @@ class AdminPage
             'missing_aspects' => 0,
             'content_not_ready' => 0,
             'price_not_ready' => 0,
+            'excluded_from_ebay' => 0,
+            'excluded_no_woo_category' => 0,
+            'excluded_bez_kategorii' => 0,
             'other' => 0,
             'errors' => 0,
             'cursor' => 0,
@@ -2007,9 +2046,10 @@ class AdminPage
 
     private function save_initial_publish_readiness_reason(int $productId, string $reason, string $message): void
     {
-        $reason = in_array($reason, ['ready', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'already_published', 'other'], true) ? $reason : 'other';
+        $reason = in_array($reason, ['ready', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'excluded_from_ebay', 'excluded_no_woo_category', 'excluded_bez_kategorii', 'already_published', 'other'], true) ? $reason : 'other';
         if ($reason !== 'ready') {
-            update_post_meta($productId, '_wei_ebay_export_status', $reason);
+            $exportStatus = in_array($reason, ['excluded_no_woo_category', 'excluded_bez_kategorii'], true) ? 'excluded_from_ebay' : $reason;
+            update_post_meta($productId, '_wei_ebay_export_status', $exportStatus);
         }
         update_post_meta($productId, '_wei_ebay_readiness_reason', $reason);
         update_post_meta($productId, '_wei_ebay_readiness_message', mb_substr($message, 0, 1000));
@@ -2024,6 +2064,9 @@ class AdminPage
 
         $status = (string) ($preflight['status'] ?? '');
         $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
+        if ($status === 'excluded_from_ebay') {
+            return 'excluded_from_ebay';
+        }
         if (in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
             return 'blocked_by_category';
         }
@@ -2068,6 +2111,9 @@ class AdminPage
         $status = trim($status);
         if ($status === 'ready') {
             return 'ready';
+        }
+        if ($status === 'excluded_from_ebay') {
+            return 'excluded_from_ebay';
         }
         if ($status === 'blocked_by_category' || $status === 'missing_category') {
             return 'blocked_by_category';
@@ -2193,6 +2239,7 @@ class AdminPage
             'missing_image' => 0,
             'missing_stock' => 0,
             'invalid_price' => 0,
+            'excluded_from_ebay' => 0,
         ];
 
         $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
@@ -2285,6 +2332,10 @@ class AdminPage
         $summary['skipped_not_ready'] = (int) ($summary['skipped_not_ready'] ?? 0) + 1;
         $status = strtolower((string) ($preflight['status'] ?? ''));
         $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
+        if ($status === 'excluded_from_ebay') {
+            $summary['excluded_from_ebay'] = (int) ($summary['excluded_from_ebay'] ?? 0) + 1;
+            return;
+        }
         if ($status === 'blocked_by_category' || $status === 'missing_category' || str_contains($message, 'category')) {
             $summary['blocked_by_category'] = (int) ($summary['blocked_by_category'] ?? 0) + 1;
         }

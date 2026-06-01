@@ -257,6 +257,7 @@ $readinessFilter = sanitize_key((string) ($_GET['readiness_filter'] ?? 'all'));
 $readinessBucketMap = [
     'all' => 'not_ready_items',
     'blocked_by_category' => 'blocked_by_category_items',
+    'excluded_from_ebay' => 'excluded_from_ebay_items',
     'missing_required_aspects' => 'missing_required_aspects_items',
     'invalid_price' => 'invalid_price_items',
     'missing_content_image_stock' => 'not_ready_items',
@@ -280,6 +281,7 @@ if ($readinessFilter === 'missing_content_image_stock') {
 $readinessFilterLabels = [
     'all' => 'All not ready',
     'blocked_by_category' => 'Blocked by category',
+    'excluded_from_ebay' => 'Excluded from eBay',
     'missing_required_aspects' => 'Missing required aspects',
     'invalid_price' => 'Invalid price',
     'missing_content_image_stock' => 'Missing content/image/stock',
@@ -406,7 +408,16 @@ $recentLogs = array_values(array_filter(array_slice(is_array($logs ?? null) ? $l
 }));
 $recentLogs = array_slice($recentLogs, 0, 50);
 $blockedByCategoryCount = (int) ($initialPublishCandidates['blocked_by_category'] ?? ($initialPublishSkippedReasons['blocked_by_category'] ?? $categoryBlockedCount));
+$excludedFromEbayCount = (int) ($initialPublishCandidates['excluded_from_ebay'] ?? ($readinessSummary['excluded_from_ebay'] ?? ($categoryAuditSummary['excluded_from_ebay'] ?? 0)));
+$excludedNoWooCategoryCount = (int) ($initialPublishCandidates['excluded_no_woo_category'] ?? ($readinessSummary['excluded_no_woo_category'] ?? ($categoryAuditSummary['excluded_no_woo_category'] ?? 0)));
+$excludedBezKategoriiCount = (int) ($initialPublishCandidates['excluded_bez_kategorii'] ?? ($readinessSummary['excluded_bez_kategorii'] ?? ($categoryAuditSummary['excluded_bez_kategorii'] ?? 0)));
 $missingAspectsCount = (int) ($initialPublishCandidates['missing_aspects'] ?? ($initialPublishSkippedReasons['missing_aspects'] ?? ($readinessSummary['missing_required_aspects'] ?? 0)));
+$initialPublishBlockedCount = (int) ($initialPublishCandidates['blocked_by_category'] ?? 0)
+    + (int) ($initialPublishCandidates['missing_aspects'] ?? 0)
+    + (int) ($initialPublishCandidates['content_not_ready'] ?? 0)
+    + (int) ($initialPublishCandidates['price_not_ready'] ?? 0)
+    + (int) ($initialPublishCandidates['other'] ?? 0)
+    + (int) ($initialPublishCandidates['errors'] ?? 0);
 $publishedListingsCount = (int) ($initialPublishCandidates['already_published'] ?? ($initialPublishSkippedReasons['already_published'] ?? 0)) + (int) $initialPublishSuccess;
 $queuedJobsCount = (int) ($autoSync['queued_products_count'] ?? 0);
 $failedJobsCount = (int) ($autoSync['failed_queue_count'] ?? 0);
@@ -475,6 +486,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <div class="wei-card"><span>Last error</span><strong><?php echo esc_html((string) (($autoSync['checkpoint']['last_error'] ?? $initialPublish['last_error'] ?? '') ?: '-')); ?></strong></div>
             <div class="wei-card"><span>Ready to publish</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
             <div class="wei-card"><span>Blocked by category</span><strong><?php echo esc_html((string) $blockedByCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>Excluded from eBay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
             <div class="wei-card"><span>Missing aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
             <div class="wei-card"><span>Published listings</span><strong><?php echo esc_html((string) $publishedListingsCount); ?></strong></div>
             <div class="wei-card"><span>Queued / failed jobs</span><strong><?php echo esc_html((string) $queuedJobsCount); ?> / <?php echo esc_html((string) $failedJobsCount); ?></strong></div>
@@ -540,8 +552,10 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         };
         $categoryAuditFullReady = !empty($lastCategoryAudit['full_report_csv_exists']) && (int) ($lastCategoryAudit['full_report_csv_size'] ?? 0) > 0;
         $categoryAuditProblemsReady = !empty($lastCategoryAudit['problems_only_csv_exists']) && (int) ($lastCategoryAudit['problems_only_csv_size'] ?? 0) > 0;
+        $categoryAuditExcludedReady = !empty($lastCategoryAudit['excluded_products_csv_exists']) && (int) ($lastCategoryAudit['excluded_products_csv_size'] ?? 0) > 0;
         $categoryAuditFullAdminUrl = (string) ($lastCategoryAudit['full_report_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['full_report_csv_path'] ?? '')));
         $categoryAuditProblemsAdminUrl = (string) ($lastCategoryAudit['problems_only_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['problems_only_csv_path'] ?? '')));
+        $categoryAuditExcludedAdminUrl = (string) ($lastCategoryAudit['excluded_products_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['excluded_products_csv_path'] ?? '')));
         $worklistReady = !empty($category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
         $worklistDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('category-mapping-worklist.csv'));
         $allWorklistReady = !empty($all_category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($all_category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
@@ -574,6 +588,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php if (!$auditIsComplete && !empty($categoryAuditSummary['audit_run_id'])): ?><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_category_readiness_audit'); ?><input type="hidden" name="action" value="wei_run_category_readiness_audit" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="hidden" name="continue_audit" value="1" /><label>Batch size <input type="number" name="audit_batch_size" value="<?php echo esc_attr((string) ($categoryAuditSummary['batch_size'] ?? 200)); ?>" min="1" max="200" step="1" style="width:80px" /></label><button class="button">Continue audit</button></form><?php endif; ?>
                 <?php if ($categoryAuditFullReady): ?><a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download full audit CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['full_report_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
                 <?php if ($categoryAuditProblemsReady): ?><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download problems-only CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['problems_only_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
+                <?php if ($categoryAuditExcludedReady): ?><a class="button" href="<?php echo esc_url($categoryAuditExcludedAdminUrl); ?>">Download excluded-products CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['excluded_products_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
             </div>
             <p><strong><?php echo esc_html($auditLabel); ?></strong></p>
             <?php if (!$auditIsComplete): ?><div class="notice notice-warning inline"><p>Do not use these KPI as final publish readiness numbers.</p></div><?php endif; ?>
@@ -583,7 +598,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php endforeach; ?>
             </div>
             <div class="wei-grid">
-                <?php foreach (['processed' => 'processed_total', 'ready' => 'ready', 'blocked_by_category' => 'blocked_by_category', 'missing_category' => 'missing_category', 'invalid_ebay_category_id' => 'invalid_ebay_category_id', 'non_leaf_category' => 'non_leaf_category', 'category_sanity_failed' => 'category_sanity_failed', 'needs_category_review' => 'needs_category_review', 'missing_required_aspects' => 'missing_required_aspects'] as $label => $key): ?>
+                <?php foreach (['processed' => 'processed_total', 'ready' => 'ready', 'blocked' => 'blocked_by_category', 'excluded_from_ebay' => 'excluded_from_ebay', 'excluded_no_woo_category' => 'excluded_no_woo_category', 'excluded_bez_kategorii' => 'excluded_bez_kategorii', 'missing_category' => 'missing_category', 'invalid_ebay_category_id' => 'invalid_ebay_category_id', 'non_leaf_category' => 'non_leaf_category', 'category_sanity_failed' => 'category_sanity_failed', 'needs_category_review' => 'needs_category_review', 'missing_required_aspects' => 'missing_required_aspects'] as $label => $key): ?>
                     <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($auditIsComplete ? ($categoryAuditSummary[$key] ?? 0) : ($categoryAuditSummary[$key] ?? 0))); ?></strong></div>
                 <?php endforeach; ?>
             </div>
@@ -659,6 +674,10 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <div class="wei-card"><span>skipped_this_run</span><strong><?php echo esc_html((string) $initialPublishSkippedThisRun); ?></strong></div>
             <div class="wei-card"><span>errors_this_run</span><strong><?php echo esc_html((string) $initialPublishFailed); ?></strong></div>
             <div class="wei-card"><span>ready</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
+            <div class="wei-card"><span>blocked</span><strong><?php echo esc_html((string) $initialPublishBlockedCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_from_ebay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_no_woo_category</span><strong><?php echo esc_html((string) $excludedNoWooCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_bez_kategorii</span><strong><?php echo esc_html((string) $excludedBezKategoriiCount); ?></strong></div>
             <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($publishSummary['current_active_listing_count'] ?? $ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>needs_reexport_count</span><strong><?php echo esc_html((string) ($publishSummary['needs_reexport_count'] ?? $ebayListingStateSummary['needs_reexport_count'] ?? 0)); ?></strong></div>
         </div>

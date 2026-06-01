@@ -210,6 +210,9 @@ class AutoSyncScheduler
             'missing_image' => 0,
             'missing_stock' => 0,
             'missing_policies_location' => 0,
+            'excluded_from_ebay' => 0,
+            'excluded_no_woo_category' => 0,
+            'excluded_bez_kategorii' => 0,
             'errors' => 0,
             'not_ready_items' => [],
             'not_ready_examples' => [],
@@ -221,6 +224,7 @@ class AutoSyncScheduler
             'missing_image_items' => [],
             'missing_stock_items' => [],
             'missing_policies_location_items' => [],
+            'excluded_from_ebay_items' => [],
             'not_ready_sample_ids' => [],
             'blocked_by_category_sample_ids' => [],
             'missing_required_aspects_sample_ids' => [],
@@ -237,9 +241,22 @@ class AutoSyncScheduler
                 continue;
             }
 
-            $summary['not_ready']++;
             $status = (string) ($result['status'] ?? 'not_ready');
             $item = $this->readiness_item($productId, $result);
+            if ($status === 'excluded_from_ebay') {
+                $reason = (string) ($result['exclusion_reason'] ?? $result['category']['exclusion_reason'] ?? 'excluded_from_ebay');
+                $summary['excluded_from_ebay']++;
+                if (isset($summary[$reason])) {
+                    $summary[$reason]++;
+                }
+                update_post_meta($productId, '_wei_ebay_export_status', 'excluded_from_ebay');
+                update_post_meta($productId, '_wei_ebay_readiness_reason', $reason);
+                delete_post_meta($productId, '_wei_ebay_last_preflight_error');
+                $this->append_limited($summary['excluded_from_ebay_items'], $item, self::READINESS_BUCKET_LIMIT);
+                continue;
+            }
+
+            $summary['not_ready']++;
             $this->persist_not_ready_preflight_status($productId, $result, $item);
             $this->append_limited($summary['not_ready_items'], $item, self::READINESS_NOT_READY_LIMIT);
             $summary['not_ready_examples'] = $summary['not_ready_items'];
@@ -564,7 +581,7 @@ class AutoSyncScheduler
 
             $this->increment_category_audit_detail_counts($state, $result, $item, $auditStatus);
 
-            if ($auditStatus !== 'ready') {
+            if ($auditStatus !== 'ready' && $auditStatus !== 'excluded_from_ebay') {
                 $this->append_limited($state['sample_problem_product_ids'], $productId, self::READINESS_BUCKET_LIMIT);
                 $reasonKey = $reason !== '' ? $reason : $auditStatus;
                 $state['reason_counts'][$reasonKey] = (int) ($state['reason_counts'][$reasonKey] ?? 0) + 1;
@@ -615,7 +632,7 @@ class AutoSyncScheduler
         $runSlug = 'wei-ebay-category-audit-' . gmdate('Ymd-His');
         $batchSize = $this->normalize_category_audit_batch_size($batchSize);
         $tmp = $this->full_category_audit_tmp_paths($runSlug);
-        foreach ([$tmp['full'], $tmp['problems'], $tmp['debug']] as $path) {
+        foreach ([$tmp['full'], $tmp['problems'], $tmp['excluded'], $tmp['debug']] as $path) {
             if (file_exists($path)) {
                 unlink($path);
             }
@@ -643,6 +660,9 @@ class AutoSyncScheduler
             'missing_category_count' => 0,
             'missing_required_aspects_count' => 0,
             'needs_category_review_count' => 0,
+            'excluded_from_ebay_count' => 0,
+            'excluded_no_woo_category_count' => 0,
+            'excluded_bez_kategorii_count' => 0,
             'content_not_ready_count' => 0,
             'price_not_ready_count' => 0,
             'sample_problem_product_ids' => [],
@@ -653,6 +673,8 @@ class AutoSyncScheduler
             'full_report_csv_url' => $tmp['full_url'],
             'problems_only_csv_path' => $tmp['problems'],
             'problems_only_csv_url' => $tmp['problems_url'],
+            'excluded_products_csv_path' => $tmp['excluded'],
+            'excluded_products_csv_url' => $tmp['excluded_url'],
             'tmp_debug_path' => $tmp['debug'],
             'csv_initialized' => false,
         ];
@@ -669,6 +691,8 @@ class AutoSyncScheduler
             'full_url' => trailingslashit($baseUrl) . $runSlug . '.csv',
             'problems' => trailingslashit($baseDir) . $runSlug . '-problems-only.csv',
             'problems_url' => trailingslashit($baseUrl) . $runSlug . '-problems-only.csv',
+            'excluded' => trailingslashit($baseDir) . $runSlug . '-excluded-products.csv',
+            'excluded_url' => trailingslashit($baseUrl) . $runSlug . '-excluded-products.csv',
             'debug' => trailingslashit($baseDir) . $runSlug . '-debug-products.tmp.ndjson',
         ];
     }
@@ -717,7 +741,7 @@ class AutoSyncScheduler
         $row['audit_run_id'] = (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? '');
         $row['schema_version'] = (string) ($state['schema_version'] ?? 'category_readiness_audit_v2');
         if (empty($state['csv_initialized'])) {
-            foreach (['full_report_csv_path', 'problems_only_csv_path'] as $pathKey) {
+            foreach (['full_report_csv_path', 'problems_only_csv_path', 'excluded_products_csv_path'] as $pathKey) {
                 $path = (string) ($state[$pathKey] ?? '');
                 if ($path === '') {
                     continue;
@@ -732,7 +756,9 @@ class AutoSyncScheduler
         }
 
         $this->append_category_audit_csv_path((string) ($state['full_report_csv_path'] ?? ''), $headers, $row);
-        if ($auditStatus !== 'ready') {
+        if ($auditStatus === 'excluded_from_ebay') {
+            $this->append_category_audit_csv_path((string) ($state['excluded_products_csv_path'] ?? ''), $headers, $row);
+        } elseif ($auditStatus !== 'ready') {
             $this->append_category_audit_csv_path((string) ($state['problems_only_csv_path'] ?? ''), $headers, $row);
         }
     }
@@ -754,9 +780,12 @@ class AutoSyncScheduler
     {
         $fullPath = (string) ($state['full_report_csv_path'] ?? '');
         $problemsPath = (string) ($state['problems_only_csv_path'] ?? '');
+        $excludedPath = (string) ($state['excluded_products_csv_path'] ?? '');
+        $excludedCount = (int) ($state['excluded_from_ebay_count'] ?? 0);
         $reports = [
             'full_audit_csv' => $this->category_audit_file_report($fullPath, (string) ($state['full_report_csv_url'] ?? ''), (int) ($state['total_scanned'] ?? 0), $state),
-            'problems_only_csv' => $this->category_audit_file_report($problemsPath, (string) ($state['problems_only_csv_url'] ?? ''), max(0, (int) ($state['total_scanned'] ?? 0) - (int) ($state['ready_count'] ?? 0)), $state),
+            'problems_only_csv' => $this->category_audit_file_report($problemsPath, (string) ($state['problems_only_csv_url'] ?? ''), max(0, (int) ($state['total_scanned'] ?? 0) - (int) ($state['ready_count'] ?? 0) - $excludedCount), $state),
+            'excluded_products_csv' => $this->category_audit_file_report($excludedPath, (string) ($state['excluded_products_csv_url'] ?? ''), $excludedCount, $state),
         ];
         $lastAudit = [
             'audit_run_id' => (string) ($state['audit_run_id'] ?? $state['run_slug'] ?? ''),
@@ -772,6 +801,10 @@ class AutoSyncScheduler
             'problems_only_csv_url' => (string) ($reports['problems_only_csv']['url'] ?? ''),
             'problems_only_csv_exists' => !empty($reports['problems_only_csv']['exists']),
             'problems_only_csv_size' => (int) ($reports['problems_only_csv']['size'] ?? 0),
+            'excluded_products_csv_path' => (string) ($reports['excluded_products_csv']['path'] ?? ''),
+            'excluded_products_csv_url' => (string) ($reports['excluded_products_csv']['url'] ?? ''),
+            'excluded_products_csv_exists' => !empty($reports['excluded_products_csv']['exists']),
+            'excluded_products_csv_size' => (int) ($reports['excluded_products_csv']['size'] ?? 0),
         ];
         if ($persistCompletedAudit) {
             update_option('wei_ebay_last_category_readiness_audit', $lastAudit, false);
@@ -875,6 +908,12 @@ class AutoSyncScheduler
             'needs_category_review' => (int) ($state['needs_category_review_count'] ?? 0),
             'needs_category_review_count' => (int) ($state['needs_category_review_count'] ?? 0),
             'missing_required_aspects' => (int) ($state['missing_required_aspects_count'] ?? 0),
+            'excluded_from_ebay' => (int) ($state['excluded_from_ebay_count'] ?? 0),
+            'excluded_from_ebay_count' => (int) ($state['excluded_from_ebay_count'] ?? 0),
+            'excluded_no_woo_category' => (int) ($state['excluded_no_woo_category_count'] ?? 0),
+            'excluded_no_woo_category_count' => (int) ($state['excluded_no_woo_category_count'] ?? 0),
+            'excluded_bez_kategorii' => (int) ($state['excluded_bez_kategorii_count'] ?? 0),
+            'excluded_bez_kategorii_count' => (int) ($state['excluded_bez_kategorii_count'] ?? 0),
             'content_not_ready_count' => (int) ($state['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($state['price_not_ready_count'] ?? 0),
             'sample_problem_product_ids' => (array) ($state['sample_problem_product_ids'] ?? []),
@@ -890,6 +929,17 @@ class AutoSyncScheduler
         $category = is_array($result['category'] ?? null) ? $result['category'] : [];
         $validationStatus = (string) ($category['validation_status'] ?? $item['validation_status'] ?? '');
         $reason = strtolower((string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? $item['primary_reason'] ?? ''));
+
+        if ($auditStatus === 'excluded_from_ebay') {
+            $exclusionReason = (string) ($result['exclusion_reason'] ?? $category['exclusion_reason'] ?? 'excluded_from_ebay');
+            if ($exclusionReason === 'excluded_no_woo_category') {
+                $state['excluded_no_woo_category_count'] = (int) ($state['excluded_no_woo_category_count'] ?? 0) + 1;
+            }
+            if ($exclusionReason === 'excluded_bez_kategorii') {
+                $state['excluded_bez_kategorii_count'] = (int) ($state['excluded_bez_kategorii_count'] ?? 0) + 1;
+            }
+            return;
+        }
 
         if ($status === 'invalid_ebay_category_id' || $validationStatus === 'invalid_ebay_category_id' || str_contains($reason, 'invalid_ebay_category_id')) {
             $state['invalid_ebay_category_id_count'] = (int) ($state['invalid_ebay_category_id_count'] ?? 0) + 1;
@@ -912,6 +962,9 @@ class AutoSyncScheduler
         }
 
         $status = (string) ($result['status'] ?? 'not_ready');
+        if ($status === 'excluded_from_ebay') {
+            return 'excluded_from_ebay';
+        }
         $category = is_array($result['category'] ?? null) ? $result['category'] : [];
         $categoryId = trim((string) ($category['category_id'] ?? $item['category_id'] ?? ''));
         $selected = (array) ($item['selected_candidate'] ?? []);
@@ -941,6 +994,9 @@ class AutoSyncScheduler
     {
         if ($auditStatus === 'ready') {
             return '';
+        }
+        if ($auditStatus === 'excluded_from_ebay') {
+            return (string) ($result['exclusion_reason'] ?? $result['category']['exclusion_reason'] ?? 'excluded_from_ebay');
         }
         if ($auditStatus === 'missing_required_aspects') {
             return 'missing_required_aspects: ' . implode(', ', (array) ($item['missing_aspects'] ?? []));
@@ -988,7 +1044,7 @@ class AutoSyncScheduler
             $currentCategoryPath = (string) ($localCachedCategory['category_path'] ?? '');
         }
         $categoryProblemReason = $auditStatus === 'blocked_by_category' || $auditStatus === 'missing_category' ? $reason : '';
-        if ($categoryProblemReason === '' && $currentCategoryId === '') {
+        if ($categoryProblemReason === '' && $currentCategoryId === '' && $auditStatus !== 'excluded_from_ebay') {
             $categoryProblemReason = 'missing_category';
         }
 
