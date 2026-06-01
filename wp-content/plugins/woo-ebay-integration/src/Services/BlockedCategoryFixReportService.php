@@ -234,6 +234,8 @@ class BlockedCategoryFixReportService
                     'current_ebay_category_name' => '',
                     'current_ebay_category_path' => (string) ($row['current_ebay_category_path'] ?? ''),
                     'problem_type' => $problemType,
+                    'sample_product_id' => '',
+                    'sample_product_title' => '',
                     'sample_product_ids' => [],
                     'sample_product_titles' => [],
                     'final_ebay_category_id' => '',
@@ -249,14 +251,18 @@ class BlockedCategoryFixReportService
                     $groups[$groupKey][$target] = (string) $row[$source];
                 }
             }
+            $pid = trim((string) ($row['product_id'] ?? ''));
+            $title = trim((string) ($row['product_title'] ?? $row['title'] ?? ''));
+            if ((string) ($groups[$groupKey]['sample_product_title'] ?? '') === '' && $title !== '') {
+                $groups[$groupKey]['sample_product_id'] = $pid;
+                $groups[$groupKey]['sample_product_title'] = $title;
+            }
             if (count($groups[$groupKey]['sample_product_ids']) < 10) {
-                $pid = trim((string) ($row['product_id'] ?? ''));
                 if ($pid !== '' && !in_array($pid, $groups[$groupKey]['sample_product_ids'], true)) {
                     $groups[$groupKey]['sample_product_ids'][] = $pid;
                 }
             }
             if (count($groups[$groupKey]['sample_product_titles']) < 10) {
-                $title = trim((string) ($row['product_title'] ?? $row['title'] ?? ''));
                 if ($title !== '' && !in_array($title, $groups[$groupKey]['sample_product_titles'], true)) {
                     $groups[$groupKey]['sample_product_titles'][] = $title;
                 }
@@ -378,7 +384,7 @@ class BlockedCategoryFixReportService
 
     private function category_mapping_worklist_headers(): array
     {
-        return ['woo_category_id','woo_category_name','blocked_product_count','total_product_count_in_category','current_ebay_category_id','current_ebay_category_name','current_ebay_category_path','problem_type','sample_product_ids','sample_product_titles','final_ebay_category_id','manual_notes'];
+        return ['final_ebay_category_id','sample_product_title','woo_category_id','woo_category_name','blocked_product_count','total_product_count_in_category','current_ebay_category_id','current_ebay_category_name','current_ebay_category_path','problem_type','sample_product_id','sample_product_ids','sample_product_titles','manual_notes'];
     }
 
     private function category_problem_type_for_audit_row(array $row): string
