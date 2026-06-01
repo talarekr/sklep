@@ -152,7 +152,27 @@ foreach ((array) ($category_mappings ?? []) as $row) {
         $displayCategoryPath = trim((string) (($best['category_path'] ?? $best['path'] ?? '') . ' ' . ($best['category_name'] ?? $best['name'] ?? '')));
     }
 
-    $row['_ui_status'] = $statusValue;
+    $manualStatus = $displayCategoryId === '' ? 'missing' : 'needs_category_review';
+    $validationByTerm = is_array($category_validation_statuses['by_woo_term_id'] ?? null) ? $category_validation_statuses['by_woo_term_id'] : [];
+    $validationByCategory = is_array($category_validation_statuses['by_category_id'] ?? null) ? $category_validation_statuses['by_category_id'] : [];
+    $rowValidation = is_array($validationByTerm[(string) ($row['term_id'] ?? '')] ?? null) ? $validationByTerm[(string) ($row['term_id'] ?? '')] : (is_array($validationByCategory[$displayCategoryId] ?? null) ? $validationByCategory[$displayCategoryId] : []);
+    if ($displayCategoryId === '') {
+        $manualStatus = 'missing';
+    } elseif (!empty($rowValidation)) {
+        if (empty($rowValidation['valid'])) {
+            $manualStatus = 'invalid_ebay_category_id';
+        } elseif (empty($rowValidation['leaf'])) {
+            $manualStatus = 'non_leaf_category';
+        } else {
+            $manualStatus = 'valid';
+        }
+    } elseif (in_array($statusValue, ['needs_category_review', 'blocked_by_threshold', 'blocked_by_sanity', 'category_sanity_failed'], true)) {
+        $manualStatus = $statusValue === 'blocked_by_sanity' ? 'blocked_by_category' : 'needs_category_review';
+    } elseif (in_array($statusValue, ['accepted_manual', 'accepted_auto'], true)) {
+        $manualStatus = 'valid';
+    }
+
+    $row['_ui_status'] = $manualStatus;
     $row['_ui_sanity_reason'] = $sanityReason;
     $row['_ui_best_suggestion'] = $bestSuggestion;
     $row['_ui_category_id'] = $displayCategoryId;
@@ -195,27 +215,24 @@ if ($categorySummary['last_auto_map_run'] === '-') {
 
 $currentFilter = isset($_GET['category_status']) ? sanitize_key(wp_unslash((string) $_GET['category_status'])) : 'all';
 $currentSort = isset($_GET['category_sort']) ? sanitize_key(wp_unslash((string) $_GET['category_sort'])) : '';
-$filteredCategoryRows = array_values(array_filter($categoryRows, static function (array $row) use ($currentFilter): bool {
+$wooCategorySearch = isset($_GET['woo_category_search']) ? sanitize_text_field(wp_unslash((string) $_GET['woo_category_search'])) : '';
+$ebayCategoryIdSearch = isset($_GET['current_ebay_category_id']) ? sanitize_text_field(wp_unslash((string) $_GET['current_ebay_category_id'])) : '';
+$filteredCategoryRows = array_values(array_filter($categoryRows, static function (array $row) use ($currentFilter, $wooCategorySearch, $ebayCategoryIdSearch): bool {
     $statusValue = (string) ($row['_ui_status'] ?? '');
-    if ($currentFilter === 'all' || $currentFilter === '') {
-        return true;
+    if ($currentFilter !== 'all' && $currentFilter !== '' && $statusValue !== $currentFilter) {
+        return false;
     }
-    if ($currentFilter === 'mapped_auto') {
-        return $statusValue === 'accepted_auto';
+    if ($wooCategorySearch !== '' && !str_contains(strtolower((string) ($row['woo_category_path'] ?? $row['name'] ?? '')), strtolower($wooCategorySearch))) {
+        return false;
     }
-    if ($currentFilter === 'mapped_manual') {
-        return $statusValue === 'accepted_manual';
+    if ($ebayCategoryIdSearch !== '' && !str_contains((string) ($row['_ui_category_id'] ?? $row['ebay_category_id'] ?? ''), $ebayCategoryIdSearch)) {
+        return false;
     }
-    if ($currentFilter === 'needs_review') {
-        return $statusValue === 'needs_category_review';
-    }
-    if ($currentFilter === 'blocked') {
-        return in_array($statusValue, ['blocked_by_threshold', 'blocked_by_sanity'], true);
-    }
-
     return true;
 }));
-if ($currentSort === 'confidence') {
+if ($currentSort === '') {
+    usort($filteredCategoryRows, static fn (array $a, array $b): int => ((int) ($b['product_count'] ?? 0)) <=> ((int) ($a['product_count'] ?? 0)));
+} elseif ($currentSort === 'confidence') {
     usort($filteredCategoryRows, static fn (array $a, array $b): int => ((float) ($b['confidence'] ?? 0)) <=> ((float) ($a['confidence'] ?? 0)));
 } elseif ($currentSort === 'products') {
     usort($filteredCategoryRows, static fn (array $a, array $b): int => ((int) ($b['product_count'] ?? 0)) <=> ((int) ($a['product_count'] ?? 0)));
@@ -359,6 +376,8 @@ $recentLogs = array_slice(is_array($logs ?? null) ? $logs : [], 0, 20);
 $limitedNotReadyItems = array_slice($notReadyItems, 0, 20);
 $loadProductSyncUrl = add_query_arg(['page' => 'woo-ebay', 'wei_section' => 'product-sync'], $adminPageUrl);
 $loadCategoryMappingsUrl = add_query_arg(['page' => 'woo-ebay', 'wei_section' => 'category-mappings'], $adminPageUrl);
+$manualCategoryPickerRows = is_array($manual_category_picker_rows ?? null) ? $manual_category_picker_rows : [];
+$manualCategoryPickerQuery = (string) ($manual_category_picker_query ?? '');
 $formatNullableCount = static fn($value): string => $value === null ? 'not loaded' : (string) $value;
 $technicalPreview = static function ($value, int $maxLength = 6000) use ($redactTechnical): string {
     $json = wp_json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
@@ -615,9 +634,28 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
         <details><summary>Blocked category fix report JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($blocked_category_fix_report_summary, 6000)); ?></pre></details>
         <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
-        <?php if ($categoryRowsLoaded): ?>
-            <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Status</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
-        <?php endif; ?>
+        <details open><summary>Manual WooCommerce product_cat → eBay.de Kategorie mapping</summary>
+            <p><a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Load manual mapping screen</a></p>
+            <?php if ($categoryRowsLoaded): ?>
+                <form method="get" action="<?php echo esc_url($adminPageUrl); ?>" class="wei-actions">
+                    <input type="hidden" name="page" value="woo-ebay" />
+                    <input type="hidden" name="wei_section" value="category-mappings" />
+                    <label>Status <select name="category_status">
+                        <?php foreach (['all' => 'all categories with products', 'missing' => 'missing mapping', 'invalid_ebay_category_id' => 'invalid eBay category ID', 'non_leaf_category' => 'non-leaf category', 'blocked_by_category' => 'blocked_by_category', 'needs_category_review' => 'needs_category_review', 'valid' => 'valid'] as $value => $label): ?>
+                            <option value="<?php echo esc_attr($value); ?>" <?php selected($currentFilter, $value); ?>><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select></label>
+                    <label>Woo category <input type="search" name="woo_category_search" value="<?php echo esc_attr($wooCategorySearch); ?>" /></label>
+                    <label>Current eBay ID <input type="search" name="current_ebay_category_id" value="<?php echo esc_attr($ebayCategoryIdSearch); ?>" /></label>
+                    <input type="hidden" name="category_sort" value="products" />
+                    <button class="button">Filter / sort by product_count desc</button>
+                </form>
+                <div style="display:grid; grid-template-columns:minmax(0,2fr) minmax(320px,1fr); gap:16px; align-items:start;">
+                    <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>woo_category_id</th><th>Woo category name/path</th><th>product_count</th><th>current ebay_category_id</th><th>current eBay path/name</th><th>status</th><th>source</th><th>updated_at / reviewed_at</th><th>sample product titles</th><th>Save valid leaf</th><th>Diagnostics</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><?php $samples = is_array($row['sample_products'] ?? null) ? $row['sample_products'] : []; ?><tr><td><code><?php echo esc_html((string) ($row['term_id'] ?? '0')); ?></code></td><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code></td><td><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><strong><?php echo esc_html((string) ($row['_ui_status'] ?? 'missing')); ?></strong></td><td><?php echo esc_html((string) ($row['source'] ?? 'unknown')); ?></td><td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td><td><ol><?php foreach ($samples as $sample): ?><li><?php echo esc_html((string) ($sample['title'] ?? '')); ?></li><?php endforeach; ?></ol></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="leaf category ID" value="<?php echo esc_attr((string) ($row['_ui_category_id'] ?? '')); ?>" size="10" /><button class="button button-primary">Save manual</button></form></td><td><details><summary>debug</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['resolver_selected_id' => (int) ($row['resolver_selected_id'] ?? 0), 'selected_ebay_category_id' => (string) ($row['_ui_category_id'] ?? ''), 'selected_source' => (string) ($row['source'] ?? 'unknown'), 'status' => (string) ($row['_ui_status'] ?? ''), 'publish_ready_from_category' => (string) ($row['_ui_status'] ?? '') === 'valid', 'all_ebay_de_mapping_rows' => (array) ($row['mapping_rows'] ?? [])], 4000)); ?></pre></details></td></tr><?php endforeach; ?></tbody></table></div>
+                    <aside class="wei-card"><h3>eBay.de Auto & Motorrad Teile picker</h3><form method="get" action="<?php echo esc_url($adminPageUrl); ?>"><input type="hidden" name="page" value="woo-ebay" /><input type="hidden" name="wei_section" value="category-mappings" /><input type="search" name="ebay_category_search" value="<?php echo esc_attr($manualCategoryPickerQuery); ?>" placeholder="Search German category name or ID" /><button class="button">Search cache</button></form><div class="wei-scroll"><table class="widefat striped"><thead><tr><th>ID</th><th>German name/path</th><th>Leaf</th></tr></thead><tbody><?php foreach ($manualCategoryPickerRows as $cat): ?><tr><td><code><?php echo esc_html((string) ($cat['category_id'] ?? '')); ?></code></td><td><strong><?php echo esc_html((string) ($cat['category_name'] ?? '')); ?></strong><br><?php echo esc_html((string) ($cat['category_path'] ?? '')); ?></td><td><?php echo !empty($cat['is_leaf']) ? 'leaf' : 'non-leaf'; ?></td></tr><?php endforeach; ?></tbody></table></div><details><summary>Import lightweight EBAY_DE category cache JSON</summary><p class="description">Paste an array of categories with category_id, category_name, category_path, is_leaf and optional parent_category_id. The picker never calls eBay APIs on page load.</p><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_import_ebay_de_category_tree_cache'); ?><input type="hidden" name="action" value="wei_import_ebay_de_category_tree_cache" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><textarea name="category_tree_json" rows="6" class="large-text code" placeholder='[{"category_id":"33559","category_name":"...","category_path":"Auto & Motorrad Teile > ...","is_leaf":true}]'></textarea><button class="button">Import cache</button></form></details></aside>
+                </div>
+            <?php endif; ?>
+        </details>
     </div>
 
     <div class="wei-box" data-wei-module="publish">

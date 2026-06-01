@@ -100,11 +100,107 @@ class EbayTaxonomyService
     }
 
 
+    public function cached_category(string $marketplace_id, string $category_id): ?array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_tree_cache';
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE marketplace_id=%s AND category_id=%s LIMIT 1",
+            $marketplace_id,
+            trim($category_id)
+        ), ARRAY_A);
+        if (!is_array($row)) {
+            return null;
+        }
+        return [
+            'status' => 'ok',
+            'category_id' => (string) ($row['category_id'] ?? ''),
+            'category_name' => (string) ($row['category_name'] ?? ''),
+            'category_path' => (string) ($row['category_path'] ?? ''),
+            'leaf' => !empty($row['is_leaf']),
+            'source' => 'local_tree_cache',
+        ];
+    }
+
+    public function search_cached_automotive_categories(string $marketplace_id, string $query = '', int $limit = 50): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_tree_cache';
+        $limit = max(1, min(100, $limit));
+        $query = trim($query);
+        if ($query !== '') {
+            $like = '%' . $wpdb->esc_like($query) . '%';
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT category_id, category_name, category_path, is_leaf, parent_category_id FROM {$table} WHERE marketplace_id=%s AND is_automotive=1 AND (category_id=%s OR category_name LIKE %s OR category_path LIKE %s) ORDER BY is_leaf DESC, category_path ASC LIMIT %d",
+                $marketplace_id,
+                $query,
+                $like,
+                $like,
+                $limit
+            ), ARRAY_A);
+        } else {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT category_id, category_name, category_path, is_leaf, parent_category_id FROM {$table} WHERE marketplace_id=%s AND is_automotive=1 ORDER BY category_path ASC LIMIT %d",
+                $marketplace_id,
+                $limit
+            ), ARRAY_A);
+        }
+        return is_array($rows) ? $rows : [];
+    }
+
+    public function import_cached_categories(string $marketplace_id, array $rows): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_tree_cache';
+        $now = gmdate('Y-m-d H:i:s');
+        $summary = ['processed' => 0, 'inserted_or_updated' => 0, 'skipped' => 0];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                $summary['skipped']++;
+                continue;
+            }
+            $categoryId = trim((string) ($row['category_id'] ?? $row['categoryId'] ?? ''));
+            $name = trim((string) ($row['category_name'] ?? $row['categoryName'] ?? ''));
+            $path = trim((string) ($row['category_path'] ?? $row['categoryPath'] ?? $name));
+            if ($categoryId === '' || $name === '') {
+                $summary['skipped']++;
+                continue;
+            }
+            $summary['processed']++;
+            $isAutomotive = !empty($row['is_automotive']) || str_contains(strtolower($path), 'auto & motorrad teile') || str_contains(strtolower($path), 'autoteile');
+            $data = [
+                'marketplace_id' => $marketplace_id,
+                'category_id' => $categoryId,
+                'parent_category_id' => (string) ($row['parent_category_id'] ?? $row['parentCategoryId'] ?? ''),
+                'category_name' => $name,
+                'category_path' => $path,
+                'is_leaf' => !empty($row['is_leaf']) || !empty($row['leaf']) ? 1 : 0,
+                'is_automotive' => $isAutomotive ? 1 : 0,
+                'imported_at' => $now,
+                'updated_at' => $now,
+            ];
+            $existing = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$table} WHERE marketplace_id=%s AND category_id=%s LIMIT 1", $marketplace_id, $categoryId), ARRAY_A);
+            if (is_array($existing)) {
+                $wpdb->update($table, $data, ['id' => (int) $existing['id']]);
+            } else {
+                $wpdb->insert($table, $data);
+            }
+            $summary['inserted_or_updated']++;
+        }
+        return $summary;
+    }
+
+
     public function get_category_details_result(string $marketplace_id, string $category_id, bool $force_refresh = false): array
     {
         $category_id = trim($category_id);
         if ($category_id === '') {
             return ['status' => 'category_details_failed', 'category_id' => '', 'category_name' => 'unknown', 'category_path' => 'unknown', 'error' => 'Missing category_id'];
+        }
+
+        $local = $this->cached_category($marketplace_id, $category_id);
+        if (!$force_refresh && is_array($local)) {
+            return $local;
         }
 
         $cacheKey = 'wei_cat_details_' . sanitize_key($marketplace_id) . '_' . sanitize_key($category_id);
