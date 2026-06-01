@@ -769,7 +769,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         </details>
         <?php if ($vehicleCompatibilityDiagnostics !== []): ?>
             <div class="wei-card"><h3>Vehicle compatibility diagnostics</h3>
-                <p class="description">Single-product EBAY_DE preview. Status values include <code>ready_ktype</code>, <code>ready_epid</code>, <code>missing_ktype</code>, <code>insufficient_vehicle_data</code>, <code>unsupported_category</code> and <code>needs_manual_review</code>.</p>
+                <p class="description">Single-product EBAY_DE read-only preview. Missing KType/ePID is displayed as <code>compatibility_enhancement_missing</code> and is not a publish blocker when MPN/OE item specifics and other readiness checks pass. Status values include <code>ready_ktype</code>, <code>ready_epid</code>, <code>compatibility_enhancement_missing</code>, <code>unsupported_category</code> and <code>needs_manual_review</code>.</p>
                 <pre class="wei-scroll"><?php echo esc_html($technicalPreview($vehicleCompatibilityDiagnostics, 10000)); ?></pre>
             </div>
         <?php endif; ?>

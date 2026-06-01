@@ -3233,6 +3233,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $categoryId = '';
         }
         $missingAspects = $categoryId !== '' ? array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name]))) : [];
+        $partNumberDiagnostics = $this->part_number_readiness_diagnostics($product, $product_id, $skuResolution['sku'], $content, $aspects, $category, $settings, $requiredAspects);
+        if (!empty($partNumberDiagnostics['required']) && empty($partNumberDiagnostics['present_in_final_item_specifics_payload'])) {
+            $missingAspects[] = (string) ($partNumberDiagnostics['preferred_item_specific_name'] ?? 'Herstellernummer');
+            $missingAspects = array_values(array_unique($missingAspects));
+        }
         $priceResolution = $this->resolve_price($product, $product_id, $settings);
         if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
             $this->logger->info('Resolved eBay category for preflight/export', [
@@ -3288,7 +3293,72 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+    }
+
+
+    private function part_number_readiness_diagnostics($product, int $productId, string $sku, array $content, array $aspects, array $category, array $settings, array $requiredAspects): array
+    {
+        $resolved = $this->resolve_mpn_aspect_value($product, $productId, $sku, $content);
+        $partNumber = (string) ($resolved['value'] ?? '');
+        $mappedNames = ['Herstellernummer', 'Manufacturer Part Number', 'MPN'];
+        if (!empty($aspects['OE/OEM Referenznummer']) || !empty($aspects['OE/OEM number']) || !empty($aspects['OE/OEM Referenznummer(n)'])) {
+            $mappedNames[] = 'OE/OEM number';
+        }
+        $presentNames = [];
+        foreach ($mappedNames as $name) {
+            if ($this->aspect_value_present($aspects, $name, $partNumber)) {
+                $presentNames[] = $name;
+            }
+        }
+        $required = $this->part_number_required_for_category($category, $requiredAspects);
+
+        return [
+            'detected_manufacturer_part_number' => $partNumber,
+            'source' => (string) ($resolved['source'] ?? 'none'),
+            'source_type' => (string) ($resolved['source_type'] ?? 'none'),
+            'source_key' => (string) ($resolved['source_key'] ?? ''),
+            'mapped_ebay_item_specific_names' => $mappedNames,
+            'present_item_specific_names' => $presentNames,
+            'present_in_final_item_specifics_payload' => $partNumber !== '' && $presentNames !== [],
+            'required' => $required,
+            'preferred_item_specific_name' => 'Herstellernummer',
+            'issue' => $required && ($partNumber === '' || $presentNames === []) ? 'missing_manufacturer_part_number_item_specific' : '',
+        ];
+    }
+
+    private function aspect_value_present(array $aspects, string $name, string $expectedValue = ''): bool
+    {
+        foreach ($aspects as $aspectName => $values) {
+            if ($this->normalize_aspect_alias_name((string) $aspectName) !== $this->normalize_aspect_alias_name($name)) {
+                continue;
+            }
+            $normalizedValues = $this->normalize_part_numbers($values);
+            if ($expectedValue === '') {
+                return $normalizedValues !== [] || $this->normalize_aspect_values((array) $values) !== [];
+            }
+            return in_array($expectedValue, $normalizedValues, true);
+        }
+        return false;
+    }
+
+    private function part_number_required_for_category(array $category, array $requiredAspects): bool
+    {
+        foreach ($requiredAspects as $requiredAspect) {
+            if ($this->is_part_number_aspect_alias((string) $requiredAspect)) {
+                return true;
+            }
+        }
+        if ($this->marketplace_id() !== 'EBAY_DE') {
+            return false;
+        }
+        $categoryText = mb_strtolower(trim(implode(' ', array_filter([
+            (string) ($category['category_path'] ?? ''),
+            (string) ($category['category_name'] ?? ''),
+            (string) ($category['mapping']['ebay_category_path'] ?? ''),
+            (string) ($category['mapping']['ebay_category_name'] ?? ''),
+        ], static fn($value): bool => trim((string) $value) !== ''))));
+        return $categoryText !== '' && (str_contains($categoryText, 'auto') || str_contains($categoryText, 'motorrad') || str_contains($categoryText, 'fahrzeug') || str_contains($categoryText, 'teile'));
     }
 
 
@@ -4008,7 +4078,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         foreach (['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number', '_catalog_number', 'catalog_number'] as $metaKey) {
             $value = $this->normalize_part_number_value((string) get_post_meta($product_id, $metaKey, true));
             if ($value !== '') {
-                return ['value' => $value, 'source' => 'meta', 'rejected_tokens' => [], 'confidence' => 0.98, 'skipped_weak_part_number' => false];
+                return ['value' => $value, 'source' => 'meta:' . $metaKey, 'source_type' => 'meta', 'source_key' => $metaKey, 'rejected_tokens' => [], 'confidence' => 0.98, 'skipped_weak_part_number' => false];
             }
         }
 
@@ -4018,7 +4088,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
             $value = $this->normalize_part_number_value((string) $product->get_attribute($attributeName));
             if ($value !== '') {
-                return ['value' => $value, 'source' => 'meta', 'rejected_tokens' => [], 'confidence' => 0.95, 'skipped_weak_part_number' => false];
+                return ['value' => $value, 'source' => 'attribute:' . $attributeName, 'source_type' => 'attribute', 'source_key' => $attributeName, 'rejected_tokens' => [], 'confidence' => 0.95, 'skipped_weak_part_number' => false];
             }
         }
 
@@ -4079,8 +4149,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        if (empty($aspects['MPN'])) {
-            $aspects['MPN'] = [$partNumber];
+        foreach (['MPN', 'Herstellernummer', 'Manufacturer Part Number'] as $standardAlias) {
+            if (empty($aspects[$standardAlias])) {
+                $aspects[$standardAlias] = [$partNumber];
+            }
+        }
+        if (empty($aspects['OE/OEM Referenznummer'])) {
+            $aspects['OE/OEM Referenznummer'] = [$partNumber];
         }
 
         return $aspects;

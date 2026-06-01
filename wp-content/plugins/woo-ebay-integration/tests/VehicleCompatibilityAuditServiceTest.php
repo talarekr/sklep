@@ -7,11 +7,12 @@ $root = dirname(__DIR__);
 $GLOBALS['wei_test_meta'] = [
     101 => ['_sku' => ['SKU-KTYPE'], 'ktype_id' => ['12345'], 'Producent' => ['Audi']],
     102 => ['_sku' => ['SKU-EPID'], '_epid' => ['EPID-9']],
-    103 => ['_sku' => ['SKU-BASIC'], 'make' => ['BMW'], 'model' => ['3 Series'], 'year' => ['2018']],
+    103 => ['_sku' => ['SKU-BASIC'], 'make' => ['BMW'], 'model' => ['3 Series'], 'year' => ['2018'], 'Numer części' => ['8P0123456']],
     104 => ['_sku' => ['SKU-OVOKO'], 'ovoko_car_id' => ['CAR-77']],
+    105 => ['_sku' => ['SKU-NO-MPN'], 'make' => ['BMW'], 'model' => ['5 Series'], 'year' => ['2019']],
 ];
-$GLOBALS['wei_test_titles'] = [101 => 'KType product', 102 => 'ePID product', 103 => 'Basic vehicle product', 104 => 'Ovoko only product'];
-$GLOBALS['wei_test_product_ids'] = [104, 103, 102, 101];
+$GLOBALS['wei_test_titles'] = [101 => 'KType product', 102 => 'ePID product', 103 => 'Basic vehicle product', 104 => 'Ovoko only product', 105 => 'Missing MPN product'];
+$GLOBALS['wei_test_product_ids'] = [105, 104, 103, 102, 101];
 $GLOBALS['wei_test_api_calls'] = 0;
 
 if (!function_exists('get_post_meta')) {
@@ -75,16 +76,23 @@ $assert = static function (bool $condition, string $message) use (&$failures): v
 $service = new VehicleCompatibilityAuditService();
 $assert($service->auditProduct(101)['compatibility_status'] === 'ready_ktype', 'Product with KType becomes ready_ktype.');
 $assert($service->auditProduct(102)['compatibility_status'] === 'ready_epid', 'Product with ePID becomes ready_epid.');
-$basicStatus = $service->auditProduct(103)['compatibility_status'];
-$assert(in_array($basicStatus, ['missing_ktype', 'insufficient_vehicle_data'], true), 'Product with make/model/year but no KType is not ready.');
+$basicAudit = $service->auditProduct(103);
+$basicStatus = $basicAudit['compatibility_status'];
+$assert($basicStatus === 'compatibility_enhancement_missing', 'Product with MPN but no KType/ePID is only missing an enhancement.');
+$assert(($basicAudit['mpn_readiness']['detected_manufacturer_part_number'] ?? '') === '8P0123456', 'MPN is detected from Woo Numer części.');
+$assert(($basicAudit['mpn_readiness']['source_label'] ?? '') === 'meta:Numer części', 'MPN source field is reported.');
+$assert(in_array('Herstellernummer', (array) ($basicAudit['mpn_readiness']['mapped_ebay_item_specific_names'] ?? []), true), 'Herstellernummer mapping is reported.');
+$assert(($basicAudit['mpn_readiness']['present_in_final_item_specifics_payload'] ?? false) === true, 'MPN is marked present in the final item specifics payload preview.');
+$missingMpnAudit = $service->auditProduct(105);
+$assert(($missingMpnAudit['mpn_readiness']['missing_issue'] ?? '') === 'missing_manufacturer_part_number_item_specific', 'Missing MPN is reported separately from compatibility status.');
 $assert($service->auditProduct(104)['compatibility_status'] !== 'ready_ktype' && $service->auditProduct(104)['compatibility_status'] !== 'ready_epid', 'Product with Ovoko car ID only does not become ready.');
 
 $headers = $service->csvHeaders();
-foreach (['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'compatibility_status', 'missing_fields', 'notes'] as $column) {
+foreach (['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'detected_manufacturer_part_number', 'mpn_source', 'mapped_item_specific_names', 'mpn_present_in_final_item_specifics_payload', 'compatibility_status', 'missing_fields', 'notes'] as $column) {
     $assert(in_array($column, $headers, true), 'Audit CSV contains expected column: ' . $column);
 }
 
-$csv = $service->generateAuditCsv('EBAY_DE', 4);
+$csv = $service->generateAuditCsv('EBAY_DE', 5);
 $assert(($csv['result'] ?? '') === 'success', 'CSV audit generation succeeds.');
 $assert(is_file((string) ($csv['csv_path'] ?? '')), 'CSV audit file exists.');
 $assert(($csv['called_ebay_api'] ?? true) === false, 'CSV audit declares no eBay API calls.');
