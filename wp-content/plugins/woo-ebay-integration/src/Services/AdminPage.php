@@ -85,6 +85,7 @@ class AdminPage
         add_action('admin_post_wei_ebay_rebuild_initial_publish_candidates', [$this, 'ebay_rebuild_initial_publish_candidates']);
         add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
         add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
+        add_action('admin_post_wei_refresh_ebay_listing_state', [$this, 'refresh_ebay_listing_state']);
     }
 
     public function register_menu(): void
@@ -326,6 +327,7 @@ class AdminPage
         $auto_sync_status = $this->light_auto_sync_status($s);
         $initial_publish_candidate_summary = $this->initial_publish_candidate_summary();
         $initial_publish_status = $this->initial_publish_status();
+        $ebay_listing_state_summary = $this->ebay_listing_state_summary();
         $full_category_audit_summary = get_option('wei_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
         $german_content_audit_summary = get_option('wei_ebay_german_content_audit_summary', []);
@@ -1442,6 +1444,22 @@ class AdminPage
         $this->go();
     }
 
+    public function refresh_ebay_listing_state(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_refresh_ebay_listing_state');
+        $limit = max(1, min(500, absint($_POST['batch_size'] ?? 100)));
+        $res = $this->adapter->refresh_listing_state($limit);
+        update_option('wei_ebay_listing_state_summary', $res, false);
+        $this->set_status('eBay listing state refreshed: ' . wp_json_encode([
+            'active_listings' => (int) ($res['current_active_listing_count'] ?? 0),
+            'offers' => (int) ($res['current_offer_count'] ?? 0),
+            'ended_listings' => (int) ($res['ended_listing_count'] ?? 0),
+            'needs_reexport' => (int) ($res['needs_reexport_count'] ?? 0),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
     public function ebay_initial_publish_reset(): void
     {
         $this->require_manage_options();
@@ -1451,14 +1469,27 @@ class AdminPage
             $this->go();
         }
 
-        foreach ($this->initial_publish_option_names() as $option) {
-            delete_option($option);
-        }
-        delete_option('wei_ebay_initial_publish_last_batch_log');
+        $this->reset_publish_progress_state();
         $this->set_status('Initial eBay publish progress reset.');
         $this->go();
     }
 
+
+    private function reset_publish_progress_state(): void
+    {
+        foreach ($this->initial_publish_option_names() as $option) {
+            delete_option($option);
+        }
+        delete_option('wei_ebay_initial_publish_last_batch_log');
+        delete_option('wei_ebay_initial_publish_candidate_summary');
+        delete_option('wei_ebay_initial_publish_last_summary');
+    }
+
+    private function ebay_listing_state_summary(): array
+    {
+        $summary = get_option('wei_ebay_listing_state_summary', []);
+        return is_array($summary) ? $summary : [];
+    }
 
     private function initial_publish_candidate_summary(): array
     {
@@ -1598,10 +1629,7 @@ class AdminPage
 
     private function reset_initial_publish_progress_for_new_candidate_scan(): void
     {
-        foreach ($this->initial_publish_option_names() as $option) {
-            delete_option($option);
-        }
-        delete_option('wei_ebay_initial_publish_last_batch_log');
+        $this->reset_publish_progress_state();
     }
 
     private function save_initial_publish_readiness_reason(int $productId, string $reason, string $message): void
@@ -1711,7 +1739,7 @@ class AdminPage
             INNER JOIN {$wpdb->postmeta} ready_meta
                 ON ready_meta.post_id = p.ID
                 AND ready_meta.meta_key = '_wei_ebay_export_status'
-                AND ready_meta.meta_value = 'ready'
+                AND ready_meta.meta_value IN ('ready', 'needs_reexport')
             LEFT JOIN {$wpdb->postmeta} listing_meta
                 ON listing_meta.post_id = p.ID
                 AND listing_meta.meta_key = '_wei_ebay_listing_id'
@@ -1724,16 +1752,17 @@ class AdminPage
                 ON listing_status_meta.post_id = p.ID
                 AND listing_status_meta.meta_key = '_wei_ebay_listing_status'
                 AND listing_status_meta.meta_value = 'published'
+            LEFT JOIN {$wpdb->postmeta} current_active_meta
+                ON current_active_meta.post_id = p.ID
+                AND current_active_meta.meta_key = '_wei_ebay_current_listing_state'
+                AND current_active_meta.meta_value = 'active'
             LEFT JOIN {$wpdb->postmeta} export_published_meta
                 ON export_published_meta.post_id = p.ID
                 AND export_published_meta.meta_key = '_wei_ebay_export_status'
                 AND export_published_meta.meta_value = 'published'
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
-                AND listing_meta.post_id IS NULL
-                AND item_meta.post_id IS NULL
-                AND listing_status_meta.post_id IS NULL
-                AND export_published_meta.post_id IS NULL
+                AND (listing_status_meta.post_id IS NULL OR current_active_meta.post_id IS NULL)
         ";
         return (int) $wpdb->get_var($sql);
     }
@@ -1773,6 +1802,7 @@ class AdminPage
         $processedTotal = (int) get_option('wei_ebay_initial_publish_processed', 0);
         $successTotal = (int) get_option('wei_ebay_initial_publish_success', 0);
         $failedTotal = (int) get_option('wei_ebay_initial_publish_failed', 0);
+        $skippedTotal = (int) get_option('wei_ebay_initial_publish_skipped', 0);
         $startedAt = gmdate('Y-m-d H:i:s');
         $logs = ['INITIAL_PUBLISH_BATCH_START batch_size=' . $batchSize . ' cursor=' . $cursor];
         $processed = 0;
@@ -1801,6 +1831,7 @@ class AdminPage
             $logs[] = 'INITIAL_PUBLISH_PRODUCT_START product_id=' . $productId;
 
             if ($this->is_initial_publish_already_published($productId)) {
+                $skippedTotal++;
                 $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="already_published"';
                 continue;
             }
@@ -1809,6 +1840,7 @@ class AdminPage
                 $preflight = $this->adapter->preflight_product($productId);
                 if (empty($preflight['ready'])) {
                     $reason = (string) ($preflight['status'] ?? 'not_ready');
+                    $skippedTotal++;
                     $this->accumulate_publish_not_ready_reason($skipSummary, $preflight);
                     update_post_meta($productId, '_wei_ebay_last_sync_status', 'not_ready');
                     update_post_meta($productId, '_wei_ebay_last_sync_error', $reason);
@@ -1847,6 +1879,7 @@ class AdminPage
         update_option('wei_ebay_initial_publish_processed', $processedTotal, false);
         update_option('wei_ebay_initial_publish_success', $successTotal, false);
         update_option('wei_ebay_initial_publish_failed', $failedTotal, false);
+        update_option('wei_ebay_initial_publish_skipped', $skippedTotal, false);
         update_option('wei_ebay_initial_publish_cursor', $newCursor, false);
         update_option('wei_ebay_initial_publish_last_run_at', $startedAt, false);
         update_option('wei_ebay_initial_publish_last_error', $lastError, false);
@@ -1928,7 +1961,7 @@ class AdminPage
             INNER JOIN {$postmeta} ready_meta
                 ON ready_meta.post_id = p.ID
                 AND ready_meta.meta_key = '_wei_ebay_export_status'
-                AND ready_meta.meta_value = 'ready'
+                AND ready_meta.meta_value IN ('ready', 'needs_reexport')
             LEFT JOIN {$postmeta} listing_meta
                 ON listing_meta.post_id = p.ID
                 AND listing_meta.meta_key = '_wei_ebay_listing_id'
@@ -1941,12 +1974,14 @@ class AdminPage
                 ON listing_status_meta.post_id = p.ID
                 AND listing_status_meta.meta_key = '_wei_ebay_listing_status'
                 AND listing_status_meta.meta_value = 'published'
+            LEFT JOIN {$postmeta} current_active_meta
+                ON current_active_meta.post_id = p.ID
+                AND current_active_meta.meta_key = '_wei_ebay_current_listing_state'
+                AND current_active_meta.meta_value = 'active'
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
-                AND listing_meta.post_id IS NULL
-                AND item_meta.post_id IS NULL
-                AND listing_status_meta.post_id IS NULL
+                AND (listing_status_meta.post_id IS NULL OR current_active_meta.post_id IS NULL)
             GROUP BY p.ID
             ORDER BY p.ID ASC
             LIMIT %d
@@ -1957,10 +1992,11 @@ class AdminPage
 
     private function is_initial_publish_already_published(int $productId): bool
     {
-        return trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true)) !== ''
-            || trim((string) get_post_meta($productId, '_wei_ebay_item_id', true)) !== ''
-            || (string) get_post_meta($productId, '_wei_ebay_listing_status', true) === 'published'
-            || (string) get_post_meta($productId, '_wei_ebay_export_status', true) === 'published';
+        return (string) get_post_meta($productId, '_wei_ebay_current_listing_state', true) === 'active'
+            && (
+                (string) get_post_meta($productId, '_wei_ebay_listing_status', true) === 'published'
+                || (string) get_post_meta($productId, '_wei_ebay_export_status', true) === 'published'
+            );
     }
 
     private function initial_publish_status(): array
@@ -1982,10 +2018,26 @@ class AdminPage
             'last_batch_success' => (int) get_option('wei_ebay_initial_publish_last_batch_success', 0),
             'last_batch_failed' => (int) get_option('wei_ebay_initial_publish_last_batch_failed', 0),
             'last_batch_processed' => (int) get_option('wei_ebay_initial_publish_last_batch_processed', 0),
+            'skipped' => (int) get_option('wei_ebay_initial_publish_skipped', 0),
             'last_published_product_id' => (int) get_option('wei_ebay_initial_publish_last_published_product_id', 0),
             'last_listing_id' => (string) get_option('wei_ebay_initial_publish_last_listing_id', ''),
             'candidate_summary' => $candidateSummary,
             'last_batch_log' => (array) get_option('wei_ebay_initial_publish_last_batch_log', []),
+            'summary' => $this->publish_summary_counts($candidateSummary, $success),
+        ];
+    }
+
+    private function publish_summary_counts(array $candidateSummary, int $success): array
+    {
+        $state = $this->ebay_listing_state_summary();
+        return [
+            'historical_published_count' => $this->count_initial_publish_already_published_products(),
+            'current_active_listing_count' => (int) ($state['current_active_listing_count'] ?? 0),
+            'current_offer_count' => (int) ($state['current_offer_count'] ?? 0),
+            'publish_progress_published_this_run' => $success,
+            'published_total_from_old_checkpoint' => (int) get_option('wei_ebay_initial_publish_success', 0),
+            'needs_reexport_count' => (int) ($state['needs_reexport_count'] ?? $this->count_products_with_export_status('needs_reexport')),
+            'ended_listing_count' => (int) ($state['ended_listing_count'] ?? 0),
         ];
     }
 
@@ -2012,6 +2064,7 @@ class AdminPage
             'wei_ebay_initial_publish_processed',
             'wei_ebay_initial_publish_success',
             'wei_ebay_initial_publish_failed',
+            'wei_ebay_initial_publish_skipped',
             'wei_ebay_initial_publish_cursor',
             'wei_ebay_initial_publish_last_run_at',
             'wei_ebay_initial_publish_last_error',

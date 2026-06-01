@@ -525,6 +525,152 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'condition_resolution' => ['condition' => $conditionResolution['condition'], 'source' => $conditionResolution['source']], 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
     }
 
+
+    public function refresh_listing_state(int $limit = 100): array
+    {
+        global $wpdb;
+
+        $limit = max(1, min(500, $limit));
+        $marketplaceId = $this->marketplace_id();
+        $now = gmdate('Y-m-d H:i:s');
+        $summary = [
+            'refreshed_at' => $now,
+            'marketplace_id' => $marketplaceId,
+            'checked_products' => 0,
+            'historical_published_count' => 0,
+            'current_active_listing_count' => 0,
+            'current_offer_count' => 0,
+            'offers_without_active_listing_count' => 0,
+            'needs_reexport_count' => 0,
+            'ended_listing_count' => 0,
+            'missing_remote_offer_count' => 0,
+            'errors' => 0,
+            'sample' => [],
+        ];
+
+        $remoteOffers = $this->client->get_offers([
+            'marketplace_id' => $marketplaceId,
+            'limit' => min(200, $limit),
+            'offset' => 0,
+        ], [
+            'stage' => 'refresh_listing_state_get_offers',
+            'marketplace_id' => $marketplaceId,
+        ]);
+        if (!is_wp_error($remoteOffers) && is_array($remoteOffers)) {
+            $summary['current_offer_count'] = (int) ($remoteOffers['total'] ?? count((array) ($remoteOffers['offers'] ?? [])));
+        }
+
+        $rows = (array) $wpdb->get_results($wpdb->prepare(
+            "SELECT p.ID AS product_id,
+                    offer.meta_value AS offer_id,
+                    listing.meta_value AS listing_id,
+                    item.meta_value AS item_id
+             FROM {$wpdb->posts} p
+             LEFT JOIN {$wpdb->postmeta} offer
+                ON offer.post_id = p.ID AND offer.meta_key = '_wei_ebay_offer_id' AND offer.meta_value <> ''
+             LEFT JOIN {$wpdb->postmeta} listing
+                ON listing.post_id = p.ID AND listing.meta_key = '_wei_ebay_listing_id' AND listing.meta_value <> ''
+             LEFT JOIN {$wpdb->postmeta} item
+                ON item.post_id = p.ID AND item.meta_key = '_wei_ebay_item_id' AND item.meta_value <> ''
+             WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND (offer.post_id IS NOT NULL OR listing.post_id IS NOT NULL OR item.post_id IS NOT NULL)
+             GROUP BY p.ID
+             ORDER BY p.ID ASC
+             LIMIT %d",
+            $limit
+        ), ARRAY_A);
+
+        foreach ($rows as $row) {
+            $productId = (int) ($row['product_id'] ?? 0);
+            if ($productId <= 0) {
+                continue;
+            }
+
+            $offerId = trim((string) ($row['offer_id'] ?? ''));
+            $listingId = trim((string) ($row['listing_id'] ?? ''));
+            if ($listingId === '') {
+                $listingId = trim((string) ($row['item_id'] ?? ''));
+            }
+
+            $summary['checked_products']++;
+            $summary['historical_published_count']++;
+            $offerExists = false;
+            $listingActive = false;
+            $state = 'unknown';
+            $error = '';
+
+            if ($offerId !== '') {
+                $offer = $this->client->get_offer($offerId, [
+                    'stage' => 'refresh_listing_state_get_offer',
+                    'product_id' => $productId,
+                    'offer_id' => $offerId,
+                    'marketplace_id' => $marketplaceId,
+                ]);
+                if (is_wp_error($offer)) {
+                    $error = $offer->get_error_message();
+                } else {
+                    $offerExists = true;
+                    $state = 'offer_exists';
+                    if ($listingId === '' && is_array($offer)) {
+                        $listingId = trim((string) ($offer['listingId'] ?? $offer['listing']['listingId'] ?? ''));
+                    }
+                }
+            }
+
+            if ($listingId !== '') {
+                $item = $this->client->browse_get_item_by_legacy_id($listingId, $marketplaceId);
+                if (!is_wp_error($item) && is_array($item)) {
+                    $listingActive = true;
+                    $state = 'active';
+                } elseif ($error === '') {
+                    $error = is_wp_error($item) ? $item->get_error_message() : '';
+                }
+            }
+
+            if ($listingActive) {
+                $summary['current_active_listing_count']++;
+                update_post_meta($productId, '_wei_ebay_current_listing_state', 'active');
+                update_post_meta($productId, '_wei_ebay_listing_status', 'published');
+                update_post_meta($productId, '_wei_ebay_export_status', 'published');
+                update_post_meta($productId, '_wei_ebay_last_sync_status', 'published');
+                delete_post_meta($productId, '_wei_ebay_last_sync_error');
+            } else {
+                if ($offerExists) {
+                    $summary['offers_without_active_listing_count']++;
+                    $state = 'offer_without_active_listing';
+                } elseif ($offerId !== '') {
+                    $summary['missing_remote_offer_count']++;
+                    $state = 'remote_offer_missing';
+                } else {
+                    $state = 'listing_not_active';
+                }
+                $summary['ended_listing_count']++;
+                $summary['needs_reexport_count']++;
+                update_post_meta($productId, '_wei_ebay_current_listing_state', $state);
+                update_post_meta($productId, '_wei_ebay_listing_status', 'ended');
+                update_post_meta($productId, '_wei_ebay_export_status', 'needs_reexport');
+                update_post_meta($productId, '_wei_ebay_last_sync_status', 'needs_reexport');
+                update_post_meta($productId, '_wei_ebay_last_sync_error', $error !== '' ? $error : 'Listing is not active on eBay; recreate offer, update offer, or publish existing offer in the next publish run.');
+            }
+
+            update_post_meta($productId, '_wei_ebay_listing_state_checked_at', $now);
+            if (count($summary['sample']) < 25) {
+                $summary['sample'][] = [
+                    'product_id' => $productId,
+                    'offer_id' => $offerId,
+                    'listing_id' => $listingId,
+                    'state' => $state,
+                    'offer_exists' => $offerExists,
+                    'listing_active' => $listingActive,
+                ];
+            }
+        }
+
+        $this->logger->info('EBAY_LISTING_STATE_REFRESH_DONE', $summary);
+        return $summary;
+    }
+
     private function marketplace_id(): string
     {
         $settings = $this->settings();

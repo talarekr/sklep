@@ -49,7 +49,7 @@ foreach (['wei_export_product', 'wei_publish_product_offer_only', 'wei_sync_stoc
     }
 }
 
-foreach (['3. Publish', 'Run readiness scan', 'Export ready products to eBay', 'Publish ready offers', 'Publish ready products'] as $needle) {
+foreach (['3. Publish', 'Run readiness scan', 'Export ready products to eBay', 'Publish ready offers', 'Publish ready products', 'Resetuj postęp publikacji', 'Refresh eBay listing state'] as $needle) {
     $assertContains($publish, $needle, 'Publish module');
 }
 foreach (['Inspect offer before publish', 'Manual publish offer only', 'Export single product', 'Regenerate German content for one product', 'OAuth', 'Product sync status rows', 'Raw logs'] as $debugNeedle) {
