@@ -260,6 +260,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $product = wc_get_product($variation_id ?: $product_id);
         if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
 
+        $exclusion = $this->ebay_publish_exclusion($product_id);
+        if (!empty($exclusion['excluded'])) {
+            $preflight = $this->excluded_from_ebay_preflight($product_id, $exclusion);
+            update_post_meta($product_id, '_wei_ebay_export_status', 'excluded_from_ebay');
+            update_post_meta($product_id, '_wei_ebay_readiness_reason', (string) ($exclusion['reason'] ?? 'excluded_from_ebay'));
+            return ['result' => 'error', 'error' => 'excluded_from_ebay', 'message' => (string) ($preflight['message'] ?? 'Product is intentionally excluded from eBay.'), 'details' => $preflight];
+        }
+
         $marketplaceId = $this->marketplace_id();
         $settings = $this->settings();
         $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
@@ -764,6 +772,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
 
             $settings = array_merge($this->settings(), $context);
+            $exclusion = $this->ebay_publish_exclusion($product_id);
+            if (!empty($exclusion['excluded'])) {
+                $preflight = $this->excluded_from_ebay_preflight($product_id, $exclusion);
+                if ($persistStatus) {
+                    update_post_meta($product_id, '_wei_ebay_export_status', 'excluded_from_ebay');
+                    update_post_meta($product_id, '_wei_ebay_readiness_reason', (string) ($exclusion['reason'] ?? 'excluded_from_ebay'));
+                }
+                return $preflight;
+            }
             if (!empty($context['suppress_side_effects']) || !empty($context['audit_mode'])) {
                 $settings['auto_generate_german_content_preflight'] = 0;
                 $settings['regenerate_german_content_on_hash_change'] = 0;
@@ -3002,6 +3019,74 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $productId = method_exists($product, 'get_id') ? (int) $product->get_id() : 0;
         return $this->ebay_german_content_translator()->source_hash($this->ebay_german_content_source($product, $productId));
+    }
+
+
+    private function ebay_publish_exclusion(int $productId): array
+    {
+        $terms = function_exists('wp_get_post_terms') ? wp_get_post_terms($productId, 'product_cat') : [];
+        if (is_wp_error($terms) || empty($terms)) {
+            return ['excluded' => true, 'status' => 'excluded_from_ebay', 'reason' => 'excluded_no_woo_category', 'woo_category_path' => ''];
+        }
+
+        $paths = [];
+        foreach ((array) $terms as $term) {
+            if (!is_object($term)) {
+                continue;
+            }
+            $name = isset($term->name) ? trim((string) $term->name) : '';
+            $slug = isset($term->slug) ? trim((string) $term->slug) : '';
+            if (isset($term->term_id)) {
+                $paths[] = $this->categoryRepo->woo_category_path((int) $term->term_id);
+            }
+            if ($this->is_bez_kategorii_term($name, $slug)) {
+                return ['excluded' => true, 'status' => 'excluded_from_ebay', 'reason' => 'excluded_bez_kategorii', 'woo_category_path' => implode(' | ', array_values(array_filter($paths)))];
+            }
+        }
+
+        return ['excluded' => false, 'status' => '', 'reason' => '', 'woo_category_path' => implode(' | ', array_values(array_filter($paths)))];
+    }
+
+    private function is_bez_kategorii_term(string $name, string $slug): bool
+    {
+        $normalizedName = $this->normalize_exclusion_category_label($name);
+        $normalizedSlug = $this->normalize_exclusion_category_label(str_replace('-', ' ', $slug));
+        return $normalizedName === 'bez kategorii' || $normalizedSlug === 'bez kategorii';
+    }
+
+    private function normalize_exclusion_category_label(string $value): string
+    {
+        $value = function_exists('remove_accents') ? remove_accents($value) : $value;
+        $value = strtolower(trim($value));
+        $value = preg_replace('/\s+/u', ' ', $value) ?: $value;
+        return $value;
+    }
+
+    private function excluded_from_ebay_preflight(int $productId, array $exclusion): array
+    {
+        $reason = (string) ($exclusion['reason'] ?? 'excluded_from_ebay');
+        $message = $reason === 'excluded_bez_kategorii'
+            ? 'Product intentionally excluded from eBay: Woo category is Bez kategorii.'
+            : 'Product intentionally excluded from eBay: missing Woo product_cat.';
+
+        return [
+            'ready' => false,
+            'status' => 'excluded_from_ebay',
+            'exclusion_reason' => $reason,
+            'message' => $message,
+            'product_id' => $productId,
+            'category' => [
+                'category_id' => '',
+                'status' => 'excluded_from_ebay',
+                'source' => $reason,
+                'exclusion_reason' => $reason,
+                'woo_category_path' => (string) ($exclusion['woo_category_path'] ?? ''),
+            ],
+            'errors' => [],
+            'required_aspects' => [],
+            'missing_aspects' => [],
+            'category_validation' => [],
+        ];
     }
 
     private function resolve_category($product, int $product_id, string $sku, string $marketplaceId, array $settings): array
