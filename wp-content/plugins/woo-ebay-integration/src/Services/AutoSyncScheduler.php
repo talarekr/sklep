@@ -316,6 +316,7 @@ class AutoSyncScheduler
         }
         $expectedCategoryKeywords = $this->expected_category_keywords_for_readiness_item($productTitle, $mapping, $content, (string) ($suggestionDiagnostics['detected_intent'] ?? ''));
 
+
         return [
             'product_id' => $productId,
             'product_title' => $productTitle,
@@ -688,6 +689,14 @@ class AutoSyncScheduler
             'current_ebay_category_path',
             'status',
             'reason',
+            'category_problem_reason',
+            'selected_mapping_source',
+            'selected_mapping_row_id',
+            'selected_mapping_active',
+            'selected_ebay_category_is_leaf',
+            'selected_ebay_category_exists_in_cache',
+            'selected_ebay_category_path',
+            'resolver_reason',
             'detected_intent',
             'category_sanity_reason',
             'missing_aspects',
@@ -930,6 +939,21 @@ class AutoSyncScheduler
         }
         $wooTerm = $wooTermId > 0 ? get_term($wooTermId, 'product_cat') : null;
 
+        $selectedMappingSource = (string) ($mapping['source'] ?? $category['source'] ?? '');
+        $selectedMappingRowId = (string) ($mapping['id'] ?? $category['manual_teaching_rule_id'] ?? '');
+        $selectedMappingActive = array_key_exists('active', $mapping) ? ((int) ($mapping['active'] ?? 0) === 1 ? 'yes' : 'no') : ($mapping !== [] ? 'yes' : '');
+        $categoryValidation = is_array($result['category_validation'] ?? null) ? $result['category_validation'] : [];
+        $localCachedCategory = $currentCategoryId !== '' ? $this->local_cached_ebay_category('EBAY_DE', $currentCategoryId) : null;
+        $cacheExists = is_array($localCachedCategory);
+        $isLeaf = $cacheExists ? (!empty($localCachedCategory['leaf']) ? 'yes' : 'no') : ($currentCategoryId !== '' && $categoryValidation !== [] ? (!empty($categoryValidation['leaf']) ? 'yes' : 'no') : '');
+        if ($currentCategoryPath === '' && $cacheExists) {
+            $currentCategoryPath = (string) ($localCachedCategory['category_path'] ?? '');
+        }
+        $categoryProblemReason = $auditStatus === 'blocked_by_category' || $auditStatus === 'missing_category' ? $reason : '';
+        if ($categoryProblemReason === '' && $currentCategoryId === '') {
+            $categoryProblemReason = 'missing_category';
+        }
+
         return [
             'product_id' => $productId,
             'woo_category_id' => $wooTermId > 0 ? (string) $wooTermId : '',
@@ -941,10 +965,43 @@ class AutoSyncScheduler
             'current_ebay_category_path' => $currentCategoryPath,
             'status' => $auditStatus,
             'reason' => $reason,
+            'category_problem_reason' => $categoryProblemReason,
+            'selected_mapping_source' => $selectedMappingSource,
+            'selected_mapping_row_id' => $selectedMappingRowId,
+            'selected_mapping_active' => $selectedMappingActive,
+            'selected_ebay_category_is_leaf' => $isLeaf,
+            'selected_ebay_category_exists_in_cache' => $cacheExists ? 'yes' : ($currentCategoryId !== '' && $categoryValidation !== [] ? 'no' : ''),
+            'selected_ebay_category_path' => $currentCategoryPath,
+            'resolver_reason' => (string) ($mapping['resolver_reason'] ?? ''),
             'category_sanity_reason' => (string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? ''),
             'missing_aspects' => implode('|', array_map('strval', (array) ($item['missing_aspects'] ?? []))),
             'content_status' => !empty($item['content_ready']) ? 'ready' : 'not_ready',
             'price_status' => !empty($item['price_ready']) ? 'ready' : 'not_ready',
+        ];
+    }
+
+
+    private function local_cached_ebay_category(string $marketplaceId, string $categoryId): ?array
+    {
+        global $wpdb;
+        $categoryId = trim($categoryId);
+        if ($categoryId === '') {
+            return null;
+        }
+        $table = $wpdb->prefix . 'wei_ebay_category_tree_cache';
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT category_id, category_name, category_path, is_leaf FROM {$table} WHERE marketplace_id=%s AND category_id=%s LIMIT 1",
+            $marketplaceId,
+            $categoryId
+        ), ARRAY_A);
+        if (!is_array($row)) {
+            return null;
+        }
+        return [
+            'category_id' => (string) ($row['category_id'] ?? ''),
+            'category_name' => (string) ($row['category_name'] ?? ''),
+            'category_path' => (string) ($row['category_path'] ?? ''),
+            'leaf' => !empty($row['is_leaf']),
         ];
     }
 

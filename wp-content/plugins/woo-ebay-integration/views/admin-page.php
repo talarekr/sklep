@@ -526,82 +526,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
 
     <div class="wei-box" data-wei-module="ebay-categories">
         <h2>2. Kategorie eBay</h2>
-        <p class="description">Check and maintain WooCommerce product_cat → eBay.de category ID mapping. Main actions focus on CSV import/export and readiness validation; suggestion generators and auto-mapping are in Advanced / Debug.</p>
-        <?php $ovokoConfidence = is_array($ovoko_category_suggestions_summary['confidence'] ?? null) ? $ovoko_category_suggestions_summary['confidence'] : []; ?>
-        <?php $categoryReportUrl = (string) ($category_template_export_summary['reports']['template_csv']['url'] ?? $category_teaching_export_summary['reports']['teaching_csv']['url'] ?? ''); ?>
-        <div class="wei-grid">
-            <div class="wei-card"><span>total_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['total_categories'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['categories_with_products'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>mapped_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['mapped_categories'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>unmapped_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['unmapped_categories'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>mapped_categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['mapped_categories_with_products'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>unmapped_categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['unmapped_categories_with_products'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>validation_status</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['validation_status'] ?? 'not_run')); ?></strong></div>
-            <div class="wei-card"><span>valid_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['valid_categories'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>invalid_category_id</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['invalid_category_id'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>non_leaf_category</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['non_leaf_category'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['blocked_by_category'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>needs_review</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['needs_review'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>products_affected</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['products_affected'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>last_import.total_rows</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['total_rows'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>last_import.updated</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['updated'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>last_import.inserted</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['inserted'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>report_url</span><strong><?php echo $categoryReportUrl !== '' ? '<a href="' . esc_url($categoryReportUrl) . '">open</a>' : '—'; ?></strong></div>
-        </div>
-        <div class="wei-actions" data-wei-primary-actions="categories">
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_export_category_template_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_category_template_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <label><input type="checkbox" name="export_all_categories" value="1" /> include empty categories</label>
-                <button class="button button-primary">Export category mapping CSV</button>
-            </form>
-            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_import_category_teaching_csv'); ?>
-                <input type="hidden" name="action" value="wei_import_category_teaching_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <input type="file" name="teaching_csv" accept=".csv,text/csv" required />
-                <button class="button button-primary">Import category mapping CSV</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_full_category_audit'); ?>
-                <input type="hidden" name="action" value="wei_full_category_audit" />
-                <button class="button">Validate current category mappings</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_run_category_readiness_audit'); ?>
-                <input type="hidden" name="action" value="wei_run_category_readiness_audit" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <label>Batch size <input type="number" name="audit_batch_size" value="100" min="1" max="200" step="1" style="width:80px" /></label>
-                <button class="button">Run category readiness audit</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_export_category_teaching_csv'); ?>
-                <input type="hidden" name="action" value="wei_export_category_teaching_csv" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <button class="button">Export blocked category report</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_generate_blocked_category_fix_report'); ?>
-                <input type="hidden" name="action" value="wei_generate_blocked_category_fix_report" />
-                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <button class="button button-primary">Generate blocked category fix report</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_generate_category_mapping_worklist'); ?>
-                <input type="hidden" name="action" value="wei_generate_category_mapping_worklist" />
-                <input type="hidden" name="marketplace_id" value="EBAY_DE" />
-                <button class="button button-primary">Generate category-mapping-worklist.csv</button>
-            </form>
-            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_import_category_mapping_worklist'); ?>
-                <input type="hidden" name="action" value="wei_import_category_mapping_worklist" />
-                <input type="hidden" name="marketplace_id" value="EBAY_DE" />
-                <input type="file" name="category_mapping_worklist_csv" accept=".csv,text/csv" required />
-                <button class="button">Import filled category-mapping-worklist.csv</button>
-            </form>
-            <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
-        </div>
+        <p class="description">Step-by-step EBAY_DE category workflow. This module only reads/writes category mappings and local CSV diagnostics; worklist import never publishes, revises listings, or calls the eBay API.</p>
         <?php
         $categoryAuditSummary = is_array($category_readiness_audit_summary ?? null) ? $category_readiness_audit_summary : [];
         $lastCategoryAudit = is_array($categoryAuditSummary['last_category_readiness_audit'] ?? null) ? $categoryAuditSummary['last_category_readiness_audit'] : [];
@@ -617,89 +542,82 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         $categoryAuditProblemsReady = !empty($lastCategoryAudit['problems_only_csv_exists']) && (int) ($lastCategoryAudit['problems_only_csv_size'] ?? 0) > 0;
         $categoryAuditFullAdminUrl = (string) ($lastCategoryAudit['full_report_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['full_report_csv_path'] ?? '')));
         $categoryAuditProblemsAdminUrl = (string) ($lastCategoryAudit['problems_only_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['problems_only_csv_path'] ?? '')));
-        ?>
-        <?php if ($categoryAuditFullReady || $categoryAuditProblemsReady): ?>
-            <div class="notice notice-info inline"><p><strong>Category readiness audit files:</strong></p><ul>
-                <?php if ($categoryAuditFullReady): ?>
-                    <li>Full report CSV: <a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download full category audit CSV</a> <a href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">admin download</a> · <a href="<?php echo esc_url((string) ($lastCategoryAudit['full_report_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($lastCategoryAudit['full_report_csv_size'] ?? 0)); ?> bytes)</li>
-                    <li><a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download last full audit CSV</a></li>
-                <?php endif; ?>
-                <?php if ($categoryAuditProblemsReady): ?>
-                    <li>Problems only CSV: <a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download problems only CSV</a> <a href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">admin download</a> · <a href="<?php echo esc_url((string) ($lastCategoryAudit['problems_only_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($lastCategoryAudit['problems_only_csv_size'] ?? 0)); ?> bytes)</li>
-                    <li><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download last problems-only audit CSV</a></li>
-                <?php endif; ?>
-            </ul></div>
-        <?php endif; ?>
-        <?php
         $worklistReady = !empty($category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
         $worklistDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('category-mapping-worklist.csv'));
-        ?>
-        <?php if ($worklistReady): ?>
-            <div class="notice notice-info inline"><p><strong>Category mapping worklist:</strong></p><ul>
-                <li>category-mapping-worklist.csv: <a class="button button-primary" href="<?php echo esc_url($worklistDownloadUrl); ?>">Download category-mapping-worklist.csv</a> · <a href="<?php echo esc_url((string) ($category_mapping_worklist_summary['worklist_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0)); ?> bytes, <?php echo esc_html((string) (int) ($category_mapping_worklist_summary['rows'] ?? 0)); ?> rows)</li>
-            </ul></div>
-        <?php endif; ?>
-        <?php if (!empty($category_mapping_worklist_import_summary)): ?>
-            <details><summary>Category mapping worklist import JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary, 6000)); ?></pre></details>
-        <?php endif; ?>
-        <?php
         $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
         $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
         $blockedFixRecommendationDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_recommendations.csv'));
         $blockedFixImportDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_fix_import.csv'));
+        $lastAuditTime = (string) ($lastCategoryAudit['completed_at'] ?? $lastCategoryAudit['updated_at'] ?? '');
+        $lastImportTime = (string) ($category_mapping_worklist_import_summary['imported_at'] ?? $category_mapping_worklist_import_summary['updated_at'] ?? '');
+        $primaryNextAction = $lastAuditTime === '' ? 'Run category readiness audit' : (!$worklistReady ? 'Generate category-mapping-worklist.csv' : ($lastImportTime === '' ? 'Import filled category-mapping-worklist.csv' : 'Run category readiness audit'));
         ?>
-        <?php if ($blockedFixRecommendationsReady || $blockedFixImportReady): ?>
-            <div class="notice notice-info inline"><p><strong>Blocked category fix report files:</strong></p><ul>
-                <?php if ($blockedFixRecommendationsReady): ?>
-                    <li>Recommendations CSV: <a href="<?php echo esc_url((string) ($blocked_category_fix_report_summary['recommendations_csv_url'] ?? '')); ?>">public URL</a> · <a href="<?php echo esc_url($blockedFixRecommendationDownloadUrl); ?>">admin download</a> (<?php echo esc_html((string) (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0)); ?> bytes)</li>
-                <?php endif; ?>
-                <?php if ($blockedFixImportReady): ?>
-                    <li>Fix import CSV: <a href="<?php echo esc_url((string) ($blocked_category_fix_report_summary['fix_import_csv_url'] ?? '')); ?>">public URL</a> · <a href="<?php echo esc_url($blockedFixImportDownloadUrl); ?>">admin download</a> (<?php echo esc_html((string) (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0)); ?> bytes)</li>
-                <?php endif; ?>
-            </ul></div>
-        <?php endif; ?>
-        <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
-        <?php
-        $vehicleAuditReady = !empty($vehicleCompatibilityAuditSummary['csv_exists']) && (int) ($vehicleCompatibilityAuditSummary['csv_size'] ?? 0) > 0;
-        $vehicleAuditDownloadUrl = $vehicleAuditReady ? admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode(basename((string) ($vehicleCompatibilityAuditSummary['csv_path'] ?? '')))) : '';
-        ?>
-        <div class="wei-card"><h3>Vehicle compatibility / Fahrzeugverwendungsliste readiness</h3>
-            <p class="description">Read-only EBAY_DE audit. It detects KType, ePID and vehicle fields from Woo meta/attributes/product detail rows only; it does not publish, revise listings, call eBay compatibility APIs, write products, or change categories.</p>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
-                <?php wp_nonce_field('wei_run_vehicle_compatibility_audit'); ?>
-                <input type="hidden" name="action" value="wei_run_vehicle_compatibility_audit" />
-                <label>Limit <input type="number" min="1" max="5000" name="limit" value="500" /></label>
-                <button class="button">Run vehicle compatibility readiness audit</button>
-            </form>
-            <?php if ($vehicleAuditReady): ?>
-                <p>Vehicle compatibility CSV: <a class="button" href="<?php echo esc_url($vehicleAuditDownloadUrl); ?>">Download CSV</a> <a href="<?php echo esc_url((string) ($vehicleCompatibilityAuditSummary['csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($vehicleCompatibilityAuditSummary['csv_size'] ?? 0)); ?> bytes)</p>
-            <?php endif; ?>
-            <details><summary>Vehicle compatibility audit JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($vehicleCompatibilityAuditSummary, 6000)); ?></pre></details>
+        <div class="notice notice-info inline"><p><strong>Primary next action:</strong> <?php echo esc_html($primaryNextAction); ?></p></div>
+        <div class="wei-grid">
+            <div class="wei-card"><span>marketplace</span><strong>EBAY_DE</strong></div>
+            <div class="wei-card"><span>categories with products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['categories_with_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>mapped categories with products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['mapped_categories_with_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>valid categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['valid_categories'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>category blockers</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['blocked_by_category'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>last audit time</span><strong><?php echo esc_html($lastAuditTime !== '' ? $lastAuditTime : '—'); ?></strong></div>
+            <div class="wei-card"><span>last import time</span><strong><?php echo esc_html($lastImportTime !== '' ? $lastImportTime : '—'); ?></strong></div>
         </div>
-        <details><summary>Blocked category fix report JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($blocked_category_fix_report_summary, 6000)); ?></pre></details>
-        <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
-        <details open><summary>Manual WooCommerce product_cat → eBay.de Kategorie mapping</summary>
-            <p><a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Load manual mapping screen</a></p>
-            <?php if ($categoryRowsLoaded): ?>
-                <form method="get" action="<?php echo esc_url($adminPageUrl); ?>" class="wei-actions">
-                    <input type="hidden" name="page" value="woo-ebay" />
-                    <input type="hidden" name="wei_section" value="category-mappings" />
-                    <label>Status <select name="category_status">
-                        <?php foreach (['all' => 'all categories with products', 'missing' => 'missing mapping', 'invalid_ebay_category_id' => 'invalid eBay category ID', 'non_leaf_category' => 'non-leaf category', 'blocked_by_category' => 'blocked_by_category', 'needs_category_review' => 'needs_category_review', 'valid' => 'valid'] as $value => $label): ?>
-                            <option value="<?php echo esc_attr($value); ?>" <?php selected($currentFilter, $value); ?>><?php echo esc_html($label); ?></option>
-                        <?php endforeach; ?>
-                    </select></label>
-                    <label>Woo category <input type="search" name="woo_category_search" value="<?php echo esc_attr($wooCategorySearch); ?>" /></label>
-                    <label>Current eBay ID <input type="search" name="current_ebay_category_id" value="<?php echo esc_attr($ebayCategoryIdSearch); ?>" /></label>
-                    <input type="hidden" name="category_sort" value="products" />
-                    <button class="button">Filter / sort by product_count desc</button>
-                </form>
-                <div style="display:grid; grid-template-columns:minmax(0,2fr) minmax(320px,1fr); gap:16px; align-items:start;">
-                    <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>woo_category_id</th><th>Woo category name/path</th><th>product_count</th><th>current ebay_category_id</th><th>current eBay path/name</th><th>status</th><th>source</th><th>updated_at / reviewed_at</th><th>sample product titles</th><th>Save valid leaf</th><th>Diagnostics</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><?php $samples = is_array($row['sample_products'] ?? null) ? $row['sample_products'] : []; ?><tr><td><code><?php echo esc_html((string) ($row['term_id'] ?? '0')); ?></code></td><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code></td><td><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><strong><?php echo esc_html((string) ($row['_ui_status'] ?? 'missing')); ?></strong></td><td><?php echo esc_html((string) ($row['source'] ?? 'unknown')); ?></td><td><?php echo esc_html((string) ($row['updated_at'] ?? '')); ?></td><td><ol><?php foreach ($samples as $sample): ?><li><?php echo esc_html((string) ($sample['title'] ?? '')); ?></li><?php endforeach; ?></ol></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="leaf category ID" value="<?php echo esc_attr((string) ($row['_ui_category_id'] ?? '')); ?>" size="10" /><button class="button button-primary">Save manual</button></form></td><td><details><summary>debug</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['resolver_selected_id' => (int) ($row['resolver_selected_id'] ?? 0), 'selected_ebay_category_id' => (string) ($row['_ui_category_id'] ?? ''), 'selected_source' => (string) ($row['source'] ?? 'unknown'), 'status' => (string) ($row['_ui_status'] ?? ''), 'publish_ready_from_category' => (string) ($row['_ui_status'] ?? '') === 'valid', 'all_ebay_de_mapping_rows' => (array) ($row['mapping_rows'] ?? [])], 4000)); ?></pre></details></td></tr><?php endforeach; ?></tbody></table></div>
-                    <aside class="wei-card"><h3>eBay.de Auto & Motorrad Teile picker</h3><form method="get" action="<?php echo esc_url($adminPageUrl); ?>"><input type="hidden" name="page" value="woo-ebay" /><input type="hidden" name="wei_section" value="category-mappings" /><input type="search" name="ebay_category_search" value="<?php echo esc_attr($manualCategoryPickerQuery); ?>" placeholder="Search German category name or ID" /><button class="button">Search cache</button></form><div class="wei-scroll"><table class="widefat striped"><thead><tr><th>ID</th><th>German name/path</th><th>Leaf</th></tr></thead><tbody><?php foreach ($manualCategoryPickerRows as $cat): ?><tr><td><code><?php echo esc_html((string) ($cat['category_id'] ?? '')); ?></code></td><td><strong><?php echo esc_html((string) ($cat['category_name'] ?? '')); ?></strong><br><?php echo esc_html((string) ($cat['category_path'] ?? '')); ?></td><td><?php echo !empty($cat['is_leaf']) ? 'leaf' : 'non-leaf'; ?></td></tr><?php endforeach; ?></tbody></table></div><details><summary>Import lightweight EBAY_DE category cache JSON</summary><p class="description">Paste an array of categories with category_id, category_name, category_path, is_leaf and optional parent_category_id. The picker never calls eBay APIs on page load.</p><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_import_ebay_de_category_tree_cache'); ?><input type="hidden" name="action" value="wei_import_ebay_de_category_tree_cache" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><textarea name="category_tree_json" rows="6" class="large-text code" placeholder='[{"category_id":"33559","category_name":"...","category_path":"Auto & Motorrad Teile > ...","is_leaf":true}]'></textarea><button class="button">Import cache</button></form></details></aside>
-                </div>
+
+        <section class="wei-card" data-wei-category-section="status-audyt"><h3>Section 1 — Status / Audyt</h3>
+            <p class="description">Audit and diagnostics only. CSV output includes resolver-selected mapping details and explicit category problem reasons.</p>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_category_readiness_audit'); ?><input type="hidden" name="action" value="wei_run_category_readiness_audit" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><label>Batch size <input type="number" name="audit_batch_size" value="100" min="1" max="200" step="1" style="width:80px" /></label><button class="button button-primary">Run category readiness audit</button></form>
+                <?php if ($categoryAuditFullReady): ?><a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download full audit CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['full_report_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
+                <?php if ($categoryAuditProblemsReady): ?><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download problems-only CSV</a><span class="description"><?php echo esc_html(basename((string) ($lastCategoryAudit['problems_only_csv_path'] ?? ''))); ?> · <?php echo esc_html($lastAuditTime); ?></span><?php endif; ?>
+            </div>
+            <div class="wei-grid">
+                <?php foreach (['processed' => 'total_scanned', 'ready' => 'ready_count', 'blocked_by_category' => 'blocked_by_category_count', 'missing_category' => 'missing_category_count', 'invalid_ebay_category_id' => 'invalid_ebay_category_id_count', 'non_leaf_category' => 'non_leaf_category_count', 'category_sanity_failed' => 'category_sanity_failed_count', 'needs_category_review' => 'needs_review', 'missing_required_aspects' => 'missing_required_aspects_count'] as $label => $key): ?>
+                    <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($categoryAuditSummary[$key] ?? $categoryDashboardSummary[$key] ?? 0)); ?></strong></div>
+                <?php endforeach; ?>
+            </div>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="reczne-mapowanie"><h3>Section 2 — Ręczne mapowanie kategoriami</h3>
+            <p class="description"><strong>Fill only final_ebay_category_id. Leave uncertain categories empty. Empty rows are skipped.</strong></p>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_category_mapping_worklist'); ?><input type="hidden" name="action" value="wei_generate_category_mapping_worklist" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><button class="button button-primary">Generate category-mapping-worklist.csv</button></form>
+                <?php if ($worklistReady): ?><a class="button button-primary" href="<?php echo esc_url($worklistDownloadUrl); ?>">Download category-mapping-worklist.csv</a><span class="description"><?php echo esc_html(basename((string) ($category_mapping_worklist_summary['worklist_csv_path'] ?? 'category-mapping-worklist.csv'))); ?> · <?php echo esc_html((string) ($category_mapping_worklist_summary['generated_at'] ?? $category_mapping_worklist_summary['updated_at'] ?? '')); ?> · <?php echo esc_html((string) (int) ($category_mapping_worklist_summary['rows'] ?? 0)); ?> rows</span><?php endif; ?>
+                <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_import_category_mapping_worklist'); ?><input type="hidden" name="action" value="wei_import_category_mapping_worklist" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="file" name="category_mapping_worklist_csv" accept=".csv,text/csv" required /><button class="button">Import filled category-mapping-worklist.csv</button></form>
+            </div>
+            <div class="wei-grid">
+                <?php foreach (['accepted' => 'accepted', 'skipped' => 'skipped_empty_final_ebay_category_id', 'rejected' => 'rejected', 'inserted' => 'inserted_mappings', 'updated' => 'updated_mappings', 'deactivated duplicates' => 'deactivated_duplicate_mappings', 'unchanged' => 'unchanged_mappings'] as $label => $key): ?>
+                    <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($category_mapping_worklist_import_summary[$key] ?? 0)); ?></strong></div>
+                <?php endforeach; ?>
+            </div>
+            <?php if (!empty($category_mapping_worklist_import_summary['warnings'])): ?><details open><summary>Errors / warnings</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary['warnings'], 3000)); ?></pre></details><?php endif; ?>
+            <?php if (!empty($category_mapping_worklist_import_summary)): ?><details><summary>Latest import summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary, 6000)); ?></pre></details><?php endif; ?>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="diagnostyka-mappingu"><h3>Section 3 — Diagnostyka mappingu</h3>
+            <p class="description">Debug why the production resolver selects or blocks a Woo category. Example diagnostic case: Woo category ID 5197 should select manual_worklist eBay category 33566 after import.</p>
+            <form method="get" action="<?php echo esc_url($adminPageUrl); ?>" class="wei-actions"><input type="hidden" name="page" value="woo-ebay" /><label>Woo category ID <input type="number" min="1" name="woo_category_diagnostics_id" value="<?php echo esc_attr((string) ($category_mapping_diagnostics_id ?? '')); ?>" /></label><button class="button">Show mapping diagnostics</button></form>
+            <?php if (!empty($category_mapping_diagnostics)): ?>
+                <div class="wei-grid"><div class="wei-card"><span>selected eBay category</span><strong><?php echo esc_html((string) ($category_mapping_diagnostics['selected_ebay_category_id'] ?? '')); ?></strong></div><div class="wei-card"><span>source</span><strong><?php echo esc_html((string) ($category_mapping_diagnostics['selected_source'] ?? '')); ?></strong></div><div class="wei-card"><span>leaf/cache</span><strong><?php echo !empty($category_mapping_diagnostics['selected_ebay_category_exists_in_cache']) ? (!empty($category_mapping_diagnostics['selected_ebay_category_is_leaf']) ? 'valid leaf in cache' : 'non-leaf in cache') : 'missing from cache'; ?></strong></div><div class="wei-card"><span>audit status</span><strong><?php echo esc_html((string) ($category_mapping_diagnostics['audit_category_status'] ?? '')); ?></strong></div></div>
+                <details open><summary>Resolver diagnostics JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_diagnostics, 8000)); ?></pre></details>
             <?php endif; ?>
-        </details>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="automatyczne-sugestie-legacy-tools"><h3>Section 4 — Automatyczne sugestie / legacy tools</h3>
+            <p class="wei-danger"><strong>Advanced:</strong> use only for rule-based suggestions. Manual worklist import has priority.</p>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_blocked_category_fix_report'); ?><input type="hidden" name="action" value="wei_generate_blocked_category_fix_report" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><button class="button">Generate blocked category fix report</button></form>
+                <?php if ($blockedFixRecommendationsReady): ?><a class="button" href="<?php echo esc_url($blockedFixRecommendationDownloadUrl); ?>">Download blocked_category_mapping_recommendations.csv</a><span class="description"><?php echo esc_html((string) ($blocked_category_fix_report_summary['generated_at'] ?? $blocked_category_fix_report_summary['updated_at'] ?? '')); ?></span><?php endif; ?>
+                <?php if ($blockedFixImportReady): ?><a class="button" href="<?php echo esc_url($blockedFixImportDownloadUrl); ?>">Download blocked_category_mapping_fix_import.csv</a><span class="description"><?php echo esc_html((string) ($blocked_category_fix_report_summary['generated_at'] ?? $blocked_category_fix_report_summary['updated_at'] ?? '')); ?></span><?php endif; ?>
+                <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
+            </div>
+            <details><summary>Blocked category fix report JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($blocked_category_fix_report_summary, 6000)); ?></pre></details>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="ovoko-supplier-future"><h3>Section 5 — Ovoko / Supplier import, future</h3>
+            <p class="description">Ovoko category mapping CSV can be imported here later when available.</p>
+        </section>
+
+        <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'last_audit' => $lastCategoryAudit, 'worklist' => $category_mapping_worklist_summary], 6000)); ?></pre></details>
     </div>
 
     <div class="wei-box" data-wei-module="publish">
@@ -780,6 +698,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <div class="wei-actions">
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Run single-product readiness preflight</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_vehicle_compatibility_diagnostics'); ?><input type="hidden" name="action" value="wei_vehicle_compatibility_diagnostics" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Run vehicle compatibility diagnostics</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_run_vehicle_compatibility_audit'); ?><input type="hidden" name="action" value="wei_run_vehicle_compatibility_audit" /><label>Limit <input type="number" min="1" max="5000" name="limit" value="500" /></label><button class="button">Run vehicle compatibility readiness audit</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_inspect_offer_before_publish'); ?><input type="hidden" name="action" value="wei_inspect_offer_before_publish" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Inspect offer before publish</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Manual publish offer only can publish one public eBay listing. Continue?');"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Manual publish offer only</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><input type="text" name="ebay_category_id" placeholder="optional category ID" /><textarea name="ebay_aspects_json" placeholder="optional aspects JSON" rows="1"></textarea><button class="button">Export single product</button></form>

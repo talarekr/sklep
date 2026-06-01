@@ -27,11 +27,11 @@ $assert(str_contains($schedulerSource, "update_option('wei_ebay_last_problems_on
 $assert(str_contains($adminSource, "get_option('wei_ebay_last_problems_only_csv_path'"), 'Blocked category fix report lookup must read the persisted last problems-only CSV path.');
 $assert(str_contains($schedulerSource, "'-problems-only.csv'"), 'Problems-only audit report filename must use the problems-only suffix.');
 $assert(str_contains($schedulerSource, "'size' => is_file(\$path) ? (int) filesize(\$path) : 0"), 'CSV report metadata must include size from the generated file.');
-foreach (['product_id', 'product_title', 'woo_category_id', 'woo_subcategory_name', 'woo_category_path', 'current_ebay_category_id', 'current_ebay_category_path', 'status', 'reason', 'detected_intent', 'category_sanity_reason', 'missing_aspects', 'content_status', 'price_status'] as $header) {
+foreach (['product_id', 'product_title', 'woo_category_id', 'woo_subcategory_name', 'woo_category_path', 'current_ebay_category_id', 'current_ebay_category_path', 'status', 'reason', 'category_problem_reason', 'selected_mapping_source', 'selected_mapping_row_id', 'selected_mapping_active', 'selected_ebay_category_is_leaf', 'selected_ebay_category_exists_in_cache', 'selected_ebay_category_path', 'resolver_reason', 'detected_intent', 'category_sanity_reason', 'missing_aspects', 'content_status', 'price_status'] as $header) {
     $assert(str_contains($schedulerSource, "'" . $header . "'"), 'Problems CSV header must include ' . $header . '.');
 }
-$assert(str_contains($viewSource, 'Full report CSV:'), 'UI must expose a direct full report CSV link.');
-$assert(str_contains($viewSource, 'Problems only CSV:'), 'UI must expose a direct problems-only CSV link.');
+$assert(str_contains($viewSource, 'Download full audit CSV'), 'UI must expose a direct full report CSV link.');
+$assert(str_contains($viewSource, 'Download problems-only CSV'), 'UI must expose a direct problems-only CSV link.');
 $assert(str_contains($adminSource, "'result' => 'error'") && str_contains($adminSource, 'missing_problems_only_csv_run_category_audit_first'), 'Fix report must still fail clearly when no problems CSV is available.');
 
 if ($failures !== []) {

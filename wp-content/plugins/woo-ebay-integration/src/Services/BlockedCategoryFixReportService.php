@@ -270,7 +270,14 @@ class BlockedCategoryFixReportService
         }
         fclose($fh);
 
-        $rows = array_values(array_map(function (array $group): array {
+        $rows = array_values(array_map(function (array $group) use ($marketplaceId): array {
+            $wooCategoryId = absint($group['woo_category_id'] ?? 0);
+            $resolved = $wooCategoryId > 0 ? $this->categoryRepo->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId) : null;
+            if (is_array($resolved) && trim((string) ($resolved['ebay_category_id'] ?? '')) !== '') {
+                $group['current_ebay_category_id'] = (string) ($resolved['ebay_category_id'] ?? '');
+                $group['current_ebay_category_path'] = (string) ($resolved['ebay_category_path'] ?? $group['current_ebay_category_path'] ?? '');
+                $group['manual_notes'] = trim((string) ($group['manual_notes'] ?? '') . ' resolver_source=' . (string) ($resolved['source'] ?? '') . ' resolver_row_id=' . (string) ($resolved['id'] ?? ''));
+            }
             $categoryId = (string) ($group['current_ebay_category_id'] ?? '');
             if ($categoryId !== '') {
                 $cached = $this->taxonomy->cached_category('EBAY_DE', $categoryId);
@@ -305,6 +312,7 @@ class BlockedCategoryFixReportService
             'worklist_csv_url' => $url,
             'worklist_csv_exists' => $exists,
             'worklist_csv_size' => $exists ? (int) filesize($path) : 0,
+            'generated_at' => gmdate('Y-m-d H:i:s'),
             'reports' => ['category_mapping_worklist_csv' => $report],
         ];
         update_option('wei_ebay_category_mapping_worklist_summary', $summary, false);
@@ -313,7 +321,7 @@ class BlockedCategoryFixReportService
 
     public function import_category_mapping_worklist(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
     {
-        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'total_rows' => 0, 'accepted' => 0, 'rejected' => 0, 'skipped_empty_final_ebay_category_id' => 0, 'accepted_rows' => [], 'rejected_rows' => [], 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
+        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
         if ($marketplaceId !== 'EBAY_DE') {
             $summary['result'] = 'error';
             $summary['error'] = 'unsupported_marketplace';
@@ -343,6 +351,7 @@ class BlockedCategoryFixReportService
             $finalCategoryId = trim((string) ($row['final_ebay_category_id'] ?? ''));
             if ($finalCategoryId === '') {
                 $summary['skipped_empty_final_ebay_category_id']++;
+                $summary['skipped']++;
                 continue;
             }
             if ($wooCategoryId <= 0) {
@@ -364,11 +373,25 @@ class BlockedCategoryFixReportService
                 'category_path' => (string) ($category['category_path'] ?? ''),
             ]);
             $summary['accepted']++;
+            $operation = (string) ($saved['operation'] ?? 'updated');
+            if ($operation === 'inserted') {
+                $summary['inserted_mappings']++;
+            } elseif ($operation === 'unchanged') {
+                $summary['unchanged_mappings']++;
+            } else {
+                $summary['updated_mappings']++;
+            }
+            $summary['deactivated_duplicate_mappings'] += (int) ($saved['duplicates_disabled'] ?? 0);
+            $resolved = is_array($saved['mapping'] ?? null) ? $saved['mapping'] : [];
+            if ((string) ($resolved['ebay_category_id'] ?? '') !== $finalCategoryId) {
+                $summary['warnings'][] = 'Resolver selected ' . (string) ($resolved['ebay_category_id'] ?? '(none)') . ' for Woo category ' . $wooCategoryId . ' after importing manual_worklist ' . $finalCategoryId . '. Check active manual mappings and duplicate rows.';
+            }
             if (count($summary['accepted_rows']) < 50) {
-                $summary['accepted_rows'][] = ['woo_category_id' => $wooCategoryId, 'final_ebay_category_id' => $finalCategoryId, 'selected_id' => (int) ($saved['selected_id'] ?? 0), 'duplicates_disabled' => (int) ($saved['duplicates_disabled'] ?? 0), 'source' => 'manual_worklist'];
+                $summary['accepted_rows'][] = ['woo_category_id' => $wooCategoryId, 'final_ebay_category_id' => $finalCategoryId, 'selected_id' => (int) ($saved['selected_id'] ?? 0), 'duplicates_disabled' => (int) ($saved['duplicates_disabled'] ?? 0), 'operation' => $operation, 'resolver_selected_ebay_category_id' => (string) ($resolved['ebay_category_id'] ?? ''), 'resolver_selected_source' => (string) ($resolved['source'] ?? ''), 'resolver_reason' => (string) ($resolved['resolver_reason'] ?? ''), 'source' => 'manual_worklist'];
             }
         }
         fclose($fh);
+        $summary['warnings'] = array_values(array_unique(array_map('strval', (array) ($summary['warnings'] ?? []))));
         update_option('wei_ebay_category_mapping_worklist_import_summary', $summary, false);
         return $summary;
     }

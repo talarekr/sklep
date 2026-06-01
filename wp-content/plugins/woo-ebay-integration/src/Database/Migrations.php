@@ -42,18 +42,39 @@ class Migrations
             source VARCHAR(32) NOT NULL DEFAULT 'manual',
             confidence DECIMAL(5,4) NOT NULL DEFAULT 1.0000,
             status VARCHAR(32) NOT NULL DEFAULT 'mapped_manual',
+            active TINYINT(1) NOT NULL DEFAULT 1,
             sample_product_ids TEXT NULL,
             suggestion_payload LONGTEXT NULL,
             error_reason TEXT NULL,
+            reviewed_at DATETIME NULL,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id),
-            UNIQUE KEY uniq_marketplace_woo_term (marketplace_id, woo_term_id),
+            KEY idx_marketplace_woo_term (marketplace_id, woo_term_id),
             KEY idx_ebay_category (marketplace_id, ebay_category_id),
-            KEY idx_status (marketplace_id, status)
+            KEY idx_status (marketplace_id, status),
+            KEY idx_active_priority (marketplace_id, woo_term_id, active, source, status)
         ) {$charset};";
 
         dbDelta($sql);
+        self::upgrade_category_mappings_schema($table);
+    }
+
+    private static function upgrade_category_mappings_schema(string $table): void
+    {
+        global $wpdb;
+        $columns = $wpdb->get_col("SHOW COLUMNS FROM {$table}", 0);
+        $columns = is_array($columns) ? array_map('strval', $columns) : [];
+        if (!in_array('active', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1 AFTER status");
+        }
+        if (!in_array('reviewed_at', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN reviewed_at DATETIME NULL AFTER error_reason");
+        }
+        $unique = $wpdb->get_var("SHOW INDEX FROM {$table} WHERE Key_name = 'uniq_marketplace_woo_term' AND Non_unique = 0");
+        if ($unique !== null) {
+            $wpdb->query("ALTER TABLE {$table} DROP INDEX uniq_marketplace_woo_term");
+        }
     }
 
     private static function create_category_teaching_rules_table(): void

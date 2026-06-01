@@ -34,7 +34,7 @@ foreach (['called_ebay_api' => 'false', 'updated_ebay_listing' => 'false', 'wei_
     $assertContains($german, is_string($needle) ? $needle : $expected, 'German Content safety summary');
 }
 
-foreach (['2. Kategorie eBay', 'Export category mapping CSV', 'Import category mapping CSV', 'Validate current category mappings', 'Run category readiness audit', 'Export blocked category report'] as $needle) {
+foreach (['2. Kategorie eBay', 'Section 1 — Status / Audyt', 'Section 2 — Ręczne mapowanie kategoriami', 'Section 3 — Diagnostyka mappingu', 'Section 4 — Automatyczne sugestie / legacy tools', 'Section 5 — Ovoko / Supplier import, future', 'Run category readiness audit', 'Generate category-mapping-worklist.csv', 'Import filled category-mapping-worklist.csv', 'Generate blocked category fix report'] as $needle) {
     $assertContains($categories, $needle, 'Kategorie eBay module');
 }
 foreach (['Generate all eBay.de category suggestions', 'Auto category mapping', 'Debug batch 50', 'Debug continue batch', 'Resetuj progress sugestii'] as $debugNeedle) {
