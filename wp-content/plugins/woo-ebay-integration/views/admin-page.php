@@ -569,19 +569,30 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
         <?php
-        $categoryAuditReports = is_array($full_category_audit_summary['reports'] ?? null) ? $full_category_audit_summary['reports'] : [];
-        $categoryAuditFullReport = is_array($categoryAuditReports['full_audit_csv'] ?? null) ? $categoryAuditReports['full_audit_csv'] : [];
-        $categoryAuditProblemsReport = is_array($categoryAuditReports['problems_only_csv'] ?? null) ? $categoryAuditReports['problems_only_csv'] : [];
-        $categoryAuditFullReady = !empty($categoryAuditFullReport['exists']) && (int) ($categoryAuditFullReport['size'] ?? 0) > 0;
-        $categoryAuditProblemsReady = !empty($categoryAuditProblemsReport['exists']) && (int) ($categoryAuditProblemsReport['size'] ?? 0) > 0;
+        $categoryAuditSummary = is_array($category_readiness_audit_summary ?? null) ? $category_readiness_audit_summary : [];
+        $lastCategoryAudit = is_array($categoryAuditSummary['last_category_readiness_audit'] ?? null) ? $categoryAuditSummary['last_category_readiness_audit'] : [];
+        if ($lastCategoryAudit === []) {
+            $lastCategoryAudit = get_option('wei_ebay_last_category_readiness_audit', []);
+            $lastCategoryAudit = is_array($lastCategoryAudit) ? $lastCategoryAudit : [];
+        }
+        $categoryAuditDownloadUrl = static function (string $path): string {
+            $file = basename($path);
+            return $file !== '' ? admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode($file)) : '';
+        };
+        $categoryAuditFullReady = !empty($lastCategoryAudit['full_report_csv_exists']) && (int) ($lastCategoryAudit['full_report_csv_size'] ?? 0) > 0;
+        $categoryAuditProblemsReady = !empty($lastCategoryAudit['problems_only_csv_exists']) && (int) ($lastCategoryAudit['problems_only_csv_size'] ?? 0) > 0;
+        $categoryAuditFullAdminUrl = (string) ($lastCategoryAudit['full_report_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['full_report_csv_path'] ?? '')));
+        $categoryAuditProblemsAdminUrl = (string) ($lastCategoryAudit['problems_only_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['problems_only_csv_path'] ?? '')));
         ?>
         <?php if ($categoryAuditFullReady || $categoryAuditProblemsReady): ?>
             <div class="notice notice-info inline"><p><strong>Category readiness audit files:</strong></p><ul>
                 <?php if ($categoryAuditFullReady): ?>
-                    <li>Full report CSV: <a href="<?php echo esc_url((string) ($categoryAuditFullReport['url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($categoryAuditFullReport['size'] ?? 0)); ?> bytes)</li>
+                    <li>Full report CSV: <a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download full category audit CSV</a> <a href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">admin download</a> · <a href="<?php echo esc_url((string) ($lastCategoryAudit['full_report_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($lastCategoryAudit['full_report_csv_size'] ?? 0)); ?> bytes)</li>
+                    <li><a class="button" href="<?php echo esc_url($categoryAuditFullAdminUrl); ?>">Download last full audit CSV</a></li>
                 <?php endif; ?>
                 <?php if ($categoryAuditProblemsReady): ?>
-                    <li>Problems only CSV: <a href="<?php echo esc_url((string) ($categoryAuditProblemsReport['url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($categoryAuditProblemsReport['size'] ?? 0)); ?> bytes)</li>
+                    <li>Problems only CSV: <a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download problems only CSV</a> <a href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">admin download</a> · <a href="<?php echo esc_url((string) ($lastCategoryAudit['problems_only_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($lastCategoryAudit['problems_only_csv_size'] ?? 0)); ?> bytes)</li>
+                    <li><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download last problems-only audit CSV</a></li>
                 <?php endif; ?>
             </ul></div>
         <?php endif; ?>

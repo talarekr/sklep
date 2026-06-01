@@ -741,6 +741,17 @@ class AutoSyncScheduler
             'full_audit_csv' => $this->category_audit_file_report($fullPath, (string) ($state['full_report_csv_url'] ?? ''), (int) ($state['total_scanned'] ?? 0)),
             'problems_only_csv' => $this->category_audit_file_report($problemsPath, (string) ($state['problems_only_csv_url'] ?? ''), max(0, (int) ($state['total_scanned'] ?? 0) - (int) ($state['ready_count'] ?? 0))),
         ];
+        $lastAudit = [
+            'full_report_csv_path' => (string) ($reports['full_audit_csv']['path'] ?? ''),
+            'full_report_csv_url' => (string) ($reports['full_audit_csv']['url'] ?? ''),
+            'full_report_csv_exists' => !empty($reports['full_audit_csv']['exists']),
+            'full_report_csv_size' => (int) ($reports['full_audit_csv']['size'] ?? 0),
+            'problems_only_csv_path' => (string) ($reports['problems_only_csv']['path'] ?? ''),
+            'problems_only_csv_url' => (string) ($reports['problems_only_csv']['url'] ?? ''),
+            'problems_only_csv_exists' => !empty($reports['problems_only_csv']['exists']),
+            'problems_only_csv_size' => (int) ($reports['problems_only_csv']['size'] ?? 0),
+        ];
+        update_option('wei_ebay_last_category_readiness_audit', $lastAudit, false);
         if ($problemsPath !== '' && is_readable($problemsPath)) {
             update_option('wei_ebay_last_problems_only_csv_path', $problemsPath, false);
             update_option('wei_ebay_last_problems_only_csv', $reports['problems_only_csv'], false);
