@@ -104,6 +104,7 @@ $buildEbayCategoryUrl = static function (string $categoryId, array $categoryData
 
 $thresholdValue = \WEI\Services\CategoryMappingSafety::threshold((array) ($s ?? []));
 $categoryRows = [];
+$categoryDashboardSummary = is_array($category_dashboard_summary ?? null) ? $category_dashboard_summary : [];
 $categorySummary = [
     'total' => 0,
     'mapped_manual' => 0,
@@ -506,16 +507,25 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         <h2>2. Kategorie eBay</h2>
         <p class="description">Check and maintain WooCommerce product_cat → eBay.de category ID mapping. Main actions focus on CSV import/export and readiness validation; suggestion generators and auto-mapping are in Advanced / Debug.</p>
         <?php $ovokoConfidence = is_array($ovoko_category_suggestions_summary['confidence'] ?? null) ? $ovoko_category_suggestions_summary['confidence'] : []; ?>
+        <?php $categoryReportUrl = (string) ($category_template_export_summary['reports']['template_csv']['url'] ?? $category_teaching_export_summary['reports']['teaching_csv']['url'] ?? ''); ?>
         <div class="wei-grid">
-            <div class="wei-card"><span>total_categories</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['woo_categories_total'] ?? $categorySummary['total'])); ?></strong></div>
-            <div class="wei-card"><span>mapped_categories</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
-            <div class="wei-card"><span>valid_categories</span><strong><?php echo esc_html((string) ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto'])); ?></strong></div>
-            <div class="wei-card"><span>invalid_category_id</span><strong><?php echo esc_html((string) ($categorySummary['blocked_by_expected_keyword'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>non_leaf_category</span><strong><?php echo esc_html((string) ($categorySummary['blocked_by_sonstige'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) $categoryBlockedCount); ?></strong></div>
-            <div class="wei-card"><span>needs_review</span><strong><?php echo esc_html((string) $categoryMissingCount); ?></strong></div>
-            <div class="wei-card"><span>products_affected</span><strong><?php echo esc_html((string) ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? $blockedByCategoryCount)); ?></strong></div>
-            <div class="wei-card"><span>report_url</span><strong><?php $categoryReportUrl = (string) ($category_template_export_summary['reports']['template_csv']['url'] ?? $category_teaching_export_summary['reports']['teaching_csv']['url'] ?? ''); echo $categoryReportUrl !== '' ? '<a href="' . esc_url($categoryReportUrl) . '">open</a>' : '—'; ?></strong></div>
+            <div class="wei-card"><span>total_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['total_categories'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['categories_with_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>mapped_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['mapped_categories'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>unmapped_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['unmapped_categories'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>mapped_categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['mapped_categories_with_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>unmapped_categories_with_products</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['unmapped_categories_with_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>validation_status</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['validation_status'] ?? 'not_run')); ?></strong></div>
+            <div class="wei-card"><span>valid_categories</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['valid_categories'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>invalid_category_id</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['invalid_category_id'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>non_leaf_category</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['non_leaf_category'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['blocked_by_category'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>needs_review</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['needs_review'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>products_affected</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['products_affected'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>last_import.total_rows</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['total_rows'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>last_import.updated</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['updated'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>last_import.inserted</span><strong><?php echo esc_html((string) ($categoryDashboardSummary['last_import']['inserted'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>report_url</span><strong><?php echo $categoryReportUrl !== '' ? '<a href="' . esc_url($categoryReportUrl) . '">open</a>' : '—'; ?></strong></div>
         </div>
         <div class="wei-actions" data-wei-primary-actions="categories">
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
@@ -558,7 +568,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
         <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
-        <details><summary>Category last summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['total_categories' => ($ovoko_category_suggestions_summary['woo_categories_total'] ?? $categorySummary['total']), 'mapped_categories' => ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto']), 'valid_categories' => ((int) $categorySummary['mapped_manual'] + (int) $categorySummary['accepted_auto']), 'invalid_category_id' => ($categorySummary['blocked_by_expected_keyword'] ?? 0), 'non_leaf_category' => ($categorySummary['blocked_by_sonstige'] ?? 0), 'blocked_by_category' => $categoryBlockedCount, 'needs_review' => $categoryMissingCount, 'products_affected' => ($ovoko_category_suggestions_summary['unmapped_products_count'] ?? $blockedByCategoryCount), 'report_url' => $categoryReportUrl, 'last_import' => $category_teaching_import_summary, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
+        <details><summary>Category last summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(array_merge($categoryDashboardSummary, ['report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary]), 6000)); ?></pre></details>
         <?php if ($categoryRowsLoaded): ?>
             <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Status</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
         <?php endif; ?>

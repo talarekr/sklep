@@ -345,6 +345,14 @@ class AdminPage
         $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
         $category_teaching_import_summary = get_option('wei_ebay_category_mapping_import_summary', []);
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
+        $category_validation_statuses = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
+        $category_validation_statuses = is_array($category_validation_statuses) ? $category_validation_statuses : [];
+        $category_dashboard_summary = $this->categoryRepo->production_mapping_summary(
+            (string) ($s['marketplace_id'] ?? 'EBAY_DE'),
+            $category_teaching_import_summary,
+            $category_validation_statuses,
+            $this->light_readiness_summary()
+        );
         $category_teaching_match_diagnostic = get_option('wei_ebay_category_mapping_teaching_match_diagnostic', []);
         $category_teaching_match_diagnostic = is_array($category_teaching_match_diagnostic) ? $category_teaching_match_diagnostic : [];
         $product_sync_status_rows = $load_product_sync_rows ? $this->recent_product_sync_status_rows() : [];
