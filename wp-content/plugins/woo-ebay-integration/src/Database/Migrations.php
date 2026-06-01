@@ -43,6 +43,9 @@ class Migrations
             confidence DECIMAL(5,4) NOT NULL DEFAULT 1.0000,
             status VARCHAR(32) NOT NULL DEFAULT 'mapped_manual',
             active TINYINT(1) NOT NULL DEFAULT 1,
+            cache_validation_status VARCHAR(32) NULL,
+            validation_confidence VARCHAR(32) NULL,
+            needs_cache_validation TINYINT(1) NOT NULL DEFAULT 0,
             sample_product_ids TEXT NULL,
             suggestion_payload LONGTEXT NULL,
             error_reason TEXT NULL,
@@ -70,6 +73,15 @@ class Migrations
         }
         if (!in_array('reviewed_at', $columns, true)) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN reviewed_at DATETIME NULL AFTER error_reason");
+        }
+        if (!in_array('cache_validation_status', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN cache_validation_status VARCHAR(32) NULL AFTER active");
+        }
+        if (!in_array('validation_confidence', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN validation_confidence VARCHAR(32) NULL AFTER cache_validation_status");
+        }
+        if (!in_array('needs_cache_validation', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN needs_cache_validation TINYINT(1) NOT NULL DEFAULT 0 AFTER validation_confidence");
         }
         $unique = $wpdb->get_var("SHOW INDEX FROM {$table} WHERE Key_name = 'uniq_marketplace_woo_term' AND Non_unique = 0");
         if ($unique !== null) {

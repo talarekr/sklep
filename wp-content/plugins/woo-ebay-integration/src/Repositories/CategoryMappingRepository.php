@@ -169,6 +169,9 @@ class CategoryMappingRepository
             'confidence' => 1.0,
             'status' => 'mapped_manual',
             'active' => 1,
+            'cache_validation_status' => (string) ($category['cache_validation_status'] ?? 'valid_leaf'),
+            'validation_confidence' => (string) ($category['validation_confidence'] ?? 'validated_cache'),
+            'needs_cache_validation' => !empty($category['needs_cache_validation']) ? 1 : 0,
             'error_reason' => '',
             'reviewed_at' => $now,
             'updated_at' => $now,
@@ -191,7 +194,7 @@ class CategoryMappingRepository
                 && (int) ($existingWorklist['active'] ?? 1) === 1;
             if ($unchanged) {
                 $operation = 'unchanged';
-                $wpdb->update($table, ['active' => 1, 'status' => 'mapped_manual', 'reviewed_at' => $now, 'updated_at' => $now, 'error_reason' => ''], ['id' => $selectedId]);
+                $wpdb->update($table, ['active' => 1, 'status' => 'mapped_manual', 'cache_validation_status' => (string) ($category['cache_validation_status'] ?? 'valid_leaf'), 'validation_confidence' => (string) ($category['validation_confidence'] ?? 'validated_cache'), 'needs_cache_validation' => !empty($category['needs_cache_validation']) ? 1 : 0, 'reviewed_at' => $now, 'updated_at' => $now, 'error_reason' => ''], ['id' => $selectedId]);
             } else {
                 $operation = 'updated';
                 $wpdb->update($table, $row, ['id' => $selectedId]);

@@ -324,7 +324,26 @@ $assert(array_key_exists('unchanged_mappings', $importResult), 'Import summary m
 $assert(array_key_exists('import_debug_rows', $importResult), 'Import summary must include first-row debug diagnostics.');
 $assert(($importResult['import_debug_rows'][0]['final_ebay_category_id'] ?? '') === '99999', 'Import debug must record final_ebay_category_id.');
 $assert(array_key_exists('category_cache_diagnostic', $importResult), 'Import summary must include category cache diagnostic.');
+
+$missingCacheCsv = trailingslashit($GLOBALS['wei_test_upload_dir']) . 'trusted-manual-cache-missing-worklist.csv';
+$fh = fopen($missingCacheCsv, 'wb');
+fputcsv($fh, ['final_ebay_category_id', 'sample_product_title', 'woo_category_id', 'woo_category_name']);
+fputcsv($fh, ['262243', 'Manual trusted category', '5126', 'Manual trusted']);
+fclose($fh);
+$importResult = $service->import_category_mapping_worklist($missingCacheCsv, 'EBAY_DE');
+$assert(($importResult['accepted'] ?? null) === 1, 'Importer must accept trusted manual worklist mappings when local cache is missing the numeric category ID.');
+$assert(($importResult['accepted_trusted_manual_cache_missing'] ?? null) === 1, 'Import summary must count trusted manual cache-missing accepted rows.');
+$assert(($importResult['rejected'] ?? null) === 0, 'Cache-missing trusted manual mappings must not be rejected.');
+$assert(in_array('Imported as trusted manual mapping because local EBAY_DE category cache is missing/incomplete.', $importResult['warnings'] ?? [], true), 'Import summary must warn about trusted manual cache-missing mappings.');
+$assert(($repo->savedMappings[2]['woo_category_id'] ?? null) === 5126, 'Cache-missing trusted manual mapping must still be saved for the Woo category.');
+$assert(($repo->savedMappings[2]['category']['category_id'] ?? '') === '262243', 'Cache-missing trusted manual mapping must save the numeric final category ID.');
+$assert(($repo->savedMappings[2]['category']['cache_validation_status'] ?? '') === 'cache_missing', 'Cache-missing trusted manual mapping must save cache_validation_status=cache_missing.');
+$assert(($repo->savedMappings[2]['category']['validation_confidence'] ?? '') === 'trusted_manual', 'Cache-missing trusted manual mapping must save validation_confidence=trusted_manual.');
+$assert(($repo->savedMappings[2]['category']['needs_cache_validation'] ?? null) === 1, 'Cache-missing trusted manual mapping must be flagged for later cache validation.');
 $validation = $GLOBALS['wei_test_options']['wei_ebay_category_validation_statuses'] ?? [];
+$assert(($validation['by_woo_term_id']['5126']['validation_status'] ?? '') === 'cache_missing', 'Validation cache must record cache_missing for trusted manual cache-missing mappings.');
+$assert(($validation['by_woo_term_id']['5126']['validation_confidence'] ?? '') === 'trusted_manual', 'Validation cache must record trusted_manual confidence for cache-missing mappings.');
+$assert(($validation['by_woo_term_id']['5126']['needs_cache_validation'] ?? null) === 1, 'Validation cache must flag trusted manual cache-missing mappings for later validation.');
 $assert(($validation['by_woo_term_id']['77']['category_id'] ?? '') === '99999', 'Import must mark the Woo category validation cache valid for the imported category-level mapping.');
 $assert(($validation['by_woo_term_id']['77']['source'] ?? '') === 'manual_worklist_import', 'Validation cache source must show manual_worklist_import.');
 

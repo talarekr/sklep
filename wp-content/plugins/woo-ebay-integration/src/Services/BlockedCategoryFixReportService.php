@@ -321,7 +321,7 @@ class BlockedCategoryFixReportService
 
     public function import_category_mapping_worklist(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
     {
-        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'import_debug_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
+        $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'source' => 'manual_worklist', 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'accepted_validated_cache' => 0, 'accepted_trusted_manual_cache_missing' => 0, 'rejected_invalid_format' => 0, 'rejected_non_leaf_if_cache_knows_non_leaf' => 0, 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'import_debug_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
         if ($marketplaceId !== 'EBAY_DE') {
             $summary['result'] = 'error';
             $summary['error'] = 'unsupported_marketplace';
@@ -358,6 +358,12 @@ class BlockedCategoryFixReportService
                 $summary['skipped']++;
                 continue;
             }
+            if (!ctype_digit($finalCategoryId)) {
+                $summary['rejected_invalid_format']++;
+                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, null, 'rejected', 'invalid_ebay_category_id_format');
+                $summary = $this->reject_worklist_row($summary, $row, 'invalid_ebay_category_id_format');
+                continue;
+            }
             if ($wooCategoryId <= 0) {
                 $category = $this->taxonomy->cached_category($marketplaceId, $finalCategoryId);
                 $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', 'missing_woo_category_id');
@@ -366,27 +372,43 @@ class BlockedCategoryFixReportService
             }
             $category = $this->taxonomy->cached_category($marketplaceId, $finalCategoryId);
             $decisionReason = '';
+            $trustedManualCacheMissing = false;
             if (!is_array($category)) {
                 $decisionReason = $cacheTotal <= 0 ? 'cache_missing' : 'cache_incomplete';
-                $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', $decisionReason);
-                $summary = $this->reject_worklist_row($summary, $row, $decisionReason);
-                continue;
-            }
-            if (empty($category['leaf'])) {
+                $trustedManualCacheMissing = true;
+                $category = [
+                    'category_id' => $finalCategoryId,
+                    'category_name' => '',
+                    'category_path' => '',
+                    'leaf' => null,
+                ];
+            } elseif (empty($category['leaf'])) {
                 $decisionReason = 'non_leaf_category';
+                $summary['rejected_non_leaf_if_cache_knows_non_leaf']++;
                 $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'rejected', $decisionReason);
                 $summary = $this->reject_worklist_row($summary, $row, $decisionReason);
                 continue;
+            } else {
+                $decisionReason = 'accepted_validated_cache';
             }
+            $validationStatus = $trustedManualCacheMissing ? 'cache_missing' : 'valid_leaf';
             $saved = $this->categoryRepo->save_manual_worklist_mapping($wooCategoryId, $marketplaceId, [
                 'category_id' => $finalCategoryId,
                 'category_name' => (string) ($category['category_name'] ?? ''),
                 'category_path' => (string) ($category['category_path'] ?? ''),
+                'cache_validation_status' => $validationStatus,
+                'validation_confidence' => $trustedManualCacheMissing ? 'trusted_manual' : 'validated_cache',
+                'needs_cache_validation' => $trustedManualCacheMissing ? 1 : 0,
             ]);
-            $this->record_worklist_category_validation($wooCategoryId, $marketplaceId, $finalCategoryId, $category);
-            $decisionReason = 'accepted';
-            $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $category, 'accepted', $decisionReason);
+            $this->record_worklist_category_validation($wooCategoryId, $marketplaceId, $finalCategoryId, $category, $validationStatus, $trustedManualCacheMissing);
+            $summary = $this->add_worklist_import_debug_row($summary, $row, $marketplaceId, $finalCategoryId, $trustedManualCacheMissing ? null : $category, 'accepted', $decisionReason);
             $summary['accepted']++;
+            if ($trustedManualCacheMissing) {
+                $summary['accepted_trusted_manual_cache_missing']++;
+                $summary['warnings'][] = 'Imported as trusted manual mapping because local EBAY_DE category cache is missing/incomplete.';
+            } else {
+                $summary['accepted_validated_cache']++;
+            }
             $operation = (string) ($saved['operation'] ?? 'updated');
             if ($operation === 'inserted') {
                 $summary['inserted_mappings']++;
@@ -401,7 +423,7 @@ class BlockedCategoryFixReportService
                 $summary['warnings'][] = 'Resolver selected ' . (string) ($resolved['ebay_category_id'] ?? '(none)') . ' for Woo category ' . $wooCategoryId . ' after importing manual_worklist ' . $finalCategoryId . '. Check active manual mappings and duplicate rows.';
             }
             if (count($summary['accepted_rows']) < 50) {
-                $summary['accepted_rows'][] = ['woo_category_id' => $wooCategoryId, 'final_ebay_category_id' => $finalCategoryId, 'selected_id' => (int) ($saved['selected_id'] ?? 0), 'duplicates_disabled' => (int) ($saved['duplicates_disabled'] ?? 0), 'operation' => $operation, 'resolver_selected_ebay_category_id' => (string) ($resolved['ebay_category_id'] ?? ''), 'resolver_selected_source' => (string) ($resolved['source'] ?? ''), 'resolver_reason' => (string) ($resolved['resolver_reason'] ?? ''), 'source' => 'manual_worklist'];
+                $summary['accepted_rows'][] = ['woo_category_id' => $wooCategoryId, 'final_ebay_category_id' => $finalCategoryId, 'selected_id' => (int) ($saved['selected_id'] ?? 0), 'duplicates_disabled' => (int) ($saved['duplicates_disabled'] ?? 0), 'operation' => $operation, 'resolver_selected_ebay_category_id' => (string) ($resolved['ebay_category_id'] ?? ''), 'resolver_selected_source' => (string) ($resolved['source'] ?? ''), 'resolver_reason' => (string) ($resolved['resolver_reason'] ?? ''), 'source' => 'manual_worklist', 'cache_validation_status' => $validationStatus, 'validation_confidence' => $trustedManualCacheMissing ? 'trusted_manual' : 'validated_cache', 'needs_cache_validation' => $trustedManualCacheMissing ? 1 : 0];
             }
         }
         fclose($fh);
@@ -411,7 +433,7 @@ class BlockedCategoryFixReportService
     }
 
 
-    private function record_worklist_category_validation(int $wooCategoryId, string $marketplaceId, string $categoryId, array $category): void
+    private function record_worklist_category_validation(int $wooCategoryId, string $marketplaceId, string $categoryId, array $category, string $validationStatus = 'valid_leaf', bool $needsCacheValidation = false): void
     {
         if ($wooCategoryId <= 0 || $categoryId === '') {
             return;
@@ -424,8 +446,11 @@ class BlockedCategoryFixReportService
             'woo_term_id' => $wooCategoryId,
             'category_id' => $categoryId,
             'valid' => true,
-            'leaf' => true,
-            'validation_status' => 'valid_leaf',
+            'leaf' => !$needsCacheValidation,
+            'validation_status' => $validationStatus,
+            'cache_validation_status' => $validationStatus,
+            'validation_confidence' => $needsCacheValidation ? 'trusted_manual' : 'validated_cache',
+            'needs_cache_validation' => $needsCacheValidation ? 1 : 0,
             'category_name' => (string) ($category['category_name'] ?? ''),
             'category_path' => (string) ($category['category_path'] ?? ''),
             'source' => 'manual_worklist_import',
