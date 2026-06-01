@@ -21,6 +21,7 @@ use WEI\Services\AutoSyncScheduler;
 class Plugin
 {
     public const OPTION_KEY = 'wei_ebay_settings';
+    public const DEFAULT_EBAY_SELLER_USERNAME = 'gpswiss';
 
     public function boot(): void
     {

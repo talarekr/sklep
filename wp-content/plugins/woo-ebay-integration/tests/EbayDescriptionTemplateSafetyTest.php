@@ -6,7 +6,7 @@ namespace WEI\Interfaces { interface MarketplaceAdapterInterface {} interface Tr
 namespace WEI\Repositories { class CategoryMappingRepository {} class MappingRepository {} }
 namespace WEI\Services { class EbayClient {} class EbayTaxonomyService {} class EbaySkuGenerator {} class EbayPriceResolver {} class EbayConditionResolver { public const DEFAULT_ITEM_CONDITION = 'used'; } class EbayShippingPolicyResolver { public const POLICY_30_EUR = 'policy-30'; public const POLICY_50_EUR = 'policy-50'; public const POLICY_100_EUR = 'policy-100'; } class EbayGermanContentTranslator {} class CategoryMappingSafety { public const DEFAULT_AUTO_CONFIDENCE_THRESHOLD = 0.85; } class Logger {} }
 namespace WEI\Services\Translation { class GoogleCloudTranslateProvider {} class OpenAiTranslationProvider {} }
-namespace WEI { class Plugin { public const OPTION_KEY = 'wei_settings'; } }
+namespace WEI { class Plugin { public const OPTION_KEY = 'wei_settings'; public const DEFAULT_EBAY_SELLER_USERNAME = 'gpswiss'; } }
 namespace {
     $GLOBALS['wei_test_options'] = [];
     $GLOBALS['wei_test_post_meta'] = [];
@@ -92,11 +92,18 @@ namespace {
 
 
     $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = [];
+    $GLOBALS['wei_test_post_meta'][104] = ['_ovoko_car_id' => '456'];
+    $defaultSeller = $resolveSameVehicle->invoke($adapter, 104);
+    if (($defaultSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=gpswiss&_nkw=456') {
+        $failures[] = 'Expected default seller username gpswiss to build the same-vehicle URL when settings are missing.';
+    }
+
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => ''];
     if (!defined('WEI_EBAY_SELLER_USERNAME')) {
         define('WEI_EBAY_SELLER_USERNAME', 'constant-seller');
     }
-    $GLOBALS['wei_test_post_meta'][104] = ['_ovoko_car_id' => 'CONST:321'];
-    $constantSeller = $resolveSameVehicle->invoke($adapter, 104);
+    $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'CONST:321'];
+    $constantSeller = $resolveSameVehicle->invoke($adapter, 105);
     if (($constantSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=constant-seller&_nkw=CONST%3A321') {
         $failures[] = 'Expected configured seller username constant fallback to build the same-vehicle URL when settings are empty.';
     }

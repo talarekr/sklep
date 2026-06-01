@@ -2365,7 +2365,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 }
             }
         }
-        return '';
+        return Plugin::DEFAULT_EBAY_SELLER_USERNAME;
     }
 
     private function is_ebay_public_url(string $url): bool
@@ -4849,7 +4849,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $settings['auto_generate_german_content_preflight'] = 1;
         }
         if (!isset($settings['ebay_seller_username'])) {
-            $settings['ebay_seller_username'] = '';
+            $settings['ebay_seller_username'] = Plugin::DEFAULT_EBAY_SELLER_USERNAME;
         }
         if (!isset($settings['verbose_debug'])) {
             $settings['verbose_debug'] = 0;
