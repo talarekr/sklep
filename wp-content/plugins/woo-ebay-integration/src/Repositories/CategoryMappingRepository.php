@@ -142,6 +142,136 @@ class CategoryMappingRepository
         return is_array($rows) ? $rows : [];
     }
 
+    public function production_mapping_summary(string $marketplaceId = 'EBAY_DE', array $lastImport = [], array $validation = [], array $readiness = []): array
+    {
+        global $wpdb;
+        $terms = $wpdb->terms;
+        $termTaxonomy = $wpdb->term_taxonomy;
+        $relationships = $wpdb->term_relationships;
+        $posts = $wpdb->posts;
+        $mappings = $wpdb->prefix . 'wei_ebay_category_mappings';
+
+        $mappedCondition = "TRIM(COALESCE(m.ebay_category_id, '')) <> ''";
+        $totalCategories = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$termTaxonomy} tt WHERE tt.taxonomy = 'product_cat'");
+        $categoriesWithProducts = (int) $wpdb->get_var("SELECT COUNT(DISTINCT tt.term_id) FROM {$termTaxonomy} tt INNER JOIN {$relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id INNER JOIN {$posts} p ON p.ID = tr.object_id AND p.post_type = 'product' AND p.post_status IN ('publish','draft','private') WHERE tt.taxonomy = 'product_cat'");
+
+        $mappedCategories = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT tt.term_id)
+             FROM {$termTaxonomy} tt
+             INNER JOIN {$mappings} m ON m.woo_term_id = tt.term_id AND m.marketplace_id = %s
+             WHERE tt.taxonomy = 'product_cat' AND {$mappedCondition}",
+            $marketplaceId
+        ));
+        $mappedCategoriesWithProducts = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT tt.term_id)
+             FROM {$termTaxonomy} tt
+             INNER JOIN {$relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             INNER JOIN {$posts} p ON p.ID = tr.object_id AND p.post_type = 'product' AND p.post_status IN ('publish','draft','private')
+             INNER JOIN {$mappings} m ON m.woo_term_id = tt.term_id AND m.marketplace_id = %s
+             WHERE tt.taxonomy = 'product_cat' AND {$mappedCondition}",
+            $marketplaceId
+        ));
+
+        $mappingRowsTotal = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$mappings}");
+        $mappingRowsEbayDe = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$mappings} WHERE marketplace_id = %s", $marketplaceId));
+        $mappingRowsWithCategoryId = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$mappings} WHERE marketplace_id = %s AND TRIM(COALESCE(ebay_category_id, '')) <> ''", $marketplaceId));
+
+        $statusRows = $wpdb->get_results($wpdb->prepare(
+            "SELECT COALESCE(NULLIF(status, ''), '(empty)') AS status, COUNT(*) AS count FROM {$mappings} WHERE marketplace_id = %s GROUP BY COALESCE(NULLIF(status, ''), '(empty)') ORDER BY count DESC, status ASC",
+            $marketplaceId
+        ), ARRAY_A);
+        $statusCounts = [];
+        foreach ((array) $statusRows as $row) {
+            $statusCounts[(string) ($row['status'] ?? '(empty)')] = (int) ($row['count'] ?? 0);
+        }
+
+        $samples = $wpdb->get_results($wpdb->prepare(
+            "SELECT m.woo_term_id, t.name AS woo_category_name, m.woo_category_path, m.ebay_category_id, m.ebay_category_name, m.ebay_category_path, m.status, m.source, m.updated_at
+             FROM {$mappings} m
+             LEFT JOIN {$terms} t ON t.term_id = m.woo_term_id
+             WHERE m.marketplace_id = %s AND TRIM(COALESCE(m.ebay_category_id, '')) <> ''
+             ORDER BY m.updated_at DESC, m.id DESC
+             LIMIT 10",
+            $marketplaceId
+        ), ARRAY_A);
+
+        $validationByWooTerm = is_array($validation['by_woo_term_id'] ?? null) ? $validation['by_woo_term_id'] : [];
+        $validationByCategoryId = is_array($validation['by_category_id'] ?? null) ? $validation['by_category_id'] : [];
+        $validationStatus = 'not_run';
+        if ($validationByWooTerm !== [] || $validationByCategoryId !== []) {
+            $validationStatus = count($validationByWooTerm) >= $mappedCategories && $mappedCategories > 0 ? 'completed' : 'partial';
+        }
+
+        $validCategories = 0;
+        $invalidCategoryId = 0;
+        $nonLeafCategory = 0;
+        foreach ($validationByWooTerm as $termValidation) {
+            if (!is_array($termValidation)) {
+                continue;
+            }
+            $categoryId = trim((string) ($termValidation['category_id'] ?? ''));
+            if ($categoryId === '') {
+                continue;
+            }
+            $isValid = !empty($termValidation['valid']);
+            $isLeaf = !empty($termValidation['leaf']);
+            if ($isValid && $isLeaf) {
+                $validCategories++;
+            } elseif (!$isValid) {
+                $invalidCategoryId++;
+            } else {
+                $nonLeafCategory++;
+            }
+        }
+
+        $blockedByCategory = (int) ($readiness['blocked_by_category'] ?? $readiness['blocked_by_category_total'] ?? 0);
+        $needsReview = (int) ($statusCounts['needs_category_review'] ?? 0)
+            + (int) ($statusCounts['needs_manual_review'] ?? 0)
+            + (int) ($statusCounts['low_confidence_auto'] ?? 0)
+            + (int) ($statusCounts['category_sanity_failed'] ?? 0);
+
+        return [
+            'marketplace_id' => $marketplaceId,
+            'total_categories' => $totalCategories,
+            'categories_with_products' => $categoriesWithProducts,
+            'mapped_categories' => $mappedCategories,
+            'unmapped_categories' => max(0, $totalCategories - $mappedCategories),
+            'mapped_categories_with_products' => $mappedCategoriesWithProducts,
+            'unmapped_categories_with_products' => max(0, $categoriesWithProducts - $mappedCategoriesWithProducts),
+            'validation_status' => $validationStatus,
+            'valid_categories' => $validCategories,
+            'invalid_category_id' => $invalidCategoryId,
+            'non_leaf_category' => $nonLeafCategory,
+            'blocked_by_category' => $blockedByCategory,
+            'needs_review' => $needsReview,
+            'products_affected' => (int) ($readiness['blocked_by_category_products'] ?? $readiness['products_affected'] ?? 0),
+            'last_import' => [
+                'total_rows' => (int) ($lastImport['total_rows'] ?? 0),
+                'updated' => (int) ($lastImport['updated'] ?? 0),
+                'inserted' => (int) ($lastImport['inserted'] ?? 0),
+                'skipped' => (int) ($lastImport['skipped'] ?? 0),
+                'invalid' => (int) ($lastImport['invalid'] ?? 0),
+                'imported_at' => (string) ($lastImport['imported_at'] ?? ''),
+                'source_csv' => (string) ($lastImport['source_csv'] ?? ''),
+            ],
+            'mapping_table' => $mappings,
+            'mapping_rows_total' => $mappingRowsTotal,
+            'mapping_rows_ebay_de' => $mappingRowsEbayDe,
+            'mapping_rows_with_category_id' => $mappingRowsWithCategoryId,
+            'mapping_status_counts' => $statusCounts,
+            'sample_mappings' => is_array($samples) ? $samples : [],
+            'diagnostics' => [
+                'mapping_table' => $mappings,
+                'mapping_rows_total' => $mappingRowsTotal,
+                'mapping_rows_ebay_de' => $mappingRowsEbayDe,
+                'mapping_rows_with_category_id' => $mappingRowsWithCategoryId,
+                'mapping_status_counts' => $statusCounts,
+                'sample_mappings' => is_array($samples) ? $samples : [],
+            ],
+        ];
+    }
+
+
     public function sample_products_for_category(int $term_id, int $limit = 5): array
     {
         $query = new \WP_Query([
