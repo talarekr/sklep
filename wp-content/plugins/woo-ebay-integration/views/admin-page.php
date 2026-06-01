@@ -549,6 +549,12 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
                 <button class="button">Export blocked category report</button>
             </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_blocked_category_fix_report'); ?>
+                <input type="hidden" name="action" value="wei_generate_blocked_category_fix_report" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
+                <button class="button button-primary">Generate blocked category fix report</button>
+            </form>
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
         <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
