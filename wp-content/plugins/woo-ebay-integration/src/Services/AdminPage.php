@@ -75,6 +75,7 @@ class AdminPage
         add_action('admin_post_wei_generate_missing_german_content_audit', [$this, 'generate_missing_german_content_audit']);
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
+        add_action('admin_post_wei_full_publish_readiness_audit', [$this, 'full_publish_readiness_audit']);
         add_action('admin_post_wei_full_category_audit', [$this, 'full_category_audit']);
         add_action('admin_post_wei_run_category_readiness_audit', [$this, 'run_category_readiness_audit']);
         add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
@@ -1208,6 +1209,16 @@ class AdminPage
                 $allowed[basename($candidate)] = $candidate;
             }
         }
+        $publishReadiness = get_option('wei_ebay_publish_readiness_audit_summary', []);
+        $publishReadiness = is_array($publishReadiness) ? $publishReadiness : [];
+        $publishReports = is_array($publishReadiness['reports'] ?? null) ? $publishReadiness['reports'] : [];
+        foreach (['full_csv', 'problems_only_csv', 'ready_products_csv', 'excluded_csv'] as $reportKey) {
+            $report = is_array($publishReports[$reportKey] ?? null) ? $publishReports[$reportKey] : [];
+            $candidate = (string) ($report['path'] ?? '');
+            if ($candidate !== '') {
+                $allowed[basename($candidate)] = $candidate;
+            }
+        }
         $vehicleAudit = get_option('wei_ebay_vehicle_compatibility_audit_summary', []);
         $vehicleAudit = is_array($vehicleAudit) ? $vehicleAudit : [];
         $vehicleCsv = (string) ($vehicleAudit['csv_path'] ?? '');
@@ -1469,21 +1480,37 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_auto_sync_readiness_now');
-        $res = $this->scheduler->run_readiness_scan(max(1, min(300, absint($_POST['batch_size'] ?? 200))));
+        $this->handle_full_publish_readiness_audit('Auto sync readiness scan');
+    }
+
+    public function full_publish_readiness_audit(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_full_publish_readiness_audit');
+        $this->handle_full_publish_readiness_audit('Full publish readiness audit');
+    }
+
+    private function handle_full_publish_readiness_audit(string $label): void
+    {
+        $res = $this->scheduler->run_full_publish_readiness_audit(max(1, min(500, absint($_POST['batch_size'] ?? 200))));
         $status = [
-            'processed' => (int) ($res['processed'] ?? 0),
+            'source' => 'latest readiness scan',
+            'processed_total' => (int) ($res['processed_total'] ?? $res['processed'] ?? 0),
+            'total_products' => (int) ($res['total_products'] ?? 0),
             'ready' => (int) ($res['ready'] ?? 0),
-            'not_ready' => (int) ($res['not_ready'] ?? 0),
-            'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
-            'missing_required_aspects' => (int) ($res['missing_required_aspects'] ?? 0),
+            'blocked' => (int) ($res['blocked'] ?? $res['not_ready'] ?? 0),
             'excluded_from_ebay' => (int) ($res['excluded_from_ebay'] ?? 0),
             'excluded_no_woo_category' => (int) ($res['excluded_no_woo_category'] ?? 0),
             'excluded_bez_kategorii' => (int) ($res['excluded_bez_kategorii'] ?? 0),
-            'not_ready_sample_ids' => (array) ($res['not_ready_sample_ids'] ?? []),
-            'blocked_by_category_sample_ids' => (array) ($res['blocked_by_category_sample_ids'] ?? []),
-            'missing_required_aspects_sample_ids' => (array) ($res['missing_required_aspects_sample_ids'] ?? []),
+            'blocked_by_category' => (int) ($res['blocked_by_category'] ?? 0),
+            'blocked_by_price' => (int) ($res['blocked_by_price'] ?? 0),
+            'blocked_by_stock' => (int) ($res['blocked_by_stock'] ?? 0),
+            'blocked_by_images' => (int) ($res['blocked_by_images'] ?? 0),
+            'blocked_by_german_content' => (int) ($res['blocked_by_german_content'] ?? 0),
+            'blocked_by_required_aspects' => (int) ($res['blocked_by_required_aspects'] ?? 0),
+            'reports' => (array) ($res['reports'] ?? []),
         ];
-        $this->set_status('Auto sync readiness scan: ' . wp_json_encode($status));
+        $this->set_status($label . ': ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 
