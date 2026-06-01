@@ -567,8 +567,25 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             </form>
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
+        <?php
+        $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
+        $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
+        $blockedFixRecommendationDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_recommendations.csv'));
+        $blockedFixImportDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_fix_import.csv'));
+        ?>
+        <?php if ($blockedFixRecommendationsReady || $blockedFixImportReady): ?>
+            <div class="notice notice-info inline"><p><strong>Blocked category fix report files:</strong></p><ul>
+                <?php if ($blockedFixRecommendationsReady): ?>
+                    <li>Recommendations CSV: <a href="<?php echo esc_url((string) ($blocked_category_fix_report_summary['recommendations_csv_url'] ?? '')); ?>">public URL</a> · <a href="<?php echo esc_url($blockedFixRecommendationDownloadUrl); ?>">admin download</a> (<?php echo esc_html((string) (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0)); ?> bytes)</li>
+                <?php endif; ?>
+                <?php if ($blockedFixImportReady): ?>
+                    <li>Fix import CSV: <a href="<?php echo esc_url((string) ($blocked_category_fix_report_summary['fix_import_csv_url'] ?? '')); ?>">public URL</a> · <a href="<?php echo esc_url($blockedFixImportDownloadUrl); ?>">admin download</a> (<?php echo esc_html((string) (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0)); ?> bytes)</li>
+                <?php endif; ?>
+            </ul></div>
+        <?php endif; ?>
         <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
-        <details><summary>Category last summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(array_merge($categoryDashboardSummary, ['report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary]), 6000)); ?></pre></details>
+        <details><summary>Blocked category fix report JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($blocked_category_fix_report_summary, 6000)); ?></pre></details>
+        <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
         <?php if ($categoryRowsLoaded): ?>
             <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Woo category</th><th>Products</th><th>eBay category</th><th>Status</th><th>Manual fallback</th></tr></thead><tbody><?php foreach ($filteredCategoryRows as $row): ?><tr><td><?php echo esc_html((string) ($row['woo_category_path'] ?? $row['name'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['product_count'] ?? '0')); ?></td><td><code><?php echo esc_html((string) ($row['_ui_category_id'] ?? '')); ?></code><br><?php echo esc_html((string) ($row['_ui_category_path'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['_ui_status'] ?? '')); ?></td><td><form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_save_category_mapping'); ?><input type="hidden" name="action" value="wei_save_category_mapping" /><input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" /><input type="hidden" name="woo_term_id" value="<?php echo esc_attr((string) ($row['term_id'] ?? '0')); ?>" /><input type="text" name="ebay_category_id" placeholder="category ID" value="<?php echo esc_attr((string) ($row['ebay_category_id'] ?? '')); ?>" size="8" /><input type="text" name="ebay_category_name" placeholder="name" value="<?php echo esc_attr((string) ($row['ebay_category_name'] ?? '')); ?>" /><input type="text" name="ebay_category_path" placeholder="path" value="<?php echo esc_attr((string) ($row['ebay_category_path'] ?? '')); ?>" /><button class="button">Save mapping</button></form></td></tr><?php endforeach; ?></tbody></table></div>
         <?php endif; ?>
