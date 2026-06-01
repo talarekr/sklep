@@ -2169,12 +2169,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $details = !empty($germanContent['fields']) && empty($germanContent['stale'])
             ? ['fields' => (array) $germanContent['fields'], 'used_fields' => (array) $germanContent['fields'], 'missing_fields' => [], 'field_mapping' => [], 'warnings' => []]
             : $this->collect_woo_product_details_for_ebay_template($product, $productId);
-        $detailsByPolishLabel = [];
-        foreach ($details['fields'] as $field) {
-            $detailsByPolishLabel[(string) $field['polish_label']] = (string) $field['value'];
-        }
-
-        $fitment = $this->build_template_fitment_value($detailsByPolishLabel);
         $untranslatedFields = $this->detect_likely_polish_template_fields($details['fields']);
         $sameVehicle = $this->resolve_ebay_same_vehicle_url_for_product($productId);
         $sameVehicleUrl = (string) ($sameVehicle['url'] ?? '');
@@ -2203,12 +2197,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
             . '<div style="width:92px;height:4px;background:#0057d9;margin:14px auto 22px;border-radius:2px;"></div>'
             . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Beschreibung</div><div style="padding:20px 22px;text-align:center;">' . $descriptionBlock . '</div></div>'
             . '<div style="border:1px solid #dbe3ef;border-radius:8px;overflow:hidden;background:#ffffff;margin:0 0 22px;"><div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Spezifikationen</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;text-align:center;">' . $specRows . '</table></div>'
-            . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:2px 0 0;border-radius:8px;overflow:hidden;">'
-            . '<div style="background:#06275d;color:#ffffff;padding:15px 17px;font-size:18px;font-weight:900;letter-spacing:.2px;text-align:center;">Kompatibilität / Passgenauigkeit</div>'
-            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;text-align:center;"><tr>'
-            . '<td width="50%" valign="top" align="center" style="padding:20px 22px;border-right:1px solid #dbe3ef;text-align:center;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;text-align:center;">Passend für</div><p style="margin:0;color:#1f2937;line-height:1.7;text-align:center;">' . esc_html($fitment !== '' ? $fitment : 'Bitte anhand der Teilenummer prüfen.') . '</p></td>'
-            . '<td width="50%" valign="top" align="center" style="padding:20px 22px;background:#f8fbff;text-align:center;"><div style="color:#06275d;font-size:16px;font-weight:900;margin-bottom:9px;text-align:center;">Wichtige Hinweise</div><p style="margin:0;color:#1f2937;line-height:1.7;text-align:center;">Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.</p></td>'
-            . '</tr></table></div>'
             . $buttonHtml
             . '<div style="border:1px solid #dbe3ef;background:#ffffff;margin:0 0 20px;border-radius:8px;overflow:hidden;box-shadow:0 8px 20px rgba(15,23,42,.05);">'
             . '<div style="padding:30px 28px 24px;text-align:center;background:#ffffff;">'
