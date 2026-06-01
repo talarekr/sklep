@@ -86,11 +86,13 @@ namespace {
     }
 
     $html = $renderCta->invoke($adapter, (string) $sameVehicle['url'], (string) $sameVehicle['token']);
-    if (!str_contains($html, 'Mehr Teile von diesem Fahrzeug ansehen') || !str_contains($html, 'Alle verfügbaren Teile aus demselben Fahrzeug anzeigen.')) {
-        $failures[] = 'Expected German same-vehicle CTA copy in rendered HTML.';
+    if (!str_contains($html, 'Mehr Teile von diesem Fahrzeug ansehen')) {
+        $failures[] = 'Expected German same-vehicle CTA button copy in rendered HTML.';
     }
-    if (!str_contains($html, 'Fahrzeug-ID: CAR:456') || str_contains($html, 'display:none')) {
-        $failures[] = 'Expected visible Fahrzeug-ID reference and no hidden same-vehicle content.';
+    foreach (['Alle verfügbaren Teile aus demselben Fahrzeug anzeigen.', 'Fahrzeug-ID:', 'CAR:456', 'display:none'] as $unexpectedSameVehicleHtml) {
+        if (str_contains($html, $unexpectedSameVehicleHtml)) {
+            $failures[] = 'Expected live same-vehicle CTA HTML to render only the button/link, but found ' . $unexpectedSameVehicleHtml;
+        }
     }
     if (!str_contains($html, 'href="ESC_URL:https://www.ebay.de/sch/i.html?_ssn=gpswiss&amp;_nkw=CAR%3A456"')) {
         $failures[] = 'Expected rendered CTA href to pass through esc_url and preserve encoded eBay.de search URL.';
