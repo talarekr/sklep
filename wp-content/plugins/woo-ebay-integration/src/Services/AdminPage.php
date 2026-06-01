@@ -70,6 +70,7 @@ class AdminPage
         add_action('admin_post_wei_generate_ebay_skus', [$this, 'generate_ebay_skus']);
         add_action('admin_post_wei_auto_sync_readiness_now', [$this, 'auto_sync_readiness_now']);
         add_action('admin_post_wei_full_category_audit', [$this, 'full_category_audit']);
+        add_action('admin_post_wei_run_category_readiness_audit', [$this, 'run_category_readiness_audit']);
         add_action('admin_post_wei_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
         add_action('admin_post_wei_auto_sync_stock_now', [$this, 'auto_sync_stock_now']);
         add_action('admin_post_wei_auto_sync_export_now', [$this, 'auto_sync_export_now']);
@@ -1346,6 +1347,69 @@ class AdminPage
         $this->set_status('Full eBay category audit: ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
         $this->go();
     }
+    public function run_category_readiness_audit(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_run_category_readiness_audit');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $verboseDebug = !empty($_POST['verbose_debug']);
+        $res = [];
+
+        for ($batch = 0; $batch < 100; $batch++) {
+            $res = $this->scheduler->run_full_category_audit($verboseDebug);
+            if ((string) ($res['result'] ?? '') !== 'in_progress' && (string) ($res['status'] ?? '') !== 'in_progress') {
+                break;
+            }
+        }
+
+        $status = $this->category_readiness_audit_status($res, $marketplaceId);
+        update_option('wei_ebay_category_readiness_audit_summary', $status, false);
+        $this->set_status('Category readiness audit: ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    private function category_readiness_audit_status(array $res, string $marketplaceId): array
+    {
+        $reports = (array) ($res['reports'] ?? []);
+        $problems = is_array($reports['problems_only_csv'] ?? null) ? $reports['problems_only_csv'] : [];
+        $full = is_array($reports['full_audit_csv'] ?? null) ? $reports['full_audit_csv'] : [];
+        $problemsPath = (string) ($problems['path'] ?? '');
+        $fullPath = (string) ($full['path'] ?? '');
+        $problemsExists = $problemsPath !== '' && is_file($problemsPath);
+        $fullExists = $fullPath !== '' && is_file($fullPath);
+        $processed = (int) ($res['processed'] ?? $res['total_scanned'] ?? 0);
+        $ready = (int) ($res['ready_count'] ?? 0);
+        $result = (string) ($res['result'] ?? 'error');
+
+        if (!$problemsExists || (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)) <= 0) {
+            $result = 'error';
+        }
+
+        return [
+            'action' => 'run_category_readiness_audit',
+            'result' => $result,
+            'processed' => $processed,
+            'ready_count' => $ready,
+            'not_ready_count' => max(0, $processed - $ready),
+            'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),
+            'invalid_ebay_category_id_count' => (int) ($res['invalid_ebay_category_id_count'] ?? 0),
+            'non_leaf_category_count' => (int) ($res['non_leaf_category_count'] ?? 0),
+            'category_sanity_failed_count' => (int) ($res['category_sanity_failed_count'] ?? 0),
+            'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
+            'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
+            'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
+            'problems_only_csv_path' => $problemsPath,
+            'problems_only_csv_url' => (string) ($problems['url'] ?? ''),
+            'problems_only_csv_exists' => $problemsExists,
+            'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
+            'full_report_csv_path' => $fullPath,
+            'full_report_csv_url' => (string) ($full['url'] ?? ''),
+            'full_report_csv_exists' => $fullExists,
+            'full_report_csv_size' => (int) ($full['size'] ?? ($fullExists ? filesize($fullPath) : 0)),
+            'category_dashboard_summary' => $this->category_dashboard_summary_for_report($marketplaceId),
+        ];
+    }
+
 
     public function auto_sync_orders_now(): void
     {
@@ -2836,6 +2900,10 @@ class AdminPage
 
     private function latest_audit_report_path(string $key): string
     {
+        $lastPath = trim((string) get_option('wei_ebay_last_problems_only_csv_path', ''));
+        if ($key === 'problems_only_csv' && $lastPath !== '' && is_readable($lastPath)) {
+            return $lastPath;
+        }
         $summary = get_option('wei_ebay_full_category_audit_summary', []);
         $summary = is_array($summary) ? $summary : [];
         $reports = is_array($summary['reports'] ?? null) ? $summary['reports'] : [];
