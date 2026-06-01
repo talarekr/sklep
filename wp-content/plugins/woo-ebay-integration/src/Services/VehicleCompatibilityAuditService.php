@@ -22,6 +22,7 @@ class VehicleCompatibilityAuditService
         'fuel' => ['fuel type', 'fuel_type', 'Rodzaj paliwa'],
         'power' => ['power', 'Moc silnika'],
         'ovoko_car_id' => ['ovoko_car_id', '_ovoko_car_id', 'car_id', '_car_id', 'donor_vehicle_id'],
+        'mpn_values' => ['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number', 'oe_number', '_catalog_number', 'catalog_number', 'MPN', 'Herstellernummer', 'Manufacturer Part Number', 'OE/OEM number', 'OE/OEM Referenznummer', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE'],
     ];
 
     public function __construct(private ?CategoryMappingRepository $categoryRepo = null, private ?Logger $logger = null)
@@ -36,6 +37,7 @@ class VehicleCompatibilityAuditService
         $category = $this->detectWooCategory($productId, $marketplaceId);
         $detected = $this->detectVehicleData($productId, $product);
         $statusInfo = $this->determineStatus($detected, $category);
+        $mpnDiagnostics = $this->mpnReadinessDiagnostics($detected);
 
         return [
             'product_id' => $productId,
@@ -62,6 +64,8 @@ class VehicleCompatibilityAuditService
                 'power' => $detected['power']['value'],
             ],
             'detected_ovoko_car_id' => $detected['ovoko_car_id']['value'],
+            'detected_manufacturer_part_number' => $mpnDiagnostics['detected_manufacturer_part_number'],
+            'mpn_readiness' => $mpnDiagnostics,
             'sources' => $this->compactSources($detected),
             'compatibility_status' => $statusInfo['status'],
             'missing_fields' => $statusInfo['missing_fields'],
@@ -169,7 +173,7 @@ class VehicleCompatibilityAuditService
 
     public function csvHeaders(): array
     {
-        return ['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'compatibility_status', 'missing_fields', 'notes'];
+        return ['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'detected_manufacturer_part_number', 'mpn_source', 'mapped_item_specific_names', 'mpn_present_in_final_item_specifics_payload', 'compatibility_status', 'missing_fields', 'notes'];
     }
 
     public function csvRow(array $audit): array
@@ -195,9 +199,34 @@ class VehicleCompatibilityAuditService
             $value('engine_capacity'),
             $value('fuel'),
             $value('power'),
+            (string) ($audit['mpn_readiness']['detected_manufacturer_part_number'] ?? ''),
+            (string) ($audit['mpn_readiness']['source_label'] ?? ''),
+            implode('|', (array) ($audit['mpn_readiness']['mapped_ebay_item_specific_names'] ?? [])),
+            !empty($audit['mpn_readiness']['present_in_final_item_specifics_payload']) ? 'yes' : 'no',
             (string) ($audit['compatibility_status'] ?? ''),
             implode('|', (array) ($audit['missing_fields'] ?? [])),
             implode('|', (array) ($audit['notes'] ?? [])),
+        ];
+    }
+
+
+    private function mpnReadinessDiagnostics(array $detected): array
+    {
+        $values = array_values(array_filter(array_map('strval', (array) ($detected['mpn_values']['values'] ?? [])), static fn(string $value): bool => trim($value) !== ''));
+        $partNumber = (string) ($values[0] ?? '');
+        $sources = array_values(array_filter((array) ($detected['mpn_values']['sources'] ?? []), static fn($source): bool => is_array($source) && trim((string) ($source['value'] ?? '')) !== ''));
+        $source = (array) ($sources[0] ?? ['source' => 'none', 'key' => '', 'value' => '']);
+        $mappedNames = $partNumber !== '' ? ['Herstellernummer', 'Manufacturer Part Number', 'MPN'] : [];
+        $sourceLabel = trim((string) ($source['source'] ?? '') . ':' . (string) ($source['key'] ?? ''), ':');
+
+        return [
+            'detected_manufacturer_part_number' => $partNumber,
+            'source' => $source,
+            'source_label' => $sourceLabel !== '' ? $sourceLabel : 'none',
+            'mapped_ebay_item_specific_names' => $mappedNames,
+            'present_in_final_item_specifics_payload' => $partNumber !== '',
+            'final_item_specifics_preview' => $partNumber !== '' ? array_fill_keys($mappedNames, [$partNumber]) : [],
+            'missing_issue' => $partNumber === '' ? 'missing_manufacturer_part_number_item_specific' : '',
         ];
     }
 
@@ -224,9 +253,9 @@ class VehicleCompatibilityAuditService
             }
         }
         if ($hasVehicleBasics) {
-            return ['status' => 'missing_ktype', 'missing_fields' => array_values(array_unique(array_merge(['KType'], $missing))), 'notes' => ['Vehicle make/model data exists, but audit does not guess eBay.de compatibility without KType/ePID.']];
+            return ['status' => 'compatibility_enhancement_missing', 'missing_fields' => array_values(array_unique(array_merge(['KType/ePID enhancement'], $missing))), 'notes' => ['Vehicle make/model data exists, but missing KType/ePID is informational only and must not block publish.']];
         }
-        return ['status' => 'insufficient_vehicle_data', 'missing_fields' => array_values(array_unique($missing)), 'notes' => ['No KType/ePID detected; available vehicle data is insufficient for publish-ready compatibility.', trim((string) ($detected['ovoko_car_id']['value'] ?? '')) !== '' ? 'Ovoko car ID alone is not treated as eBay.de compatibility-ready.' : '']];
+        return ['status' => 'compatibility_enhancement_missing', 'missing_fields' => array_values(array_unique($missing)), 'notes' => ['No KType/ePID detected; compatibility audit is read-only informational and is not a publish blocker.', trim((string) ($detected['ovoko_car_id']['value'] ?? '')) !== '' ? 'Ovoko car ID alone is recorded as context only.' : '']];
     }
 
     private function compactSources(array $detected): array

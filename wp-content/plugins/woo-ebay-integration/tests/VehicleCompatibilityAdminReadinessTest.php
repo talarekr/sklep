@@ -21,7 +21,8 @@ $assert(str_contains($viewSource, 'name="action" value="wei_run_vehicle_compatib
 $assert(str_contains($adminSource, "'called_ebay_api' => false") || str_contains($serviceSource, "'called_ebay_api' => false"), 'Audit/preview must declare no eBay API calls.');
 $assert(str_contains($serviceSource, 'buildProductCompatibilityPayload'), 'Future compatibility payload integration point must exist.');
 $assert(str_contains($serviceSource, 'compatibleProducts') && str_contains($serviceSource, 'kTypeValue'), 'Future payload must be shaped for Inventory API compatibleProducts kTypeValue.');
-foreach (['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'compatibility_status', 'missing_fields', 'notes'] as $column) {
+$assert(str_contains($viewSource, 'compatibility_enhancement_missing') && !str_contains($viewSource, 'missing_ktype'), 'Admin must display missing KType/ePID as a non-blocking compatibility enhancement.');
+foreach (['product_id', 'sku', 'product_title', 'woo_category_id', 'woo_category_name', 'ebay_category_id', 'category_status', 'ovoko_car_id', 'ktype_values', 'epid_values', 'make', 'model', 'year', 'trim', 'engine_code', 'engine_capacity', 'fuel', 'power', 'detected_manufacturer_part_number', 'mpn_source', 'mapped_item_specific_names', 'mpn_present_in_final_item_specifics_payload', 'compatibility_status', 'missing_fields', 'notes'] as $column) {
     $assert(str_contains($serviceSource, "'" . $column . "'"), 'Vehicle audit CSV header must include ' . $column . '.');
 }
 foreach (['create_offer', 'publish_offer', 'update_offer', 'bulk_update_price_quantity', 'revise'] as $forbidden) {
