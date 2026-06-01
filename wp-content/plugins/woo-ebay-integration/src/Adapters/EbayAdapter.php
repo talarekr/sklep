@@ -2258,13 +2258,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return '';
         }
 
-        $heading = 'Mehr Teile von diesem Fahrzeug ansehen';
+        $label = 'Mehr Teile von diesem Fahrzeug ansehen';
 
-        return '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:18px 0 24px;border-radius:8px;padding:18px 20px;text-align:center;">'
-            . '<div style="color:#06275d;font-size:18px;font-weight:900;margin-bottom:8px;">' . esc_html($heading) . '</div>'
-            . '<p style="margin:0 0 12px;color:#1f2937;line-height:1.6;">' . esc_html('Alle verfügbaren Teile aus demselben Fahrzeug anzeigen.') . '</p>'
-            . '<p style="margin:0 0 14px;color:#4b5563;font-size:13px;line-height:1.5;">' . esc_html('Fahrzeug-ID:') . ' ' . esc_html($ovokoCarId) . '</p>'
-            . '<a href="' . esc_url($sameVehicleUrl) . '" target="_blank" rel="noopener" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">' . esc_html($heading) . '</a>'
+        return '<div style="margin:18px 0 24px;text-align:center;">'
+            . '<a href="' . esc_url($sameVehicleUrl) . '" target="_blank" rel="noopener" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">' . esc_html($label) . '</a>'
             . '</div>';
     }
 
