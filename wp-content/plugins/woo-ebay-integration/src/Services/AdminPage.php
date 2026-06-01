@@ -1492,11 +1492,21 @@ class AdminPage
 
     private function handle_full_publish_readiness_audit(string $label): void
     {
-        $res = $this->scheduler->run_full_publish_readiness_audit(max(1, min(500, absint($_POST['batch_size'] ?? 200))));
+        $batchSize = max(1, min(500, absint($_POST['batch_size'] ?? 200)));
+        $restart = empty($_POST['continue_audit']);
+        $res = $this->scheduler->run_full_publish_readiness_audit($batchSize, $restart);
         $status = [
             'source' => 'latest readiness scan',
+            'audit_run_id' => (string) ($res['audit_run_id'] ?? ''),
+            'status' => (string) ($res['status'] ?? ''),
+            'result' => (string) ($res['result'] ?? ''),
+            'complete' => !empty($res['complete']),
+            'current_offset' => (int) ($res['current_offset'] ?? 0),
+            'processed_this_batch' => (int) ($res['processed_this_batch'] ?? 0),
             'processed_total' => (int) ($res['processed_total'] ?? $res['processed'] ?? 0),
             'total_products' => (int) ($res['total_products'] ?? 0),
+            'remaining_products' => (int) ($res['remaining_products'] ?? 0),
+            'batch_size' => (int) ($res['batch_size'] ?? $batchSize),
             'ready' => (int) ($res['ready'] ?? 0),
             'blocked' => (int) ($res['blocked'] ?? $res['not_ready'] ?? 0),
             'excluded_from_ebay' => (int) ($res['excluded_from_ebay'] ?? 0),
@@ -1508,6 +1518,8 @@ class AdminPage
             'blocked_by_images' => (int) ($res['blocked_by_images'] ?? 0),
             'blocked_by_german_content' => (int) ($res['blocked_by_german_content'] ?? 0),
             'blocked_by_required_aspects' => (int) ($res['blocked_by_required_aspects'] ?? 0),
+            'started_at' => (string) ($res['started_at'] ?? ''),
+            'last_updated_at' => (string) ($res['last_updated_at'] ?? $res['updated_at'] ?? ''),
             'reports' => (array) ($res['reports'] ?? []),
         ];
         $this->set_status($label . ': ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));

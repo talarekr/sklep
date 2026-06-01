@@ -20,6 +20,9 @@ class AutoSyncScheduler
     private const READINESS_BUCKET_LIMIT = 25;
     private const FULL_CATEGORY_AUDIT_BATCH_SIZE = 100;
     private const FULL_CATEGORY_AUDIT_STATE_OPTION = 'wei_ebay_full_category_audit_state';
+    private const FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION = 'wei_ebay_full_publish_readiness_audit_state';
+    private const FULL_PUBLISH_READINESS_AUDIT_BATCH_SIZE = 200;
+    private const FULL_PUBLISH_READINESS_AUDIT_TIME_BUFFER = 10;
     private const GERMAN_CONTENT_AUDIT_STATE_OPTION = 'wei_ebay_german_content_audit_state';
     private const GERMAN_CONTENT_AUDIT_BATCH_SIZE = 50;
 
@@ -200,26 +203,133 @@ class AutoSyncScheduler
         return $this->run_full_publish_readiness_audit($batchSize);
     }
 
-    public function run_full_publish_readiness_audit(int $batchSize = 200): array
+    public function run_full_publish_readiness_audit(int $batchSize = 200, bool $restart = false): array
     {
-        $batchSize = max(1, min(500, $batchSize));
-        $totalProducts = $this->product_count_for_preflight();
+        $state = get_option(self::FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION, []);
+        $state = is_array($state) ? $state : [];
+        if ($restart || empty($state) || !empty($state['complete']) || (string) ($state['status'] ?? '') !== 'in_progress') {
+            $state = $this->new_full_publish_readiness_audit_state($batchSize);
+        }
+
+        $batchSize = $this->normalize_publish_readiness_batch_size($batchSize ?: (int) ($state['batch_size'] ?? self::FULL_PUBLISH_READINESS_AUDIT_BATCH_SIZE));
+        $state['batch_size'] = $batchSize;
+        $startTime = time();
+        $deadline = $this->publish_readiness_batch_deadline($startTime);
+        $processedThisBatch = 0;
+        $ids = $this->product_ids_for_preflight_page((int) ($state['current_offset'] ?? 0), $batchSize);
+        $state['last_updated_at'] = gmdate('Y-m-d H:i:s');
+        $state['updated_at'] = $state['last_updated_at'];
+        $this->persist_full_publish_readiness_state($state);
+
+        foreach ($ids as $productId) {
+            if ($this->publish_readiness_should_stop_for_time($deadline, $processedThisBatch)) {
+                $state['stopped_for_time_guard'] = true;
+                break;
+            }
+
+            try {
+                $result = $this->adapter->preflight_product($productId, null, true, false, [
+                    'audit_mode' => true,
+                    'suppress_side_effects' => true,
+                    'suppress_verbose_logs' => true,
+                    'readiness_audit_run_id' => (string) ($state['audit_run_id'] ?? ''),
+                ]);
+            } catch (\Throwable $throwable) {
+                $state['errors'] = (int) ($state['errors'] ?? 0) + 1;
+                $result = [
+                    'ready' => false,
+                    'status' => 'not_ready',
+                    'message' => 'Preflight failed during readiness audit: ' . $throwable->getMessage(),
+                    'errors' => ['preflight_exception'],
+                ];
+            }
+            $this->record_full_publish_readiness_product($state, $productId, $result);
+            $processedThisBatch++;
+            $state['processed_this_batch'] = $processedThisBatch;
+            $state['current_offset'] = (int) ($state['current_offset'] ?? 0) + 1;
+            $state['last_updated_at'] = gmdate('Y-m-d H:i:s');
+            $state['updated_at'] = $state['last_updated_at'];
+            $this->persist_full_publish_readiness_state($state);
+        }
+
+        $this->cleanup_after_category_audit_batch();
+
+        $state['processed_this_batch'] = $processedThisBatch;
+        $state['last_updated_at'] = gmdate('Y-m-d H:i:s');
+        $state['updated_at'] = $state['last_updated_at'];
+        $complete = $ids === [] || ($processedThisBatch === count($ids) && ($processedThisBatch < $batchSize || (int) ($state['current_offset'] ?? 0) >= (int) ($state['total_products'] ?? 0)));
+        if ($complete) {
+            $state['status'] = 'completed';
+            $state['result'] = 'success';
+            $state['complete'] = true;
+            $state['finished_at'] = gmdate('Y-m-d H:i:s');
+            $state['completed_at'] = $state['finished_at'];
+        } else {
+            $state['status'] = 'in_progress';
+            $state['result'] = 'partial';
+            $state['complete'] = false;
+            $state['finished_at'] = '';
+            $state['completed_at'] = '';
+        }
+
+        $summary = $this->full_publish_readiness_summary_from_state($state);
+        $state['reports'] = $summary['reports'];
+        update_option(self::FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION, $state, false);
+        update_option('wei_ebay_readiness_summary', $summary, false);
+        update_option('wei_ebay_publish_readiness_audit_summary', $summary, false);
+        $this->logger->info(!empty($summary['complete']) ? 'eBay full publish readiness audit completed' : 'eBay full publish readiness audit batch completed', $this->readiness_log_context($summary) + [
+            'processed_this_batch' => $processedThisBatch,
+            'processed_total' => (int) $summary['processed_total'],
+            'total_products' => (int) $summary['total_products'],
+            'complete' => !empty($summary['complete']),
+            'reports' => $summary['reports'],
+        ]);
+        return $summary;
+    }
+
+    private function normalize_publish_readiness_batch_size(?int $batchSize): int
+    {
+        $batchSize = $batchSize ?? self::FULL_PUBLISH_READINESS_AUDIT_BATCH_SIZE;
+        return max(1, min(500, $batchSize));
+    }
+
+    private function new_full_publish_readiness_audit_state(?int $batchSize = null): array
+    {
+        $startedAt = gmdate('Y-m-d H:i:s');
+        $runId = 'wei-ebay-publish-readiness-' . gmdate('Ymd-His');
         $paths = $this->publish_readiness_csv_paths();
         $headers = $this->publish_readiness_csv_headers();
         foreach (['full', 'problems', 'ready', 'excluded'] as $key) {
-            $fh = fopen((string) ($paths[$key] ?? ''), 'wb');
+            $path = (string) ($paths[$key] ?? '');
+            if ($path === '') {
+                continue;
+            }
+            $fh = fopen($path, 'wb');
             if ($fh) {
-                fputcsv($fh, $headers);
+                fputcsv($fh, $headers, ',', '"', '\\');
                 fclose($fh);
             }
         }
-        $summary = [
+
+        return [
             'source' => 'latest readiness scan',
             'audit_type' => 'full_publish_readiness',
-            'started_at' => gmdate('Y-m-d H:i:s'),
+            'audit_run_id' => $runId,
+            'schema_version' => 'publish_readiness_audit_v2',
+            'status' => 'in_progress',
+            'result' => 'partial',
+            'complete' => false,
+            'started_at' => $startedAt,
+            'last_updated_at' => $startedAt,
+            'updated_at' => $startedAt,
+            'finished_at' => '',
+            'completed_at' => '',
+            'current_offset' => 0,
             'processed_total' => 0,
             'processed' => 0,
-            'total_products' => $totalProducts,
+            'processed_this_batch' => 0,
+            'batch_size' => $this->normalize_publish_readiness_batch_size($batchSize),
+            'total_products' => $this->product_count_for_preflight(),
             'ready' => 0,
             'not_ready' => 0,
             'blocked' => 0,
@@ -254,119 +364,139 @@ class AutoSyncScheduler
             'not_ready_sample_ids' => [],
             'blocked_by_category_sample_ids' => [],
             'missing_required_aspects_sample_ids' => [],
+            'reports' => [],
         ];
+    }
 
-        for ($offset = 0; $offset < $totalProducts; $offset += $batchSize) {
-            $ids = $this->product_ids_for_preflight_page($offset, $batchSize);
-            if ($ids === []) {
-                break;
-            }
+    private function record_full_publish_readiness_product(array &$state, int $productId, array $result): void
+    {
+        $paths = $this->publish_readiness_csv_paths();
+        $headers = $this->publish_readiness_csv_headers();
+        $state['processed_total'] = (int) ($state['processed_total'] ?? 0) + 1;
+        $state['processed'] = (int) $state['processed_total'];
+        update_post_meta($productId, '_wei_ebay_last_preflight_at', gmdate('Y-m-d H:i:s'));
+        $status = (string) ($result['status'] ?? 'not_ready');
+        $item = $this->readiness_item($productId, $result);
+        $row = $this->publish_readiness_csv_row($item, $result);
 
-            foreach ($ids as $productId) {
-                $result = $this->adapter->preflight_product($productId);
-                $summary['processed']++;
-                $summary['processed_total'] = $summary['processed'];
-                update_post_meta($productId, '_wei_ebay_last_preflight_at', gmdate('Y-m-d H:i:s'));
-                $status = (string) ($result['status'] ?? 'not_ready');
-                $item = $this->readiness_item($productId, $result);
-                $row = $this->publish_readiness_csv_row($item, $result);
-
-                if (!empty($result['ready'])) {
-                    $summary['ready']++;
-                    update_post_meta($productId, '_wei_ebay_export_status', 'ready');
-                    delete_post_meta($productId, '_wei_ebay_last_preflight_error');
-                    $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
-                    $this->append_publish_readiness_csv_row((string) $paths['ready'], $headers, $row);
-                    continue;
-                }
-
-                if ($status === 'excluded_from_ebay') {
-                    $reason = (string) ($result['exclusion_reason'] ?? $result['category']['exclusion_reason'] ?? 'excluded_from_ebay');
-                    $summary['excluded_from_ebay']++;
-                    if (isset($summary[$reason])) {
-                        $summary[$reason]++;
-                    }
-                    update_post_meta($productId, '_wei_ebay_export_status', 'excluded_from_ebay');
-                    update_post_meta($productId, '_wei_ebay_readiness_reason', $reason);
-                    delete_post_meta($productId, '_wei_ebay_last_preflight_error');
-                    $this->append_limited($summary['excluded_from_ebay_items'], $item, self::READINESS_BUCKET_LIMIT);
-                    $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
-                    $this->append_publish_readiness_csv_row((string) $paths['excluded'], $headers, $row);
-                    continue;
-                }
-
-                $summary['not_ready']++;
-                $summary['blocked']++;
-                $this->persist_not_ready_preflight_status($productId, $result, $item);
-                $this->append_limited($summary['not_ready_items'], $item, self::READINESS_NOT_READY_LIMIT);
-                $summary['not_ready_examples'] = $summary['not_ready_items'];
-                $this->append_limited($summary['not_ready_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
-
-                $blockedBy = $this->publish_readiness_block_reasons($status, $result);
-                if (!empty($blockedBy['category'])) {
-                    $summary['blocked_by_category']++;
-                    $this->append_limited($summary['blocked_by_category_items'], $item, self::READINESS_BUCKET_LIMIT);
-                    $this->append_limited($summary['blocked_by_category_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
-                }
-                if (!empty($blockedBy['german_content'])) {
-                    $summary['blocked_by_german_content']++;
-                    $summary['missing_german_content']++;
-                    $this->append_limited($summary['missing_german_content_items'], $item, self::READINESS_BUCKET_LIMIT);
-                }
-                if (!empty($blockedBy['required_aspects'])) {
-                    $summary['blocked_by_required_aspects']++;
-                    $summary['missing_required_aspects']++;
-                    $this->append_limited($summary['missing_required_aspects_items'], $item, self::READINESS_BUCKET_LIMIT);
-                    $this->append_limited($summary['missing_required_aspects_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
-                }
-                if (!empty($blockedBy['price'])) {
-                    $summary['blocked_by_price']++;
-                    if ($status === 'missing_exchange_rate') {
-                        $summary['missing_exchange_rate']++;
-                        $this->append_limited($summary['missing_exchange_rate_items'], $item, self::READINESS_BUCKET_LIMIT);
-                    } else {
-                        $summary['invalid_price']++;
-                        $this->append_limited($summary['invalid_price_items'], $item, self::READINESS_BUCKET_LIMIT);
-                    }
-                }
-                if (!empty($blockedBy['images'])) {
-                    $summary['blocked_by_images']++;
-                    $summary['missing_image']++;
-                    $this->append_limited($summary['missing_image_items'], $item, self::READINESS_BUCKET_LIMIT);
-                }
-                if (!empty($blockedBy['stock'])) {
-                    $summary['blocked_by_stock']++;
-                    $summary['missing_stock']++;
-                    $this->append_limited($summary['missing_stock_items'], $item, self::READINESS_BUCKET_LIMIT);
-                }
-                if (!empty($blockedBy['policies_location'])) {
-                    $summary['missing_policies_location']++;
-                    $this->append_limited($summary['missing_policies_location_items'], $item, self::READINESS_BUCKET_LIMIT);
-                }
-
-                $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
-                $this->append_publish_readiness_csv_row((string) $paths['problems'], $headers, $row);
-            }
-
-            $this->cleanup_after_category_audit_batch();
+        if (!empty($result['ready'])) {
+            $state['ready'] = (int) ($state['ready'] ?? 0) + 1;
+            update_post_meta($productId, '_wei_ebay_export_status', 'ready');
+            delete_post_meta($productId, '_wei_ebay_last_preflight_error');
+            $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
+            $this->append_publish_readiness_csv_row((string) $paths['ready'], $headers, $row);
+            return;
         }
 
-        $summary['last_run'] = gmdate('Y-m-d H:i:s');
-        $summary['finished_at'] = $summary['last_run'];
-        $summary['reports'] = [
-            'full_csv' => $this->category_audit_file_report((string) $paths['full'], (string) $paths['full_url'], (int) $summary['processed_total'], $summary),
-            'problems_only_csv' => $this->category_audit_file_report((string) $paths['problems'], (string) $paths['problems_url'], (int) $summary['blocked'], $summary),
-            'ready_products_csv' => $this->category_audit_file_report((string) $paths['ready'], (string) $paths['ready_url'], (int) $summary['ready'], $summary),
-            'excluded_csv' => $this->category_audit_file_report((string) $paths['excluded'], (string) $paths['excluded_url'], (int) $summary['excluded_from_ebay'], $summary),
+        if ($status === 'excluded_from_ebay') {
+            $reason = (string) ($result['exclusion_reason'] ?? $result['category']['exclusion_reason'] ?? 'excluded_from_ebay');
+            $state['excluded_from_ebay'] = (int) ($state['excluded_from_ebay'] ?? 0) + 1;
+            if (isset($state[$reason])) {
+                $state[$reason] = (int) ($state[$reason] ?? 0) + 1;
+            }
+            update_post_meta($productId, '_wei_ebay_export_status', 'excluded_from_ebay');
+            update_post_meta($productId, '_wei_ebay_readiness_reason', $reason);
+            delete_post_meta($productId, '_wei_ebay_last_preflight_error');
+            $this->append_limited($state['excluded_from_ebay_items'], $item, self::READINESS_BUCKET_LIMIT);
+            $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
+            $this->append_publish_readiness_csv_row((string) $paths['excluded'], $headers, $row);
+            return;
+        }
+
+        $state['not_ready'] = (int) ($state['not_ready'] ?? 0) + 1;
+        $state['blocked'] = (int) ($state['blocked'] ?? 0) + 1;
+        $this->persist_not_ready_preflight_status($productId, $result, $item);
+        $this->append_limited($state['not_ready_items'], $item, self::READINESS_NOT_READY_LIMIT);
+        $state['not_ready_examples'] = $state['not_ready_items'];
+        $this->append_limited($state['not_ready_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+
+        $blockedBy = $this->publish_readiness_block_reasons($status, $result);
+        if (!empty($blockedBy['category'])) {
+            $state['blocked_by_category'] = (int) ($state['blocked_by_category'] ?? 0) + 1;
+            $this->append_limited($state['blocked_by_category_items'], $item, self::READINESS_BUCKET_LIMIT);
+            $this->append_limited($state['blocked_by_category_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+        }
+        if (!empty($blockedBy['german_content'])) {
+            $state['blocked_by_german_content'] = (int) ($state['blocked_by_german_content'] ?? 0) + 1;
+            $state['missing_german_content'] = (int) ($state['missing_german_content'] ?? 0) + 1;
+            $this->append_limited($state['missing_german_content_items'], $item, self::READINESS_BUCKET_LIMIT);
+        }
+        if (!empty($blockedBy['required_aspects'])) {
+            $state['blocked_by_required_aspects'] = (int) ($state['blocked_by_required_aspects'] ?? 0) + 1;
+            $state['missing_required_aspects'] = (int) ($state['missing_required_aspects'] ?? 0) + 1;
+            $this->append_limited($state['missing_required_aspects_items'], $item, self::READINESS_BUCKET_LIMIT);
+            $this->append_limited($state['missing_required_aspects_sample_ids'], $productId, self::READINESS_BUCKET_LIMIT);
+        }
+        if (!empty($blockedBy['price'])) {
+            $state['blocked_by_price'] = (int) ($state['blocked_by_price'] ?? 0) + 1;
+            if ($status === 'missing_exchange_rate') {
+                $state['missing_exchange_rate'] = (int) ($state['missing_exchange_rate'] ?? 0) + 1;
+                $this->append_limited($state['missing_exchange_rate_items'], $item, self::READINESS_BUCKET_LIMIT);
+            } else {
+                $state['invalid_price'] = (int) ($state['invalid_price'] ?? 0) + 1;
+                $this->append_limited($state['invalid_price_items'], $item, self::READINESS_BUCKET_LIMIT);
+            }
+        }
+        if (!empty($blockedBy['images'])) {
+            $state['blocked_by_images'] = (int) ($state['blocked_by_images'] ?? 0) + 1;
+            $state['missing_image'] = (int) ($state['missing_image'] ?? 0) + 1;
+            $this->append_limited($state['missing_image_items'], $item, self::READINESS_BUCKET_LIMIT);
+        }
+        if (!empty($blockedBy['stock'])) {
+            $state['blocked_by_stock'] = (int) ($state['blocked_by_stock'] ?? 0) + 1;
+            $state['missing_stock'] = (int) ($state['missing_stock'] ?? 0) + 1;
+            $this->append_limited($state['missing_stock_items'], $item, self::READINESS_BUCKET_LIMIT);
+        }
+        if (!empty($blockedBy['policies_location'])) {
+            $state['missing_policies_location'] = (int) ($state['missing_policies_location'] ?? 0) + 1;
+            $this->append_limited($state['missing_policies_location_items'], $item, self::READINESS_BUCKET_LIMIT);
+        }
+
+        $this->append_publish_readiness_csv_row((string) $paths['full'], $headers, $row);
+        $this->append_publish_readiness_csv_row((string) $paths['problems'], $headers, $row);
+    }
+
+    private function persist_full_publish_readiness_state(array $state): void
+    {
+        $state['reports'] = $this->full_publish_readiness_reports($state);
+        update_option(self::FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION, $state, false);
+        update_option('wei_ebay_readiness_summary', $this->full_publish_readiness_summary_from_state($state), false);
+    }
+
+    private function full_publish_readiness_reports(array $state): array
+    {
+        $paths = $this->publish_readiness_csv_paths();
+        return [
+            'full_csv' => $this->category_audit_file_report((string) $paths['full'], (string) $paths['full_url'], (int) ($state['processed_total'] ?? 0), $state),
+            'problems_only_csv' => $this->category_audit_file_report((string) $paths['problems'], (string) $paths['problems_url'], (int) ($state['blocked'] ?? 0), $state),
+            'ready_products_csv' => $this->category_audit_file_report((string) $paths['ready'], (string) $paths['ready_url'], (int) ($state['ready'] ?? 0), $state),
+            'excluded_csv' => $this->category_audit_file_report((string) $paths['excluded'], (string) $paths['excluded_url'], (int) ($state['excluded_from_ebay'] ?? 0), $state),
         ];
-        update_option('wei_ebay_readiness_summary', $summary, false);
-        update_option('wei_ebay_publish_readiness_audit_summary', $summary, false);
-        $this->logger->info('eBay full publish readiness audit completed', $this->readiness_log_context($summary) + [
-            'processed_total' => (int) $summary['processed_total'],
-            'total_products' => (int) $summary['total_products'],
-            'reports' => $summary['reports'],
-        ]);
-        return $summary;
+    }
+
+    private function full_publish_readiness_summary_from_state(array $state): array
+    {
+        $state['reports'] = $this->full_publish_readiness_reports($state);
+        $state['remaining_products'] = max(0, (int) ($state['total_products'] ?? 0) - (int) ($state['processed_total'] ?? 0));
+        $state['last_run'] = (string) ($state['last_updated_at'] ?? gmdate('Y-m-d H:i:s'));
+        $state['complete'] = !empty($state['complete']);
+        $state['full_run'] = true;
+        $state['processed'] = (int) ($state['processed_total'] ?? $state['processed'] ?? 0);
+        return $state;
+    }
+
+    private function publish_readiness_batch_deadline(int $startTime): int
+    {
+        $limit = (int) ini_get('max_execution_time');
+        if ($limit <= 0) {
+            $limit = 120;
+        }
+        return $startTime + max(5, $limit - self::FULL_PUBLISH_READINESS_AUDIT_TIME_BUFFER);
+    }
+
+    private function publish_readiness_should_stop_for_time(int $deadline, int $processedThisBatch): bool
+    {
+        return $processedThisBatch > 0 && time() >= $deadline;
     }
 
     private function publish_readiness_csv_paths(): array
@@ -468,7 +598,7 @@ class AutoSyncScheduler
         if (!$fh) {
             return;
         }
-        fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers));
+        fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers), ',', '"', '\\');
         fclose($fh);
     }
 
