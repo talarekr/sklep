@@ -9,6 +9,7 @@ class BlockedCategoryFixReportService
     public const RECOMMENDATIONS_FILENAME = 'blocked_category_mapping_recommendations.csv';
     public const FIX_IMPORT_FILENAME = 'blocked_category_mapping_fix_import.csv';
     public const CATEGORY_MAPPING_WORKLIST_FILENAME = 'category-mapping-worklist.csv';
+    public const ALL_CATEGORY_MAPPING_WORKLIST_FILENAME = 'all-category-mapping-worklist.csv';
 
     public function __construct(private CategoryMappingRepository $categoryRepo, private EbayTaxonomyService $taxonomy, private Logger $logger)
     {
@@ -319,6 +320,147 @@ class BlockedCategoryFixReportService
         return $summary;
     }
 
+
+    public function generate_all_category_mapping_worklist(string $marketplaceId = 'EBAY_DE', string $seedCsvPath = ''): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $path = trailingslashit($baseDir) . self::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME;
+        $url = trailingslashit($baseUrl) . self::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME;
+        if ($marketplaceId !== 'EBAY_DE') {
+            return ['result' => 'error', 'error' => 'unsupported_marketplace', 'worklist_csv_path' => $path, 'worklist_csv_url' => $url, 'worklist_csv_exists' => false, 'worklist_csv_size' => 0, 'rows' => 0, 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
+        }
+
+        $seed = $this->manual_seed_mappings($seedCsvPath);
+        $categories = $this->categoryRepo->list_manual_mapping_categories($marketplaceId, ['limit' => 10000, 'with_samples' => true]);
+        $validation = get_option('wei_ebay_category_validation_statuses', []);
+        $validation = is_array($validation) ? $validation : [];
+        $validationByWooTerm = is_array($validation['by_woo_term_id'] ?? null) ? $validation['by_woo_term_id'] : [];
+        $rows = [];
+        $prefilledFromSeed = 0;
+        $prefilledFromTrustedCurrent = 0;
+        $emptyFinal = 0;
+
+        foreach ($categories as $categoryRow) {
+            $wooCategoryId = absint($categoryRow['term_id'] ?? 0);
+            $productCount = (int) ($categoryRow['product_count'] ?? 0);
+            if ($wooCategoryId <= 0 || $productCount <= 0) {
+                continue;
+            }
+            $samples = is_array($categoryRow['sample_products'] ?? null) ? (array) $categoryRow['sample_products'] : $this->categoryRepo->sample_products_for_category($wooCategoryId, 10);
+            $sampleProductId = '';
+            $sampleProductTitle = '';
+            $sampleProductIds = [];
+            $sampleProductTitles = [];
+            foreach (array_slice($samples, 0, 10) as $sample) {
+                $pid = trim((string) ($sample['id'] ?? ''));
+                $title = trim((string) ($sample['title'] ?? ''));
+                if ($sampleProductTitle === '' && $title !== '') {
+                    $sampleProductId = $pid;
+                    $sampleProductTitle = $title;
+                }
+                if ($pid !== '' && !in_array($pid, $sampleProductIds, true)) {
+                    $sampleProductIds[] = $pid;
+                }
+                if ($title !== '' && !in_array($title, $sampleProductTitles, true)) {
+                    $sampleProductTitles[] = $title;
+                }
+            }
+
+            $resolved = $this->categoryRepo->resolveProductionCategoryMapping($wooCategoryId, $marketplaceId);
+            $currentId = is_array($resolved) ? trim((string) ($resolved['ebay_category_id'] ?? '')) : '';
+            $currentSource = is_array($resolved) ? (string) ($resolved['source'] ?? '') : '';
+            $currentStatus = is_array($resolved) ? (string) ($resolved['status'] ?? '') : '';
+            $currentName = is_array($resolved) ? (string) ($resolved['ebay_category_name'] ?? '') : '';
+            $currentPath = is_array($resolved) ? (string) ($resolved['ebay_category_path'] ?? '') : '';
+            if ($currentId !== '') {
+                $cached = $this->taxonomy->cached_category($marketplaceId, $currentId);
+                if (is_array($cached)) {
+                    if ($currentName === '') {
+                        $currentName = (string) ($cached['category_name'] ?? '');
+                    }
+                    if ($currentPath === '') {
+                        $currentPath = (string) ($cached['category_path'] ?? '');
+                    }
+                }
+            }
+
+            $auditStatus = $this->current_audit_status_for_all_worklist($wooCategoryId, $currentId, $currentSource, $currentStatus, $validationByWooTerm[$wooCategoryId] ?? null, $marketplaceId);
+            $finalId = '';
+            if (isset($seed[$wooCategoryId]) && trim((string) ($seed[$wooCategoryId]['final_ebay_category_id'] ?? '')) !== '') {
+                $finalId = trim((string) $seed[$wooCategoryId]['final_ebay_category_id']);
+                $prefilledFromSeed++;
+            } elseif ($this->is_trusted_manual_current_mapping($resolved) && $auditStatus === 'ok_trusted_manual') {
+                $finalId = $currentId;
+                $prefilledFromTrustedCurrent++;
+            }
+            if ($finalId === '') {
+                $emptyFinal++;
+            }
+
+            $rows[] = [
+                'final_ebay_category_id' => $finalId,
+                'sample_product_title' => $sampleProductTitle,
+                'woo_category_id' => (string) $wooCategoryId,
+                'woo_category_name' => (string) ($categoryRow['name'] ?? ''),
+                'product_count' => (string) $productCount,
+                'current_ebay_category_id' => $currentId,
+                'current_ebay_category_name' => $currentName,
+                'current_ebay_category_path' => $currentPath,
+                'current_mapping_source' => $currentSource,
+                'current_mapping_status' => $currentStatus,
+                'current_audit_status' => $auditStatus,
+                'sample_product_id' => $sampleProductId,
+                'sample_product_ids' => implode('|', $sampleProductIds),
+                'sample_product_titles' => implode(' | ', $sampleProductTitles),
+                'manual_notes' => isset($seed[$wooCategoryId]) ? (string) ($seed[$wooCategoryId]['manual_notes'] ?? '') : '',
+            ];
+        }
+
+        usort($rows, function (array $a, array $b): int {
+            $emptyCmp = ((string) ($b['final_ebay_category_id'] ?? '') === '' ? 1 : 0) <=> ((string) ($a['final_ebay_category_id'] ?? '') === '' ? 1 : 0);
+            if ($emptyCmp !== 0) {
+                return $emptyCmp;
+            }
+            $problemCmp = $this->all_worklist_problem_sort_weight((string) ($a['current_audit_status'] ?? '')) <=> $this->all_worklist_problem_sort_weight((string) ($b['current_audit_status'] ?? ''));
+            if ($problemCmp !== 0) {
+                return $problemCmp;
+            }
+            $countCmp = ((int) ($b['product_count'] ?? 0)) <=> ((int) ($a['product_count'] ?? 0));
+            if ($countCmp !== 0) {
+                return $countCmp;
+            }
+            return strcasecmp((string) ($a['woo_category_name'] ?? ''), (string) ($b['woo_category_name'] ?? ''));
+        });
+
+        $headers = $this->all_category_mapping_worklist_headers();
+        $report = $this->write_csv($baseDir, $baseUrl, self::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME, $rows, $headers);
+        $exists = is_file($path);
+        $summary = [
+            'result' => 'success',
+            'marketplace_id' => $marketplaceId,
+            'rows' => count($rows),
+            'categories_with_products' => count($rows),
+            'empty_final_ebay_category_id_rows' => $emptyFinal,
+            'prefilled_from_seed_csv' => $prefilledFromSeed,
+            'prefilled_from_trusted_current_mapping' => $prefilledFromTrustedCurrent,
+            'seed_csv_path' => $seedCsvPath,
+            'worklist_csv_path' => $path,
+            'worklist_csv_url' => $url,
+            'worklist_csv_exists' => $exists,
+            'worklist_csv_size' => $exists ? (int) filesize($path) : 0,
+            'generated_at' => gmdate('Y-m-d H:i:s'),
+            'reports' => ['all_category_mapping_worklist_csv' => $report],
+            'ebay_api_called' => false,
+            'products_modified' => false,
+            'listings_modified' => false,
+        ];
+        update_option('wei_ebay_all_category_mapping_worklist_summary', $summary, false);
+        return $summary;
+    }
+
     public function import_category_mapping_worklist(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
     {
         $summary = ['result' => 'success', 'marketplace_id' => $marketplaceId, 'source_csv' => $csvPath, 'source' => 'manual_worklist', 'total_rows' => 0, 'accepted' => 0, 'accepted_rows' => [], 'accepted_validated_cache' => 0, 'accepted_trusted_manual_cache_missing' => 0, 'rejected_invalid_format' => 0, 'rejected_non_leaf_if_cache_knows_non_leaf' => 0, 'skipped_empty_final_ebay_category_id' => 0, 'skipped' => 0, 'rejected' => 0, 'rejected_rows' => [], 'import_debug_rows' => [], 'inserted_mappings' => 0, 'updated_mappings' => 0, 'deactivated_duplicate_mappings' => 0, 'unchanged_mappings' => 0, 'warnings' => [], 'imported_at' => gmdate('Y-m-d H:i:s'), 'ebay_api_called' => false, 'products_modified' => false, 'listings_modified' => false];
@@ -493,6 +635,91 @@ class BlockedCategoryFixReportService
             'reason' => $reason,
         ];
         return $summary;
+    }
+
+
+    private function all_category_mapping_worklist_headers(): array
+    {
+        return ['final_ebay_category_id','sample_product_title','woo_category_id','woo_category_name','product_count','current_ebay_category_id','current_ebay_category_name','current_ebay_category_path','current_mapping_source','current_mapping_status','current_audit_status','sample_product_id','sample_product_ids','sample_product_titles','manual_notes'];
+    }
+
+    private function manual_seed_mappings(string $seedCsvPath = ''): array
+    {
+        $paths = [];
+        if ($seedCsvPath !== '') {
+            $paths[] = $seedCsvPath;
+        }
+        $lastImport = get_option('wei_ebay_category_mapping_worklist_import_summary', []);
+        if (is_array($lastImport) && (string) ($lastImport['source_csv'] ?? '') !== '') {
+            $paths[] = (string) $lastImport['source_csv'];
+        }
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $paths[] = trailingslashit($baseDir) . self::CATEGORY_MAPPING_WORKLIST_FILENAME;
+
+        $seed = [];
+        foreach (array_values(array_unique(array_filter($paths))) as $path) {
+            foreach ($this->read_csv_assoc((string) $path) as $row) {
+                $wooCategoryId = absint($row['woo_category_id'] ?? 0);
+                $finalCategoryId = trim((string) ($row['final_ebay_category_id'] ?? ''));
+                if ($wooCategoryId > 0 && $finalCategoryId !== '' && ctype_digit($finalCategoryId)) {
+                    $seed[$wooCategoryId] = $row;
+                }
+            }
+            if ($seed !== []) {
+                break;
+            }
+        }
+        return $seed;
+    }
+
+    private function is_trusted_manual_current_mapping(?array $resolved): bool
+    {
+        if (!is_array($resolved) || trim((string) ($resolved['ebay_category_id'] ?? '')) === '') {
+            return false;
+        }
+        if (!in_array((string) ($resolved['source'] ?? ''), ['manual', 'manual_worklist'], true)) {
+            return false;
+        }
+        $status = (string) ($resolved['status'] ?? '');
+        return $status === '' || $status === 'mapped_manual';
+    }
+
+    private function current_audit_status_for_all_worklist(int $wooCategoryId, string $currentId, string $currentSource, string $currentStatus, $validationEntry, string $marketplaceId): string
+    {
+        if ($currentId === '') {
+            return 'missing_category';
+        }
+        if (in_array($currentSource, ['legacy', 'legacy_import'], true)) {
+            return 'legacy_mapping_review_required';
+        }
+        if (!in_array($currentSource, ['manual', 'manual_worklist'], true)) {
+            return 'untrusted_current_mapping_review_required';
+        }
+        if ($currentStatus !== '' && $currentStatus !== 'mapped_manual') {
+            return 'mapping_status_review_required';
+        }
+        if (is_array($validationEntry)) {
+            if (empty($validationEntry['valid'])) {
+                return 'invalid_ebay_category_id';
+            }
+            if (empty($validationEntry['leaf']) && empty($validationEntry['needs_cache_validation'])) {
+                return 'non_leaf_category';
+            }
+        }
+        $cached = $this->taxonomy->cached_category($marketplaceId, $currentId);
+        if (is_array($cached) && empty($cached['leaf'])) {
+            return 'non_leaf_category';
+        }
+        return 'ok_trusted_manual';
+    }
+
+    private function all_worklist_problem_sort_weight(string $auditStatus): int
+    {
+        return match ($auditStatus) {
+            'missing_category', 'invalid_ebay_category_id', 'non_leaf_category', 'legacy_mapping_review_required', 'untrusted_current_mapping_review_required', 'mapping_status_review_required' => 0,
+            default => 1,
+        };
     }
 
     private function category_mapping_worklist_headers(): array
