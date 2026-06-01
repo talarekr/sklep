@@ -2298,13 +2298,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $ovokoCarId = $this->resolve_ovoko_car_id($productId);
         $settings = $this->settings();
-        $sellerUsername = $this->resolve_ebay_seller_username($settings);
+        $sellerResolution = $this->resolve_ebay_seller_username_details($settings);
+        $sellerUsername = (string) ($sellerResolution['username'] ?? '');
+        $sellerSource = (string) ($sellerResolution['source'] ?? '');
         $strategy = 'ebay_de_seller_keyword_search_ovoko_car_id';
         $metadata = [
             'same_vehicle_cta_visible' => false,
             'reason' => '',
             'ovoko_car_id' => $ovokoCarId,
             'seller_username' => $sellerUsername,
+            'seller_source' => $sellerSource,
             'checked_url_strategy' => $strategy,
         ];
 
@@ -2332,6 +2335,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'same_vehicle_ebay_url' => $url,
             'url_strategy' => $strategy,
             'seller_username' => $sellerUsername,
+            'seller_source' => $sellerSource,
             'checked_url_strategy' => $strategy,
         ];
 
@@ -2351,21 +2355,27 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_ebay_seller_username(array $settings): string
     {
+        $resolved = $this->resolve_ebay_seller_username_details($settings);
+        return (string) ($resolved['username'] ?? '');
+    }
+
+    private function resolve_ebay_seller_username_details(array $settings): array
+    {
         foreach (['ebay_seller_username', 'seller_username', 'ebay_username', 'ebay_store_username'] as $key) {
             $value = trim((string) ($settings[$key] ?? ''));
             if ($value !== '') {
-                return $value;
+                return ['username' => $value, 'source' => 'settings', 'settings_key' => $key];
             }
         }
         foreach (['WEI_EBAY_SELLER_USERNAME', 'EBAY_SELLER_USERNAME'] as $constant) {
             if (defined($constant)) {
                 $value = trim((string) constant($constant));
                 if ($value !== '') {
-                    return $value;
+                    return ['username' => $value, 'source' => 'constant', 'constant' => $constant];
                 }
             }
         }
-        return Plugin::DEFAULT_EBAY_SELLER_USERNAME;
+        return ['username' => Plugin::DEFAULT_EBAY_SELLER_USERNAME, 'source' => 'default_gpswiss'];
     }
 
     private function is_ebay_public_url(string $url): bool
@@ -2814,6 +2824,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'same_vehicle_cta_visible' => !empty($preview['same_vehicle_cta']['same_vehicle_cta_visible']),
                 'same_vehicle_token' => (string) ($preview['same_vehicle_cta']['same_vehicle_token'] ?? ''),
                 'same_vehicle_ebay_url' => (string) ($preview['same_vehicle_cta']['same_vehicle_ebay_url'] ?? ''),
+                'same_vehicle_seller_username' => (string) ($preview['same_vehicle_cta']['seller_username'] ?? ''),
+                'same_vehicle_seller_source' => (string) ($preview['same_vehicle_cta']['seller_source'] ?? ''),
                 'warnings' => (array) ($preview['warnings'] ?? []),
                 'safety' => [
                     'called_ebay_api' => false,
@@ -4848,8 +4860,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!isset($settings['auto_generate_german_content_preflight'])) {
             $settings['auto_generate_german_content_preflight'] = 1;
         }
-        if (!isset($settings['ebay_seller_username'])) {
-            $settings['ebay_seller_username'] = Plugin::DEFAULT_EBAY_SELLER_USERNAME;
+        if (isset($settings['ebay_seller_username'])) {
+            $settings['ebay_seller_username'] = trim((string) $settings['ebay_seller_username']);
         }
         if (!isset($settings['verbose_debug'])) {
             $settings['verbose_debug'] = 0;

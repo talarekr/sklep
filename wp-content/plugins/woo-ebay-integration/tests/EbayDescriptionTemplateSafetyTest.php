@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace WEI\Interfaces { interface MarketplaceAdapterInterface {} interface TranslationProviderInterface {} }
 namespace WEI\Repositories { class CategoryMappingRepository {} class MappingRepository {} }
-namespace WEI\Services { class EbayClient {} class EbayTaxonomyService {} class EbaySkuGenerator {} class EbayPriceResolver {} class EbayConditionResolver { public const DEFAULT_ITEM_CONDITION = 'used'; } class EbayShippingPolicyResolver { public const POLICY_30_EUR = 'policy-30'; public const POLICY_50_EUR = 'policy-50'; public const POLICY_100_EUR = 'policy-100'; } class EbayGermanContentTranslator {} class CategoryMappingSafety { public const DEFAULT_AUTO_CONFIDENCE_THRESHOLD = 0.85; } class Logger {} }
+namespace WEI\Services { class EbayClient {} class EbayTaxonomyService {} class EbaySkuGenerator {} class EbayPriceResolver {} class EbayConditionResolver { public const DEFAULT_ITEM_CONDITION = 'used'; } class EbayShippingPolicyResolver { public const POLICY_30_EUR = 'policy-30'; public const POLICY_50_EUR = 'policy-50'; public const POLICY_100_EUR = 'policy-100'; } class EbayGermanContentTranslator { public const META_TITLE = '_wei_ebay_de_title'; public const META_DESCRIPTION = '_wei_ebay_de_description'; public const META_SOURCE = '_wei_ebay_de_source'; public function __construct(...$args) {} public function cached(int $productId, array $source): array { return ['ready' => false, 'source_hash' => $this->source_hash($source), 'cached_translation_hash' => '']; } public function source_hash(array $source): string { return md5(json_encode($source)); } public function untranslated_fields(array $cached): array { return []; } } class CategoryMappingSafety { public const DEFAULT_AUTO_CONFIDENCE_THRESHOLD = 0.85; } class Logger { public function info(string $message, array $context = []): void {} public function error(string $message, array $context = []): void {} } }
 namespace WEI\Services\Translation { class GoogleCloudTranslateProvider {} class OpenAiTranslationProvider {} }
 namespace WEI { class Plugin { public const OPTION_KEY = 'wei_settings'; public const DEFAULT_EBAY_SELLER_USERNAME = 'gpswiss'; } }
 namespace {
@@ -14,6 +14,14 @@ namespace {
     function is_wp_error($value) { return false; }
     function get_option($key, $default = false) { return $GLOBALS['wei_test_options'][$key] ?? $default; }
     function get_post_meta($post_id, $key = '', $single = false) { return $GLOBALS['wei_test_post_meta'][(int) $post_id][$key] ?? ''; }
+    function get_post_field($field, $post_id) { return $GLOBALS['wei_test_post_fields'][(int) $post_id][$field] ?? ''; }
+    function wc_get_product($product_id) { return $GLOBALS['wei_test_products'][(int) $product_id] ?? null; }
+    function wc_get_products($args) { return []; }
+    function metadata_exists($type, $object_id, $meta_key) { return array_key_exists($meta_key, $GLOBALS['wei_test_post_meta'][(int) $object_id] ?? []); }
+    function wp_strip_all_tags($text) { return strip_tags((string) $text); }
+    function wp_kses_post($text) { return (string) $text; }
+    function wpautop($text) { return '<p>' . (string) $text . '</p>'; }
+    function wc_attribute_label($name, $product = null) { return (string) $name; }
     function esc_url_raw($url) { return (string) $url; }
     function esc_url($url) { return 'ESC_URL:' . htmlspecialchars((string) $url, ENT_QUOTES, 'UTF-8'); }
     function esc_html($text) { return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8'); }
@@ -23,6 +31,22 @@ namespace {
 
     use WEI\Adapters\EbayAdapter;
     use WEI\Plugin;
+    use WEI\Repositories\CategoryMappingRepository;
+    use WEI\Repositories\MappingRepository;
+    use WEI\Services\EbayClient;
+    use WEI\Services\EbayTaxonomyService;
+    use WEI\Services\Logger;
+
+    class WeiTemplatePreviewFakeProduct
+    {
+        public function __construct(private int $id, private string $sku, private string $name, private string $description = '') {}
+        public function get_id(): int { return $this->id; }
+        public function get_sku(): string { return $this->sku; }
+        public function get_name(): string { return $this->name; }
+        public function get_description(): string { return $this->description; }
+        public function get_short_description(): string { return ''; }
+        public function get_attributes(): array { return []; }
+    }
 
     $failures = [];
 
@@ -97,16 +121,56 @@ namespace {
     if (($defaultSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=gpswiss&_nkw=456') {
         $failures[] = 'Expected default seller username gpswiss to build the same-vehicle URL when settings are missing.';
     }
+    if (($defaultSeller['metadata']['seller_source'] ?? '') !== 'default_gpswiss') {
+        $failures[] = 'Expected missing seller settings to be diagnosed as seller_source=default_gpswiss. Got ' . json_encode($defaultSeller['metadata'] ?? []);
+    }
+
+    $GLOBALS['wei_test_products'][10907] = new WeiTemplatePreviewFakeProduct(10907, 'SKU-10907', 'Preview product', 'Source description');
+    $GLOBALS['wei_test_post_fields'][10907] = ['post_content' => 'Source description'];
+    $GLOBALS['wei_test_post_meta'][10907] = ['_ovoko_car_id' => '456', '_product_attributes' => []];
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => ''];
+    $previewAdapter = new EbayAdapter(new EbayClient(), new MappingRepository(), new CategoryMappingRepository(), new EbayTaxonomyService(), new Logger());
+    $adminPreview = $previewAdapter->preview_ebay_de_description_template('10907');
+    if (($adminPreview['result'] ?? '') !== 'success') {
+        $failures[] = 'Expected admin preview path to succeed for product 10907 fixture. Got ' . json_encode($adminPreview);
+    }
+    if (($adminPreview['same_vehicle_url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=gpswiss&_nkw=456') {
+        $failures[] = 'Expected admin preview path metadata to use the same seller resolver as the CTA URL builder and default gpswiss when the saved setting is empty. Got ' . json_encode($adminPreview['same_vehicle_cta'] ?? []);
+    }
+    if (empty($adminPreview['same_vehicle_cta_visible'])) {
+        $failures[] = 'Expected admin preview path to expose same_vehicle_cta_visible=true when seller and Ovoko car ID resolve.';
+    }
+    if (($adminPreview['same_vehicle_seller_source'] ?? '') !== 'default_gpswiss' || ($adminPreview['same_vehicle_cta']['seller_source'] ?? '') !== 'default_gpswiss') {
+        $failures[] = 'Expected admin preview diagnostics to expose seller_source=default_gpswiss for an empty saved setting. Got ' . json_encode($adminPreview);
+    }
+
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'settings-seller'];
+    $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'SETTINGS:321'];
+    $settingsSeller = $resolveSameVehicle->invoke($adapter, 105);
+    if (($settingsSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=settings-seller&_nkw=SETTINGS%3A321' || ($settingsSeller['metadata']['seller_source'] ?? '') !== 'settings') {
+        $failures[] = 'Expected non-empty seller setting to be used with seller_source=settings. Got ' . json_encode($settingsSeller);
+    }
 
     $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => ''];
     if (!defined('WEI_EBAY_SELLER_USERNAME')) {
         define('WEI_EBAY_SELLER_USERNAME', 'constant-seller');
     }
-    $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'CONST:321'];
-    $constantSeller = $resolveSameVehicle->invoke($adapter, 105);
+    $GLOBALS['wei_test_post_meta'][106] = ['_ovoko_car_id' => 'CONST:321'];
+    $constantSeller = $resolveSameVehicle->invoke($adapter, 106);
     if (($constantSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=constant-seller&_nkw=CONST%3A321') {
         $failures[] = 'Expected configured seller username constant fallback to build the same-vehicle URL when settings are empty.';
     }
+    if (($constantSeller['metadata']['seller_source'] ?? '') !== 'constant') {
+        $failures[] = 'Expected constant seller fallback to diagnose seller_source=constant. Got ' . json_encode($constantSeller['metadata'] ?? []);
+    }
+
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => '   '];
+    $GLOBALS['wei_test_post_meta'][107] = ['_ovoko_car_id' => '456'];
+    $emptySavedSeller = $resolveSameVehicle->invoke($adapter, 107);
+    if (($emptySavedSeller['url'] ?? '') !== 'https://www.ebay.de/sch/i.html?_ssn=constant-seller&_nkw=456' || ($emptySavedSeller['metadata']['seller_source'] ?? '') !== 'constant') {
+        $failures[] = 'Expected empty saved seller setting to be ignored and constant fallback to be used. Got ' . json_encode($emptySavedSeller);
+    }
+
 
     if ($failures !== []) {
         fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
