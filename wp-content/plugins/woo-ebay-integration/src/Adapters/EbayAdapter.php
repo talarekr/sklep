@@ -2150,9 +2150,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $specRows = $this->render_ebay_template_specification_rows($details['fields']);
 
-        $buttonHtml = $sameVehicleUrl !== '' && $sameVehicleToken !== ''
-            ? '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:18px 0 24px;border-radius:8px;padding:18px 20px;text-align:center;"><div style="color:#06275d;font-size:18px;font-weight:900;margin-bottom:8px;">Weitere Teile aus diesem Fahrzeug ansehen</div><p style="margin:0 0 12px;color:#1f2937;line-height:1.6;">Entdecken Sie weitere verfügbare Teile aus demselben Fahrzeug.</p><p style="margin:0 0 14px;color:#4b5563;font-size:13px;line-height:1.5;">Fahrzeugreferenz: ' . esc_html($sameVehicleToken) . '</p><a href="' . esc_url($sameVehicleUrl) . '" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">Weitere Teile ansehen</a></div>'
-            : '';
+        $buttonHtml = $this->render_ebay_same_vehicle_cta_html($sameVehicleUrl, $sameVehicleToken);
 
         $descriptionBlock = $descriptionHtml !== ''
             ? $descriptionHtml
@@ -2253,6 +2251,23 @@ class EbayAdapter implements MarketplaceAdapterInterface
             : ['valid' => false, 'error' => 'invalid_translated_html_css', 'matches' => array_values(array_unique($matches))];
     }
 
+
+    private function render_ebay_same_vehicle_cta_html(string $sameVehicleUrl, string $ovokoCarId): string
+    {
+        if ($sameVehicleUrl === '' || $ovokoCarId === '') {
+            return '';
+        }
+
+        $heading = 'Mehr Teile von diesem Fahrzeug ansehen';
+
+        return '<div style="border:1px solid #dbe3ef;background:#f8fbff;margin:18px 0 24px;border-radius:8px;padding:18px 20px;text-align:center;">'
+            . '<div style="color:#06275d;font-size:18px;font-weight:900;margin-bottom:8px;">' . esc_html($heading) . '</div>'
+            . '<p style="margin:0 0 12px;color:#1f2937;line-height:1.6;">' . esc_html('Alle verfügbaren Teile aus demselben Fahrzeug anzeigen.') . '</p>'
+            . '<p style="margin:0 0 14px;color:#4b5563;font-size:13px;line-height:1.5;">' . esc_html('Fahrzeug-ID:') . ' ' . esc_html($ovokoCarId) . '</p>'
+            . '<a href="' . esc_url($sameVehicleUrl) . '" target="_blank" rel="noopener" style="display:inline-block;background:#0057d9;color:#ffffff;text-decoration:none;padding:16px 28px;border-radius:6px;font-size:14px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;box-shadow:0 8px 18px rgba(0,87,217,.18);">' . esc_html($heading) . '</a>'
+            . '</div>';
+    }
+
     private function resolve_ebay_same_vehicle_url_for_product(int $productId): array
     {
         $warnings = [];
@@ -2265,7 +2280,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $warnings[] = [
                     'code' => $this->is_ebay_public_url($url) ? 'legacy_ebay_same_vehicle_url_ignored' : 'legacy_woo_same_vehicle_url_ignored',
                     'source' => $helper,
-                    'message' => 'Legacy same-vehicle URL helper is intentionally ignored; eBay.de token search URL is used instead when possible.',
+                    'message' => 'Legacy same-vehicle URL helper is intentionally ignored; eBay.de seller search URL is used instead when possible.',
                 ];
             }
         }
@@ -2276,7 +2291,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $warnings[] = [
                     'code' => $this->is_ebay_public_url($url) ? 'legacy_ebay_same_vehicle_url_meta_ignored' : 'legacy_same_vehicle_url_meta_ignored',
                     'source' => $metaKey,
-                    'message' => 'Legacy same-vehicle URL meta is intentionally ignored; eBay.de token search URL is used instead when possible.',
+                    'message' => 'Legacy same-vehicle URL meta is intentionally ignored; eBay.de seller search URL is used instead when possible.',
                 ];
             }
         }
@@ -2284,7 +2299,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $ovokoCarId = $this->resolve_ovoko_car_id($productId);
         $settings = $this->settings();
         $sellerUsername = $this->resolve_ebay_seller_username($settings);
-        $strategy = 'ebay_search_title_description_token';
+        $strategy = 'ebay_de_seller_keyword_search_ovoko_car_id';
         $metadata = [
             'same_vehicle_cta_visible' => false,
             'reason' => '',
@@ -2300,11 +2315,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($sellerUsername === '') {
             $metadata['reason'] = 'missing_ebay_seller_username_for_same_vehicle_url';
             $warnings[] = ['code' => 'missing_ebay_seller_username_for_same_vehicle_url', 'message' => 'Cannot build eBay.de same-vehicle CTA URL without seller username in plugin settings.'];
-            return ['url' => '', 'source' => '', 'token' => 'GPSWCarID:' . $ovokoCarId, 'warnings' => $warnings, 'metadata' => $metadata];
+            return ['url' => '', 'source' => '', 'token' => $ovokoCarId, 'warnings' => $warnings, 'metadata' => $metadata];
         }
 
-        $token = 'GPSWCarID:' . $ovokoCarId;
-        $url = 'https://www.ebay.de/sch/i.html?_ssn=' . rawurlencode($sellerUsername) . '&LH_TitleDesc=1&_nkw=' . rawurlencode($token);
+        $token = $ovokoCarId;
+        $url = 'https://www.ebay.de/sch/i.html?_ssn=' . rawurlencode($sellerUsername) . '&_nkw=' . rawurlencode($ovokoCarId);
         if (!str_starts_with($url, 'https://www.ebay.de/')) {
             $metadata['reason'] = 'invalid_same_vehicle_ebay_url';
             return ['url' => '', 'source' => '', 'token' => $token, 'warnings' => $warnings, 'metadata' => $metadata];
@@ -2325,10 +2340,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_ovoko_car_id(int $productId): string
     {
-        foreach (['_ovoko_car_id', 'ovoko_car_id'] as $metaKey) {
+        foreach (['_ovoko_car_id', 'ovoko_car_id', '_car_id', 'car_id', 'donor_vehicle_id', '_donor_vehicle_id', '_ovoko_vehicle_id', 'ovoko_vehicle_id', '_vehicle_id', 'vehicle_id'] as $metaKey) {
             $value = trim((string) get_post_meta($productId, $metaKey, true));
             if ($value !== '') {
-                return preg_replace('/[^A-Za-z0-9_-]/', '', $value) ?: '';
+                return preg_replace('/[^A-Za-z0-9_:-]/', '', $value) ?: '';
             }
         }
         return '';
@@ -2340,6 +2355,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $value = trim((string) ($settings[$key] ?? ''));
             if ($value !== '') {
                 return $value;
+            }
+        }
+        foreach (['WEI_EBAY_SELLER_USERNAME', 'EBAY_SELLER_USERNAME'] as $constant) {
+            if (defined($constant)) {
+                $value = trim((string) constant($constant));
+                if ($value !== '') {
+                    return $value;
+                }
             }
         }
         return '';
