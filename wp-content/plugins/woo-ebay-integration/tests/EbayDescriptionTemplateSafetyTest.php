@@ -145,6 +145,24 @@ namespace {
     if (($adminPreview['same_vehicle_seller_source'] ?? '') !== 'default_gpswiss' || ($adminPreview['same_vehicle_cta']['seller_source'] ?? '') !== 'default_gpswiss') {
         $failures[] = 'Expected admin preview diagnostics to expose seller_source=default_gpswiss for an empty saved setting. Got ' . json_encode($adminPreview);
     }
+    $previewHtml = (string) ($adminPreview['html'] ?? '');
+    foreach (['Zgodność / dopasowanie', 'Nadaje się do', 'Ważne instrukcje', 'Kompatibilität / Passgenauigkeit', 'Passend für', 'Wichtige Hinweise', 'Bitte vergleichen Sie die Teilenummer und die Fotos vor dem Kauf.', 'Bitte anhand der Teilenummer prüfen.'] as $removedFitmentText) {
+        if (str_contains($previewHtml, $removedFitmentText)) {
+            $failures[] = 'Expected live template preview HTML to omit compatibility/fitment section text, but found ' . $removedFitmentText;
+        }
+    }
+    if (!str_contains($previewHtml, 'Mehr Teile von diesem Fahrzeug ansehen')) {
+        $failures[] = 'Expected live template preview HTML to keep the same-vehicle CTA button.';
+    }
+    $specPosition = strpos($previewHtml, 'Spezifikationen');
+    $ctaPosition = strpos($previewHtml, 'Mehr Teile von diesem Fahrzeug ansehen');
+    $deliveryPosition = strpos($previewHtml, 'Wir liefern in ganz Europa');
+    if ($specPosition === false || $ctaPosition === false || $deliveryPosition === false || !($specPosition < $ctaPosition && $ctaPosition < $deliveryPosition)) {
+        $failures[] = 'Expected live template order to be specifications table, same-vehicle CTA, then Europe delivery section.';
+    }
+    if (!str_contains($previewHtml, '</table></div><div style="margin:18px 0 24px;text-align:center;"><a href="ESC_URL:https://www.ebay.de/sch/i.html?_ssn=gpswiss&amp;_nkw=456"')) {
+        $failures[] = 'Expected same-vehicle CTA to render immediately after the specifications table block without an intervening compatibility placeholder.';
+    }
 
     $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'settings-seller'];
     $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'SETTINGS:321'];
