@@ -49,6 +49,8 @@ class BlockedCategoryFixReportService
             $validation = $mapper->validate_recommendation($recommendation, $this->taxonomy, $marketplaceId);
             $apply = !empty($validation['apply_candidate']);
             $confidence = (float) ($recommendation['confidence'] ?? 0);
+            $mappingStatus = $apply ? 'review_suggested' : 'needs_manual_review';
+            $confidenceLabel = $apply ? 'high' : ($confidence >= EbayDeCategoryRuleMapper::HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'low');
             if ((string) ($recommendation['recommended_ebay_category_id'] ?? '') !== '') {
                 $recommendedProducts++;
                 if ($wooTermId > 0) {
@@ -63,6 +65,10 @@ class BlockedCategoryFixReportService
             }
 
             $note = '';
+            $exclusionReason = '';
+            if (!$apply) {
+                $exclusionReason = $this->exclusion_reason($recommendation, $validation, $wooTermId, $confidence);
+            }
             if ($wooTermId <= 0) {
                 $note = 'woo_category_id_not_resolved_from_audit_row';
             } elseif (!$apply && $confidence >= EbayDeCategoryRuleMapper::HIGH_CONFIDENCE_THRESHOLD) {
@@ -83,9 +89,12 @@ class BlockedCategoryFixReportService
                 'recommended_ebay_category_id' => (string) ($recommendation['recommended_ebay_category_id'] ?? ''),
                 'recommended_ebay_category_path' => (string) ($recommendation['recommended_ebay_category_path'] ?? ''),
                 'recommendation_confidence' => $confidence > 0 ? sprintf('%.4F', $confidence) : '',
+                'confidence' => $confidenceLabel,
+                'mapping_status' => $mappingStatus,
                 'recommendation_reason' => (string) ($recommendation['decision_reason'] ?? ''),
                 'taxonomy_validation_status' => (string) ($validation['status'] ?? $validation['validation_status'] ?? ''),
                 'apply_candidate' => $apply ? '1' : '0',
+                'exclusion_reason' => $exclusionReason,
                 'note' => $note,
             ];
 
@@ -222,6 +231,27 @@ class BlockedCategoryFixReportService
         return $rows;
     }
 
+    private function exclusion_reason(array $recommendation, array $validation, int $wooTermId, float $confidence): string
+    {
+        if ($wooTermId <= 0) {
+            return 'woo_category_id_not_resolved';
+        }
+        if ((string) ($recommendation['recommended_ebay_category_id'] ?? '') === '') {
+            return (string) ($recommendation['decision_reason'] ?? 'no_recommended_category');
+        }
+        if ($confidence < EbayDeCategoryRuleMapper::HIGH_CONFIDENCE_THRESHOLD) {
+            return 'confidence_below_safe_import_threshold';
+        }
+        if (empty($validation['valid']) || empty($validation['leaf']) || empty($validation['automotive'])) {
+            return (string) ($validation['status'] ?? $validation['validation_status'] ?? 'taxonomy_validation_failed');
+        }
+        if ((string) ($recommendation['sanity_status'] ?? '') !== 'pass') {
+            return (string) ($recommendation['sanity_reason'] ?? 'sanity_validation_failed');
+        }
+        return 'not_safe_for_bulk_import';
+    }
+
+
     private function write_csv(string $baseDir, string $baseUrl, string $filename, array $rows, array $headers): array
     {
         $path = trailingslashit($baseDir) . $filename;
@@ -252,7 +282,7 @@ class BlockedCategoryFixReportService
 
     private function recommendation_headers(): array
     {
-        return ['product_id','product_title','woo_category_id','woo_category_path','current_ebay_category_id','current_ebay_category_path','detected_intent','sanity_reason','recommended_ebay_category_id','recommended_ebay_category_path','recommendation_confidence','recommendation_reason','taxonomy_validation_status','apply_candidate','note'];
+        return ['product_id','product_title','woo_category_id','woo_category_path','current_ebay_category_id','current_ebay_category_path','detected_intent','sanity_reason','recommended_ebay_category_id','recommended_ebay_category_path','recommendation_confidence','confidence','mapping_status','recommendation_reason','taxonomy_validation_status','apply_candidate','exclusion_reason','note'];
     }
 
     private function fix_headers(): array

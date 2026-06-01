@@ -35,17 +35,25 @@ class EbayDeCategoryRuleMapper
     /** @param array<string,mixed> $context */
     public function recommend(array $context): array
     {
-        $source = $this->normalize(implode(' ', array_filter([
-            (string) ($context['woo_subcategory_name'] ?? ''),
-            (string) ($context['woo_category_path'] ?? ''),
-            (string) ($context['product_title'] ?? ''),
-            (string) ($context['translated_title'] ?? ''),
-            (string) ($context['sample_product_data'] ?? ''),
-        ])));
+        $wooName = $this->normalize((string) ($context['woo_subcategory_name'] ?? ''));
+        $wooPath = $this->normalize((string) ($context['woo_category_path'] ?? ''));
+        $productTitle = $this->normalize((string) ($context['product_title'] ?? ''));
+        $translatedTitle = $this->normalize((string) ($context['translated_title'] ?? ''));
+        $sampleProductData = $this->normalize((string) ($context['sample_product_data'] ?? ''));
+        $titleSource = trim(implode(' ', array_filter([$productTitle, $translatedTitle])));
+        $source = trim(implode(' ', array_filter([$wooName, $wooPath, $titleSource, $sampleProductData])));
 
-        $rule = $this->match_rule($source);
+        if ($this->is_uncategorized($wooName, $wooPath)) {
+            return $this->empty_result('uncategorized', 'uncategorized_always_needs_manual_review');
+        }
+
+        $rule = $this->match_rule($source, $wooName, $wooPath, $titleSource);
         if ($rule === []) {
             return $this->empty_result('unknown_intent', 'no_supported_family_rule_matched');
+        }
+
+        if ((string) ($rule['category_id'] ?? '') === '') {
+            return $this->empty_result((string) $rule['intent'], (string) ($rule['reason'] ?? 'manual_review_required'));
         }
 
         $category = self::CATEGORY_CATALOG[(string) $rule['category_id']] ?? null;
@@ -100,13 +108,35 @@ class EbayDeCategoryRuleMapper
 
     public static function supported_intents(): array
     {
-        return ['ac_hose','ac_compressor','ac_panel','ac_condenser','interior_trim','control_module','car_speaker','wiring_harness','spare_wheel','tow_hook','complete_engine','engine_block','cylinder_head','oil_pan','alternator','starter','turbocharger','power_steering_hose','adblue_hose','gearbox_cover','seats','sunroof','bumper_reinforcement'];
+        return ['ac_hose','ac_compressor','ac_panel','ac_condenser','ac_other','cooling_hose','interior_trim','interior_mirror','interior_light','headliner','control_module','car_speaker','wiring_harness','spare_wheel','tow_hook','complete_engine','engine_block','cylinder_head','oil_pan','alternator','starter','turbocharger','power_steering_hose','adblue_hose','gearbox_cover','seats','sunroof','bumper_reinforcement','uncategorized'];
     }
 
-    private function match_rule(string $source): array
+    private function match_rule(string $source, string $wooName = '', string $wooPath = '', string $titleSource = ''): array
     {
         if ($this->contains_any($source, ['kamera cofania', 'ruckfahrkamera', 'rueckfahrkamera', 'rear camera', 'backup camera'])) {
             return [];
+        }
+        if ($this->is_cooling_hose_intent($wooName . ' ' . $wooPath)) {
+            return $this->empty_rule('cooling_hose', 'cooling_hose_needs_manual_review_no_confirmed_ebay_de_leaf');
+        }
+        if ($this->is_roof_interior_non_sunroof_intent($wooName)) {
+            return $this->roof_interior_rule($wooName);
+        }
+        if ($this->is_ac_other_intent($wooName, $wooPath)) {
+            $specificAcRule = $this->match_specific_ac_rule($titleSource);
+            if ($specificAcRule !== []) {
+                return $specificAcRule;
+            }
+            return $this->empty_rule('ac_other', 'ac_other_generic_needs_manual_review_without_specific_sample_title');
+        }
+        if ($this->is_tow_hook_intent($source)) {
+            return $this->rule('tow_hook', '33653', 0.96, 'tow_hook_priority_rule_not_wiring_harness');
+        }
+        if ($this->is_cooling_hose_intent($source)) {
+            return $this->empty_rule('cooling_hose', 'cooling_hose_needs_manual_review_no_confirmed_ebay_de_leaf');
+        }
+        if ($this->is_roof_interior_non_sunroof_intent($source)) {
+            return $this->roof_interior_rule($source);
         }
         if ($this->contains_any($source, ['kompresor klimatyzacji', 'sprezarka klimatyzacji', 'sprężarka klimatyzacji', 'klimakompressor', 'ac compressor'])) {
             return $this->rule('ac_compressor', '33543', 0.97, 'ac_compressor_positive_rule_not_ac_hose');
@@ -158,7 +188,7 @@ class EbayDeCategoryRuleMapper
         if ($this->contains_any($source, ['kolo zapasowe', 'koło zapasowe', 'dojazdowe', 'ersatzrad', 'notrad', 'reserverad'])) {
             return $this->rule('spare_wheel', '179679', 0.76, 'spare_wheel_review_rule_avoids_complete_wheel_set');
         }
-        if ($this->contains_any($source, ['hak holowniczy', 'komplet haka', 'ucho holownicze', 'zaczep holowniczy', 'anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'tow hook', 'tow bar'])) {
+        if ($this->contains_any($source, ['hak holowniczy', 'komplet haka', 'hak', 'ucho holownicze', 'zaczep holowniczy', 'anhangerkupplung', 'anhaengerkupplung', 'abschlepphaken', 'abschleppose', 'abschleppoese', 'tow hook', 'towbar', 'tow bar'])) {
             return $this->rule('tow_hook', '33653', 0.94, 'tow_hook_positive_rule');
         }
         if ($this->contains_any($source, ['przewod wspomagania', 'przewód wspomagania', 'waz wspomagania', 'wąż wspomagania', 'servolenkungsschlauch', 'servoleitung', 'power steering hose'])) {
@@ -184,6 +214,70 @@ class EbayDeCategoryRuleMapper
         }
 
         return [];
+    }
+
+    private function match_specific_ac_rule(string $source): array
+    {
+        if ($source === '') {
+            return [];
+        }
+        if ($this->contains_any($source, ['kompresor', 'sprezarka', 'sprężarka', 'klimakompressor', 'ac compressor'])) {
+            return $this->rule('ac_compressor', '33543', 0.96, 'ac_other_sample_title_ac_compressor');
+        }
+        if ($this->contains_any($source, ['panel', 'sterownik klimatyzacji', 'klimabedienteil', 'klimasteuerung', 'bedienfeld klima'])) {
+            return $this->rule('ac_panel', '262082', 0.95, 'ac_other_sample_title_ac_panel');
+        }
+        if ($this->contains_any($source, ['skraplacz', 'kondensator', 'chlodnica klimatyzacji', 'chłodnica klimatyzacji', 'klimakondensator', 'kondensator klimaanlage'])) {
+            return $this->rule('ac_condenser', '61864', 0.95, 'ac_other_sample_title_ac_condenser');
+        }
+        if ($this->contains_any($source, ['przewod klimatyzacji', 'przewód klimatyzacji', 'waz klimatyzacji', 'wąż klimatyzacji', 'rurka klimatyzacji', 'klimaleitung', 'klimaschlauch', 'kaltemittelleitung', 'kaeltemittelleitung'])) {
+            return $this->rule('ac_hose', '33544', 0.96, 'ac_other_sample_title_ac_hose');
+        }
+        return [];
+    }
+
+    private function is_uncategorized(string $wooName, string $wooPath): bool
+    {
+        $value = trim($wooName !== '' ? $wooName : $wooPath);
+        return $value === 'bez kategorii' || str_ends_with(trim($wooPath), 'bez kategorii');
+    }
+
+    private function is_ac_other_intent(string $wooName, string $wooPath): bool
+    {
+        $source = trim($wooName . ' ' . $wooPath);
+        return $this->contains_any($source, ['inne elementy ukladu klimatyzacji', 'inne elementy układu klimatyzacji', 'pozostale elementy klimatyzacji', 'pozostałe elementy klimatyzacji']);
+    }
+
+    private function is_tow_hook_intent(string $source): bool
+    {
+        return $this->contains_any($source, ['hak holowniczy', 'komplet haka', 'ucho holownicze', 'zaczep holowniczy', 'anhangerkupplung', 'anhaengerkupplung', 'tow hook', 'towbar', 'tow bar'])
+            || (bool) preg_match('/(^|[^a-z0-9])hak([^a-z0-9]|$)/', $source);
+    }
+
+    private function is_cooling_hose_intent(string $source): bool
+    {
+        return $this->contains_any($source, ['przewod / waz chlodnicy', 'przewód / wąż chłodnicy', 'waz chlodnicy', 'wąż chłodnicy', 'przewod chlodnicy', 'przewód chłodnicy', 'przewod chlodzenia', 'przewód chłodzenia', 'kühlerschlauch', 'kuhlerschlauch', 'kühlmittelschlauch', 'kuhlmittelschlauch', 'coolant hose', 'radiator hose']);
+    }
+
+    private function is_roof_interior_non_sunroof_intent(string $source): bool
+    {
+        return $this->contains_any($source, ['lusterko wsteczne', 'innenruckspiegel', 'innenrueckspiegel', 'rear view mirror', 'panel oswietlenia wnetrza', 'panel oświetlenia wnętrza', 'lampka wnetrza', 'lampka wnętrza', 'oswietlenie podsufitki', 'oświetlenie podsufitki', 'uchwyt sufitowy', 'podsufitka', 'tapicerka dachu', 'dachhimmel', 'headliner']);
+    }
+
+    private function roof_interior_rule(string $source): array
+    {
+        if ($this->contains_any($source, ['lusterko wsteczne', 'innenruckspiegel', 'innenrueckspiegel', 'rear view mirror'])) {
+            return $this->empty_rule('interior_mirror', 'interior_mirror_needs_manual_review_no_confirmed_ebay_de_leaf');
+        }
+        if ($this->contains_any($source, ['panel oswietlenia wnetrza', 'panel oświetlenia wnętrza', 'lampka wnetrza', 'lampka wnętrza', 'oswietlenie podsufitki', 'oświetlenie podsufitki', 'uchwyt sufitowy'])) {
+            return $this->empty_rule('interior_light', 'interior_light_needs_manual_review_no_confirmed_ebay_de_leaf');
+        }
+        return $this->rule('headliner', '33705', 0.89, 'headliner_review_rule_not_sunroof');
+    }
+
+    private function empty_rule(string $intent, string $reason): array
+    {
+        return ['intent' => $intent, 'category_id' => '', 'confidence' => 0.0, 'reason' => $reason];
     }
 
     private function rule(string $intent, string $categoryId, float $confidence, string $reason): array
