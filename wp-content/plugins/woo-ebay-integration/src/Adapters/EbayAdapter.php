@@ -3026,8 +3026,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $status = (string) ($mapping['status'] ?? '');
                 $source = (string) ($mapping['source'] ?? '');
                 $confidence = (float) ($mapping['confidence'] ?? 0);
-                if (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual_teaching_csv', 'manual_woo_category_mapping'], true)) {
-                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => $source === 'manual_woo_category_mapping' ? 'manual_woo_category_mapping' : ($source === 'manual_teaching_csv' ? 'manual_teaching_csv' : 'woo_category_mapping_manual'), 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
+                if (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual_teaching_csv', 'manual_woo_category_mapping', 'manual_worklist'], true)) {
+                    return ['category_id' => (string) $mapping['ebay_category_id'], 'status' => 'ready_manual', 'source' => $source === 'manual_woo_category_mapping' ? 'manual_woo_category_mapping' : ($source === 'manual_teaching_csv' ? 'manual_teaching_csv' : ($source === 'manual_worklist' ? 'manual_worklist' : 'woo_category_mapping_manual')), 'mapping' => $mapping, 'confidence' => $confidence, 'product_override_found' => false];
                 }
 
                 if ($status === 'mapped_auto' || $source === 'auto_taxonomy') {
@@ -3082,7 +3082,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $confidence = (float) ($mapping['confidence'] ?? 0);
         $threshold = CategoryMappingSafety::threshold($settings);
 
-        if ($categoryId !== '' && (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping'], true))) {
+        if ($categoryId !== '' && (in_array($status, ['mapped_manual', 'mapped_manual_teaching', 'mapped_manual_woo_category'], true) || ($status === '' && $source === 'manual') || in_array($source, ['manual', 'manual_teaching_csv', 'manual_woo_category_mapping', 'manual_worklist'], true))) {
             return ['accepted' => true, 'final_status' => 'ready_manual', 'ui_status' => 'accepted_manual', 'threshold' => $threshold, 'sanity_check_pass' => true, 'sanity_reason' => ''];
         }
 

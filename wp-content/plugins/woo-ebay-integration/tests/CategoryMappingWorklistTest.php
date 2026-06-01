@@ -139,6 +139,16 @@ final class CategoryMappingWorklistTestTaxonomy extends EbayTaxonomyService
         return $categories[$category_id] ?? null;
     }
 
+    public function category_cache_diagnostic(string $marketplace_id = 'EBAY_DE', array $sampleCategoryIds = []): array
+    {
+        $lookup = [];
+        foreach (($sampleCategoryIds !== [] ? $sampleCategoryIds : ['33544', '33615', '33566', '9886', '171115']) as $categoryId) {
+            $cached = $this->cached_category($marketplace_id, (string) $categoryId);
+            $lookup[(string) $categoryId] = ['found' => is_array($cached), 'leaf' => is_array($cached) ? !empty($cached['leaf']) : null];
+        }
+        return ['marketplace_id' => $marketplace_id, 'total_cached_categories' => 4, 'cached_leaf_categories' => 4, 'cached_non_leaf_categories' => 0, 'taxonomy_version' => '', 'last_cache_refresh_import_time' => '2026-06-01 00:00:00', 'sample_lookup_by_category_id' => $lookup, 'cache_status' => 'cache_available'];
+    }
+
     public function get_category_details_result(string $marketplace_id, string $category_id, bool $force_refresh = false): array
     {
         $this->apiCalls++;
@@ -311,6 +321,12 @@ $assert(array_key_exists('inserted_mappings', $importResult), 'Import summary mu
 $assert(array_key_exists('updated_mappings', $importResult), 'Import summary must include updated_mappings.');
 $assert(array_key_exists('deactivated_duplicate_mappings', $importResult), 'Import summary must include deactivated_duplicate_mappings.');
 $assert(array_key_exists('unchanged_mappings', $importResult), 'Import summary must include unchanged_mappings.');
+$assert(array_key_exists('import_debug_rows', $importResult), 'Import summary must include first-row debug diagnostics.');
+$assert(($importResult['import_debug_rows'][0]['final_ebay_category_id'] ?? '') === '99999', 'Import debug must record final_ebay_category_id.');
+$assert(array_key_exists('category_cache_diagnostic', $importResult), 'Import summary must include category cache diagnostic.');
+$validation = $GLOBALS['wei_test_options']['wei_ebay_category_validation_statuses'] ?? [];
+$assert(($validation['by_woo_term_id']['77']['category_id'] ?? '') === '99999', 'Import must mark the Woo category validation cache valid for the imported category-level mapping.');
+$assert(($validation['by_woo_term_id']['77']['source'] ?? '') === 'manual_worklist_import', 'Validation cache source must show manual_worklist_import.');
 
 $repo->mappingRows[5197] = [[
     'id' => 1,

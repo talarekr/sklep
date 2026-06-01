@@ -122,6 +122,47 @@ class EbayTaxonomyService
         ];
     }
 
+
+    public function category_cache_diagnostic(string $marketplace_id = 'EBAY_DE', array $sampleCategoryIds = []): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wei_ebay_category_tree_cache';
+        $sampleCategoryIds = $sampleCategoryIds !== [] ? $sampleCategoryIds : ['33544', '33615', '33566', '9886', '171115'];
+
+        $total = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE marketplace_id=%s", $marketplace_id));
+        $leaf = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE marketplace_id=%s AND is_leaf=1", $marketplace_id));
+        $nonLeaf = max(0, $total - $leaf);
+        $lastImportedAt = (string) $wpdb->get_var($wpdb->prepare("SELECT MAX(imported_at) FROM {$table} WHERE marketplace_id=%s", $marketplace_id));
+        $lastUpdatedAt = (string) $wpdb->get_var($wpdb->prepare("SELECT MAX(updated_at) FROM {$table} WHERE marketplace_id=%s", $marketplace_id));
+        $lookup = [];
+        foreach ($sampleCategoryIds as $categoryId) {
+            $categoryId = trim((string) $categoryId);
+            if ($categoryId === '') {
+                continue;
+            }
+            $cached = $this->cached_category($marketplace_id, $categoryId);
+            $lookup[$categoryId] = [
+                'category_id' => $categoryId,
+                'found' => is_array($cached),
+                'leaf' => is_array($cached) ? !empty($cached['leaf']) : null,
+                'category_name' => is_array($cached) ? (string) ($cached['category_name'] ?? '') : '',
+                'category_path' => is_array($cached) ? (string) ($cached['category_path'] ?? '') : '',
+            ];
+        }
+
+        return [
+            'marketplace_id' => $marketplace_id,
+            'total_cached_categories' => $total,
+            'cached_leaf_categories' => $leaf,
+            'cached_non_leaf_categories' => $nonLeaf,
+            'taxonomy_version' => (string) get_option('wei_ebay_category_tree_cache_taxonomy_version_' . sanitize_key($marketplace_id), ''),
+            'last_cache_refresh_import_time' => $lastImportedAt !== '' ? $lastImportedAt : $lastUpdatedAt,
+            'last_cache_update_time' => $lastUpdatedAt,
+            'sample_lookup_by_category_id' => $lookup,
+            'cache_status' => $total <= 0 ? 'cache_missing' : 'cache_available',
+        ];
+    }
+
     public function search_cached_automotive_categories(string $marketplace_id, string $query = '', int $limit = 50): array
     {
         global $wpdb;
