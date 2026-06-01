@@ -587,6 +587,19 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
                 <button class="button button-primary">Generate blocked category fix report</button>
             </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_category_mapping_worklist'); ?>
+                <input type="hidden" name="action" value="wei_generate_category_mapping_worklist" />
+                <input type="hidden" name="marketplace_id" value="EBAY_DE" />
+                <button class="button button-primary">Generate category-mapping-worklist.csv</button>
+            </form>
+            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_import_category_mapping_worklist'); ?>
+                <input type="hidden" name="action" value="wei_import_category_mapping_worklist" />
+                <input type="hidden" name="marketplace_id" value="EBAY_DE" />
+                <input type="file" name="category_mapping_worklist_csv" accept=".csv,text/csv" required />
+                <button class="button">Import filled category-mapping-worklist.csv</button>
+            </form>
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
         <?php
@@ -616,6 +629,18 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                     <li><a class="button" href="<?php echo esc_url($categoryAuditProblemsAdminUrl); ?>">Download last problems-only audit CSV</a></li>
                 <?php endif; ?>
             </ul></div>
+        <?php endif; ?>
+        <?php
+        $worklistReady = !empty($category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
+        $worklistDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('category-mapping-worklist.csv'));
+        ?>
+        <?php if ($worklistReady): ?>
+            <div class="notice notice-info inline"><p><strong>Category mapping worklist:</strong></p><ul>
+                <li>category-mapping-worklist.csv: <a class="button button-primary" href="<?php echo esc_url($worklistDownloadUrl); ?>">Download category-mapping-worklist.csv</a> · <a href="<?php echo esc_url((string) ($category_mapping_worklist_summary['worklist_csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0)); ?> bytes, <?php echo esc_html((string) (int) ($category_mapping_worklist_summary['rows'] ?? 0)); ?> rows)</li>
+            </ul></div>
+        <?php endif; ?>
+        <?php if (!empty($category_mapping_worklist_import_summary)): ?>
+            <details><summary>Category mapping worklist import JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($category_mapping_worklist_import_summary, 6000)); ?></pre></details>
         <?php endif; ?>
         <?php
         $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
