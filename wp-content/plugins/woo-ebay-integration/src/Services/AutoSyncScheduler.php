@@ -461,7 +461,7 @@ class AutoSyncScheduler
 
     private function is_category_blocked_status(string $status): bool
     {
-        return in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true);
+        return in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped', 'invalid_ebay_category_id', 'non_leaf_ebay_category_id'], true);
     }
 
     private function readiness_log_context(array $summary): array
@@ -498,7 +498,8 @@ class AutoSyncScheduler
 
             return [
                 'product_id' => (int) ($item['product_id'] ?? 0),
-                'title' => (string) ($item['product_title'] ?? ''),
+                'product_title' => (string) ($item['product_title'] ?? ''),
+            'title' => (string) ($item['product_title'] ?? ''),
                 'detected_intent' => (string) ($item['detected_intent'] ?? ''),
                 'category_id' => (string) ($item['category_id'] ?? ''),
                 'ebay_category_path' => (string) ($item['category_path'] ?? ''),
@@ -557,6 +558,8 @@ class AutoSyncScheduler
             $state['total_scanned'] = (int) ($state['total_scanned'] ?? 0) + 1;
             $state[$auditStatus . '_count'] = (int) ($state[$auditStatus . '_count'] ?? 0) + 1;
             $processedThisBatch++;
+
+            $this->increment_category_audit_detail_counts($state, $result, $item, $auditStatus);
 
             if ($auditStatus !== 'ready') {
                 $this->append_limited($state['sample_problem_product_ids'], $productId, self::READINESS_BUCKET_LIMIT);
@@ -625,6 +628,9 @@ class AutoSyncScheduler
             'total_scanned' => 0,
             'ready_count' => 0,
             'blocked_by_category_count' => 0,
+            'invalid_ebay_category_id_count' => 0,
+            'non_leaf_category_count' => 0,
+            'category_sanity_failed_count' => 0,
             'missing_category_count' => 0,
             'missing_required_aspects_count' => 0,
             'content_not_ready_count' => 0,
@@ -695,6 +701,9 @@ class AutoSyncScheduler
             'total_scanned' => (int) ($state['total_scanned'] ?? 0),
             'ready_count' => (int) ($state['ready_count'] ?? 0),
             'blocked_by_category_count' => (int) ($state['blocked_by_category_count'] ?? 0),
+            'invalid_ebay_category_id_count' => (int) ($state['invalid_ebay_category_id_count'] ?? 0),
+            'non_leaf_category_count' => (int) ($state['non_leaf_category_count'] ?? 0),
+            'category_sanity_failed_count' => (int) ($state['category_sanity_failed_count'] ?? 0),
             'missing_category_count' => (int) ($state['missing_category_count'] ?? 0),
             'missing_required_aspects_count' => (int) ($state['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($state['content_not_ready_count'] ?? 0),
@@ -704,6 +713,24 @@ class AutoSyncScheduler
             'top_10_detected_intents_with_problems' => array_slice($intentProblemCounts, 0, 10, true),
             'reports' => (array) ($state['reports'] ?? []),
         ];
+    }
+
+    private function increment_category_audit_detail_counts(array &$state, array $result, array $item, string $auditStatus): void
+    {
+        $status = (string) ($result['status'] ?? $item['category_status'] ?? '');
+        $category = is_array($result['category'] ?? null) ? $result['category'] : [];
+        $validationStatus = (string) ($category['validation_status'] ?? $item['validation_status'] ?? '');
+        $reason = strtolower((string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? $item['primary_reason'] ?? ''));
+
+        if ($status === 'invalid_ebay_category_id' || $validationStatus === 'invalid_ebay_category_id' || str_contains($reason, 'invalid_ebay_category_id')) {
+            $state['invalid_ebay_category_id_count'] = (int) ($state['invalid_ebay_category_id_count'] ?? 0) + 1;
+        }
+        if ($status === 'non_leaf_ebay_category_id' || $validationStatus === 'non_leaf_ebay_category_id' || str_contains($reason, 'non_leaf')) {
+            $state['non_leaf_category_count'] = (int) ($state['non_leaf_category_count'] ?? 0) + 1;
+        }
+        if ($status === 'category_sanity_failed' || str_contains($reason, 'sanity')) {
+            $state['category_sanity_failed_count'] = (int) ($state['category_sanity_failed_count'] ?? 0) + 1;
+        }
     }
 
     private function audit_status(array $result, array $item): string
@@ -798,6 +825,7 @@ class AutoSyncScheduler
             'woo_subcategory_name' => is_object($wooTerm) && isset($wooTerm->name) ? (string) $wooTerm->name : '',
             'sku' => (string) ($item['sku'] ?? ''),
             'wei_ebay_sku' => (string) ($item['ebay_sku'] ?? ''),
+            'product_title' => (string) ($item['product_title'] ?? ''),
             'title' => (string) ($item['product_title'] ?? ''),
             'woo_category_path' => $this->product_category_paths($productId),
             'detected_intent' => (string) ($item['detected_intent'] ?? ''),
@@ -812,7 +840,10 @@ class AutoSyncScheduler
             'proposed_ebay_category_path' => $proposedPath,
             'status' => $auditStatus,
             'reason' => $reason,
+            'category_sanity_reason' => (string) ($item['category_sanity_reason'] ?? $item['mapping_error_reason'] ?? ''),
             'missing_aspects' => implode('|', array_map('strval', (array) ($item['missing_aspects'] ?? []))),
+            'content_status' => !empty($item['content_ready']) ? 'ready' : 'not_ready',
+            'price_status' => !empty($item['price_ready']) ? 'ready' : 'not_ready',
             'required_aspects' => implode('|', array_map('strval', (array) ($item['required_aspects'] ?? []))),
             'top_3_candidates_json' => wp_json_encode(array_slice((array) ($item['top_candidates'] ?? []), 0, 3), JSON_UNESCAPED_UNICODE),
             'edit_url' => (string) ($item['edit_url'] ?? ''),
@@ -881,13 +912,17 @@ class AutoSyncScheduler
             return ['error' => 'failed_to_create_audit_upload_dir', 'dir' => $baseDir];
         }
         $reports = [];
-        $reports['full_audit_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-full.csv', $fullRows);
-        $reports['problems_only_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-problems.csv', $problemRows);
+        $reports['full_audit_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '.csv', $fullRows);
+        $reports['problems_only_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-problems-only.csv', $problemRows);
         $reports['missing_category_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-missing-category.csv', $missingCategoryRows);
         $reports['missing_required_aspects_csv'] = $this->write_csv_report($baseDir, $baseUrl, $runSlug . '-missing-required-aspects.csv', $missingAspectsRows);
         $jsonPath = trailingslashit($baseDir) . $runSlug . '-debug.json';
         file_put_contents($jsonPath, wp_json_encode($debugDetails, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        $reports['debug_json'] = ['path' => $jsonPath, 'url' => trailingslashit($baseUrl) . basename($jsonPath)];
+        $reports['debug_json'] = ['path' => $jsonPath, 'url' => trailingslashit($baseUrl) . basename($jsonPath), 'exists' => is_file($jsonPath), 'size' => is_file($jsonPath) ? (int) filesize($jsonPath) : 0];
+        if (!empty($reports['problems_only_csv']['path']) && is_readable((string) $reports['problems_only_csv']['path'])) {
+            update_option('wei_ebay_last_problems_only_csv_path', (string) $reports['problems_only_csv']['path'], false);
+            update_option('wei_ebay_last_problems_only_csv', $reports['problems_only_csv'], false);
+        }
         return $reports;
     }
 
@@ -899,18 +934,18 @@ class AutoSyncScheduler
             return ['error' => 'failed_to_open_csv', 'path' => $path];
         }
         $headers = $rows !== [] ? array_keys($rows[0]) : [
-            'product_id', 'woo_category_id', 'woo_subcategory_name', 'sku', 'wei_ebay_sku', 'title', 'woo_category_path', 'detected_intent',
+            'product_id', 'product_title', 'woo_category_id', 'woo_subcategory_name', 'sku', 'wei_ebay_sku', 'title', 'woo_category_path', 'detected_intent',
             'current_ebay_category_id', 'current_ebay_category_name', 'current_ebay_category_path',
             'mapping_status', 'mapping_source', 'mapping_confidence', 'proposed_ebay_category_id',
             'proposed_ebay_category_name', 'proposed_ebay_category_path', 'status', 'reason',
-            'missing_aspects', 'required_aspects', 'top_3_candidates_json', 'edit_url',
+            'category_sanity_reason', 'missing_aspects', 'content_status', 'price_status', 'required_aspects', 'top_3_candidates_json', 'edit_url',
         ];
         fputcsv($fh, $headers);
         foreach ($rows as $row) {
             fputcsv($fh, array_map(static fn($header) => (string) ($row[$header] ?? ''), $headers));
         }
         fclose($fh);
-        return ['path' => $path, 'url' => trailingslashit($baseUrl) . $filename, 'rows' => count($rows)];
+        return ['path' => $path, 'url' => trailingslashit($baseUrl) . $filename, 'rows' => count($rows), 'exists' => is_file($path), 'size' => is_file($path) ? (int) filesize($path) : 0];
     }
 
     private function product_category_paths(int $productId): string

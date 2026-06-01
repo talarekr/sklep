@@ -548,8 +548,9 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <button class="button">Validate current category mappings</button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_full_category_audit'); ?>
-                <input type="hidden" name="action" value="wei_full_category_audit" />
+                <?php wp_nonce_field('wei_run_category_readiness_audit'); ?>
+                <input type="hidden" name="action" value="wei_run_category_readiness_audit" />
+                <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
                 <input type="hidden" name="verbose_debug" value="1" />
                 <button class="button">Run category readiness audit</button>
             </form>
@@ -567,6 +568,23 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             </form>
             <a class="button" href="<?php echo esc_url($loadCategoryMappingsUrl); ?>">Open mapping table</a>
         </div>
+        <?php
+        $categoryAuditReports = is_array($full_category_audit_summary['reports'] ?? null) ? $full_category_audit_summary['reports'] : [];
+        $categoryAuditFullReport = is_array($categoryAuditReports['full_audit_csv'] ?? null) ? $categoryAuditReports['full_audit_csv'] : [];
+        $categoryAuditProblemsReport = is_array($categoryAuditReports['problems_only_csv'] ?? null) ? $categoryAuditReports['problems_only_csv'] : [];
+        $categoryAuditFullReady = !empty($categoryAuditFullReport['exists']) && (int) ($categoryAuditFullReport['size'] ?? 0) > 0;
+        $categoryAuditProblemsReady = !empty($categoryAuditProblemsReport['exists']) && (int) ($categoryAuditProblemsReport['size'] ?? 0) > 0;
+        ?>
+        <?php if ($categoryAuditFullReady || $categoryAuditProblemsReady): ?>
+            <div class="notice notice-info inline"><p><strong>Category readiness audit files:</strong></p><ul>
+                <?php if ($categoryAuditFullReady): ?>
+                    <li>Full report CSV: <a href="<?php echo esc_url((string) ($categoryAuditFullReport['url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($categoryAuditFullReport['size'] ?? 0)); ?> bytes)</li>
+                <?php endif; ?>
+                <?php if ($categoryAuditProblemsReady): ?>
+                    <li>Problems only CSV: <a href="<?php echo esc_url((string) ($categoryAuditProblemsReport['url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($categoryAuditProblemsReport['size'] ?? 0)); ?> bytes)</li>
+                <?php endif; ?>
+            </ul></div>
+        <?php endif; ?>
         <?php
         $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
         $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
