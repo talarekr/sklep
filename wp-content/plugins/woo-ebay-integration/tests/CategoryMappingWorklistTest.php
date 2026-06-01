@@ -166,6 +166,8 @@ final class CategoryMappingWorklistTestRepository extends CategoryMappingReposit
 {
     public array $savedMappings = [];
     public array $mappingRows = [];
+    public array $manualMappingCategories = [];
+    public array $sampleProductsByCategory = [];
 
     public function __construct() {}
 
@@ -192,6 +194,24 @@ final class CategoryMappingWorklistTestRepository extends CategoryMappingReposit
             }
         }
         return null;
+    }
+
+
+
+    public function list_manual_mapping_categories(string $marketplaceId = 'EBAY_DE', array $args = []): array
+    {
+        $rows = [];
+        foreach ($this->manualMappingCategories as $row) {
+            $termId = (int) ($row['term_id'] ?? 0);
+            $row['sample_products'] = $this->sampleProductsByCategory[$termId] ?? [];
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
+    public function sample_products_for_category(int $term_id, int $limit = 5): array
+    {
+        return array_slice($this->sampleProductsByCategory[$term_id] ?? [], 0, max(1, min(10, $limit)));
     }
 
     public function save_manual_worklist_mapping(int $wooCategoryId, string $marketplaceId, array $category): array
@@ -238,6 +258,8 @@ foreach ($expectedHeaders as $header) {
 $assert(str_contains($serviceSource, "return ['" . implode("','", $expectedHeaders) . "'];"), 'category-mapping-worklist.csv headers must put final_ebay_category_id first and sample_product_title second.');
 
 $assert(str_contains($serviceSource, 'generate_category_mapping_worklist'), 'Worklist export service method must exist.');
+$assert(str_contains($serviceSource, 'generate_all_category_mapping_worklist'), 'All-category worklist export service method must exist.');
+$assert(str_contains($serviceSource, 'ALL_CATEGORY_MAPPING_WORKLIST_FILENAME'), 'All-category worklist filename constant must exist.');
 $assert(str_contains($serviceSource, 'import_category_mapping_worklist'), 'Worklist import service method must exist.');
 $assert(str_contains($serviceSource, 'if ($problemType === \'\')') && str_contains($serviceSource, 'continue;'), 'Worklist export must exclude non-category readiness problems and ready rows.');
 $assert(str_contains($serviceSource, 'sample_product_title') && str_contains($serviceSource, 'product_title'), 'Worklist export must include one representative sample product title.');
@@ -251,8 +273,12 @@ $assert(!str_contains($serviceSource, 'update_post_meta(') && !str_contains($ser
 $assert(str_contains($repoSource, "'source' => 'manual_worklist'"), 'Valid import must save category mapping with source manual_worklist.');
 $assert(str_contains($repoSource, 'disabled_duplicate'), 'Import must deduplicate/deactivate older duplicate mappings.');
 $assert(str_contains($adminSource, "add_action('admin_post_wei_generate_category_mapping_worklist'") && str_contains($adminSource, "add_action('admin_post_wei_import_category_mapping_worklist'"), 'Admin hooks must exist for worklist export/import.');
+$assert(str_contains($adminSource, "add_action('admin_post_wei_generate_all_category_mapping_worklist'"), 'Admin hook must exist for all-category worklist export.');
 $assert(str_contains($adminSource, 'CATEGORY_MAPPING_WORKLIST_FILENAME'), 'Download allow-list must include category-mapping-worklist.csv.');
+$assert(str_contains($adminSource, 'ALL_CATEGORY_MAPPING_WORKLIST_FILENAME'), 'Download allow-list must include all-category-mapping-worklist.csv.');
 $assert(str_contains($viewSource, 'Download category-mapping-worklist.csv'), 'Admin UI must show a download link after the worklist export completes.');
+$assert(str_contains($viewSource, 'Generate all-category-mapping-worklist.csv') && str_contains($viewSource, 'Download all-category-mapping-worklist.csv'), 'Admin UI must expose all-category worklist generate and download controls.');
+$assert(str_contains($viewSource, 'Use all-category-mapping-worklist.csv to complete mapping for every Woo category with products.'), 'Admin UI must explain the all-category mapping worklist purpose.');
 
 $GLOBALS['wei_test_terms'] = [55 => 'Wąż / Przewód klimatyzacji A/C', 77 => 'Czujniki'];
 $sourceCsv = trailingslashit($GLOBALS['wei_test_upload_dir']) . 'source-problems.csv';
@@ -292,6 +318,74 @@ $assert(($rows[0]['sample_product_titles'] ?? '') === 'Przewód klimatyzacji Aud
 $assert(($rows[0]['sample_product_ids'] ?? '') === '123|124', 'sample_product_ids must keep multiple IDs later in the file.');
 $assert(($rows[1]['sample_product_title'] ?? '') === 'Czujnik ABS BMW E90', 'Second Woo category must have its own representative title.');
 $assert(($rows[1]['sample_product_id'] ?? '') === '777', 'Second Woo category sample_product_id must match its representative title.');
+
+
+$seedCsv = trailingslashit($GLOBALS['wei_test_upload_dir']) . 'manual-seed-worklist.csv';
+$fh = fopen($seedCsv, 'wb');
+fputcsv($fh, ['final_ebay_category_id', 'sample_product_title', 'woo_category_id', 'woo_category_name', 'manual_notes']);
+fputcsv($fh, ['12345', 'Seeded title', '55', 'Wąż / Przewód klimatyzacji A/C', 'preserve me']);
+fclose($fh);
+
+$repo->manualMappingCategories = [
+    ['term_id' => 55, 'name' => 'Wąż / Przewód klimatyzacji A/C', 'product_count' => 2],
+    ['term_id' => 77, 'name' => 'Czujniki', 'product_count' => 3],
+    ['term_id' => 88, 'name' => 'Legacy', 'product_count' => 1],
+    ['term_id' => 99, 'name' => 'Empty category', 'product_count' => 0],
+];
+$repo->sampleProductsByCategory = [
+    55 => [['id' => 123, 'title' => 'Przewód klimatyzacji Audi A4'], ['id' => 124, 'title' => 'Drugi przewód klimatyzacji Audi A6']],
+    77 => [['id' => 777, 'title' => 'Czujnik ABS BMW E90']],
+    88 => [['id' => 888, 'title' => 'Legacy sample']],
+    99 => [['id' => 999, 'title' => 'Should be excluded']],
+];
+$repo->mappingRows[77] = [[
+    'id' => 20,
+    'woo_term_id' => 77,
+    'marketplace_id' => 'EBAY_DE',
+    'ebay_category_id' => '33566',
+    'ebay_category_name' => 'Pompa ABS',
+    'ebay_category_path' => 'Auto > Brakes > ABS pumps',
+    'source' => 'manual_worklist',
+    'status' => 'mapped_manual',
+    'active' => 1,
+    'resolver_priority' => 20,
+]];
+$repo->mappingRows[88] = [[
+    'id' => 21,
+    'woo_term_id' => 88,
+    'marketplace_id' => 'EBAY_DE',
+    'ebay_category_id' => '262084',
+    'source' => 'legacy',
+    'status' => 'mapped_auto',
+    'active' => 1,
+    'resolver_priority' => 60,
+]];
+$GLOBALS['wei_test_options']['wei_ebay_category_mapping_worklist_import_summary'] = ['source_csv' => $seedCsv];
+$allResult = $service->generate_all_category_mapping_worklist('EBAY_DE', $seedCsv);
+$assert(($allResult['result'] ?? '') === 'success', 'All-category worklist export should succeed.');
+$assert(($allResult['rows'] ?? null) === 3, 'All-category worklist must include every Woo category with products and exclude empty categories.');
+$allRows = [];
+$fh = fopen((string) ($allResult['worklist_csv_path'] ?? ''), 'rb');
+$allHeaders = fgetcsv($fh) ?: [];
+while (($data = fgetcsv($fh)) !== false) {
+    $allRows[] = array_combine($allHeaders, $data) ?: [];
+}
+fclose($fh);
+$expectedAllHeaders = ['final_ebay_category_id','sample_product_title','woo_category_id','woo_category_name','product_count','current_ebay_category_id','current_ebay_category_name','current_ebay_category_path','current_mapping_source','current_mapping_status','current_audit_status','sample_product_id','sample_product_ids','sample_product_titles','manual_notes'];
+$assert($allHeaders === $expectedAllHeaders, 'All-category worklist header order must match the requested user-friendly layout.');
+$assert(($allHeaders[0] ?? '') === 'final_ebay_category_id', 'All-category final_ebay_category_id must be first column.');
+$assert(($allHeaders[1] ?? '') === 'sample_product_title', 'All-category sample_product_title must be second column.');
+$assert(!in_array('99', array_column($allRows, 'woo_category_id'), true), 'All-category worklist must exclude Woo categories with no products.');
+$seededRow = array_values(array_filter($allRows, static fn(array $row): bool => ($row['woo_category_id'] ?? '') === '55'))[0] ?? [];
+$assert(($seededRow['final_ebay_category_id'] ?? '') === '12345', 'All-category worklist must preserve user-filled seed CSV mappings.');
+$assert(($seededRow['manual_notes'] ?? '') === 'preserve me', 'All-category worklist should carry seed manual notes.');
+$manualRow = array_values(array_filter($allRows, static fn(array $row): bool => ($row['woo_category_id'] ?? '') === '77'))[0] ?? [];
+$assert(($manualRow['final_ebay_category_id'] ?? '') === '33566', 'All-category worklist must prefill trusted current manual_worklist mappings.');
+$legacyRow = array_values(array_filter($allRows, static fn(array $row): bool => ($row['woo_category_id'] ?? '') === '88'))[0] ?? [];
+$assert(($legacyRow['final_ebay_category_id'] ?? '') === '', 'All-category worklist must not prefill legacy/untrusted current mappings.');
+$assert(($allRows[0]['final_ebay_category_id'] ?? 'not-empty') === '', 'All-category worklist must sort empty final_ebay_category_id rows first.');
+$assert(($manualRow['sample_product_title'] ?? '') === 'Czujnik ABS BMW E90' && ($manualRow['sample_product_id'] ?? '') === '777', 'All-category representative title and sample_product_id must match.');
+$assert(($allResult['ebay_api_called'] ?? null) === false && $taxonomy->apiCalls === 0, 'All-category worklist generation must not call eBay API methods.');
 
 $oldOrderCsv = trailingslashit($GLOBALS['wei_test_upload_dir']) . 'old-order-worklist.csv';
 $oldHeaders = ['woo_category_id','woo_category_name','blocked_product_count','total_product_count_in_category','current_ebay_category_id','current_ebay_category_name','current_ebay_category_path','problem_type','sample_product_ids','sample_product_titles','final_ebay_category_id','manual_notes'];

@@ -62,6 +62,7 @@ class AdminPage
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
         add_action('admin_post_wei_generate_blocked_category_fix_report', [$this, 'generate_blocked_category_fix_report']);
         add_action('admin_post_wei_generate_category_mapping_worklist', [$this, 'generate_category_mapping_worklist']);
+        add_action('admin_post_wei_generate_all_category_mapping_worklist', [$this, 'generate_all_category_mapping_worklist']);
         add_action('admin_post_wei_import_category_mapping_worklist', [$this, 'import_category_mapping_worklist']);
         add_action('admin_post_download_wei_report', [$this, 'download_wei_report']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
@@ -354,6 +355,8 @@ class AdminPage
         $blocked_category_fix_report_summary = is_array($blocked_category_fix_report_summary) ? $blocked_category_fix_report_summary : [];
         $category_mapping_worklist_summary = get_option('wei_ebay_category_mapping_worklist_summary', []);
         $category_mapping_worklist_summary = is_array($category_mapping_worklist_summary) ? $category_mapping_worklist_summary : [];
+        $all_category_mapping_worklist_summary = get_option('wei_ebay_all_category_mapping_worklist_summary', []);
+        $all_category_mapping_worklist_summary = is_array($all_category_mapping_worklist_summary) ? $all_category_mapping_worklist_summary : [];
         $category_mapping_worklist_import_summary = get_option('wei_ebay_category_mapping_worklist_import_summary', []);
         $category_mapping_worklist_import_summary = is_array($category_mapping_worklist_import_summary) ? $category_mapping_worklist_import_summary : [];
         $ovoko_category_suggestions_summary = get_option('wei_ebay_ovoko_category_suggestions_summary', []);
@@ -1136,6 +1139,21 @@ class AdminPage
         $this->go();
     }
 
+
+    public function generate_all_category_mapping_worklist(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_all_category_mapping_worklist');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $lastImport = get_option('wei_ebay_category_mapping_worklist_import_summary', []);
+        $seedCsvPath = is_array($lastImport) ? (string) ($lastImport['source_csv'] ?? '') : '';
+        $reporter = new BlockedCategoryFixReportService($this->categoryRepo, $this->taxonomy, $this->logger);
+        $res = $reporter->generate_all_category_mapping_worklist($marketplaceId, $seedCsvPath);
+        update_option('wei_ebay_all_category_mapping_worklist_summary', $res, false);
+        $this->set_status('All-category mapping worklist export: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
     public function import_category_mapping_worklist(): void
     {
         $this->require_manage_options();
@@ -1182,6 +1200,7 @@ class AdminPage
             BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::RECOMMENDATIONS_FILENAME,
             BlockedCategoryFixReportService::FIX_IMPORT_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::FIX_IMPORT_FILENAME,
             BlockedCategoryFixReportService::CATEGORY_MAPPING_WORKLIST_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::CATEGORY_MAPPING_WORKLIST_FILENAME,
+            BlockedCategoryFixReportService::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME,
         ];
         foreach (['full_report_csv_path', 'problems_only_csv_path'] as $pathKey) {
             $candidate = (string) ($audit[$pathKey] ?? '');

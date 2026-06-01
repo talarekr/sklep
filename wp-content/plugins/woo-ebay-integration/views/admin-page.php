@@ -544,6 +544,8 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         $categoryAuditProblemsAdminUrl = (string) ($lastCategoryAudit['problems_only_csv_admin_url'] ?? $categoryAuditDownloadUrl((string) ($lastCategoryAudit['problems_only_csv_path'] ?? '')));
         $worklistReady = !empty($category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
         $worklistDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('category-mapping-worklist.csv'));
+        $allWorklistReady = !empty($all_category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($all_category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
+        $allWorklistDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('all-category-mapping-worklist.csv'));
         $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
         $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
         $blockedFixRecommendationDownloadUrl = admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode('blocked_category_mapping_recommendations.csv'));
@@ -578,10 +580,12 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         </section>
 
         <section class="wei-card" data-wei-category-section="reczne-mapowanie"><h3>Section 2 — Ręczne mapowanie kategoriami</h3>
-            <p class="description"><strong>Fill only final_ebay_category_id. Leave uncertain categories empty. Empty rows are skipped.</strong></p>
+            <p class="description"><strong>Fill only final_ebay_category_id. Leave uncertain categories empty. Empty rows are skipped.</strong> Use all-category-mapping-worklist.csv to complete mapping for every Woo category with products.</p>
             <div class="wei-actions">
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_category_mapping_worklist'); ?><input type="hidden" name="action" value="wei_generate_category_mapping_worklist" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><button class="button button-primary">Generate category-mapping-worklist.csv</button></form>
                 <?php if ($worklistReady): ?><a class="button button-primary" href="<?php echo esc_url($worklistDownloadUrl); ?>">Download category-mapping-worklist.csv</a><span class="description"><?php echo esc_html(basename((string) ($category_mapping_worklist_summary['worklist_csv_path'] ?? 'category-mapping-worklist.csv'))); ?> · <?php echo esc_html((string) ($category_mapping_worklist_summary['generated_at'] ?? $category_mapping_worklist_summary['updated_at'] ?? '')); ?> · <?php echo esc_html((string) (int) ($category_mapping_worklist_summary['rows'] ?? 0)); ?> rows</span><?php endif; ?>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_generate_all_category_mapping_worklist'); ?><input type="hidden" name="action" value="wei_generate_all_category_mapping_worklist" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><button class="button button-primary">Generate all-category-mapping-worklist.csv</button></form>
+                <?php if ($allWorklistReady): ?><a class="button button-primary" href="<?php echo esc_url($allWorklistDownloadUrl); ?>">Download all-category-mapping-worklist.csv</a><span class="description"><?php echo esc_html(basename((string) ($all_category_mapping_worklist_summary['worklist_csv_path'] ?? 'all-category-mapping-worklist.csv'))); ?> · <?php echo esc_html((string) ($all_category_mapping_worklist_summary['generated_at'] ?? $all_category_mapping_worklist_summary['updated_at'] ?? '')); ?> · <?php echo esc_html((string) (int) ($all_category_mapping_worklist_summary['rows'] ?? 0)); ?> rows</span><?php endif; ?>
                 <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_import_category_mapping_worklist'); ?><input type="hidden" name="action" value="wei_import_category_mapping_worklist" /><input type="hidden" name="marketplace_id" value="EBAY_DE" /><input type="file" name="category_mapping_worklist_csv" accept=".csv,text/csv" required /><button class="button">Import filled category-mapping-worklist.csv</button></form>
             </div>
             <div class="wei-grid">
@@ -631,7 +635,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <p class="description">Ovoko category mapping CSV can be imported here later when available.</p>
         </section>
 
-        <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'last_audit' => $lastCategoryAudit, 'worklist' => $category_mapping_worklist_summary], 6000)); ?></pre></details>
+        <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'last_audit' => $lastCategoryAudit, 'worklist' => $category_mapping_worklist_summary, 'all_worklist' => $all_category_mapping_worklist_summary], 6000)); ?></pre></details>
     </div>
 
     <div class="wei-box" data-wei-module="publish">
