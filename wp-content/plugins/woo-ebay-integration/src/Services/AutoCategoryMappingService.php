@@ -1797,7 +1797,7 @@ class AutoCategoryMappingService
     public function import_production_category_mapping_csv(string $csvPath, string $marketplaceId = 'EBAY_DE'): array
     {
         $rows = $this->read_csv_assoc($csvPath);
-        $summary = ['imported_at' => gmdate('Y-m-d H:i:s'), 'source_csv' => $csvPath, 'total_rows' => count($rows), 'inserted' => 0, 'updated' => 0, 'skipped' => 0, 'skipped_empty_ebay_id' => 0, 'invalid' => 0, 'errors' => []];
+        $summary = ['imported_at' => gmdate('Y-m-d H:i:s'), 'source_csv' => $csvPath, 'total_rows' => count($rows), 'inserted' => 0, 'updated' => 0, 'skipped' => 0, 'skipped_empty_ebay_id' => 0, 'invalid' => 0, 'validation_cache_invalidated' => 0, 'errors' => []];
         foreach ($rows as $index => $row) {
             $rowNumber = $index + 2;
             $allEmpty = true;
@@ -1828,6 +1828,7 @@ class AutoCategoryMappingService
                 $details = $this->taxonomy->get_category_details_result($marketplaceId, $ebayId);
                 $ebayPath = (string) ($details['category_path'] ?? '');
             }
+            $oldEbayId = (string) ($existing['ebay_category_id'] ?? '');
             $this->categoryRepo->upsert([
                 'marketplace_id' => $marketplaceId,
                 'woo_term_id' => $wooId,
@@ -1843,9 +1844,36 @@ class AutoCategoryMappingService
                 'error_reason' => (string) ($row['note'] ?? ''),
             ]);
             if ($existing) { $summary['updated']++; } else { $summary['inserted']++; }
+            if (!$existing || $oldEbayId !== $ebayId) {
+                $this->invalidate_category_validation_cache($wooId, $oldEbayId, $ebayId);
+                $summary['validation_cache_invalidated']++;
+            }
         }
         update_option('wei_ebay_category_mapping_import_summary', $summary, false);
         return $summary;
+    }
+
+
+    private function invalidate_category_validation_cache(int $wooTermId, string $oldCategoryId, string $newCategoryId): void
+    {
+        $validation = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
+        if (!is_array($validation)) {
+            return;
+        }
+        if (isset($validation['by_woo_term_id']) && is_array($validation['by_woo_term_id'])) {
+            unset($validation['by_woo_term_id'][(string) $wooTermId]);
+        }
+        if (isset($validation['by_category_id']) && is_array($validation['by_category_id'])) {
+            if ($oldCategoryId !== '') {
+                unset($validation['by_category_id'][$oldCategoryId]);
+            }
+            if ($newCategoryId !== '' && $newCategoryId !== $oldCategoryId) {
+                unset($validation['by_category_id'][$newCategoryId]);
+            }
+        }
+        $validation['updated_at'] = gmdate('c');
+        $validation['last_invalidated_by_import'] = ['woo_term_id' => $wooTermId, 'old_ebay_category_id' => $oldCategoryId, 'new_ebay_category_id' => $newCategoryId, 'at' => gmdate('c')];
+        update_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, $validation, false);
     }
 
     private function woo_category_export_rows(string $marketplaceId, bool $leafOnly): array

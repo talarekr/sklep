@@ -783,8 +783,19 @@ class AutoSyncScheduler
             $currentCategoryPath = (string) ($mapping['ebay_category_path'] ?? '');
         }
 
+        $wooTermId = (int) ($category['woo_term_id'] ?? $mapping['woo_term_id'] ?? 0);
+        if ($wooTermId <= 0) {
+            $terms = wp_get_post_terms($productId, 'product_cat');
+            if (!is_wp_error($terms) && !empty($terms[0]) && is_object($terms[0]) && isset($terms[0]->term_id)) {
+                $wooTermId = (int) $terms[0]->term_id;
+            }
+        }
+        $wooTerm = $wooTermId > 0 ? get_term($wooTermId, 'product_cat') : null;
+
         return [
             'product_id' => $productId,
+            'woo_category_id' => $wooTermId > 0 ? (string) $wooTermId : '',
+            'woo_subcategory_name' => is_object($wooTerm) && isset($wooTerm->name) ? (string) $wooTerm->name : '',
             'sku' => (string) ($item['sku'] ?? ''),
             'wei_ebay_sku' => (string) ($item['ebay_sku'] ?? ''),
             'title' => (string) ($item['product_title'] ?? ''),
@@ -888,7 +899,7 @@ class AutoSyncScheduler
             return ['error' => 'failed_to_open_csv', 'path' => $path];
         }
         $headers = $rows !== [] ? array_keys($rows[0]) : [
-            'product_id', 'sku', 'wei_ebay_sku', 'title', 'woo_category_path', 'detected_intent',
+            'product_id', 'woo_category_id', 'woo_subcategory_name', 'sku', 'wei_ebay_sku', 'title', 'woo_category_path', 'detected_intent',
             'current_ebay_category_id', 'current_ebay_category_name', 'current_ebay_category_path',
             'mapping_status', 'mapping_source', 'mapping_confidence', 'proposed_ebay_category_id',
             'proposed_ebay_category_name', 'proposed_ebay_category_path', 'status', 'reason',

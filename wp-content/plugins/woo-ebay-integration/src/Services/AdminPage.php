@@ -57,6 +57,7 @@ class AdminPage
         add_action('admin_post_wei_generate_all_ebay_de_category_suggestions', [$this, 'generate_all_ebay_de_category_suggestions']);
         add_action('admin_post_wei_reset_ebay_de_category_suggestions_progress', [$this, 'reset_ebay_de_category_suggestions_progress']);
         add_action('admin_post_wei_repair_blocked_category_mappings', [$this, 'repair_blocked_category_mappings']);
+        add_action('admin_post_wei_generate_blocked_category_fix_report', [$this, 'generate_blocked_category_fix_report']);
         add_action('admin_post_wei_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
         add_action('admin_post_wei_apply_manual_woo_category_mappings', [$this, 'apply_manual_woo_category_mappings']);
         add_action('admin_post_wei_export_category_teaching_csv', [$this, 'export_category_teaching_csv']);
@@ -982,6 +983,31 @@ class AdminPage
         $this->go();
     }
 
+
+    public function generate_blocked_category_fix_report(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_blocked_category_fix_report');
+        $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
+        $path = $this->latest_audit_report_path('problems_only_csv');
+        if ($path === '') {
+            $this->set_status('Blocked category fix report failed: problems CSV not found. Run the full category audit first.');
+            $this->go();
+        }
+        $reporter = new BlockedCategoryFixReportService($this->categoryRepo, $this->taxonomy, $this->logger);
+        $res = $reporter->generate_from_audit($path, $marketplaceId);
+        $this->set_status('Blocked category fix report: ' . wp_json_encode([
+            'blocked_by_category_rows' => (int) ($res['blocked_by_category_rows'] ?? 0),
+            'recommended_products' => (int) ($res['recommended_products'] ?? 0),
+            'recommended_categories' => (int) ($res['recommended_categories'] ?? 0),
+            'high_confidence_products' => (int) ($res['high_confidence_products'] ?? 0),
+            'high_confidence_categories' => (int) ($res['high_confidence_categories'] ?? 0),
+            'fix_import_rows' => (int) ($res['fix_import_rows'] ?? 0),
+            'reports' => (array) ($res['reports'] ?? []),
+        ], JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
     public function repair_blocked_category_mappings(): void
     {
         $this->require_manage_options();
@@ -1127,6 +1153,7 @@ class AdminPage
             'skipped' => (int) ($res['skipped'] ?? 0),
             'skipped_empty_ebay_id' => (int) ($res['skipped_empty_ebay_id'] ?? 0),
             'invalid' => (int) ($res['invalid'] ?? 0),
+            'validation_cache_invalidated' => (int) ($res['validation_cache_invalidated'] ?? 0),
             'errors' => (array) ($res['errors'] ?? []),
         ], JSON_UNESCAPED_UNICODE));
         $this->go();
