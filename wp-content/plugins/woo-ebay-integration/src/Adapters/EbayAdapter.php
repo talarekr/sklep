@@ -754,10 +754,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
             $marketplaceId = $this->marketplace_id();
             $skuResolution = $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
-            $content = $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
+            $content = !empty($settings['lightweight'])
+                ? $this->resolve_german_content_lightweight($product, $product_id, $marketplaceId, $settings)
+                : $this->resolve_german_content($product, $product_id, $marketplaceId, $settings);
             $category = $this->resolve_category($product, $product_id, $skuResolution['sku'], $marketplaceId, $settings);
             $aspects = $this->resolve_product_aspects($product, $product_id, $skuResolution['sku'], $settings, $category['category_id'], $content);
             $preflight = $this->preflight_validate($product, $product_id, $skuResolution, $content, $category, $aspects, $settings);
+            if (!empty($settings['lightweight'])) {
+                unset($preflight['aspects']);
+            }
             if ($persistStatus) {
                 update_post_meta($product_id, '_wei_ebay_export_status', $preflight['status']);
             }
@@ -1872,6 +1877,49 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'untranslated_fields' => (array) ($content['untranslated_fields'] ?? $translator->untranslated_fields($cachedAfter)),
             'error_message' => (string) ($content['error_message'] ?? ''),
         ], $safety);
+    }
+
+    private function resolve_german_content_lightweight($product, int $product_id, string $marketplaceId, array $settings): array
+    {
+        if ($marketplaceId !== 'EBAY_DE') {
+            $title = is_object($product) && method_exists($product, 'get_name') ? trim(wp_strip_all_tags((string) $product->get_name())) : '';
+            $hasDescription = $title !== '';
+            return [
+                'ready' => $title !== '' && $hasDescription,
+                'title' => $title,
+                'description' => $hasDescription ? '__present__' : '',
+                'source' => 'lightweight_product',
+                'language' => '',
+                'title_length' => mb_strlen($title),
+                'description_length' => 0,
+                'lightweight' => true,
+            ];
+        }
+
+        $title = trim(wp_strip_all_tags((string) get_post_meta($product_id, EbayGermanContentTranslator::META_TITLE, true)));
+        $descriptionPresent = function_exists('metadata_exists')
+            ? metadata_exists('post', $product_id, EbayGermanContentTranslator::META_DESCRIPTION)
+            : get_post_meta($product_id, EbayGermanContentTranslator::META_DESCRIPTION, true) !== '';
+        $source = trim((string) get_post_meta($product_id, EbayGermanContentTranslator::META_SOURCE, true)) ?: 'lightweight_meta';
+
+        return [
+            'ready' => $title !== '' && $descriptionPresent,
+            'title' => $title,
+            'description' => $descriptionPresent ? '__present__' : '',
+            'source' => $descriptionPresent ? $source : 'missing',
+            'language' => 'de-DE',
+            'product_id' => $product_id,
+            'source_product_id' => $product_id,
+            'translated_product_id' => 0,
+            'title_found' => $title !== '',
+            'description_found' => $descriptionPresent,
+            'title_length' => mb_strlen($title),
+            'description_length' => $descriptionPresent ? 1 : 0,
+            'generated' => false,
+            'stale' => false,
+            'lightweight' => true,
+            'error_message' => $descriptionPresent ? '' : 'German eBay content missing.',
+        ];
     }
 
     private function resolve_german_content($product, int $product_id, string $marketplaceId, array $settings): array
@@ -3322,7 +3370,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'removed_aspects' => $cleanup['removed'],
             ]);
         }
-        if ($this->marketplace_id() === 'EBAY_DE') {
+        if ($this->marketplace_id() === 'EBAY_DE' && empty($settings['lightweight'])) {
             $resolved = $this->ebay_german_content_translator()->translate_aspects_from_cache(
                 $product_id,
                 $this->ebay_german_content_source($product, $product_id),

@@ -1341,7 +1341,7 @@ class AdminPage
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
             'top_10_sanity_reasons' => (array) ($res['top_10_sanity_reasons'] ?? []),
             'top_10_detected_intents_with_problems' => (array) ($res['top_10_detected_intents_with_problems'] ?? []),
-            'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 25),
+            'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 20),
             'reports' => (array) ($res['reports'] ?? []),
         ];
         $this->set_status('Full eBay category audit: ' . wp_json_encode($status, JSON_UNESCAPED_UNICODE));
@@ -1353,10 +1353,11 @@ class AdminPage
         check_admin_referer('wei_run_category_readiness_audit');
         $marketplaceId = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_DE'));
         $verboseDebug = !empty($_POST['verbose_debug']);
+        $auditBatchSize = max(1, min(200, absint($_POST['audit_batch_size'] ?? 100)));
         $res = [];
 
-        for ($batch = 0; $batch < 100; $batch++) {
-            $res = $this->scheduler->run_full_category_audit($verboseDebug);
+        for ($batch = 0; $batch < 1; $batch++) {
+            $res = $this->scheduler->run_full_category_audit($verboseDebug, $auditBatchSize);
             if ((string) ($res['result'] ?? '') !== 'in_progress' && (string) ($res['status'] ?? '') !== 'in_progress') {
                 break;
             }
@@ -1381,16 +1382,15 @@ class AdminPage
         $ready = (int) ($res['ready_count'] ?? 0);
         $result = (string) ($res['result'] ?? 'error');
 
-        if (!$problemsExists || (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)) <= 0) {
-            $result = 'error';
+        if ($result === 'in_progress') {
+            $result = 'partial';
         }
 
         return [
-            'action' => 'run_category_readiness_audit',
             'result' => $result,
+            'status' => $result === 'partial' ? 'partial' : (string) ($res['status'] ?? $result),
             'processed' => $processed,
             'ready_count' => $ready,
-            'not_ready_count' => max(0, $processed - $ready),
             'blocked_by_category_count' => (int) ($res['blocked_by_category_count'] ?? 0),
             'invalid_ebay_category_id_count' => (int) ($res['invalid_ebay_category_id_count'] ?? 0),
             'non_leaf_category_count' => (int) ($res['non_leaf_category_count'] ?? 0),
@@ -1398,15 +1398,13 @@ class AdminPage
             'missing_required_aspects_count' => (int) ($res['missing_required_aspects_count'] ?? 0),
             'content_not_ready_count' => (int) ($res['content_not_ready_count'] ?? 0),
             'price_not_ready_count' => (int) ($res['price_not_ready_count'] ?? 0),
-            'problems_only_csv_path' => $problemsPath,
-            'problems_only_csv_url' => (string) ($problems['url'] ?? ''),
-            'problems_only_csv_exists' => $problemsExists,
-            'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
-            'full_report_csv_path' => $fullPath,
             'full_report_csv_url' => (string) ($full['url'] ?? ''),
-            'full_report_csv_exists' => $fullExists,
-            'full_report_csv_size' => (int) ($full['size'] ?? ($fullExists ? filesize($fullPath) : 0)),
-            'category_dashboard_summary' => $this->category_dashboard_summary_for_report($marketplaceId),
+            'problems_only_csv_url' => (string) ($problems['url'] ?? ''),
+            'problems_only_csv_size' => (int) ($problems['size'] ?? ($problemsExists ? filesize($problemsPath) : 0)),
+            'sample_problem_product_ids' => array_slice((array) ($res['sample_problem_product_ids'] ?? []), 0, 20),
+            'resume_offset' => $result === 'partial' ? (int) ($res['total_scanned'] ?? $processed) : 0,
+            'partial_full_report_csv_url' => $result === 'partial' ? (string) ($full['url'] ?? '') : '',
+            'partial_problems_only_csv_url' => $result === 'partial' ? (string) ($problems['url'] ?? '') : '',
         ];
     }
 

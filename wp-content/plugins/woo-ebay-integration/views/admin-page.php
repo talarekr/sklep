@@ -551,7 +551,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <?php wp_nonce_field('wei_run_category_readiness_audit'); ?>
                 <input type="hidden" name="action" value="wei_run_category_readiness_audit" />
                 <input type="hidden" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" />
-                <input type="hidden" name="verbose_debug" value="1" />
+                <label>Batch size <input type="number" name="audit_batch_size" value="100" min="1" max="200" step="1" style="width:80px" /></label>
                 <button class="button">Run category readiness audit</button>
             </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
