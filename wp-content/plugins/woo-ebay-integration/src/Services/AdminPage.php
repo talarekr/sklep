@@ -3233,7 +3233,7 @@ class AdminPage
             $s['ebay_de_delivery_map_url'] = '';
         }
         if (!isset($s['ebay_seller_username'])) {
-            $s['ebay_seller_username'] = '';
+            $s['ebay_seller_username'] = Plugin::DEFAULT_EBAY_SELLER_USERNAME;
         }
         if (!isset($s['verbose_debug'])) {
             $s['verbose_debug'] = 0;
