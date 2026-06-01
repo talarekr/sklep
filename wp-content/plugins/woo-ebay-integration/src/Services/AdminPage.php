@@ -458,7 +458,10 @@ class AdminPage
         $s['auto_generate_german_content_preflight'] = !empty($_POST['auto_generate_german_content_preflight']) ? 1 : 0;
         $s['enable_ebay_de_description_template'] = !empty($_POST['enable_ebay_de_description_template']) ? 1 : 0;
         $s['ebay_de_delivery_map_url'] = esc_url_raw((string) ($_POST['ebay_de_delivery_map_url'] ?? ''));
-        $s['ebay_seller_username'] = sanitize_text_field((string) ($_POST['ebay_seller_username'] ?? ($s['ebay_seller_username'] ?? '')));
+        $s['ebay_seller_username'] = trim(sanitize_text_field((string) ($_POST['ebay_seller_username'] ?? ($s['ebay_seller_username'] ?? ''))));
+        if ($s['ebay_seller_username'] === '') {
+            $s['ebay_seller_username'] = Plugin::DEFAULT_EBAY_SELLER_USERNAME;
+        }
         $s['regenerate_german_content_on_hash_change'] = !empty($_POST['regenerate_german_content_on_hash_change']) ? 1 : 0;
         $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? 'gpswiss-pl'));
         $s['inventory_location_name'] = sanitize_text_field((string) ($_POST['inventory_location_name'] ?? 'gpswiss-pl'));
@@ -2782,6 +2785,8 @@ class AdminPage
             'same_vehicle_cta_visible' => !empty($res['same_vehicle_cta_visible']),
             'same_vehicle_token' => (string) ($res['same_vehicle_token'] ?? ''),
             'same_vehicle_ebay_url' => (string) ($res['same_vehicle_ebay_url'] ?? ''),
+            'same_vehicle_seller_username' => (string) ($res['same_vehicle_seller_username'] ?? ($res['same_vehicle_cta']['seller_username'] ?? '')),
+            'same_vehicle_seller_source' => (string) ($res['same_vehicle_seller_source'] ?? ($res['same_vehicle_cta']['seller_source'] ?? '')),
             'warnings' => (array) ($res['warnings'] ?? []),
             'safety' => (array) ($res['safety'] ?? []),
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
@@ -3232,8 +3237,10 @@ class AdminPage
         if (!isset($s['ebay_de_delivery_map_url'])) {
             $s['ebay_de_delivery_map_url'] = '';
         }
-        if (!isset($s['ebay_seller_username'])) {
+        if (!isset($s['ebay_seller_username']) || trim((string) $s['ebay_seller_username']) === '') {
             $s['ebay_seller_username'] = Plugin::DEFAULT_EBAY_SELLER_USERNAME;
+        } else {
+            $s['ebay_seller_username'] = trim((string) $s['ebay_seller_username']);
         }
         if (!isset($s['verbose_debug'])) {
             $s['verbose_debug'] = 0;
