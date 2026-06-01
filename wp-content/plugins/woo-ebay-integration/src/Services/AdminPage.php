@@ -48,6 +48,8 @@ class AdminPage
         add_action('admin_post_wei_basic_specifics_bulk_stop', [$this, 'basic_specifics_bulk_stop']);
         add_action('admin_post_wei_basic_specifics_bulk_process', [$this, 'basic_specifics_bulk_process']);
         add_action('admin_post_wei_preflight_product', [$this, 'preflight_product']);
+        add_action('admin_post_wei_vehicle_compatibility_diagnostics', [$this, 'vehicle_compatibility_diagnostics']);
+        add_action('admin_post_wei_run_vehicle_compatibility_audit', [$this, 'run_vehicle_compatibility_audit']);
         add_action('admin_post_wei_publish_product_offer_only', [$this, 'publish_product_offer_only']);
         add_action('admin_post_wei_inspect_offer_before_publish', [$this, 'inspect_offer_before_publish']);
         add_action('admin_post_wei_verify_api_publishing_readiness', [$this, 'verify_api_publishing_readiness']);
@@ -350,6 +352,10 @@ class AdminPage
         $blocked_category_fix_report_summary = is_array($blocked_category_fix_report_summary) ? $blocked_category_fix_report_summary : [];
         $ovoko_category_suggestions_summary = get_option('wei_ebay_ovoko_category_suggestions_summary', []);
         $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
+        $vehicle_compatibility_audit_summary = get_option('wei_ebay_vehicle_compatibility_audit_summary', []);
+        $vehicle_compatibility_audit_summary = is_array($vehicle_compatibility_audit_summary) ? $vehicle_compatibility_audit_summary : [];
+        $vehicle_compatibility_diagnostics = get_option('wei_ebay_last_vehicle_compatibility_diagnostics', []);
+        $vehicle_compatibility_diagnostics = is_array($vehicle_compatibility_diagnostics) ? $vehicle_compatibility_diagnostics : [];
         $category_teaching_import_summary = get_option('wei_ebay_category_mapping_import_summary', []);
         $category_teaching_import_summary = is_array($category_teaching_import_summary) ? $category_teaching_import_summary : [];
         $category_validation_statuses = get_option(EbayCategorySuggestionReportService::VALIDATION_OPTION, []);
@@ -1064,6 +1070,12 @@ class AdminPage
             if ($candidate !== '') {
                 $allowed[basename($candidate)] = $candidate;
             }
+        }
+        $vehicleAudit = get_option('wei_ebay_vehicle_compatibility_audit_summary', []);
+        $vehicleAudit = is_array($vehicleAudit) ? $vehicleAudit : [];
+        $vehicleCsv = (string) ($vehicleAudit['csv_path'] ?? '');
+        if ($vehicleCsv !== '') {
+            $allowed[basename($vehicleCsv)] = $vehicleCsv;
         }
         if (!isset($allowed[$file])) {
             wp_die('Invalid report file');
@@ -2274,6 +2286,32 @@ class AdminPage
         update_option(Plugin::OPTION_KEY, $s, false);
         $this->set_status(!empty($s['auto_sync_paused']) ? 'Auto sync paused' : 'Auto sync resumed');
         $this->go();
+    }
+
+
+    public function vehicle_compatibility_diagnostics(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_vehicle_compatibility_diagnostics');
+        $id = (int) ($_REQUEST['product_id'] ?? 0);
+        $service = new VehicleCompatibilityAuditService($this->categoryRepo, $this->logger);
+        $res = $id > 0 ? $service->auditProduct($id, 'EBAY_DE') : ['result' => 'error', 'error' => 'missing_product_id', 'called_ebay_api' => false, 'updated_ebay_listing' => false, 'wrote_product_meta' => false];
+        update_option('wei_ebay_last_vehicle_compatibility_diagnostics', $res, false);
+        $this->set_status('Vehicle compatibility diagnostics: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    public function run_vehicle_compatibility_audit(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_run_vehicle_compatibility_audit');
+        $limit = isset($_POST['limit']) ? max(1, min(5000, (int) $_POST['limit'])) : 500;
+        $service = new VehicleCompatibilityAuditService($this->categoryRepo, $this->logger);
+        $res = $service->generateAuditCsv('EBAY_DE', $limit);
+        update_option('wei_ebay_vehicle_compatibility_audit_summary', $res, false);
+        $this->set_status('Vehicle compatibility readiness audit: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&wei_section=category-mappings'));
+        exit;
     }
 
     public function preflight_product(): void

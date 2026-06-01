@@ -378,6 +378,8 @@ $loadProductSyncUrl = add_query_arg(['page' => 'woo-ebay', 'wei_section' => 'pro
 $loadCategoryMappingsUrl = add_query_arg(['page' => 'woo-ebay', 'wei_section' => 'category-mappings'], $adminPageUrl);
 $manualCategoryPickerRows = is_array($manual_category_picker_rows ?? null) ? $manual_category_picker_rows : [];
 $manualCategoryPickerQuery = (string) ($manual_category_picker_query ?? '');
+$vehicleCompatibilityAuditSummary = is_array($vehicle_compatibility_audit_summary ?? null) ? $vehicle_compatibility_audit_summary : [];
+$vehicleCompatibilityDiagnostics = is_array($vehicle_compatibility_diagnostics ?? null) ? $vehicle_compatibility_diagnostics : [];
 $formatNullableCount = static fn($value): string => $value === null ? 'not loaded' : (string) $value;
 $technicalPreview = static function ($value, int $maxLength = 6000) use ($redactTechnical): string {
     $json = wp_json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
@@ -632,6 +634,23 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             </ul></div>
         <?php endif; ?>
         <p class="description">Import CSV minimum: <code>woo_subcategory_id</code> or <code>woo_category_id</code> plus <code>ebay_category_id</code>. Empty <code>ebay_category_id</code> rows are skipped.</p>
+        <?php
+        $vehicleAuditReady = !empty($vehicleCompatibilityAuditSummary['csv_exists']) && (int) ($vehicleCompatibilityAuditSummary['csv_size'] ?? 0) > 0;
+        $vehicleAuditDownloadUrl = $vehicleAuditReady ? admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode(basename((string) ($vehicleCompatibilityAuditSummary['csv_path'] ?? '')))) : '';
+        ?>
+        <div class="wei-card"><h3>Vehicle compatibility / Fahrzeugverwendungsliste readiness</h3>
+            <p class="description">Read-only EBAY_DE audit. It detects KType, ePID and vehicle fields from Woo meta/attributes/product detail rows only; it does not publish, revise listings, call eBay compatibility APIs, write products, or change categories.</p>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+                <?php wp_nonce_field('wei_run_vehicle_compatibility_audit'); ?>
+                <input type="hidden" name="action" value="wei_run_vehicle_compatibility_audit" />
+                <label>Limit <input type="number" min="1" max="5000" name="limit" value="500" /></label>
+                <button class="button">Run vehicle compatibility readiness audit</button>
+            </form>
+            <?php if ($vehicleAuditReady): ?>
+                <p>Vehicle compatibility CSV: <a class="button" href="<?php echo esc_url($vehicleAuditDownloadUrl); ?>">Download CSV</a> <a href="<?php echo esc_url((string) ($vehicleCompatibilityAuditSummary['csv_url'] ?? '')); ?>">public URL</a> (<?php echo esc_html((string) (int) ($vehicleCompatibilityAuditSummary['csv_size'] ?? 0)); ?> bytes)</p>
+            <?php endif; ?>
+            <details><summary>Vehicle compatibility audit JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($vehicleCompatibilityAuditSummary, 6000)); ?></pre></details>
+        </div>
         <details><summary>Blocked category fix report JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($blocked_category_fix_report_summary, 6000)); ?></pre></details>
         <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'report_url' => $categoryReportUrl, 'last_export' => $category_template_export_summary], 6000)); ?></pre></details>
         <details open><summary>Manual WooCommerce product_cat → eBay.de Kategorie mapping</summary>
@@ -735,6 +754,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         <details><summary>Advanced / Debug: single-product publish and content tools</summary>
             <div class="wei-actions">
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_preflight'); ?><input type="hidden" name="action" value="wei_preflight_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Run single-product readiness preflight</button></form>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_vehicle_compatibility_diagnostics'); ?><input type="hidden" name="action" value="wei_vehicle_compatibility_diagnostics" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Run vehicle compatibility diagnostics</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_inspect_offer_before_publish'); ?><input type="hidden" name="action" value="wei_inspect_offer_before_publish" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Inspect offer before publish</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Manual publish offer only can publish one public eBay listing. Continue?');"><?php wp_nonce_field('wei_publish_product_offer_only'); ?><input type="hidden" name="action" value="wei_publish_product_offer_only" /><input type="number" name="product_id" placeholder="Woo product ID" required /><button class="button">Manual publish offer only</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_export'); ?><input type="hidden" name="action" value="wei_export_product" /><input type="number" name="product_id" placeholder="Woo product ID" required /><input type="text" name="ebay_category_id" placeholder="optional category ID" /><textarea name="ebay_aspects_json" placeholder="optional aspects JSON" rows="1"></textarea><button class="button">Export single product</button></form>
@@ -747,6 +767,12 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <?php if (!empty($oauthCallbackMessage['oauth_error'])): ?><div class="notice notice-error inline"><p><strong>eBay OAuth error:</strong> <?php echo esc_html($oauthCallbackMessage['oauth_error']); ?> <?php echo $oauthCallbackMessage['error_description'] !== '' ? esc_html(' — ' . $oauthCallbackMessage['error_description']) : ''; ?></p><pre class="wei-scroll"><?php echo esc_html($technicalPreview($oauthCallbackMessage, 3000)); ?></pre></div><?php endif; ?>
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['oauth' => $oauthCallbackDebug, 'cached_policies' => $cached, 'last_status' => $status, 'auto_sync' => array_diff_key($autoSync, array_flip(['readiness_summary']))], 8000)); ?></pre>
         </details>
+        <?php if ($vehicleCompatibilityDiagnostics !== []): ?>
+            <div class="wei-card"><h3>Vehicle compatibility diagnostics</h3>
+                <p class="description">Single-product EBAY_DE preview. Status values include <code>ready_ktype</code>, <code>ready_epid</code>, <code>missing_ktype</code>, <code>insufficient_vehicle_data</code>, <code>unsupported_category</code> and <code>needs_manual_review</code>.</p>
+                <pre class="wei-scroll"><?php echo esc_html($technicalPreview($vehicleCompatibilityDiagnostics, 10000)); ?></pre>
+            </div>
+        <?php endif; ?>
         <details><summary>Settings</summary>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_save_settings'); ?>
