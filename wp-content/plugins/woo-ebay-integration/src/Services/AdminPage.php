@@ -9,6 +9,8 @@ use WEI\Services\EbayShippingPolicyResolver;
 
 class AdminPage
 {
+    private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_ebay_german_content_schema_migration_state';
+
     public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler)
     {
     }
@@ -39,6 +41,7 @@ class AdminPage
         add_action('admin_post_wei_ebay_regenerate_german_content', [$this, 'regenerate_german_content']);
         add_action('admin_post_wei_generate_german_content_single', [$this, 'generate_german_content_single']);
         add_action('admin_post_wei_generate_german_content_batch', [$this, 'generate_german_content_batch']);
+        add_action('admin_post_wei_german_content_schema_diagnostic', [$this, 'german_content_schema_diagnostic']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
         add_action('admin_post_wei_shipping_policy_bulk_pause', [$this, 'shipping_policy_bulk_pause']);
@@ -1392,6 +1395,14 @@ class AdminPage
         $vehicleCsv = (string) ($vehicleAudit['csv_path'] ?? '');
         if ($vehicleCsv !== '') {
             $allowed[basename($vehicleCsv)] = $vehicleCsv;
+        }
+        $germanMigration = get_option(self::GERMAN_CONTENT_MIGRATION_STATE_OPTION, []);
+        $germanMigration = is_array($germanMigration) ? $germanMigration : [];
+        foreach ((array) ($germanMigration['reports'] ?? []) as $report) {
+            $candidate = is_array($report) ? (string) ($report['path'] ?? '') : '';
+            if ($candidate !== '') {
+                $allowed[basename($candidate)] = $candidate;
+            }
         }
         if (!isset($allowed[$file])) {
             wp_die('Invalid report file');
@@ -3213,7 +3224,7 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_description_template_preview');
-        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $input = sanitize_text_field((string) ($_REQUEST['product_or_sku'] ?? ''));
         $res = $this->adapter->preview_ebay_de_description_template($input);
         $this->render_description_template_preview_response($res);
     }
@@ -3367,6 +3378,10 @@ class AdminPage
         $mode = in_array($mode, ['all', 'stale', 'force_current_schema'], true) ? $mode : 'stale';
         $includeExcluded = !empty($_POST['include_excluded_from_ebay']);
         $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
+        if ($mode === 'force_current_schema') {
+            $this->run_german_content_schema_migration_batch($batchSize, $includeExcluded, !empty($_POST['continue_migration']));
+            return;
+        }
         $cursorOption = 'wei_ebay_german_content_batch_cursor_' . $mode;
         $cursor = (int) get_option($cursorOption, 0);
         $productIds = $this->german_content_batch_product_ids($batchSize, $mode, $cursor, $includeExcluded);
@@ -3442,6 +3457,268 @@ class AdminPage
         update_option('wei_ebay_german_content_audit_summary', array_diff_key($summary, ['results' => true]), false);
         $this->set_status('Generate German content: ' . wp_json_encode($summary, JSON_UNESCAPED_UNICODE));
         $this->go();
+    }
+
+
+    private function run_german_content_schema_migration_batch(int $batchSize, bool $includeExcluded, bool $continue): void
+    {
+        $state = $continue ? get_option(self::GERMAN_CONTENT_MIGRATION_STATE_OPTION, []) : [];
+        $state = is_array($state) ? $state : [];
+        if (!$continue || $state === [] || !empty($state['complete'])) {
+            $state = $this->new_german_content_schema_migration_state($batchSize, $includeExcluded);
+            $this->initialize_german_content_migration_reports($state);
+        } else {
+            $state['batch_size'] = $batchSize;
+            $includeExcluded = !empty($state['include_excluded_from_ebay']);
+        }
+
+        $productIds = $this->german_content_batch_product_ids($batchSize, 'force_current_schema', (int) ($state['current_offset'] ?? 0), $includeExcluded);
+        $rows = [];
+        $processedProductIds = [];
+        $regeneratedProductIds = [];
+        $alreadyCurrentSchemaProductIds = [];
+        $errorProductIds = [];
+        $sampleProducts = [];
+        foreach ($productIds as $productId) {
+            $productId = (int) $productId;
+            if (count($processedProductIds) < 100) {
+                $processedProductIds[] = $productId;
+            }
+            $before = $this->adapter->german_content_schema_status_for_identifier((string) $productId);
+            $alreadyCurrent = empty($before['stale_bool'])
+                && (string) ($before['current_stored_schema_version'] ?? '') === \WEI\Services\EbayGermanContentTranslator::SCHEMA_VERSION
+                && (string) ($before['current_stored_template_version'] ?? '') === \WEI\Services\EbayGermanContentTranslator::TEMPLATE_VERSION;
+            if ($alreadyCurrent) {
+                $res = [
+                    'result' => 'already_current_schema',
+                    'stored_schema_version' => (string) ($before['current_stored_schema_version'] ?? ''),
+                    'template_version' => (string) ($before['current_stored_template_version'] ?? ''),
+                    'called_ebay_api' => false,
+                    'updated_ebay_listing' => false,
+                ];
+                $after = $before;
+            } else {
+                $res = $this->adapter->generate_german_content_meta_only($productId, true);
+                $after = $this->adapter->german_content_schema_status_for_identifier((string) $productId);
+            }
+            $result = (string) ($res['result'] ?? '');
+            $error = (string) (($res['error_message'] ?? '') ?: ($res['reason'] ?? ''));
+            $regenerated = !$alreadyCurrent && in_array($result, ['success', 'generated'], true);
+            $staleFixed = !empty($before['stale_bool']) && empty($after['stale_bool']);
+
+            $state['processed_total'] = (int) ($state['processed_total'] ?? 0) + 1;
+            if ($regenerated) {
+                $state['regenerated_total'] = (int) ($state['regenerated_total'] ?? 0) + 1;
+            }
+            if ($alreadyCurrent) {
+                $state['already_current_schema_total'] = (int) ($state['already_current_schema_total'] ?? 0) + 1;
+            }
+            if ($staleFixed) {
+                $state['stale_fixed_total'] = (int) ($state['stale_fixed_total'] ?? 0) + 1;
+            }
+            if ((!$regenerated && !$alreadyCurrent) || $error !== '') {
+                $state['errors_total'] = (int) ($state['errors_total'] ?? 0) + 1;
+            }
+            if ($regenerated && count($regeneratedProductIds) < 100) {
+                $regeneratedProductIds[] = $productId;
+            }
+            if ($alreadyCurrent && count($alreadyCurrentSchemaProductIds) < 100) {
+                $alreadyCurrentSchemaProductIds[] = $productId;
+            }
+            if (((!$regenerated && !$alreadyCurrent) || $error !== '') && count($errorProductIds) < 100) {
+                $errorProductIds[] = $productId;
+            }
+
+            $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
+            $row = [
+                'product_id' => $productId,
+                'sku' => is_object($product) && method_exists($product, 'get_sku') ? (string) $product->get_sku() : (string) ($before['sku'] ?? ''),
+                'product_title' => is_object($product) && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) ($before['product_title'] ?? ''),
+                'old_schema_version' => (string) ($before['current_stored_schema_version'] ?? ''),
+                'new_schema_version' => (string) ($after['current_stored_schema_version'] ?? ($res['stored_schema_version'] ?? '')),
+                'old_template_version' => (string) ($before['current_stored_template_version'] ?? ''),
+                'new_template_version' => (string) ($after['current_stored_template_version'] ?? ($res['template_version'] ?? '')),
+                'stale_before' => !empty($before['stale_bool']) ? 'yes' : 'no',
+                'stale_after' => !empty($after['stale_bool']) ? 'yes' : 'no',
+                'stale_reasons' => implode('|', array_map('strval', (array) ($before['stale_reasons'] ?? []))),
+                'regenerated' => $regenerated ? 'yes' : 'no',
+                'already_current_schema' => $alreadyCurrent ? 'yes' : 'no',
+                'source_description_field' => (string) ($before['source_description_field'] ?? ''),
+                'source_description_used' => (string) ($before['source_description_used'] ?? ''),
+                'error_message' => ($regenerated || $alreadyCurrent) ? '' : $error,
+            ];
+            $rows[] = $row;
+            if (count($sampleProducts) < 20) {
+                $sampleProducts[] = array_merge(array_intersect_key($row, array_flip([
+                    'product_id',
+                    'sku',
+                    'product_title',
+                    'regenerated',
+                    'stale_before',
+                    'stale_after',
+                    'stale_reasons',
+                    'old_schema_version',
+                    'new_schema_version',
+                    'source_description_field',
+                ])), [
+                    'preview_url' => $this->german_content_preview_url($productId),
+                ]);
+            }
+            $state['current_offset'] = max((int) ($state['current_offset'] ?? 0), $productId);
+        }
+
+        $state['processed_product_ids'] = $processedProductIds;
+        $state['regenerated_product_ids'] = $regeneratedProductIds;
+        $state['already_current_schema_product_ids'] = $alreadyCurrentSchemaProductIds;
+        $state['error_product_ids'] = $errorProductIds;
+        $state['sample_products'] = $sampleProducts;
+        $state['last_batch_sample_limits'] = [
+            'processed_product_ids' => 100,
+            'regenerated_product_ids' => 100,
+            'already_current_schema_product_ids' => 100,
+            'error_product_ids' => 100,
+            'sample_products' => 20,
+        ];
+        $state['last_updated_at'] = gmdate('c');
+        $state['remaining_products'] = max(0, (int) ($state['total_target_products'] ?? 0) - (int) ($state['processed_total'] ?? 0));
+        if ((int) ($state['processed_total'] ?? 0) >= (int) ($state['total_target_products'] ?? 0) || count($productIds) < $batchSize) {
+            $state['complete'] = true;
+            $state['completed_at'] = gmdate('c');
+            $state['remaining_products'] = 0;
+        }
+        $state['reports'] = $this->append_german_content_migration_reports($state, $rows);
+        update_option(self::GERMAN_CONTENT_MIGRATION_STATE_OPTION, $state, false);
+        update_option('wei_ebay_german_content_audit_summary', $state, false);
+        $this->set_status('German content schema migration: ' . wp_json_encode($state, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    private function new_german_content_schema_migration_state(int $batchSize, bool $includeExcluded): array
+    {
+        $now = gmdate('c');
+        $reports = $this->german_content_migration_report_paths();
+        $totalTargetProducts = $this->german_content_target_product_count($includeExcluded);
+        return [
+            'migration_run_id' => 'german-content-schema-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false),
+            'schema_version' => \WEI\Services\EbayGermanContentTranslator::SCHEMA_VERSION,
+            'template_version' => \WEI\Services\EbayGermanContentTranslator::TEMPLATE_VERSION,
+            'started_at' => $now,
+            'last_updated_at' => $now,
+            'completed_at' => '',
+            'complete' => false,
+            'batch_size' => $batchSize,
+            'current_offset' => 0,
+            'processed_total' => 0,
+            'total_target_products' => $totalTargetProducts,
+            'remaining_products' => $totalTargetProducts,
+            'regenerated_total' => 0,
+            'already_current_schema_total' => 0,
+            'stale_fixed_total' => 0,
+            'errors_total' => 0,
+            'excluded_skipped_total' => $includeExcluded ? 0 : $this->german_content_excluded_product_count(),
+            'include_excluded_from_ebay' => $includeExcluded,
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'published' => false,
+            'reports' => $reports,
+        ];
+    }
+
+    private function german_content_target_product_count(bool $includeExcluded): int
+    {
+        global $wpdb;
+        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p WHERE p.post_type = 'product' AND p.post_status IN ('publish', 'draft', 'private') AND (%d = 1 OR NOT EXISTS (SELECT 1 FROM {$wpdb->postmeta} excluded_meta WHERE excluded_meta.post_id = p.ID AND excluded_meta.meta_key = '_wei_ebay_export_status' AND excluded_meta.meta_value = 'excluded_from_ebay'))";
+        return (int) $wpdb->get_var($wpdb->prepare($sql, $includeExcluded ? 1 : 0));
+    }
+
+    private function german_content_excluded_product_count(): int
+    {
+        global $wpdb;
+        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} excluded_meta ON excluded_meta.post_id = p.ID AND excluded_meta.meta_key = '_wei_ebay_export_status' AND excluded_meta.meta_value = 'excluded_from_ebay' WHERE p.post_type = 'product' AND p.post_status IN ('publish', 'draft', 'private')";
+        return (int) $wpdb->get_var($sql);
+    }
+
+    private function german_content_migration_report_paths(): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-audits';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-audits';
+        wp_mkdir_p($baseDir);
+        $files = [
+            'full' => 'german-content-migration-full.csv',
+            'errors' => 'german-content-migration-errors.csv',
+            'stale_fixed' => 'german-content-migration-stale-fixed.csv',
+            'already_current' => 'german-content-migration-already-current.csv',
+        ];
+        $reports = [];
+        foreach ($files as $key => $file) {
+            $path = trailingslashit($baseDir) . $file;
+            $reports[$key] = ['path' => $path, 'url' => trailingslashit($baseUrl) . $file];
+        }
+        return $reports;
+    }
+
+    private function initialize_german_content_migration_reports(array $state): void
+    {
+        foreach ((array) ($state['reports'] ?? []) as $report) {
+            $path = is_array($report) ? (string) ($report['path'] ?? '') : '';
+            if ($path !== '') {
+                @unlink($path);
+            }
+        }
+    }
+
+    private function append_german_content_migration_reports(array $state, array $rows): array
+    {
+        $reports = (array) ($state['reports'] ?? $this->german_content_migration_report_paths());
+        $headers = ['product_id','sku','product_title','old_schema_version','new_schema_version','old_template_version','new_template_version','stale_before','stale_after','stale_reasons','regenerated','already_current_schema','source_description_field','source_description_used','error_message'];
+        $sets = [
+            'full' => $rows,
+            'errors' => array_values(array_filter($rows, static fn(array $row): bool => trim((string) ($row['error_message'] ?? '')) !== '')),
+            'stale_fixed' => array_values(array_filter($rows, static fn(array $row): bool => ($row['stale_before'] ?? '') === 'yes' && ($row['stale_after'] ?? '') === 'no')),
+            'already_current' => array_values(array_filter($rows, static fn(array $row): bool => ($row['already_current_schema'] ?? '') === 'yes')),
+        ];
+        foreach ($sets as $key => $setRows) {
+            $path = (string) ($reports[$key]['path'] ?? '');
+            if ($path === '') {
+                continue;
+            }
+            $exists = file_exists($path) && filesize($path) > 0;
+            $fh = fopen($path, 'ab');
+            if (!$fh) {
+                continue;
+            }
+            if (!$exists) {
+                fputcsv($fh, $headers);
+            }
+            foreach ($setRows as $row) {
+                fputcsv($fh, array_map(static fn(string $header): string => (string) ($row[$header] ?? ''), $headers));
+            }
+            fclose($fh);
+        }
+        return $reports;
+    }
+
+    public function german_content_schema_diagnostic(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_german_content_schema_diagnostic');
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $res = $this->adapter->german_content_schema_status_for_identifier($input);
+        $this->set_status('German content schema status diagnostic: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        echo '<div class="wrap"><h1>German content schema status</h1>';
+        echo '<p>This updates local German content only. It does not update active eBay listings.</p>';
+        echo '<pre style="white-space:pre-wrap;background:#fff;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+        echo '<p><a class="button" href="' . esc_url(admin_url('admin.php?page=woo-ebay')) . '">Back to Woo eBay Integration</a></p></div>';
+        exit;
+    }
+
+    private function german_content_preview_url(int $productId): string
+    {
+        return wp_nonce_url(
+            admin_url('admin-post.php?action=wei_description_template_preview&product_or_sku=' . rawurlencode((string) $productId)),
+            'wei_description_template_preview'
+        );
     }
 
     private function german_content_batch_product_ids(int $batchSize, string $mode, int $cursor = 0, bool $includeExcluded = false): array
