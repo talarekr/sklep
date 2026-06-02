@@ -3403,7 +3403,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_shipping_policy_mapping', 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
 
@@ -3483,11 +3483,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $price = (float) $product->get_price();
             return [
                 'base_price_pln' => $price,
+                'woo_price_pln' => $price,
                 'markup_percent' => 0,
                 'markup_source' => 'not_applicable',
                 'marked_price_pln' => $price,
+                'price_after_markup_pln' => $price,
                 'currency_source' => get_woocommerce_currency(),
                 'nbp_rate' => null,
+                'exchange_rate' => null,
                 'nbp_effective_date' => '',
                 'ebay_price_eur' => $price,
                 'ready' => $price > 0,
@@ -3499,11 +3502,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'ready' => false,
             'error' => 'missing_exchange_rate',
             'base_price_pln' => (float) $product->get_price(),
+            'woo_price_pln' => (float) $product->get_price(),
             'markup_percent' => null,
             'markup_source' => 'resolver_missing',
             'marked_price_pln' => null,
+            'price_after_markup_pln' => null,
             'currency_source' => 'nbp_table_a',
             'nbp_rate' => null,
+            'exchange_rate' => null,
             'nbp_effective_date' => '',
             'ebay_price_eur' => null,
         ];

@@ -481,7 +481,7 @@ $movedModules = [
     'Manual export/publish/preflight forms' => 'Main actions, renamed as daily single-product workflow',
     'Readiness/category audit report tables' => 'Advanced diagnostics, with only operational counts surfaced in Dashboard / Category mapping',
 ];
-$sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Publish', 'Advanced / Debug', 'Recent logs'];
+$sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Publish', 'Ustawienia eBay', 'Advanced / Debug', 'Recent logs'];
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
@@ -805,6 +805,73 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
             <?php endforeach; ?>
         </div>
         <details><summary>Readiness scan, publish run, and eBay state refresh technical summaries</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['latest_readiness_scan' => $readinessSummary, 'latest_publish_run' => ['processed_this_run' => (int) ($initialPublish['processed'] ?? 0), 'exported_this_run' => (int) $initialPublishSuccess, 'published_this_run' => (int) $initialPublishSuccess, 'skipped_this_run' => (int) $initialPublishSkippedThisRun, 'errors_this_run' => (int) $initialPublishFailed, 'historical_published_count' => (int) ($publishSummary['historical_published_count'] ?? 0), 'current_offer_count' => (int) ($publishSummary['current_offer_count'] ?? $ebayListingStateSummary['current_offer_count'] ?? 0), 'publish_progress_published_this_run' => (int) ($publishSummary['publish_progress_published_this_run'] ?? $initialPublishSuccess), 'published_total_from_old_checkpoint' => (int) ($publishSummary['published_total_from_old_checkpoint'] ?? 0), 'ended_listing_count' => (int) ($publishSummary['ended_listing_count'] ?? $ebayListingStateSummary['ended_listing_count'] ?? 0), 'last_batch_log' => $initialPublishLog], 'latest_ebay_state_refresh' => $ebayListingStateSummary], 8000)); ?></pre></details>
+    </div>
+
+
+    <div class="wei-box" data-wei-module="ebay-settings" id="wei-ebay-settings">
+        <h2>4. Ustawienia eBay</h2>
+        <p class="description">Visible local eBay price and Woo <code>product_cat</code> → fulfillment policy settings. Saving and previewing this module does not create eBay policies, call the eBay API, publish listings, or modify Woo products.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+            <?php wp_nonce_field('wei_save_ebay_settings'); ?>
+            <input type="hidden" name="action" value="wei_save_ebay_settings" />
+            <h3>Price markup</h3>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th><label for="wei-ebay-default-markup-percent">Default markup %</label></th>
+                    <td>
+                        <input id="wei-ebay-default-markup-percent" type="number" step="0.01" min="0" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" />
+                        <p class="description">If set to 25, eBay prices are 25% higher than WooCommerce prices before currency conversion.</p>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>Woo category → eBay shipping policy mapping</h3>
+            <p class="description">Paste Woo product_cat IDs separated by commas. These are Woo category IDs, not eBay category IDs.</p>
+            <p class="description"><strong>Priority:</strong> Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30. Select only existing eBay fulfillment/shipping policies; this plugin does not create shipping policies. Selector labels show policy name + policy ID to distinguish duplicates.</p>
+            <?php if (!empty($shippingMappingWarnings['conflicts'])): ?><div class="notice notice-warning inline"><p><strong>Conflict warning:</strong> the same Woo category ID appears in multiple groups. Runtime priority remains Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30.</p><pre><?php echo esc_html(wp_json_encode($shippingMappingWarnings['conflicts'], JSON_PRETTY_PRINT)); ?></pre></div><?php endif; ?>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th><label for="wei-visible-shipping-category-ids-30">Wysyłka 30</label></th>
+                    <td>
+                        <textarea id="wei-visible-shipping-category-ids-30" class="large-text code" rows="2" name="shipping_category_ids_30" placeholder="Woo product_cat IDs, e.g. 5063,5066"><?php echo esc_textarea((string) ($s['shipping_category_ids_30'] ?? '')); ?></textarea>
+                        <p><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select existing Wysyłka 30 euro fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_30" value="<?php echo esc_attr((string) ($s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="wei-visible-shipping-category-ids-50">Wysyłka 50</label></th>
+                    <td>
+                        <textarea id="wei-visible-shipping-category-ids-50" class="large-text code" rows="2" name="shipping_category_ids_50" placeholder="Woo product_cat IDs"><?php echo esc_textarea((string) ($s['shipping_category_ids_50'] ?? '')); ?></textarea>
+                        <p><?php $renderFulfillmentPolicyControl('shipping_policy_50', $fulfillmentId50, $fulfillmentId50, 'Select existing Wysyłka 50 euro fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_50" value="<?php echo esc_attr((string) ($s['shipping_policy_name_50'] ?? '')); ?>" placeholder="optional policy name" /></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="wei-visible-shipping-category-ids-130">Wysyłka 130</label></th>
+                    <td>
+                        <textarea id="wei-visible-shipping-category-ids-130" class="large-text code" rows="2" name="shipping_category_ids_130" placeholder="Woo product_cat IDs"><?php echo esc_textarea((string) ($s['shipping_category_ids_130'] ?? '')); ?></textarea>
+                        <p><?php $renderFulfillmentPolicyControl('shipping_policy_130', $fulfillmentId130, $fulfillmentId130, 'Select existing Koszt wysyłki 130 euro fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_130" value="<?php echo esc_attr((string) ($s['shipping_policy_name_130'] ?? '')); ?>" placeholder="optional policy name" /></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="wei-visible-default-shipping-policy">Default shipping policy</label></th>
+                    <td>
+                        <?php $renderFulfillmentPolicyControl('default_shipping_policy_id', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input id="wei-visible-default-shipping-policy" class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" />
+                        <p class="description">Used only if no configured Woo category ID matches this product.</p>
+                    </td>
+                </tr>
+            </table>
+            <p><button class="button button-primary">Save eBay settings</button></p>
+        </form>
+
+        <h3>Preview shipping/price resolution</h3>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_shipping_mapping_diagnostics'); ?>
+            <input type="hidden" name="action" value="wei_shipping_mapping_diagnostics" />
+            <label>product_id <input type="number" min="1" name="product_id" placeholder="Product ID" required /></label>
+            <button class="button">Preview shipping/price resolution</button>
+        </form>
+        <?php if ($lastAction === 'Shipping mapping diagnostics' && !empty($lastStatusPayload)): ?>
+            <pre class="wei-scroll"><?php echo esc_html($technicalPreview($lastStatusPayload, 6000)); ?></pre>
+        <?php endif; ?>
     </div>
 
     <details class="wei-box">
