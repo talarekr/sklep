@@ -133,14 +133,14 @@ class EbayShippingPolicyResolver
         return match (self::normalize_group($group)) {
             self::GROUP_SHIPPING_130 => self::first_setting($settings, ['shipping_policy_name_130', 'fulfillment_policy_name_130_eur']),
             self::GROUP_SHIPPING_50 => self::first_setting($settings, ['shipping_policy_name_50', 'fulfillment_policy_name_50_eur']),
-            self::GROUP_SHIPPING_30 => self::first_setting($settings, ['shipping_policy_name_30', 'fulfillment_policy_name_30_eur']),
+            self::GROUP_SHIPPING_30 => self::first_setting($settings, ['shipping_policy_30_name', 'shipping_policy_name_30', 'fulfillment_policy_name_30_eur']),
             default => '',
         };
     }
 
     public static function default_policy_id(array $settings): string
     {
-        return self::first_setting($settings, ['default_shipping_policy_id', 'ebay_default_shipping_policy_id']);
+        return self::first_setting($settings, ['default_shipping_policy_id', 'default_shipping_policy', 'ebay_default_shipping_policy_id']);
     }
 
     public static function default_policy_name(array $settings): string

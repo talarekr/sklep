@@ -542,35 +542,20 @@ class AdminPage
         $s['inventory_location_postal_code'] = sanitize_text_field((string) ($_POST['inventory_location_postal_code'] ?? '08-460'));
         $s['inventory_location_city'] = sanitize_text_field((string) ($_POST['inventory_location_city'] ?? 'Sobolew'));
         $s['inventory_location_address_line_1'] = sanitize_text_field((string) ($_POST['inventory_location_address_line_1'] ?? ''));
-        $postedShippingPolicyId = static function (string $key, array $legacyKeys = []): string {
-            $manual = sanitize_text_field((string) ($_POST[$key . '_manual'] ?? ''));
-            if ($manual !== '') {
-                return $manual;
-            }
-            $selected = sanitize_text_field((string) ($_POST[$key] ?? ''));
-            if ($selected !== '') {
-                return $selected;
-            }
-            $existing = sanitize_text_field((string) ($_POST[$key . '_existing'] ?? ''));
-            if ($existing !== '') {
-                return $existing;
-            }
-            foreach ($legacyKeys as $legacyKey) {
-                $legacy = sanitize_text_field((string) ($_POST[$legacyKey] ?? ''));
-                if ($legacy !== '') {
-                    return $legacy;
-                }
-            }
-            return '';
-        };
-        $s['shipping_policy_30'] = $postedShippingPolicyId('shipping_policy_30', ['fulfillment_policy_id_30_eur', 'fulfillmentPolicyId', 'ebay_fulfillment_policy_id']);
-        $s['shipping_policy_50'] = $postedShippingPolicyId('shipping_policy_50', ['fulfillment_policy_id_50_eur']);
-        $s['shipping_policy_130'] = $postedShippingPolicyId('shipping_policy_130', ['fulfillment_policy_id_130_eur']);
-        $s['default_shipping_policy_id'] = $postedShippingPolicyId('default_shipping_policy_id');
-        $s['shipping_policy_name_30'] = sanitize_text_field((string) ($_POST['shipping_policy_name_30'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_30'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_30', ['fulfillment_policy_id_30_eur', 'fulfillmentPolicyId', 'ebay_fulfillment_policy_id']);
+        $s['shipping_policy_50'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_50', ['fulfillment_policy_id_50_eur']);
+        $s['shipping_policy_130'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_130', ['fulfillment_policy_id_130_eur']);
+        $s['default_shipping_policy_id'] = self::posted_shipping_policy_id($_POST, 'default_shipping_policy_id', ['default_shipping_policy']);
+        $s['shipping_policy_name_30'] = self::posted_shipping_policy_name($_POST, 'shipping_policy_30') ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_30_name'] = $s['shipping_policy_name_30'];
+        $s['default_shipping_policy'] = $s['default_shipping_policy_id'];
         $s['shipping_policy_name_50'] = sanitize_text_field((string) ($_POST['shipping_policy_name_50'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_50']);
         $s['shipping_policy_name_130'] = sanitize_text_field((string) ($_POST['shipping_policy_name_130'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_130']);
         $s['default_shipping_policy_name'] = sanitize_text_field((string) ($_POST['default_shipping_policy_name'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['default_shipping_policy_id']);
+        $s['ebay_payment_policy_id'] = self::posted_shipping_policy_id($_POST, 'ebay_payment_policy_id', ['paymentPolicyId', 'payment_policy']);
+        $s['ebay_return_policy_id'] = self::posted_shipping_policy_id($_POST, 'ebay_return_policy_id', ['returnPolicyId', 'return_policy']);
+        $s['ebay_payment_policy_name'] = sanitize_text_field((string) ($_POST['ebay_payment_policy_name'] ?? '')) ?: $this->cached_business_policy_name($s, 'paymentPolicies', 'paymentPolicyId', $s['ebay_payment_policy_id']);
+        $s['ebay_return_policy_name'] = sanitize_text_field((string) ($_POST['ebay_return_policy_name'] ?? '')) ?: $this->cached_business_policy_name($s, 'returnPolicies', 'returnPolicyId', $s['ebay_return_policy_id']);
         $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
         $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
         $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
@@ -580,12 +565,67 @@ class AdminPage
         $s['shipping_category_ids_130'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_130'] ?? $_POST['shipping_category_ids_130_eur'] ?? '')));
         $conflicts = EbayShippingPolicyResolver::conflict_ids($s);
         update_option('wei_ebay_shipping_mapping_warnings', $conflicts === [] ? [] : ['conflicts' => $conflicts, 'message' => 'Woo category ID appears in multiple eBay shipping groups. Runtime priority is Wysyłka 130 > Wysyłka 50 > Wysyłka 30.'], false);
-        $s['ebay_payment_policy_id'] = sanitize_text_field((string) ($_POST['paymentPolicyId'] ?? $_POST['ebay_payment_policy_id'] ?? ''));
-        $s['ebay_return_policy_id'] = sanitize_text_field((string) ($_POST['returnPolicyId'] ?? $_POST['ebay_return_policy_id'] ?? ''));
         $this->sync_product_category_overrides($s['product_category_overrides']);
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1' . (!empty($conflicts) ? '&shipping_mapping_conflicts=1' : '')));
         exit;
+    }
+
+
+    public static function posted_shipping_policy_id(array $post, string $key, array $legacyKeys = []): string
+    {
+        $keys = array_values(array_unique(array_merge([$key], $legacyKeys, self::shipping_policy_field_aliases($key))));
+
+        foreach ($keys as $fieldKey) {
+            $manual = sanitize_text_field((string) ($post[$fieldKey . '_manual'] ?? ''));
+            if ($manual !== '') {
+                return $manual;
+            }
+        }
+
+        foreach ($keys as $fieldKey) {
+            $selected = sanitize_text_field((string) ($post[$fieldKey] ?? ''));
+            if ($selected !== '') {
+                return $selected;
+            }
+        }
+
+        foreach ($keys as $fieldKey) {
+            $existing = sanitize_text_field((string) ($post[$fieldKey . '_existing'] ?? ''));
+            if ($existing !== '') {
+                return $existing;
+            }
+        }
+
+        return '';
+    }
+
+    public static function posted_shipping_policy_name(array $post, string $key): string
+    {
+        $suffix = preg_match('/_(\d+)$/', $key, $matches) ? (string) $matches[1] : '';
+        $nameKeys = [$key . '_name'];
+        if ($suffix !== '') {
+            $nameKeys[] = 'shipping_policy_name_' . $suffix;
+        }
+
+        foreach ($nameKeys as $nameKey) {
+            $name = sanitize_text_field((string) ($post[$nameKey] ?? ''));
+            if ($name !== '') {
+                return $name;
+            }
+        }
+
+        return '';
+    }
+
+    /** @return array<int,string> */
+    private static function shipping_policy_field_aliases(string $key): array
+    {
+        return match ($key) {
+            'default_shipping_policy_id' => ['default_shipping_policy'],
+            'default_shipping_policy' => ['default_shipping_policy_id'],
+            default => [],
+        };
     }
 
 
@@ -598,27 +638,22 @@ class AdminPage
         $defaultMarkupRaw = trim((string) ($_POST['ebay_default_markup_percent'] ?? ''));
         $defaultMarkup = $defaultMarkupRaw === '' ? 25.0 : (float) str_replace(',', '.', $defaultMarkupRaw);
         $s['ebay_default_markup_percent'] = $defaultMarkup > 0 ? round($defaultMarkup, 4) : 25;
+        $s['inventory_location_key'] = sanitize_text_field((string) ($_POST['inventory_location_key'] ?? ($s['inventory_location_key'] ?? '')));
 
-        $postedShippingPolicyId = static function (string $key): string {
-            $manual = sanitize_text_field((string) ($_POST[$key . '_manual'] ?? ''));
-            if ($manual !== '') {
-                return $manual;
-            }
-            $selected = sanitize_text_field((string) ($_POST[$key] ?? ''));
-            if ($selected !== '') {
-                return $selected;
-            }
-            return sanitize_text_field((string) ($_POST[$key . '_existing'] ?? ''));
-        };
-
-        $s['shipping_policy_30'] = $postedShippingPolicyId('shipping_policy_30');
-        $s['shipping_policy_50'] = $postedShippingPolicyId('shipping_policy_50');
-        $s['shipping_policy_130'] = $postedShippingPolicyId('shipping_policy_130');
-        $s['default_shipping_policy_id'] = $postedShippingPolicyId('default_shipping_policy_id');
-        $s['shipping_policy_name_30'] = sanitize_text_field((string) ($_POST['shipping_policy_name_30'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_30'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_30');
+        $s['shipping_policy_50'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_50');
+        $s['shipping_policy_130'] = self::posted_shipping_policy_id($_POST, 'shipping_policy_130');
+        $s['default_shipping_policy_id'] = self::posted_shipping_policy_id($_POST, 'default_shipping_policy_id', ['default_shipping_policy']);
+        $s['shipping_policy_name_30'] = self::posted_shipping_policy_name($_POST, 'shipping_policy_30') ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_30_name'] = $s['shipping_policy_name_30'];
+        $s['default_shipping_policy'] = $s['default_shipping_policy_id'];
         $s['shipping_policy_name_50'] = sanitize_text_field((string) ($_POST['shipping_policy_name_50'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_50']);
         $s['shipping_policy_name_130'] = sanitize_text_field((string) ($_POST['shipping_policy_name_130'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_130']);
         $s['default_shipping_policy_name'] = sanitize_text_field((string) ($_POST['default_shipping_policy_name'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['default_shipping_policy_id']);
+        $s['ebay_payment_policy_id'] = self::posted_shipping_policy_id($_POST, 'ebay_payment_policy_id', ['paymentPolicyId', 'payment_policy']);
+        $s['ebay_return_policy_id'] = self::posted_shipping_policy_id($_POST, 'ebay_return_policy_id', ['returnPolicyId', 'return_policy']);
+        $s['ebay_payment_policy_name'] = sanitize_text_field((string) ($_POST['ebay_payment_policy_name'] ?? '')) ?: $this->cached_business_policy_name($s, 'paymentPolicies', 'paymentPolicyId', $s['ebay_payment_policy_id']);
+        $s['ebay_return_policy_name'] = sanitize_text_field((string) ($_POST['ebay_return_policy_name'] ?? '')) ?: $this->cached_business_policy_name($s, 'returnPolicies', 'returnPolicyId', $s['ebay_return_policy_id']);
         $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
         $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
         $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
@@ -648,6 +683,7 @@ class AdminPage
         ];
         $product = $productId > 0 && function_exists('wc_get_product') ? wc_get_product($productId) : null;
         $priceResolution = $product ? $this->priceResolver->resolve($product, $productId, $settings, true) : [];
+        $businessPolicyResolution = EbayAdapter::business_policy_resolution_for_settings($settings, $resolution, (string) ($settings['inventory_location_key'] ?? ''));
         $diagnostics = [
             'product_id' => $productId,
             'product_title' => $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId),
@@ -656,8 +692,18 @@ class AdminPage
             'matched_woo_category_id' => (int) ($resolution['matched_woo_category_id'] ?? 0),
             'selected_shipping_policy_id' => (string) ($resolution['policy_id'] ?? ''),
             'selected_shipping_policy_name' => (string) ($resolution['policy_name'] ?? ''),
-            'selected_fulfillment_policy_id' => (string) ($resolution['policy_id'] ?? ''),
-            'selected_fulfillment_policy_name' => (string) ($resolution['policy_name'] ?? ''),
+            'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''),
+            'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''),
+            'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
+            'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''),
+            'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
+            'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''),
+            'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''),
+            'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']) ? 'yes' : 'no',
+            'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']) ? 'yes' : 'no',
+            'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']) ? 'yes' : 'no',
+            'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']) ? 'yes' : 'no',
+            'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''),
             'fallback_default_used' => !empty($resolution['default_used']) ? 'yes' : 'no',
             'default_policy_used' => !empty($resolution['default_used']) ? 'yes' : 'no',
             'missing_shipping_policy_mapping' => !empty($resolution['blocked']) || (string) ($resolution['reason'] ?? '') === 'missing_shipping_policy_mapping' ? 'yes' : 'no',
@@ -3629,8 +3675,14 @@ class AdminPage
         if (empty($s['marketplace_id'])) {
             $s['marketplace_id'] = 'EBAY_DE';
         }
-        if (empty($s['inventory_location_key'])) {
+        if (!isset($s['inventory_location_key'])) {
             $s['inventory_location_key'] = 'gpswiss-pl';
+        }
+        if (!isset($s['ebay_payment_policy_id'])) {
+            $s['ebay_payment_policy_id'] = '259264220013';
+        }
+        if (!isset($s['ebay_return_policy_id'])) {
+            $s['ebay_return_policy_id'] = '259264151013';
         }
         if (empty($s['inventory_location_name'])) {
             $s['inventory_location_name'] = 'gpswiss-pl';
@@ -3771,15 +3823,37 @@ class AdminPage
         $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
         $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
         $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
+        $s['default_shipping_policy_id'] = trim((string) ($s['default_shipping_policy_id'] ?? $s['default_shipping_policy'] ?? ''));
+        $s['default_shipping_policy'] = $s['default_shipping_policy_id'];
+        $s['shipping_policy_name_30'] = trim((string) ($s['shipping_policy_name_30'] ?? $s['shipping_policy_30_name'] ?? ''));
+        $s['shipping_policy_30_name'] = $s['shipping_policy_name_30'];
         if (empty($s['ebay_fulfillment_policy_id'])) {
             $s['ebay_fulfillment_policy_id'] = (string) $s['shipping_policy_30'];
         }
-        foreach (['shipping_category_ids_30', 'shipping_category_ids_50', 'shipping_category_ids_130', 'default_shipping_policy_id', 'default_shipping_policy_name', 'shipping_policy_name_30', 'shipping_policy_name_50', 'shipping_policy_name_130'] as $key) {
+        foreach (['shipping_category_ids_30', 'shipping_category_ids_50', 'shipping_category_ids_130', 'default_shipping_policy_id', 'default_shipping_policy', 'default_shipping_policy_name', 'shipping_policy_name_30', 'shipping_policy_30_name', 'shipping_policy_name_50', 'shipping_policy_name_130', 'ebay_payment_policy_id', 'ebay_payment_policy_name', 'ebay_return_policy_id', 'ebay_return_policy_name'] as $key) {
             if (!isset($s[$key])) {
                 $s[$key] = '';
             }
         }
         return $s;
+    }
+
+    private function cached_business_policy_name(array $settings, string $policySetKey, string $policyIdKey, string $policyId): string
+    {
+        $policyId = trim($policyId);
+        if ($policyId === '') {
+            return '';
+        }
+
+        $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
+        $policies = is_array($cached[$policySetKey] ?? null) ? $cached[$policySetKey] : [];
+        foreach ($policies as $policy) {
+            if ((string) ($policy[$policyIdKey] ?? '') === $policyId) {
+                return (string) ($policy['name'] ?? $policyId);
+            }
+        }
+
+        return '';
     }
 
     private function cached_fulfillment_policy_name(array $settings, string $policyId): string

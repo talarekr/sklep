@@ -333,24 +333,25 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'details' => $shippingPolicyResolution,
             ];
         }
-        $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
-        if (!$policyValidation['valid']) {
+        $businessPolicyResolution = self::business_policy_resolution_for_settings($settings, $shippingPolicyResolution, $this->merchant_location_key());
+        if ((string) ($businessPolicyResolution['business_policy_problem_reason'] ?? '') !== '') {
             return [
                 'result' => 'error',
-                'error' => 'business_policy_ids_missing_or_invalid',
-                'message' => 'Missing or invalid eBay Business Policy IDs. Refresh EBAY_DE policies and select fulfillmentPolicyId, paymentPolicyId and returnPolicyId before export.',
-                'details' => $policyValidation,
+                'error' => (string) $businessPolicyResolution['business_policy_problem_reason'],
+                'message' => 'Missing eBay Business Policy setting: ' . (string) $businessPolicyResolution['business_policy_problem_reason'] . '.',
+                'details' => $businessPolicyResolution,
             ];
         }
+        $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
 
         $priceCurrency = $this->offer_currency($marketplaceId);
         $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : $this->resolve_price($product, $product_id, $settings);
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) $product->get_price();
 
         $listingPolicies = [
-            'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
-            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
-            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+            'fulfillmentPolicyId' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
         ];
 
         $offerPayload = [
@@ -714,8 +715,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function merchant_location_key(): string
     {
         $settings = $this->settings();
-        $merchantLocationKey = (string) ($settings['inventory_location_key'] ?? 'gpswiss-pl');
-        return $merchantLocationKey !== '' ? $merchantLocationKey : 'gpswiss-pl';
+        return trim((string) ($settings['inventory_location_key'] ?? ''));
     }
 
     private function offer_currency(string $marketplaceId): string
@@ -1208,10 +1208,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['policy_id'] ?? '') === '') {
             return ['result' => 'error', 'error' => 'missing_shipping_policy_mapping', 'message' => 'No eBay shipping policy resolved from Woo product_cat mapping and no default shipping policy is configured.', 'details' => $shippingPolicyResolution];
         }
+        $businessPolicyResolution = self::business_policy_resolution_for_settings($settings, $shippingPolicyResolution, $this->merchant_location_key());
+        if ((string) ($businessPolicyResolution['business_policy_problem_reason'] ?? '') !== '') {
+            return ['result' => 'error', 'error' => (string) $businessPolicyResolution['business_policy_problem_reason'], 'message' => 'Missing eBay Business Policy setting: ' . (string) $businessPolicyResolution['business_policy_problem_reason'] . '.', 'details' => $businessPolicyResolution];
+        }
         $listingPolicies = [
-            'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
-            'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
-            'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+            'fulfillmentPolicyId' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''),
+            'paymentPolicyId' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
+            'returnPolicyId' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
         ];
         $inventoryPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
@@ -1540,14 +1544,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $priceValue = $marketplaceId === 'EBAY_DE' ? (float) ($priceResolution['ebay_price_eur'] ?? 0) : (float) (is_object($product) && method_exists($product, 'get_price') ? $product->get_price() : 0);
         $category = is_array($preflight['category'] ?? null) ? $preflight['category'] : [];
         $content = is_array($preflight['content'] ?? null) ? $preflight['content'] : [];
+        $businessPolicyResolution = self::business_policy_resolution_for_settings($settings, $shippingPolicyResolution, $this->merchant_location_key());
 
         return [
             'sku' => $sku,
             'category_id' => (string) ($category['category_id'] ?? ''),
             'business_policy_ids' => [
-                'fulfillmentPolicyId' => (string) ($shippingPolicyResolution['policy_id'] ?? EbayShippingPolicyResolver::policy_id_for_group(EbayShippingPolicyResolver::GROUP_DEFAULT_30_EUR, $settings)),
-                'paymentPolicyId' => (string) ($settings['ebay_payment_policy_id'] ?? ''),
-                'returnPolicyId' => (string) ($settings['ebay_return_policy_id'] ?? ''),
+                'fulfillmentPolicyId' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''),
+                'paymentPolicyId' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
+                'returnPolicyId' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
+                'merchantLocationKey' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''),
             ],
             'price' => [
                 'value' => $priceValue,
@@ -3378,21 +3384,22 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         if ($missingAspects !== [] && $categoryId !== '') { $errors[] = 'missing required aspect ' . implode(', ', $missingAspects); $status = 'missing_required_aspects'; }
         $shippingPolicyResolution = EbayShippingPolicyResolver::resolve_for_product($product_id, $settings);
-        $policyValidation = ['valid' => true, 'missing' => []];
+        $businessPolicyResolution = self::business_policy_resolution_for_settings($settings, $shippingPolicyResolution, $this->merchant_location_key());
+        $policyValidation = ['valid' => true, 'missing' => [], 'invalid' => []];
         if (!empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['policy_id'] ?? '') === '') {
             $errors[] = 'missing_shipping_policy_mapping';
             $status = 'missing_shipping_policy_mapping';
         } else {
             $policyValidation = $this->validate_selected_policies($settings, [(string) ($shippingPolicyResolution['policy_id'] ?? '')]);
-            if (!$policyValidation['valid']) {
-                $errors[] = 'business policies missing or invalid';
+            $businessPolicyProblemReason = (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? '');
+            if ($businessPolicyProblemReason !== '') {
+                $errors[] = $businessPolicyProblemReason;
                 $status = 'blocked_by_shipping_policy';
             }
         }
         if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
         if ((int) $product->get_stock_quantity() < 0) $errors[] = 'stock invalid';
         if (!$product->get_image_id()) $errors[] = 'image missing';
-        if ($this->merchant_location_key() === '') $errors[] = 'inventory location missing';
 
         $ready = $errors === [];
         $message = $ready ? 'Product ready for eBay export.' : 'Product not ready for eBay: ' . implode('; ', $errors) . '.';
@@ -3403,7 +3410,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_shipping_policy_mapping', 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
 
@@ -4895,6 +4902,75 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $this->logger->info('EBAY_SHIPPING_POLICY_CHANGED', $context);
     }
 
+    public static function business_policy_resolution_for_settings(array $settings, array $shippingPolicyResolution, string $merchantLocationKey): array
+    {
+        $fulfillmentPolicyId = trim((string) ($shippingPolicyResolution['policy_id'] ?? ''));
+        $fulfillmentPolicyName = trim((string) ($shippingPolicyResolution['policy_name'] ?? ''));
+        $paymentPolicyId = trim((string) ($settings['ebay_payment_policy_id'] ?? $settings['paymentPolicyId'] ?? ''));
+        $returnPolicyId = trim((string) ($settings['ebay_return_policy_id'] ?? $settings['returnPolicyId'] ?? ''));
+        $merchantLocationKey = trim($merchantLocationKey !== '' ? $merchantLocationKey : (string) ($settings['inventory_location_key'] ?? ''));
+
+        $paymentPolicyName = trim((string) ($settings['ebay_payment_policy_name'] ?? ''));
+        if ($paymentPolicyName === '') {
+            $paymentPolicyName = self::cached_policy_name($settings, 'paymentPolicies', 'paymentPolicyId', $paymentPolicyId);
+        }
+        $returnPolicyName = trim((string) ($settings['ebay_return_policy_name'] ?? ''));
+        if ($returnPolicyName === '') {
+            $returnPolicyName = self::cached_policy_name($settings, 'returnPolicies', 'returnPolicyId', $returnPolicyId);
+        }
+        if ($fulfillmentPolicyName === '') {
+            $fulfillmentPolicyName = self::cached_policy_name($settings, 'fulfillmentPolicies', 'fulfillmentPolicyId', $fulfillmentPolicyId);
+        }
+
+        $missingFulfillmentPolicy = $fulfillmentPolicyId === '';
+        $missingPaymentPolicy = $paymentPolicyId === '';
+        $missingReturnPolicy = $returnPolicyId === '';
+        $missingMerchantLocation = $merchantLocationKey === '';
+        $problemReason = '';
+        foreach ([
+            'missing_payment_policy' => $missingPaymentPolicy,
+            'missing_return_policy' => $missingReturnPolicy,
+            'missing_merchant_location' => $missingMerchantLocation,
+            'missing_fulfillment_policy' => $missingFulfillmentPolicy,
+        ] as $reason => $missing) {
+            if ($missing) {
+                $problemReason = $reason;
+                break;
+            }
+        }
+
+        return [
+            'selected_fulfillment_policy_id' => $fulfillmentPolicyId,
+            'selected_fulfillment_policy_name' => $fulfillmentPolicyName,
+            'selected_payment_policy_id' => $paymentPolicyId,
+            'selected_payment_policy_name' => $paymentPolicyName,
+            'selected_return_policy_id' => $returnPolicyId,
+            'selected_return_policy_name' => $returnPolicyName,
+            'merchant_location_key' => $merchantLocationKey,
+            'missing_fulfillment_policy' => $missingFulfillmentPolicy,
+            'missing_payment_policy' => $missingPaymentPolicy,
+            'missing_return_policy' => $missingReturnPolicy,
+            'missing_merchant_location' => $missingMerchantLocation,
+            'business_policy_problem_reason' => $problemReason,
+        ];
+    }
+
+    private static function cached_policy_name(array $settings, string $policySetKey, string $policyIdKey, string $policyId): string
+    {
+        if ($policyId === '') {
+            return '';
+        }
+        $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
+        $policies = is_array($cached[$policySetKey] ?? null) ? $cached[$policySetKey] : [];
+        foreach ($policies as $policy) {
+            if ((string) ($policy[$policyIdKey] ?? '') === $policyId) {
+                return (string) ($policy['name'] ?? '');
+            }
+        }
+
+        return '';
+    }
+
     private function validate_selected_policies(array $settings, array $fulfillmentPolicyIds = []): array
     {
         $cached = is_array($settings['wei_cached_policies'] ?? null) ? $settings['wei_cached_policies'] : [];
@@ -4931,12 +5007,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
         foreach ($required as $field => $id) {
             if ($id === '') {
                 $missing[] = $field;
-                continue;
-            }
-
-            $policySetKey = str_starts_with($field, 'fulfillmentPolicyId') ? 'fulfillmentPolicyId' : $field;
-            if (!$this->policy_id_exists($policySets[$policySetKey] ?? [], $id)) {
-                $invalid[$field] = $id;
             }
         }
 
@@ -4999,6 +5069,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $settings = get_option(Plugin::OPTION_KEY, []);
         $settings = is_array($settings) ? $settings : [];
+        if (!isset($settings['marketplace_id'])) {
+            $settings['marketplace_id'] = 'EBAY_DE';
+        }
+        if (!isset($settings['inventory_location_key'])) {
+            $settings['inventory_location_key'] = 'gpswiss-pl';
+        }
+        if (!isset($settings['ebay_payment_policy_id'])) {
+            $settings['ebay_payment_policy_id'] = '259264220013';
+        }
+        if (!isset($settings['ebay_return_policy_id'])) {
+            $settings['ebay_return_policy_id'] = '259264151013';
+        }
         if (!isset($settings['sku_category_overrides'])) {
             $settings['sku_category_overrides'] = "CFM-001=179847";
         }
@@ -5085,10 +5167,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings['fulfillment_policy_id_30_eur'] = $settings['shipping_policy_30'];
         $settings['fulfillment_policy_id_50_eur'] = $settings['shipping_policy_50'];
         $settings['fulfillment_policy_id_130_eur'] = $settings['shipping_policy_130'];
+        $settings['default_shipping_policy_id'] = trim((string) ($settings['default_shipping_policy_id'] ?? $settings['default_shipping_policy'] ?? ''));
+        $settings['default_shipping_policy'] = $settings['default_shipping_policy_id'];
+        $settings['shipping_policy_name_30'] = trim((string) ($settings['shipping_policy_name_30'] ?? $settings['shipping_policy_30_name'] ?? ''));
+        $settings['shipping_policy_30_name'] = $settings['shipping_policy_name_30'];
         if (empty($settings['ebay_fulfillment_policy_id'])) {
             $settings['ebay_fulfillment_policy_id'] = (string) $settings['shipping_policy_30'];
         }
-        foreach (['shipping_category_ids_30', 'shipping_category_ids_50', 'shipping_category_ids_130', 'default_shipping_policy_id', 'default_shipping_policy_name', 'shipping_policy_name_30', 'shipping_policy_name_50', 'shipping_policy_name_130'] as $key) {
+        foreach (['shipping_category_ids_30', 'shipping_category_ids_50', 'shipping_category_ids_130', 'default_shipping_policy_id', 'default_shipping_policy', 'default_shipping_policy_name', 'shipping_policy_name_30', 'shipping_policy_30_name', 'shipping_policy_name_50', 'shipping_policy_name_130', 'ebay_payment_policy_id', 'ebay_payment_policy_name', 'ebay_return_policy_id', 'ebay_return_policy_name'] as $key) {
             if (!isset($settings[$key])) {
                 $settings[$key] = '';
             }
