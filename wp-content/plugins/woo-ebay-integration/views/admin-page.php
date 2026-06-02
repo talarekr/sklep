@@ -518,7 +518,7 @@ $movedModules = [
     'Manual export/publish/preflight forms' => 'Main actions, renamed as daily single-product workflow',
     'Readiness/category audit report tables' => 'Advanced diagnostics, with only operational counts surfaced in Dashboard / Category mapping',
 ];
-$sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Publish', 'Ustawienia eBay', 'Advanced / Debug', 'Recent logs'];
+$sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie eBay', 'Ustawienia eBay', 'Advanced / Debug', 'Recent logs'];
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
@@ -581,8 +581,110 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         </details>
     </div>
 
+    <div class="wei-box" data-wei-module="publish">
+        <h2>1. Publish</h2>
+        <p class="description">Publish ready products only. Run the full publish readiness audit first; it only reads local Woo/product meta data and writes CSV diagnostics. Publish/export buttons remain separate actions.</p>
+        <p class="wei-danger"><strong>Warning:</strong> Publish run counters, readiness audit counters, and eBay listing state refresh counters are intentionally separate. These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.</p>
+        <h3>Latest readiness scan</h3>
+        <?php if (!$publishAuditComplete): ?><div class="notice notice-warning inline"><p><strong>PARTIAL / IN PROGRESS:</strong> These are checkpointed partial counts only. The dashboard shows final publish readiness KPI only after <code>complete=true</code>.</p></div><?php endif; ?>
+        <div class="wei-grid">
+            <div class="wei-card"><span>audit status</span><strong><?php echo esc_html($publishAuditStatusLabel); ?></strong></div>
+            <div class="wei-card"><span>processed_total / total_products</span><strong><?php echo esc_html((string) $readinessProcessedTotal . ' / ' . (string) $readinessTotalProducts); ?></strong></div>
+            <div class="wei-card"><span>remaining_products</span><strong><?php echo esc_html((string) $publishAuditRemainingProducts); ?></strong></div>
+            <div class="wei-card"><span>batch_size</span><strong><?php echo esc_html((string) $publishAuditBatchSize); ?></strong></div>
+            <div class="wei-card"><span>complete</span><strong><?php echo $publishAuditComplete ? 'true' : 'false'; ?></strong></div>
+            <div class="wei-card"><span>current_offset</span><strong><?php echo esc_html((string) ($readinessSummary['current_offset'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>processed_total</span><strong><?php echo esc_html((string) $readinessProcessedTotal); ?></strong></div>
+            <div class="wei-card"><span>total_products</span><strong><?php echo esc_html((string) $readinessTotalProducts); ?></strong></div>
+            <div class="wei-card"><span><?php echo $publishAuditComplete ? 'ready (final KPI)' : 'ready (partial)'; ?></span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
+            <div class="wei-card"><span>blocked</span><strong><?php echo esc_html((string) $readinessBlockedCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_from_ebay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_no_woo_category</span><strong><?php echo esc_html((string) $excludedNoWooCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>excluded_bez_kategorii</span><strong><?php echo esc_html((string) $excludedBezKategoriiCount); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) $readinessBlockedByCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_price</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_price'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_stock</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_stock'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_images</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_images'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_german_content</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_german_content'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_by_required_aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
+        </div>
+        <h3>Latest publish run</h3>
+        <div class="wei-grid">
+            <div class="wei-card"><span>processed_this_run</span><strong><?php echo esc_html((string) ($initialPublish['processed'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>exported_this_run</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
+            <div class="wei-card"><span>published_this_run</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
+            <div class="wei-card"><span>skipped_this_run</span><strong><?php echo esc_html((string) $initialPublishSkippedThisRun); ?></strong></div>
+            <div class="wei-card"><span>errors_this_run</span><strong><?php echo esc_html((string) $initialPublishFailed); ?></strong></div>
+            <div class="wei-card"><span>ready_at_publish_start</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
+            <div class="wei-card"><span>blocked_this_publish_run</span><strong><?php echo esc_html((string) $initialPublishBlockedCount); ?></strong></div>
+        </div>
+        <h3>Latest eBay state refresh</h3>
+        <div class="wei-grid">
+            <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>needs_reexport_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['needs_reexport_count'] ?? 0)); ?></strong></div>
+        </div>
+        <div class="wei-actions" data-wei-primary-actions="publish">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
+                <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
+                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="200" /></label>
+                <button class="button">Run readiness scan / full publish readiness audit (new checkpointed run)</button>
+            </form>
+            <?php if (!$publishAuditComplete && $publishAuditRunId !== ''): ?>
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                    <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
+                    <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
+                    <input type="hidden" name="continue_audit" value="1" />
+                    <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="<?php echo esc_attr((string) $publishAuditBatchSize); ?>" /></label>
+                    <button class="button button-primary">Continue readiness audit</button>
+                </form>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_auto_sync_export_now'); ?>
+                <input type="hidden" name="action" value="wei_auto_sync_export_now" />
+                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="20" /></label>
+                <button class="button">Export ready products to eBay</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This can publish public eBay listings for ready products only. Continue?');">
+                <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
+                <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
+                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="5" /></label>
+                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready offers</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Publish ready products runs the existing ready-product publish batch. It skips not_ready products. Continue?');">
+                <?php wp_nonce_field('wei_publish_ready_products'); ?>
+                <input type="hidden" name="action" value="wei_publish_ready_products" />
+                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="50" /></label>
+                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready products</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset publish progress / counters? This clears only publish progress, cursors, checkpoints and counters. It does not delete category mappings, German content, OAuth tokens, policies, prices, stock, images or Woo products. Type RESET to confirm.');">
+                <?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?>
+                <input type="hidden" name="action" value="wei_ebay_initial_publish_reset" />
+                <input type="text" name="confirm_reset" placeholder="RESET" size="8" />
+                <button class="button button-link-delete">Resetuj postęp publikacji</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Refresh current eBay listing and offer state via eBay API?');">
+                <?php wp_nonce_field('wei_refresh_ebay_listing_state'); ?>
+                <input type="hidden" name="action" value="wei_refresh_ebay_listing_state" />
+                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="100" /></label>
+                <button class="button">Refresh eBay listing state</button>
+            </form>
+        </div>
+        <div class="wei-actions">
+            <?php foreach (['full_csv' => 'publish-readiness-full.csv', 'problems_only_csv' => 'publish-readiness-problems-only.csv', 'ready_products_csv' => 'publish-readiness-ready-products.csv', 'excluded_csv' => 'publish-readiness-excluded.csv'] as $reportKey => $label): ?>
+                <?php $report = is_array($publishReadinessReports[$reportKey] ?? null) ? $publishReadinessReports[$reportKey] : []; ?>
+                <?php if (!empty($report['exists']) && !empty($report['path'])): ?>
+                    <a class="button" href="<?php echo esc_url(admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode(basename((string) $report['path'])))); ?>"><?php echo esc_html($label); ?></a>
+                <?php endif; ?>
+            <?php endforeach; ?>
+        </div>
+        <details><summary>Readiness scan, publish run, and eBay state refresh technical summaries</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['latest_readiness_scan' => $readinessSummary, 'latest_publish_run' => ['processed_this_run' => (int) ($initialPublish['processed'] ?? 0), 'exported_this_run' => (int) $initialPublishSuccess, 'published_this_run' => (int) $initialPublishSuccess, 'skipped_this_run' => (int) $initialPublishSkippedThisRun, 'errors_this_run' => (int) $initialPublishFailed, 'historical_published_count' => (int) ($publishSummary['historical_published_count'] ?? 0), 'current_offer_count' => (int) ($publishSummary['current_offer_count'] ?? $ebayListingStateSummary['current_offer_count'] ?? 0), 'publish_progress_published_this_run' => (int) ($publishSummary['publish_progress_published_this_run'] ?? $initialPublishSuccess), 'published_total_from_old_checkpoint' => (int) ($publishSummary['published_total_from_old_checkpoint'] ?? 0), 'ended_listing_count' => (int) ($publishSummary['ended_listing_count'] ?? $ebayListingStateSummary['ended_listing_count'] ?? 0), 'last_batch_log' => $initialPublishLog], 'latest_ebay_state_refresh' => $ebayListingStateSummary], 8000)); ?></pre></details>
+    </div>
+
+
+
     <div class="wei-box" data-wei-module="german-content">
-        <h2>1. German Content</h2>
+        <h2>2. German Content</h2>
         <p class="description">Generate German title, description, listing template data, Spezifikationen and Artikelmerkmale for eBay.de. These actions write only local German-content meta and do not call eBay APIs.</p>
         <p class="notice notice-warning" style="padding:8px 12px;"><strong>This updates local German content only. It does not update active eBay listings.</strong></p>
         <?php $germanMigration = is_array($german_content_audit_summary ?? null) ? $german_content_audit_summary : []; ?>
@@ -699,7 +801,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
     </div>
 
     <div class="wei-box" data-wei-module="ebay-categories">
-        <h2>2. Kategorie eBay</h2>
+        <h2>3. Kategorie eBay</h2>
         <p class="description">Step-by-step EBAY_DE category workflow. This module only reads/writes category mappings and local CSV diagnostics; worklist import never publishes, revises listings, or calls the eBay API.</p>
         <?php
         $categoryAuditSummary = is_array($category_readiness_audit_summary ?? null) ? $category_readiness_audit_summary : [];
@@ -824,107 +926,6 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
 
         <details><summary>Category dashboard summary JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_dashboard_summary' => $categoryDashboardSummary, 'last_audit' => $lastCategoryAudit, 'worklist' => $category_mapping_worklist_summary, 'all_worklist' => $all_category_mapping_worklist_summary], 6000)); ?></pre></details>
     </div>
-
-    <div class="wei-box" data-wei-module="publish">
-        <h2>3. Publish</h2>
-        <p class="description">Publish ready products only. Run the full publish readiness audit first; it only reads local Woo/product meta data and writes CSV diagnostics. Publish/export buttons remain separate actions.</p>
-        <p class="wei-danger"><strong>Warning:</strong> Publish run counters, readiness audit counters, and eBay listing state refresh counters are intentionally separate. These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.</p>
-        <h3>Latest readiness scan</h3>
-        <?php if (!$publishAuditComplete): ?><div class="notice notice-warning inline"><p><strong>PARTIAL / IN PROGRESS:</strong> These are checkpointed partial counts only. The dashboard shows final publish readiness KPI only after <code>complete=true</code>.</p></div><?php endif; ?>
-        <div class="wei-grid">
-            <div class="wei-card"><span>audit status</span><strong><?php echo esc_html($publishAuditStatusLabel); ?></strong></div>
-            <div class="wei-card"><span>processed_total / total_products</span><strong><?php echo esc_html((string) $readinessProcessedTotal . ' / ' . (string) $readinessTotalProducts); ?></strong></div>
-            <div class="wei-card"><span>remaining_products</span><strong><?php echo esc_html((string) $publishAuditRemainingProducts); ?></strong></div>
-            <div class="wei-card"><span>batch_size</span><strong><?php echo esc_html((string) $publishAuditBatchSize); ?></strong></div>
-            <div class="wei-card"><span>complete</span><strong><?php echo $publishAuditComplete ? 'true' : 'false'; ?></strong></div>
-            <div class="wei-card"><span>current_offset</span><strong><?php echo esc_html((string) ($readinessSummary['current_offset'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>processed_total</span><strong><?php echo esc_html((string) $readinessProcessedTotal); ?></strong></div>
-            <div class="wei-card"><span>total_products</span><strong><?php echo esc_html((string) $readinessTotalProducts); ?></strong></div>
-            <div class="wei-card"><span><?php echo $publishAuditComplete ? 'ready (final KPI)' : 'ready (partial)'; ?></span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
-            <div class="wei-card"><span>blocked</span><strong><?php echo esc_html((string) $readinessBlockedCount); ?></strong></div>
-            <div class="wei-card"><span>excluded_from_ebay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
-            <div class="wei-card"><span>excluded_no_woo_category</span><strong><?php echo esc_html((string) $excludedNoWooCategoryCount); ?></strong></div>
-            <div class="wei-card"><span>excluded_bez_kategorii</span><strong><?php echo esc_html((string) $excludedBezKategoriiCount); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_category</span><strong><?php echo esc_html((string) $readinessBlockedByCategoryCount); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_price</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_price'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_stock</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_stock'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_images</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_images'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_german_content</span><strong><?php echo esc_html((string) ($readinessSummary['blocked_by_german_content'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>blocked_by_required_aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
-        </div>
-        <h3>Latest publish run</h3>
-        <div class="wei-grid">
-            <div class="wei-card"><span>processed_this_run</span><strong><?php echo esc_html((string) ($initialPublish['processed'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>exported_this_run</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
-            <div class="wei-card"><span>published_this_run</span><strong><?php echo esc_html((string) $initialPublishSuccess); ?></strong></div>
-            <div class="wei-card"><span>skipped_this_run</span><strong><?php echo esc_html((string) $initialPublishSkippedThisRun); ?></strong></div>
-            <div class="wei-card"><span>errors_this_run</span><strong><?php echo esc_html((string) $initialPublishFailed); ?></strong></div>
-            <div class="wei-card"><span>ready_at_publish_start</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
-            <div class="wei-card"><span>blocked_this_publish_run</span><strong><?php echo esc_html((string) $initialPublishBlockedCount); ?></strong></div>
-        </div>
-        <h3>Latest eBay state refresh</h3>
-        <div class="wei-grid">
-            <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>
-            <div class="wei-card"><span>needs_reexport_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['needs_reexport_count'] ?? 0)); ?></strong></div>
-        </div>
-        <div class="wei-actions" data-wei-primary-actions="publish">
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
-                <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
-                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="200" /></label>
-                <button class="button">Run readiness scan / full publish readiness audit (new checkpointed run)</button>
-            </form>
-            <?php if (!$publishAuditComplete && $publishAuditRunId !== ''): ?>
-                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                    <?php wp_nonce_field('wei_full_publish_readiness_audit'); ?>
-                    <input type="hidden" name="action" value="wei_full_publish_readiness_audit" />
-                    <input type="hidden" name="continue_audit" value="1" />
-                    <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="<?php echo esc_attr((string) $publishAuditBatchSize); ?>" /></label>
-                    <button class="button button-primary">Continue readiness audit</button>
-                </form>
-            <?php endif; ?>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
-                <?php wp_nonce_field('wei_auto_sync_export_now'); ?>
-                <input type="hidden" name="action" value="wei_auto_sync_export_now" />
-                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="20" /></label>
-                <button class="button">Export ready products to eBay</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This can publish public eBay listings for ready products only. Continue?');">
-                <?php wp_nonce_field('wei_ebay_initial_publish_batch'); ?>
-                <input type="hidden" name="action" value="wei_ebay_initial_publish_batch" />
-                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="5" /></label>
-                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready offers</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Publish ready products runs the existing ready-product publish batch. It skips not_ready products. Continue?');">
-                <?php wp_nonce_field('wei_publish_ready_products'); ?>
-                <input type="hidden" name="action" value="wei_publish_ready_products" />
-                <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="5" /></label>
-                <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready products</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset publish progress / counters? This clears only publish progress, cursors, checkpoints and counters. It does not delete category mappings, German content, OAuth tokens, policies, prices, stock, images or Woo products. Type RESET to confirm.');">
-                <?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?>
-                <input type="hidden" name="action" value="wei_ebay_initial_publish_reset" />
-                <input type="text" name="confirm_reset" placeholder="RESET" size="8" />
-                <button class="button button-link-delete">Resetuj postęp publikacji</button>
-            </form>
-            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Refresh current eBay listing and offer state via eBay API?');">
-                <?php wp_nonce_field('wei_refresh_ebay_listing_state'); ?>
-                <input type="hidden" name="action" value="wei_refresh_ebay_listing_state" />
-                <label>Batch size <input type="number" min="1" max="500" name="batch_size" value="100" /></label>
-                <button class="button">Refresh eBay listing state</button>
-            </form>
-        </div>
-        <div class="wei-actions">
-            <?php foreach (['full_csv' => 'publish-readiness-full.csv', 'problems_only_csv' => 'publish-readiness-problems-only.csv', 'ready_products_csv' => 'publish-readiness-ready-products.csv', 'excluded_csv' => 'publish-readiness-excluded.csv'] as $reportKey => $label): ?>
-                <?php $report = is_array($publishReadinessReports[$reportKey] ?? null) ? $publishReadinessReports[$reportKey] : []; ?>
-                <?php if (!empty($report['exists']) && !empty($report['path'])): ?>
-                    <a class="button" href="<?php echo esc_url(admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode(basename((string) $report['path'])))); ?>"><?php echo esc_html($label); ?></a>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </div>
-        <details><summary>Readiness scan, publish run, and eBay state refresh technical summaries</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['latest_readiness_scan' => $readinessSummary, 'latest_publish_run' => ['processed_this_run' => (int) ($initialPublish['processed'] ?? 0), 'exported_this_run' => (int) $initialPublishSuccess, 'published_this_run' => (int) $initialPublishSuccess, 'skipped_this_run' => (int) $initialPublishSkippedThisRun, 'errors_this_run' => (int) $initialPublishFailed, 'historical_published_count' => (int) ($publishSummary['historical_published_count'] ?? 0), 'current_offer_count' => (int) ($publishSummary['current_offer_count'] ?? $ebayListingStateSummary['current_offer_count'] ?? 0), 'publish_progress_published_this_run' => (int) ($publishSummary['publish_progress_published_this_run'] ?? $initialPublishSuccess), 'published_total_from_old_checkpoint' => (int) ($publishSummary['published_total_from_old_checkpoint'] ?? 0), 'ended_listing_count' => (int) ($publishSummary['ended_listing_count'] ?? $ebayListingStateSummary['ended_listing_count'] ?? 0), 'last_batch_log' => $initialPublishLog], 'latest_ebay_state_refresh' => $ebayListingStateSummary], 8000)); ?></pre></details>
-    </div>
-
 
     <div class="wei-box" data-wei-module="ebay-settings" id="wei-ebay-settings">
         <h2>4. Ustawienia eBay</h2>
