@@ -594,6 +594,13 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
         </div>
         <div class="wei-actions" data-wei-primary-actions="german-content">
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <strong>Generate / refresh German content for one product</strong>
+                <?php wp_nonce_field('wei_generate_german_content_single'); ?>
+                <input type="hidden" name="action" value="wei_generate_german_content_single" />
+                <label>Product ID / SKU <input type="text" name="product_or_sku" placeholder="Woo product ID or SKU" required /></label>
+                <button class="button button-primary">Generate / refresh German content for this product</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_generate_german_content_batch'); ?>
                 <input type="hidden" name="action" value="wei_generate_german_content_batch" />
                 <input type="hidden" name="mode" value="all" />

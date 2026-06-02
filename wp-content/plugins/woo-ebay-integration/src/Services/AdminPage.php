@@ -37,6 +37,7 @@ class AdminPage
         add_action('admin_post_wei_description_template_publish_dry_run', [$this, 'description_template_publish_dry_run']);
         add_action('admin_post_wei_description_template_single', [$this, 'description_template_single']);
         add_action('admin_post_wei_ebay_regenerate_german_content', [$this, 'regenerate_german_content']);
+        add_action('admin_post_wei_generate_german_content_single', [$this, 'generate_german_content_single']);
         add_action('admin_post_wei_generate_german_content_batch', [$this, 'generate_german_content_batch']);
         add_action('admin_post_wei_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
@@ -3309,17 +3310,49 @@ class AdminPage
         $this->require_manage_options();
         check_admin_referer('wei_ebay_regenerate_german_content');
 
-        $productId = (int) ($_POST['product_id'] ?? 0);
-        $res = $this->adapter->generate_german_content_meta_only($productId, true);
-        $res = array_merge($res, [
-            'called_ebay_api' => false,
-            'updated_ebay_listing' => false,
-            'created_ebay_listing' => false,
-            'modified_woo_product' => false,
-        ]);
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? $_POST['product_id'] ?? ''));
+        $res = $this->adapter->generate_german_content_meta_only_for_identifier($input, true);
 
-        $this->set_status('eBay.de German content regenerated meta-only: ' . wp_json_encode($res));
+        $this->set_status('eBay.de German content regenerated meta-only: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
         wp_send_json($res);
+    }
+
+    public function generate_german_content_single(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_generate_german_content_single');
+
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? $_POST['product_id'] ?? ''));
+        $res = $this->adapter->generate_german_content_meta_only_for_identifier($input, true);
+        update_option('wei_ebay_german_content_single_summary', $res, false);
+        $this->set_status('Single-product German content refresh: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
+        $this->render_german_content_single_response($res);
+    }
+
+    private function render_german_content_single_response(array $res): void
+    {
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        $backUrl = esc_url(admin_url('admin.php?page=woo-ebay'));
+        $productId = (int) ($res['product_id'] ?? 0);
+        $sku = (string) ($res['sku'] ?? '');
+        $previewIdentifier = $sku !== '' ? $sku : (string) $productId;
+        echo '<div class="wrap" style="font-family:Arial,Helvetica,sans-serif;margin:20px;">';
+        echo '<h1>Generate / refresh German content for one product</h1>';
+        echo '<p><a href="' . $backUrl . '">&larr; Back to Woo eBay Integration</a></p>';
+        echo '<p><strong>Safety:</strong> local German-content meta only; no eBay API call, no active listing update, no listing publish/export, no Woo title/description change.</p>';
+        echo '<h2>Result summary</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+        if (($res['generated'] ?? 'no') === 'yes' && $productId > 0) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field('wei_description_template_preview');
+            echo '<input type="hidden" name="action" value="wei_description_template_preview" />';
+            echo '<input type="hidden" name="product_or_sku" value="' . esc_attr($previewIdentifier) . '" />';
+            echo '<button class="button button-primary">Preview German listing template for this product</button>';
+            echo '</form>';
+        }
+        echo '</div>';
+        exit;
     }
 
 
