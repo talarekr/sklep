@@ -2552,8 +2552,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
             $fullMapping[] = $row;
             if ($value !== '') {
-                $fields[] = $row + ['value' => $value, 'source_value' => $value];
-                $used[] = $row + ['value' => $value, 'source_value' => $value];
+                $knownTranslation = $this->ebay_german_content_translator()->translate_known_spec_value($polishLabel, $value);
+                $translatedValue = $knownTranslation !== '' ? $knownTranslation : '';
+                $translationSource = $knownTranslation !== '' ? 'local_override' : 'source_fields_no_preview_google_call';
+                $fields[] = $row + ['value' => $value, 'source_value' => $value, 'translated_value' => $translatedValue, 'translation_source' => $translationSource];
+                $used[] = $row + ['value' => $value, 'source_value' => $value, 'translated_value' => $translatedValue, 'translation_source' => $translationSource];
             } else {
                 $missing[] = $row;
             }
@@ -2595,10 +2598,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function detect_likely_polish_template_fields(array $fields): array
     {
         $warnings = [];
-        $polishPattern = '/[ąćęłńóśźż]|\b(lewy|prawy|przód|przod|tył|tyl|manualna|automatyczna|benzyna|diesel|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        $translator = $this->ebay_german_content_translator();
         foreach ($fields as $field) {
-            $value = trim((string) ($field['value'] ?? ''));
-            if ($value === '' || !preg_match($polishPattern, $value)) {
+            $value = $this->template_field_value($field);
+            if ($value === '' || !$translator->detects_untranslated_spec_value($value)) {
                 continue;
             }
             $warnings[] = [
@@ -2626,18 +2629,21 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function german_template_field_diagnostics(array $fields): array
     {
         $diagnostics = [];
-        $polishPattern = '/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|diesel|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        $translator = $this->ebay_german_content_translator();
         foreach ($fields as $field) {
             $sourceValue = $this->clean_template_value((string) ($field['source_value'] ?? $field['value'] ?? ''));
             $translatedValue = $this->clean_template_value((string) ($field['translated_value'] ?? ''));
             $valueUsed = $this->template_field_value($field);
-            $warning = $valueUsed !== '' && preg_match($polishPattern, $valueUsed) ? 'untranslated_spec_values' : '';
+            $isDetectedUntranslated = $valueUsed !== '' && $translator->detects_untranslated_spec_value($valueUsed);
+            $warning = $isDetectedUntranslated ? 'untranslated_spec_values' : '';
             $diagnostics[] = [
                 'polish_label' => (string) ($field['polish_label'] ?? $field['source_label'] ?? ''),
                 'german_label' => (string) ($field['german_label'] ?? $field['label'] ?? ''),
                 'source_value' => $sourceValue,
                 'translated_value' => $translatedValue,
                 'value_used_in_template' => $valueUsed,
+                'translation_source' => (string) ($field['translation_source'] ?? ($translatedValue !== '' ? 'cached_translated_value' : 'source_fallback')),
+                'is_detected_untranslated' => $isDetectedUntranslated ? 'yes' : 'no',
                 'warning' => $warning,
             ];
         }
@@ -3288,7 +3294,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function ebay_german_content_translator(): EbayGermanContentTranslator
     {
-        return new EbayGermanContentTranslator($this->logger);
+        return new EbayGermanContentTranslator(isset($this->logger) ? $this->logger : null);
     }
 
 
@@ -3304,7 +3310,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private static function german_translation_schema_version(): string
     {
-        return defined(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v3';
+        return defined(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v4';
     }
 
     private function ebay_german_content_source($product, int $productId, array $aspectsSource = []): array

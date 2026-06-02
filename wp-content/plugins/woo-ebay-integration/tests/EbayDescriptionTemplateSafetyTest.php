@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace WEI\Interfaces { interface MarketplaceAdapterInterface {} interface TranslationProviderInterface {} }
 namespace WEI\Repositories { class CategoryMappingRepository {} class MappingRepository {} }
-namespace WEI\Services { class EbayClient {} class EbayTaxonomyService {} class EbaySkuGenerator {} class EbayPriceResolver {} class EbayConditionResolver { public const DEFAULT_ITEM_CONDITION = 'used'; } class EbayShippingPolicyResolver { public const POLICY_30_EUR = 'policy-30'; public const POLICY_50_EUR = 'policy-50'; public const POLICY_100_EUR = 'policy-100'; } class EbayGermanContentTranslator { public const META_TITLE = '_wei_ebay_de_title'; public const META_DESCRIPTION = '_wei_ebay_de_description'; public const META_SOURCE = '_wei_ebay_de_source'; public function __construct(...$args) {} public function cached(int $productId, array $source): array { return ['ready' => false, 'source_hash' => $this->source_hash($source), 'cached_translation_hash' => '']; } public function source_hash(array $source): string { return md5(json_encode($source)); } public function untranslated_fields(array $cached): array { return []; } } class CategoryMappingSafety { public const DEFAULT_AUTO_CONFIDENCE_THRESHOLD = 0.85; } class Logger { public function info(string $message, array $context = []): void {} public function error(string $message, array $context = []): void {} } }
+namespace WEI\Services { class EbayClient {} class EbayTaxonomyService {} class EbaySkuGenerator {} class EbayPriceResolver {} class EbayConditionResolver { public const DEFAULT_ITEM_CONDITION = 'used'; } class EbayShippingPolicyResolver { public const POLICY_30_EUR = 'policy-30'; public const POLICY_50_EUR = 'policy-50'; public const POLICY_100_EUR = 'policy-100'; } class EbayGermanContentTranslator { public const META_TITLE = '_wei_ebay_de_title'; public const META_DESCRIPTION = '_wei_ebay_de_description'; public const META_SOURCE = '_wei_ebay_de_source'; public function __construct(...$args) {} public function cached(int $productId, array $source): array { return ['ready' => false, 'source_hash' => $this->source_hash($source), 'cached_translation_hash' => '']; } public function source_hash(array $source): string { return md5(json_encode($source)); } public function untranslated_fields(array $cached): array { return []; } public function detects_untranslated_spec_value(string $value): bool { return preg_match('/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu', $value) === 1; } }  class CategoryMappingSafety { public const DEFAULT_AUTO_CONFIDENCE_THRESHOLD = 0.85; } class Logger { public function info(string $message, array $context = []): void {} public function error(string $message, array $context = []): void {} } }
 namespace WEI\Services\Translation { class GoogleCloudTranslateProvider {} class OpenAiTranslationProvider {} }
 namespace WEI { class Plugin { public const OPTION_KEY = 'wei_settings'; public const DEFAULT_EBAY_SELLER_USERNAME = 'gpswiss'; } }
 namespace {
@@ -82,9 +82,10 @@ namespace {
         ['polish_label' => 'Koła napędowe', 'german_label' => 'Antrieb', 'source_value' => 'Przód', 'value' => 'Przód', 'translated_value' => 'Frontantrieb'],
         ['polish_label' => 'Pozycja kierownicy', 'german_label' => 'Lenkradposition', 'source_value' => 'Lewa strona', 'value' => 'Lewa strona', 'translated_value' => 'Linkslenker'],
         ['polish_label' => 'Typ skrzyni biegów', 'german_label' => 'Getriebeart', 'source_value' => 'Automatyczny', 'value' => 'Automatyczny', 'translated_value' => 'Automatik'],
+        ['polish_label' => 'Rodzaj paliwa', 'german_label' => 'Kraftstoffart', 'source_value' => 'Diesel', 'value' => 'Diesel', 'translated_value' => 'Diesel', 'translation_source' => 'local_override'],
     ];
     $specHtml = $renderSpecs->invoke($adapter, $translatedSpecFields);
-    foreach (['Weiß', 'Frontantrieb', 'Linkslenker', 'Automatik'] as $expectedTranslatedValue) {
+    foreach (['Weiß', 'Frontantrieb', 'Linkslenker', 'Automatik', 'Diesel'] as $expectedTranslatedValue) {
         if (!str_contains($specHtml, $expectedTranslatedValue)) {
             $failures[] = 'Expected rendered German specification template to use translated value: ' . $expectedTranslatedValue;
         }
@@ -96,16 +97,19 @@ namespace {
     }
     $diagnostics = $fieldDiagnostics->invoke($adapter, $translatedSpecFields);
     foreach ($diagnostics as $diagnostic) {
-        if (($diagnostic['source_value'] ?? '') === ($diagnostic['value_used_in_template'] ?? '')) {
+        if (($diagnostic['source_value'] ?? '') !== 'Diesel' && ($diagnostic['source_value'] ?? '') === ($diagnostic['value_used_in_template'] ?? '')) {
             $failures[] = 'Expected diagnostics value_used_in_template to differ from raw Polish source value when translated_value exists. Got ' . json_encode($diagnostic);
         }
         if (($diagnostic['translated_value'] ?? '') !== ($diagnostic['value_used_in_template'] ?? '')) {
             $failures[] = 'Expected diagnostics value_used_in_template to equal translated_value. Got ' . json_encode($diagnostic);
         }
-        foreach (['polish_label', 'german_label', 'source_value', 'translated_value', 'value_used_in_template'] as $requiredDiagnosticKey) {
+        foreach (['polish_label', 'german_label', 'source_value', 'translated_value', 'value_used_in_template', 'translation_source', 'is_detected_untranslated'] as $requiredDiagnosticKey) {
             if (!array_key_exists($requiredDiagnosticKey, $diagnostic)) {
                 $failures[] = 'Expected template field diagnostics to include ' . $requiredDiagnosticKey . '. Got ' . json_encode($diagnostic);
             }
+        }
+        if (($diagnostic['source_value'] ?? '') === 'Diesel' && (($diagnostic['is_detected_untranslated'] ?? '') !== 'no' || ($diagnostic['warning'] ?? '') !== '')) {
+            $failures[] = 'Expected Diesel diagnostics to be valid German/language-neutral and not stale. Got ' . json_encode($diagnostic);
         }
     }
 

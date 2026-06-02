@@ -14,7 +14,7 @@ class EbayGermanContentTranslator
     public const META_GENERATED_AT = '_wei_ebay_de_content_generated_at';
     public const SCHEMA_VERSION = '2026-06-new-ebay-template-v3';
     public const TEMPLATE_VERSION = 'ebay-de-product-card-template-v3';
-    public const TRANSLATION_SCHEMA_VERSION = 'pl-de-spec-overrides-2026-06-v3';
+    public const TRANSLATION_SCHEMA_VERSION = 'pl-de-spec-overrides-2026-06-v4';
 
     /** @var array<string,string> */
     private array $labelOverrides = [
@@ -162,11 +162,11 @@ class EbayGermanContentTranslator
         $add('description', $this->sanitize_text((string) ($source['description'] ?? '')), 'text');
         foreach ((array) ($source['fields'] ?? []) as $index => $field) {
             $label = (string) ($field['polish_label'] ?? $field['label'] ?? '');
-            $value = (string) ($field['value'] ?? '');
+            $value = (string) ($field['value'] ?? $field['source_value'] ?? '');
             if ($label !== '' && !$this->override_label($label)) {
                 $add('field_label.' . $index, $label, 'text');
             }
-            if ($value !== '' && !$this->override_value($value) && !$this->is_protected_technical_value($value)) {
+            if ($value !== '' && !$this->override_field_value($label, $value) && !$this->is_protected_technical_value($value)) {
                 $add('field_value.' . $index, $value, 'text');
             }
         }
@@ -177,7 +177,7 @@ class EbayGermanContentTranslator
             }
             foreach ((array) $values as $valueIndex => $value) {
                 $value = (string) $value;
-                if ($value !== '' && !$this->override_value($value) && !$this->is_protected_technical_value($value)) {
+                if ($value !== '' && !$this->override_field_value($name, $value) && !$this->is_protected_technical_value($value)) {
                     $add('aspect_value.' . $name . '.' . $valueIndex, $value, 'text');
                 }
             }
@@ -194,15 +194,18 @@ class EbayGermanContentTranslator
         $fields = [];
         foreach ((array) ($source['fields'] ?? []) as $index => $field) {
             $labelSource = (string) ($field['polish_label'] ?? $field['label'] ?? '');
-            $valueSource = (string) ($field['value'] ?? '');
+            $valueSource = (string) ($field['value'] ?? $field['source_value'] ?? '');
             $label = $this->override_label($labelSource) ?: (string) ($translatedByKey['field_label.' . $index] ?? $field['german_label'] ?? $labelSource);
-            $value = $this->override_field_value($labelSource, $valueSource) ?: ($this->is_protected_technical_value($valueSource) ? $valueSource : (string) ($translatedByKey['field_value.' . $index] ?? $valueSource));
+            $overrideValue = $this->override_field_value($labelSource, $valueSource);
+            $value = $overrideValue !== '' ? $overrideValue : ($this->is_protected_technical_value($valueSource) ? $valueSource : (string) ($translatedByKey['field_value.' . $index] ?? $valueSource));
+            $fieldTranslationSource = $overrideValue !== '' ? 'local_override' : ($this->is_protected_technical_value($valueSource) ? 'protected_technical_value' : (array_key_exists('field_value.' . $index, $translatedByKey) ? 'generated_' . $provider->provider_key() : 'source_fallback'));
             $fields[] = array_merge($field, [
                 'source_label' => $labelSource,
                 'source_value' => $valueSource,
                 'german_label' => $this->sanitize_text($label),
                 'value' => $this->sanitize_text($value),
                 'translated_value' => $this->sanitize_text($value),
+                'translation_source' => $fieldTranslationSource,
             ]);
         }
 
@@ -213,7 +216,7 @@ class EbayGermanContentTranslator
             $translatedValues = [];
             foreach ((array) $values as $valueIndex => $value) {
                 $sourceValue = (string) $value;
-                $translatedValue = $this->override_value($sourceValue) ?: ($this->is_protected_technical_value($sourceValue) ? $sourceValue : (string) ($translatedByKey['aspect_value.' . $sourceName . '.' . $valueIndex] ?? $sourceValue));
+                $translatedValue = $this->override_field_value($sourceName, $sourceValue) ?: ($this->is_protected_technical_value($sourceValue) ? $sourceValue : (string) ($translatedByKey['aspect_value.' . $sourceName . '.' . $valueIndex] ?? $sourceValue));
                 $translatedValue = $this->sanitize_text($translatedValue);
                 if ($translatedValue !== '') {
                     $translatedValues[] = $translatedValue;
@@ -286,7 +289,7 @@ class EbayGermanContentTranslator
     public function untranslated_fields(array $payload): array
     {
         $warnings = [];
-        $pattern = '/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|diesel|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        $pattern = '/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
         foreach ((array) ($payload['fields'] ?? []) as $field) {
             foreach (['german_label', 'value'] as $key) {
                 $value = trim((string) ($field[$key] ?? ''));
@@ -333,7 +336,7 @@ class EbayGermanContentTranslator
         if (stripos($description, 'TEIL IN FUNKTIONSFÄHIGEM ZUSTAND') !== false) {
             $reasons[] = 'old_allegro_description_marker';
         }
-        if ($this->untranslated_fields($payload) !== []) {
+        if ($this->untranslated_fields($payload) !== [] || $this->has_missing_known_spec_value_translations($payload)) {
             $reasons[] = 'untranslated_spec_values';
         }
         return array_values(array_unique($reasons));
@@ -379,6 +382,44 @@ class EbayGermanContentTranslator
             $results[] = (string) ($translated[0] ?? $text);
         }
         return $results;
+    }
+
+    public function translate_known_spec_value(string $label, string $value): string
+    {
+        return $this->sanitize_text($this->override_field_value($label, $value));
+    }
+
+    public function detects_untranslated_spec_value(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return false;
+        }
+        return preg_match('/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu', $value) === 1;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function has_missing_known_spec_value_translations(array $payload): bool
+    {
+        foreach ((array) ($payload['fields'] ?? []) as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $sourceValue = trim((string) ($field['source_value'] ?? ''));
+            $sourceLabel = trim((string) ($field['polish_label'] ?? $field['source_label'] ?? ''));
+            if ($sourceValue === '' || strcasecmp($sourceValue, 'Diesel') === 0) {
+                continue;
+            }
+            $knownTranslation = $this->translate_known_spec_value($sourceLabel, $sourceValue);
+            if ($knownTranslation === '') {
+                continue;
+            }
+            $translatedValue = trim((string) ($field['translated_value'] ?? ''));
+            if ($translatedValue === '' || $translatedValue === $sourceValue) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function override_label(string $label): string
@@ -446,7 +487,7 @@ class EbayGermanContentTranslator
     {
         $values = [];
         foreach ((array) ($source['fields'] ?? []) as $field) {
-            $value = (string) ($field['value'] ?? '');
+            $value = (string) ($field['value'] ?? $field['source_value'] ?? '');
             if ($this->is_protected_technical_value($value)) {
                 $values[] = trim($value);
             }
@@ -474,7 +515,7 @@ class EbayGermanContentTranslator
             $translatedName = $this->override_label((string) $name) ?: (string) $name;
             $translatedValues = [];
             foreach ((array) $values as $value) {
-                $translatedValues[] = $this->override_value((string) $value) ?: (string) $value;
+                $translatedValues[] = $this->override_field_value((string) $name, (string) $value) ?: (string) $value;
             }
             $translated[$translatedName] = array_values(array_unique(array_filter($translatedValues, static fn($value): bool => trim((string) $value) !== '')));
         }
