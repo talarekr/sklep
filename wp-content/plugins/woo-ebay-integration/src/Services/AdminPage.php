@@ -9,6 +9,9 @@ use WEI\Services\EbayShippingPolicyResolver;
 
 class AdminPage
 {
+    private const PUBLISH_ACTION_MIN_BATCH_SIZE = 1;
+    private const PUBLISH_ACTION_MAX_BATCH_SIZE = 300;
+
     private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_ebay_german_content_schema_migration_state';
 
     public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler)
@@ -514,7 +517,7 @@ class AdminPage
         $s['stock_sync_mode'] = in_array(($_POST['stock_sync_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['stock_sync_mode'] : 'set_zero';
         $s['auto_sync_mode'] = in_array(($_POST['auto_sync_mode'] ?? 'disabled'), ['disabled', 'preflight_only', 'export_ready_products', 'orders_stock_only', 'full_sync'], true) ? $_POST['auto_sync_mode'] : 'disabled';
         $s['auto_sync_frequency'] = in_array(($_POST['auto_sync_frequency'] ?? 'hourly'), ['every_15_minutes', 'hourly', 'daily'], true) ? $_POST['auto_sync_frequency'] : 'hourly';
-        $s['auto_sync_export_batch_size'] = max(1, min(50, absint($_POST['auto_sync_export_batch_size'] ?? 20)));
+        $s['auto_sync_export_batch_size'] = max(self::PUBLISH_ACTION_MIN_BATCH_SIZE, min(self::PUBLISH_ACTION_MAX_BATCH_SIZE, absint($_POST['auto_sync_export_batch_size'] ?? 20)));
         $s['auto_sync_preflight_batch_size'] = max(1, min(300, absint($_POST['auto_sync_preflight_batch_size'] ?? 200)));
         $s['auto_sync_stock_batch_size'] = max(1, min(300, absint($_POST['auto_sync_stock_batch_size'] ?? 100)));
         $s['woo_to_ebay_stock_sync_enabled'] = !empty($_POST['woo_to_ebay_stock_sync_enabled']) ? 1 : 0;
@@ -1908,7 +1911,8 @@ class AdminPage
             $this->set_status('Auto sync export skipped: auto export disabled');
             $this->go();
         }
-        $res = $this->scheduler->run_export_batch(max(1, min(50, absint($_POST['batch_size'] ?? 20))));
+        $batchSize = $this->publish_action_batch_size_from_post('batch_size', 20);
+        $res = $this->scheduler->run_export_batch($batchSize);
         $this->set_status('Auto sync export batch: ' . wp_json_encode($res));
         $this->go();
     }
@@ -2010,7 +2014,7 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_ebay_initial_publish_batch');
-        $batchSize = max(1, min(50, absint($_POST['batch_size'] ?? 5)));
+        $batchSize = $this->publish_action_batch_size_from_post('batch_size', 5);
         $res = $this->run_initial_publish_batch($batchSize);
         $this->set_status('Initial eBay publish batch: ' . wp_json_encode([
             'processed' => (int) ($res['processed'] ?? 0),
@@ -2028,7 +2032,7 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_publish_ready_products');
-        $batchSize = max(1, min(50, absint($_POST['batch_size'] ?? 5)));
+        $batchSize = $this->publish_action_batch_size_from_post('batch_size', 5);
         $res = $this->run_initial_publish_batch($batchSize);
         $this->set_status('Publish ready products: ' . wp_json_encode([
             'processed' => (int) ($res['processed'] ?? 0),
@@ -3832,6 +3836,19 @@ class AdminPage
     {
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay'));
         exit;
+    }
+
+    private function publish_action_batch_size_from_post(string $field, int $default): int
+    {
+        $batchSize = absint($_POST[$field] ?? $default);
+        if ($batchSize < self::PUBLISH_ACTION_MIN_BATCH_SIZE) {
+            return self::PUBLISH_ACTION_MIN_BATCH_SIZE;
+        }
+        if ($batchSize > self::PUBLISH_ACTION_MAX_BATCH_SIZE) {
+            $this->set_status('Maximum batch size is 300.');
+            $this->go();
+        }
+        return $batchSize;
     }
 
     private function set_status(string $message): void
