@@ -70,6 +70,44 @@ namespace {
     $resolveSameVehicle->setAccessible(true);
     $renderCta = new \ReflectionMethod(EbayAdapter::class, 'render_ebay_same_vehicle_cta_html');
     $renderCta->setAccessible(true);
+    $renderSpecs = new \ReflectionMethod(EbayAdapter::class, 'render_ebay_template_specification_rows');
+    $renderSpecs->setAccessible(true);
+    $fieldDiagnostics = new \ReflectionMethod(EbayAdapter::class, 'german_template_field_diagnostics');
+    $fieldDiagnostics->setAccessible(true);
+
+
+
+    $translatedSpecFields = [
+        ['polish_label' => 'Kolor', 'german_label' => 'Farbe', 'source_value' => 'Biały', 'value' => 'Biały', 'translated_value' => 'Weiß'],
+        ['polish_label' => 'Koła napędowe', 'german_label' => 'Antrieb', 'source_value' => 'Przód', 'value' => 'Przód', 'translated_value' => 'Frontantrieb'],
+        ['polish_label' => 'Pozycja kierownicy', 'german_label' => 'Lenkradposition', 'source_value' => 'Lewa strona', 'value' => 'Lewa strona', 'translated_value' => 'Linkslenker'],
+        ['polish_label' => 'Typ skrzyni biegów', 'german_label' => 'Getriebeart', 'source_value' => 'Automatyczny', 'value' => 'Automatyczny', 'translated_value' => 'Automatik'],
+    ];
+    $specHtml = $renderSpecs->invoke($adapter, $translatedSpecFields);
+    foreach (['Weiß', 'Frontantrieb', 'Linkslenker', 'Automatik'] as $expectedTranslatedValue) {
+        if (!str_contains($specHtml, $expectedTranslatedValue)) {
+            $failures[] = 'Expected rendered German specification template to use translated value: ' . $expectedTranslatedValue;
+        }
+    }
+    foreach (['Biały', 'Przód', 'Lewa strona', 'Automatyczny'] as $unexpectedRawValue) {
+        if (str_contains($specHtml, $unexpectedRawValue)) {
+            $failures[] = 'Expected rendered German specification template not to use raw Polish source value when translated_value exists: ' . $unexpectedRawValue;
+        }
+    }
+    $diagnostics = $fieldDiagnostics->invoke($adapter, $translatedSpecFields);
+    foreach ($diagnostics as $diagnostic) {
+        if (($diagnostic['source_value'] ?? '') === ($diagnostic['value_used_in_template'] ?? '')) {
+            $failures[] = 'Expected diagnostics value_used_in_template to differ from raw Polish source value when translated_value exists. Got ' . json_encode($diagnostic);
+        }
+        if (($diagnostic['translated_value'] ?? '') !== ($diagnostic['value_used_in_template'] ?? '')) {
+            $failures[] = 'Expected diagnostics value_used_in_template to equal translated_value. Got ' . json_encode($diagnostic);
+        }
+        foreach (['polish_label', 'german_label', 'source_value', 'translated_value', 'value_used_in_template'] as $requiredDiagnosticKey) {
+            if (!array_key_exists($requiredDiagnosticKey, $diagnostic)) {
+                $failures[] = 'Expected template field diagnostics to include ' . $requiredDiagnosticKey . '. Got ' . json_encode($diagnostic);
+            }
+        }
+    }
 
     $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'gpswiss'];
     $GLOBALS['wei_test_post_meta'][101] = ['_ovoko_car_id' => 'CAR:456'];

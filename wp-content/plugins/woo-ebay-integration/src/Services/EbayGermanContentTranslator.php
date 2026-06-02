@@ -12,9 +12,9 @@ class EbayGermanContentTranslator
     public const META_DESCRIPTION = '_wei_ebay_de_description';
     public const META_SOURCE = '_wei_ebay_de_content_source';
     public const META_GENERATED_AT = '_wei_ebay_de_content_generated_at';
-    public const SCHEMA_VERSION = '2026-06-new-ebay-template-v2';
-    public const TEMPLATE_VERSION = 'ebay-de-product-card-template-v2';
-    public const TRANSLATION_SCHEMA_VERSION = 'pl-de-spec-overrides-2026-06-v2';
+    public const SCHEMA_VERSION = '2026-06-new-ebay-template-v3';
+    public const TEMPLATE_VERSION = 'ebay-de-product-card-template-v3';
+    public const TRANSLATION_SCHEMA_VERSION = 'pl-de-spec-overrides-2026-06-v3';
 
     /** @var array<string,string> */
     private array $labelOverrides = [
@@ -196,7 +196,7 @@ class EbayGermanContentTranslator
             $labelSource = (string) ($field['polish_label'] ?? $field['label'] ?? '');
             $valueSource = (string) ($field['value'] ?? '');
             $label = $this->override_label($labelSource) ?: (string) ($translatedByKey['field_label.' . $index] ?? $field['german_label'] ?? $labelSource);
-            $value = $this->override_value($valueSource) ?: ($this->is_protected_technical_value($valueSource) ? $valueSource : (string) ($translatedByKey['field_value.' . $index] ?? $valueSource));
+            $value = $this->override_field_value($labelSource, $valueSource) ?: ($this->is_protected_technical_value($valueSource) ? $valueSource : (string) ($translatedByKey['field_value.' . $index] ?? $valueSource));
             $fields[] = array_merge($field, [
                 'source_label' => $labelSource,
                 'source_value' => $valueSource,
@@ -391,6 +391,34 @@ class EbayGermanContentTranslator
         return $this->valueOverrides[$value] ?? '';
     }
 
+    private function override_field_value(string $label, string $value): string
+    {
+        $normalizedLabel = $this->normalize_key($label);
+        $normalizedValue = $this->normalize_key($value);
+        if (in_array($normalizedLabel, ['kolanapedowe', 'kolanapędowe'], true)) {
+            $driveOverride = [
+                'przod' => 'Frontantrieb',
+                'przód' => 'Frontantrieb',
+                'tyl' => 'Heckantrieb',
+                'tył' => 'Heckantrieb',
+            ][$normalizedValue] ?? '';
+            if ($driveOverride !== '') {
+                return $driveOverride;
+            }
+        }
+        return $this->override_value($value);
+    }
+
+    private function normalize_key(string $value): string
+    {
+        if (function_exists('remove_accents')) {
+            $value = remove_accents($value);
+        } else {
+            $value = strtr($value, ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z', 'Ą' => 'A', 'Ć' => 'C', 'Ę' => 'E', 'Ł' => 'L', 'Ń' => 'N', 'Ó' => 'O', 'Ś' => 'S', 'Ź' => 'Z', 'Ż' => 'Z']);
+        }
+        $value = function_exists('mb_strtolower') ? mb_strtolower($value) : strtolower($value);
+        return preg_replace('/[^a-z0-9]+/u', '', $value) ?: '';
+    }
 
     private function is_protected_technical_value(string $value): bool
     {
