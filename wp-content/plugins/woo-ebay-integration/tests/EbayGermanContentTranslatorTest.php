@@ -159,17 +159,28 @@ $payload2 = $translator->refresh(10908, ['product_id' => 10908, 'title' => 'Test
     ['polish_label' => 'Kolor', 'value' => 'Srebrny'],
     ['polish_label' => 'Stan', 'value' => 'Nowy'],
     ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Manualny'],
+    ['polish_label' => 'Stan', 'value' => 'Używany'],
+    ['polish_label' => 'Rodzaj paliwa', 'value' => 'Diesel'],
     ['polish_label' => 'Koła napędowe', 'value' => 'AWD'],
     ['polish_label' => 'Koła napędowe', 'value' => 'Przód'],
     ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Automatyczny'],
 ]], $provider2);
 $overrideValues = array_column($payload2['fields'], 'value');
-foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Allradantrieb', 'Frontantrieb', 'Automatik'] as $expectedOverride) {
+foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Gebraucht', 'Diesel', 'Allradantrieb', 'Frontantrieb', 'Automatik'] as $expectedOverride) {
     if (!in_array($expectedOverride, $overrideValues, true)) {
         $failures[] = 'Expected PL -> DE override value: ' . $expectedOverride;
     }
 }
 
+
+foreach ($payload2['fields'] as $field) {
+    if (in_array(($field['source_value'] ?? ''), ['Biały', 'Lewa strona', 'Używany', 'Diesel', 'AWD'], true) && trim((string) ($field['translated_value'] ?? '')) === '') {
+        $failures[] = 'Expected product-2081-style known source value to store non-empty translated_value. Got ' . json_encode($field);
+    }
+}
+if ($translator->untranslated_fields(['fields' => [['german_label' => 'Kraftstoffart', 'value' => 'Diesel', 'source_value' => 'Diesel', 'translated_value' => 'Diesel']]]) !== []) {
+    $failures[] = 'Expected Diesel to be accepted as valid German/language-neutral and not flagged stale.';
+}
 
 // Stale detection for legacy German content caches generated under older source/template rules.
 $GLOBALS['wei_test_meta'] = [];
@@ -184,6 +195,7 @@ update_post_meta(20001, EbayGermanContentTranslator::META_PAYLOAD, [
         ['german_label' => 'Lenkradposition', 'value' => 'Lewa strona'],
         ['german_label' => 'Kraftstoffart', 'value' => 'Benzyna'],
         ['german_label' => 'Getriebeart', 'value' => 'Mechaniczna'],
+        ['german_label' => 'Kraftstoffart', 'value' => 'Diesel', 'source_value' => 'Diesel', 'translated_value' => ''],
     ],
     'aspects' => [],
     'source_hash' => $currentHash,
