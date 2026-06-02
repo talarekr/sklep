@@ -1350,7 +1350,9 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
                     const published = parseInt(batch.published || 0, 10) || 0;
                     const skipped = parseInt(batch.skipped_not_ready || 0, 10) || 0;
                     const failed = parseInt(batch.errors || 0, 10) || 0;
-                    const remaining = parseInt(batch.remaining_ready || 0, 10) || 0;
+                    const globalRemaining = Object.prototype.hasOwnProperty.call(batch, 'global_remaining_ready') ? (parseInt(batch.global_remaining_ready || 0, 10) || 0) : null;
+                    const remaining = globalRemaining !== null ? globalRemaining : (parseInt(batch.remaining_ready || 0, 10) || 0);
+                    const madeProgress = published > 0 || exported > 0 || processed > 0;
 
                     state.batches_completed += 1;
                     state.total_processed += processed;
@@ -1365,8 +1367,16 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
                         stopRunner(batch.stopped_reason || 'fatal_error');
                         break;
                     }
-                    if (batch.status === 'completed' || remaining <= 0 || processed <= 0) {
+                    if (batch.queue_empty === true) {
                         stopRunner('completed');
+                        break;
+                    }
+                    if (globalRemaining === 0 && !madeProgress) {
+                        stopRunner('completed');
+                        break;
+                    }
+                    if (!madeProgress) {
+                        stopRunner('no_progress');
                         break;
                     }
 

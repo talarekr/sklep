@@ -511,6 +511,31 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($listing_id === '') {
             $listing_id = trim((string) get_post_meta($metaProductId, '_wei_ebay_item_id', true));
         }
+        $activeListingDiagnostics = $this->local_active_listing_diagnostics($product_id, $variation_id, $sku, $offer_id, $listing_id);
+        if (!empty($activeListingDiagnostics['already_published'])) {
+            $this->logger->warning('publishOffer skipped because product already has an active eBay listing', [
+                'stage' => 'publishOffer',
+                'product_id' => $product_id,
+                'sku' => $sku,
+                'offer_id' => $offer_id,
+                'listing_id' => (string) ($activeListingDiagnostics['listing_id'] ?? ''),
+                'active_listing_state' => (string) ($activeListingDiagnostics['active_listing_state'] ?? ''),
+                'skipped_reason' => 'already_published_active_listing',
+                'marketplace_id' => $marketplaceId,
+                'category_id' => $categoryId,
+            ]);
+            update_post_meta($metaProductId, '_wei_ebay_last_sync_status', 'already_published_active_listing');
+            delete_post_meta($metaProductId, '_wei_ebay_last_sync_error');
+            return [
+                'result' => 'skipped',
+                'status' => 'already_published_active_listing',
+                'message' => 'Product already has an active eBay listing; publishOffer skipped.',
+                'offer_id' => $offer_id,
+                'listing_id' => (string) ($activeListingDiagnostics['listing_id'] ?? ''),
+                'inventory_id' => $sku,
+                'diagnostics' => $activeListingDiagnostics,
+            ];
+        }
         if (empty($settings['auto_publish_enabled']) && !$forcePublish) {
             $this->logger->warning('publishOffer skipped because auto publish is disabled', [
                 'stage' => 'publishOffer',
@@ -583,6 +608,35 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ]);
 
         return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'condition_resolution' => ['condition' => $conditionResolution['condition'], 'source' => $conditionResolution['source']], 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
+    }
+
+
+    private function local_active_listing_diagnostics(int $productId, ?int $variationId, string $sku, string $offerId, string $listingId): array
+    {
+        $metaProductId = $variationId ?: $productId;
+        $listingId = trim($listingId);
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($metaProductId, '_wei_ebay_listing_id', true));
+        }
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($metaProductId, '_wei_ebay_item_id', true));
+        }
+        $activeListingState = (string) get_post_meta($metaProductId, '_wei_ebay_current_listing_state', true);
+        $listingStatus = (string) get_post_meta($metaProductId, '_wei_ebay_listing_status', true);
+        $exportStatus = (string) get_post_meta($metaProductId, '_wei_ebay_export_status', true);
+        $alreadyPublished = ($listingId !== '' && $activeListingState === 'active')
+            || $listingStatus === 'published'
+            || $exportStatus === 'published';
+
+        return [
+            'product_id' => $productId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+            'active_listing_state' => $activeListingState,
+            'skipped_reason' => $alreadyPublished ? 'already_published_active_listing' : '',
+            'already_published' => $alreadyPublished,
+        ];
     }
 
 

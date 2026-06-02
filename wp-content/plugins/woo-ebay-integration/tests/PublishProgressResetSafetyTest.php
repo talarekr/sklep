@@ -93,10 +93,10 @@ foreach ([
     $assertContains($adapter, $needle, 'Refresh marks inactive listings as not published/needs re-export');
 }
 
-$alreadyPublishedBlock = $methodBlock($admin, 'is_initial_publish_already_published');
-$assertContains($alreadyPublishedBlock, "'_wei_ebay_current_listing_state', true) === 'active'", 'Old listing IDs require refreshed active state');
-$assertNotContains($alreadyPublishedBlock, "'_wei_ebay_listing_id'", 'Old listing_id alone is not active');
-$assertNotContains($alreadyPublishedBlock, "'_wei_ebay_item_id'", 'Old item_id alone is not active');
+$alreadyPublishedBlock = $methodBlock($admin, 'initial_publish_already_published_diagnostics');
+$assertContains($alreadyPublishedBlock, "'_wei_ebay_current_listing_state', true)", 'Old listing IDs require refreshed active state diagnostics');
+$assertContains($alreadyPublishedBlock, "\$listingId !== '' && \$activeListingState === 'active'", 'Active listing IDs are skipped only with active state');
+$assertContains($alreadyPublishedBlock, "already_published_active_listing", 'Active already-published skip reason is recorded');
 
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
