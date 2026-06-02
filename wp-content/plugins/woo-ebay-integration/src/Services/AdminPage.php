@@ -2238,11 +2238,20 @@ class AdminPage
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
+                AND (
+                    %d = 1
+                    OR NOT EXISTS (
+                        SELECT 1 FROM {$wpdb->postmeta} excluded_meta
+                        WHERE excluded_meta.post_id = p.ID
+                            AND excluded_meta.meta_key = '_wei_ebay_export_status'
+                            AND excluded_meta.meta_value = 'excluded_from_ebay'
+                    )
+                )
             ORDER BY p.ID ASC
             LIMIT %d
         ";
 
-        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $includeExcluded ? 1 : 0, $batchSize))));
     }
 
     private function reset_initial_publish_progress_for_new_candidate_scan(): void
@@ -2611,13 +2620,22 @@ class AdminPage
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
+                AND (
+                    %d = 1
+                    OR NOT EXISTS (
+                        SELECT 1 FROM {$wpdb->postmeta} excluded_meta
+                        WHERE excluded_meta.post_id = p.ID
+                            AND excluded_meta.meta_key = '_wei_ebay_export_status'
+                            AND excluded_meta.meta_value = 'excluded_from_ebay'
+                    )
+                )
                 AND (listing_status_meta.post_id IS NULL OR current_active_meta.post_id IS NULL)
             GROUP BY p.ID
             ORDER BY p.ID ASC
             LIMIT %d
         ";
 
-        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $includeExcluded ? 1 : 0, $batchSize))));
     }
 
     private function is_initial_publish_already_published(int $productId): bool
@@ -3242,6 +3260,15 @@ class AdminPage
             'sku' => (string) ($res['sku'] ?? ''),
             'title' => (string) ($res['title'] ?? ''),
             'description_source' => (string) ($res['description_source'] ?? 'post_content'),
+            'current_schema_version' => (string) ($res['current_schema_version'] ?? ''),
+            'stored_schema_version' => (string) ($res['stored_schema_version'] ?? ''),
+            'template_version' => (string) ($res['template_version'] ?? ''),
+            'translation_schema_version' => (string) ($res['translation_schema_version'] ?? ''),
+            'source_description_field' => (string) ($res['source_description_field'] ?? ''),
+            'source_description_used' => (string) ($res['source_description_used'] ?? ''),
+            'stale_reason' => (string) ($res['stale_reason'] ?? ''),
+            'stale_reasons' => (array) ($res['stale_reasons'] ?? []),
+            'translated_field_value_status' => (array) ($res['translated_field_value_status'] ?? []),
             'source_hash' => (string) ($res['source_hash'] ?? ''),
             'cached_translation_hash' => (string) ($res['cached_translation_hash'] ?? ''),
             'stale' => !empty($res['stale']),
@@ -3302,19 +3329,24 @@ class AdminPage
         check_admin_referer('wei_generate_german_content_batch');
 
         $mode = sanitize_key((string) ($_POST['mode'] ?? 'stale'));
-        $mode = in_array($mode, ['all', 'stale'], true) ? $mode : 'stale';
+        $mode = in_array($mode, ['all', 'stale', 'force_current_schema'], true) ? $mode : 'stale';
+        $includeExcluded = !empty($_POST['include_excluded_from_ebay']);
         $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
         $cursorOption = 'wei_ebay_german_content_batch_cursor_' . $mode;
         $cursor = (int) get_option($cursorOption, 0);
-        $productIds = $this->german_content_batch_product_ids($batchSize, $mode, $cursor);
+        $productIds = $this->german_content_batch_product_ids($batchSize, $mode, $cursor, $includeExcluded);
         $summary = [
             'mode' => $mode,
             'status' => 'in_progress',
             'cursor' => $cursor,
             'next_cursor' => 0,
             'processed' => 0,
+            'processed_total' => 0,
             'generated' => 0,
+            'regenerated' => 0,
             'already_fresh' => 0,
+            'already_current_schema' => 0,
+            'include_excluded_from_ebay' => $includeExcluded,
             'stale_fixed' => 0,
             'errors' => 0,
             'google_api_called' => false,
@@ -3326,12 +3358,18 @@ class AdminPage
 
         foreach ($productIds as $productId) {
             $productId = (int) $productId;
-            $res = $this->adapter->generate_german_content_meta_only($productId, $mode === 'all');
+            $forceCurrentSchema = in_array($mode, ['all', 'force_current_schema'], true);
+            $res = $this->adapter->generate_german_content_meta_only($productId, $forceCurrentSchema);
             $summary['processed']++;
+            $summary['processed_total']++;
             if (($res['result'] ?? '') === 'already_ready') {
                 $summary['already_fresh']++;
+                if (($res['stored_schema_version'] ?? '') === \WEI\Services\EbayGermanContentTranslator::SCHEMA_VERSION && ($res['template_version'] ?? '') === \WEI\Services\EbayGermanContentTranslator::TEMPLATE_VERSION) {
+                    $summary['already_current_schema']++;
+                }
             } elseif (($res['result'] ?? '') === 'success' || ($res['result'] ?? '') === 'generated') {
                 $summary['generated']++;
+                $summary['regenerated']++;
                 if (!empty($res['stale_before']) && empty($res['stale_after'])) {
                     $summary['stale_fixed']++;
                 }
@@ -3349,6 +3387,10 @@ class AdminPage
                 'google_api_called' => !empty($res['google_api_called']),
                 'called_ebay_api' => false,
                 'updated_ebay_listing' => false,
+                'stored_schema_version' => (string) ($res['stored_schema_version'] ?? ''),
+                'template_version' => (string) ($res['template_version'] ?? ''),
+                'stale_reason' => (string) ($res['stale_reason'] ?? ''),
+                'stale_reasons' => (array) ($res['stale_reasons'] ?? []),
             ];
         }
 
@@ -3367,7 +3409,7 @@ class AdminPage
         $this->go();
     }
 
-    private function german_content_batch_product_ids(int $batchSize, string $mode, int $cursor = 0): array
+    private function german_content_batch_product_ids(int $batchSize, string $mode, int $cursor = 0, bool $includeExcluded = false): array
     {
         global $wpdb;
         $sql = "
@@ -3376,11 +3418,20 @@ class AdminPage
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
+                AND (
+                    %d = 1
+                    OR NOT EXISTS (
+                        SELECT 1 FROM {$wpdb->postmeta} excluded_meta
+                        WHERE excluded_meta.post_id = p.ID
+                            AND excluded_meta.meta_key = '_wei_ebay_export_status'
+                            AND excluded_meta.meta_value = 'excluded_from_ebay'
+                    )
+                )
             GROUP BY p.ID
             ORDER BY p.ID ASC
             LIMIT %d
         ";
-        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $batchSize))));
+        return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $includeExcluded ? 1 : 0, $batchSize))));
     }
 
     public function description_template_single(): void

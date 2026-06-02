@@ -1807,6 +1807,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'translated_fields_count' => count((array) ($cachedBefore['fields'] ?? [])),
                     'translated_item_specifics_count' => count((array) ($cachedBefore['aspects'] ?? [])),
                     'untranslated_fields' => $translator->untranslated_fields($cachedBefore),
+                    'current_schema_version' => self::german_content_schema_version(),
+                    'stored_schema_version' => (string) ($cachedBefore['stored_schema_version'] ?? ''),
+                    'template_version' => (string) ($cachedBefore['template_version'] ?? ''),
+                    'translation_schema_version' => (string) ($cachedBefore['translation_schema_version'] ?? ''),
+                    'stale_reasons' => (array) ($cachedBefore['stale_reasons'] ?? []),
+                    'stale_reason' => (string) ($cachedBefore['stale_reason'] ?? 'current'),
                 ], $safety);
             }
 
@@ -1858,11 +1864,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'provider' => $provider->provider_key(),
                     'generated' => true,
                     'stale' => false,
+                    'german_content_schema_version' => self::german_content_schema_version(),
+                    'template_version' => self::german_content_template_version(),
+                    'translation_schema_version' => self::german_translation_schema_version(),
                     'source_hash' => $sourceHash,
-                    'content_hash' => $sourceHash,
+                    'content_hash' => (string) ($payload['content_hash'] ?? $sourceHash),
                     'cached_translation_hash' => $sourceHash,
                     'current_content_hash' => $sourceHash,
+                    'source_title' => (string) ($source['title'] ?? ''),
                     'source_description' => (string) ($source['description'] ?? ''),
+                    'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
                     'description_source' => (string) ($source['description_source'] ?? 'post_content'),
                     'fields' => (array) ($payload['fields'] ?? []),
                     'translated_fields' => (array) ($payload['translated_fields'] ?? []),
@@ -1926,6 +1937,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'translated_fields_count' => count((array) ($content['fields'] ?? $cachedAfter['fields'] ?? [])),
             'translated_item_specifics_count' => count((array) ($content['aspects'] ?? $cachedAfter['aspects'] ?? [])),
             'untranslated_fields' => (array) ($content['untranslated_fields'] ?? $translator->untranslated_fields($cachedAfter)),
+            'current_schema_version' => self::german_content_schema_version(),
+            'stored_schema_version' => (string) ($cachedAfter['stored_schema_version'] ?? ''),
+            'template_version' => (string) ($cachedAfter['template_version'] ?? ''),
+            'translation_schema_version' => (string) ($cachedAfter['translation_schema_version'] ?? ''),
+            'stale_reasons' => (array) ($cachedAfter['stale_reasons'] ?? []),
+            'stale_reason' => (string) ($cachedAfter['stale_reason'] ?? (!empty($cachedAfter['stale']) ? 'old_source_hash' : 'current')),
             'error_message' => (string) ($content['error_message'] ?? ''),
         ], $safety);
     }
@@ -1947,11 +1964,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
         }
 
-        $title = trim(wp_strip_all_tags((string) get_post_meta($product_id, EbayGermanContentTranslator::META_TITLE, true)));
-        $descriptionPresent = function_exists('metadata_exists')
+        $sourceData = $this->ebay_german_content_source($product, $product_id);
+        $translator = $this->ebay_german_content_translator();
+        $cached = $translator->cached($product_id, $sourceData);
+        $title = trim(wp_strip_all_tags((string) ($cached['title'] ?? get_post_meta($product_id, EbayGermanContentTranslator::META_TITLE, true))));
+        $descriptionPresent = trim((string) ($cached['description'] ?? '')) !== '' || (function_exists('metadata_exists')
             ? metadata_exists('post', $product_id, EbayGermanContentTranslator::META_DESCRIPTION)
-            : get_post_meta($product_id, EbayGermanContentTranslator::META_DESCRIPTION, true) !== '';
-        $source = trim((string) get_post_meta($product_id, EbayGermanContentTranslator::META_SOURCE, true)) ?: 'lightweight_meta';
+            : get_post_meta($product_id, EbayGermanContentTranslator::META_DESCRIPTION, true) !== '');
+        $source = trim((string) ($cached['translation_source'] ?? get_post_meta($product_id, EbayGermanContentTranslator::META_SOURCE, true))) ?: 'lightweight_meta';
 
         return [
             'ready' => $title !== '' && $descriptionPresent,
@@ -1967,7 +1987,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'title_length' => mb_strlen($title),
             'description_length' => $descriptionPresent ? 1 : 0,
             'generated' => false,
-            'stale' => false,
+            'stale' => !empty($cached['stale']),
+            'stale_reasons' => (array) ($cached['stale_reasons'] ?? []),
+            'stale_reason' => (string) ($cached['stale_reason'] ?? (!empty($cached['stale']) ? 'old_source_hash' : 'current')),
+            'current_schema_version' => self::german_content_schema_version(),
+            'stored_schema_version' => (string) ($cached['stored_schema_version'] ?? ''),
+            'template_version' => (string) ($cached['template_version'] ?? ''),
+            'source_hash' => (string) ($cached['source_hash'] ?? ''),
+            'cached_translation_hash' => (string) ($cached['cached_translation_hash'] ?? ''),
             'lightweight' => true,
             'error_message' => $descriptionPresent ? '' : 'German eBay content missing.',
         ];
@@ -1989,11 +2016,21 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return $this->log_german_content($product_id, $product_id, (string) ($cached['translation_source'] ?? 'ebay_german_content_cache'), (string) ($cached['title'] ?? ''), (string) ($cached['description'] ?? ''), [
                 'generated' => false,
                 'stale' => !empty($cached['stale']),
+                'stale_reasons' => (array) ($cached['stale_reasons'] ?? []),
+                'stale_reason' => (string) ($cached['stale_reason'] ?? ''),
+                'german_content_schema_version' => (string) ($cached['german_content_schema_version'] ?? ''),
+                'current_schema_version' => self::german_content_schema_version(),
+                'stored_schema_version' => (string) ($cached['stored_schema_version'] ?? $cached['german_content_schema_version'] ?? ''),
+                'template_version' => (string) ($cached['template_version'] ?? ''),
+                'translation_schema_version' => (string) ($cached['translation_schema_version'] ?? ''),
+                'source_description_field' => (string) ($cached['source_description_field'] ?? ''),
                 'source_hash' => (string) ($cached['source_hash'] ?? ''),
                 'content_hash' => (string) ($cached['cached_translation_hash'] ?? ''),
                 'cached_translation_hash' => (string) ($cached['cached_translation_hash'] ?? ''),
                 'current_content_hash' => (string) ($cached['source_hash'] ?? ''),
+                'source_title' => (string) ($source['title'] ?? ''),
                 'source_description' => (string) ($source['description'] ?? ''),
+                'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
                 'description_source' => (string) ($source['description_source'] ?? 'post_content'),
                 'fields' => (array) ($cached['fields'] ?? []),
                 'translated_fields' => (array) ($cached['translated_fields'] ?? []),
@@ -2020,8 +2057,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'generated' => false,
                 'stale' => false,
                 'source_hash' => (string) ($cached['source_hash'] ?? $translator->source_hash($source)),
+                'current_schema_version' => self::german_content_schema_version(),
+                'stored_schema_version' => (string) ($cached['stored_schema_version'] ?? ''),
+                'template_version' => (string) ($cached['template_version'] ?? ''),
+                'stale_reasons' => (array) ($cached['stale_reasons'] ?? []),
+                'stale_reason' => (string) ($cached['stale_reason'] ?? 'missing'),
                 'cached_translation_hash' => (string) ($cached['cached_translation_hash'] ?? ''),
+                'source_title' => (string) ($source['title'] ?? ''),
                 'source_description' => (string) ($source['description'] ?? ''),
+                'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
                 'description_source' => (string) ($source['description_source'] ?? 'post_content'),
                 'side_effects_suppressed' => true,
                 'error_message' => 'German eBay content missing; preview does not call Google Translate and did not use old Allegro/WPML/Polylang cache.',
@@ -2077,10 +2121,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'target_language' => 'de',
             'provider' => $providerKey,
             'generated' => false,
+            'german_content_schema_version' => self::german_content_schema_version(),
+            'template_version' => self::german_content_template_version(),
+            'translation_schema_version' => self::german_translation_schema_version(),
             'content_hash' => $hash,
             'source_hash' => $hash,
             'source_used' => $reason,
+            'source_title' => (string) ($source['title'] ?? ''),
             'source_description' => (string) ($source['description'] ?? ''),
+            'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
             'description_source' => (string) ($source['description_source'] ?? 'post_content'),
             'ebay_write_calls' => false,
             'message' => 'German eBay content regeneration writes plugin meta _wei_ebay_de_* only; no publishOffer/createOrReplaceInventoryItem/createOffer/updateOffer calls are executed.',
@@ -2125,6 +2174,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'translation_source' => 'generated_' . $provider->provider_key(),
                 'title_length' => mb_strlen($title),
                 'description_length' => mb_strlen($description),
+                'content_hash' => (string) ($payload['content_hash'] ?? $hash),
                 'cached_translation_hash' => $hash,
                 'stale' => false,
                 'fields' => (array) ($payload['fields'] ?? []),
@@ -2247,6 +2297,16 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'html_css_protected' => true,
             'html_validation' => $htmlValidation,
             'translated_description' => $translatedDescription,
+            'current_schema_version' => self::german_content_schema_version(),
+            'stored_schema_version' => (string) ($germanContent['stored_schema_version'] ?? $germanContent['german_content_schema_version'] ?? ''),
+            'german_content_schema_version' => (string) ($germanContent['german_content_schema_version'] ?? ''),
+            'template_version' => (string) ($germanContent['template_version'] ?? ''),
+            'translation_schema_version' => (string) ($germanContent['translation_schema_version'] ?? ''),
+            'source_description_field' => (string) ($germanContent['source_description_field'] ?? $source['description_source'] ?? 'post_content'),
+            'source_description_used' => $sourceDescription,
+            'stale_reasons' => (array) ($germanContent['stale_reasons'] ?? []),
+            'stale_reason' => (string) ($germanContent['stale_reason'] ?? (!empty($germanContent['stale']) ? 'old_source_hash' : 'current')),
+            'translated_field_value_status' => $this->german_translated_field_value_status($details['fields'], $untranslatedFields),
             'source_hash' => (string) ($germanContent['source_hash'] ?? $this->ebay_german_content_translator()->source_hash($source)),
             'cached_translation_hash' => (string) ($germanContent['cached_translation_hash'] ?? $germanContent['content_hash'] ?? ''),
             'stale' => !empty($germanContent['stale']),
@@ -2263,6 +2323,32 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'same_vehicle_cta' => $sameVehicleCta,
             'warnings' => array_merge($warnings, empty($htmlValidation['valid']) ? [['code' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])]] : []),
         ];
+    }
+
+
+    /** @param array<int,mixed> $fields @param array<int,mixed> $untranslatedFields */
+    private function german_translated_field_value_status(array $fields, array $untranslatedFields): array
+    {
+        $untranslatedValues = [];
+        foreach ($untranslatedFields as $warning) {
+            if (is_array($warning)) {
+                $untranslatedValues[] = (string) ($warning['value'] ?? '');
+            }
+        }
+        $status = [];
+        foreach ($fields as $field) {
+            $label = (string) ($field['german_label'] ?? $field['label'] ?? $field['polish_label'] ?? '');
+            $value = (string) ($field['value'] ?? '');
+            $status[] = [
+                'label' => $label,
+                'value' => $value,
+                'source_label' => (string) ($field['source_label'] ?? $field['polish_label'] ?? ''),
+                'source_value' => (string) ($field['source_value'] ?? ''),
+                'translated' => $value !== '' && !in_array($value, $untranslatedValues, true),
+                'warning' => in_array($value, $untranslatedValues, true) ? 'untranslated_spec_values' : '',
+            ];
+        }
+        return $status;
     }
 
     public static function validate_ebay_de_rendered_html(string $html): array
@@ -2839,6 +2925,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'source_description' => (string) ($preview['source_description'] ?? ''),
                 'translated_description' => (string) ($preview['translated_description'] ?? ''),
                 'description_source' => (string) ($preview['description_source'] ?? 'post_content'),
+                'current_schema_version' => (string) ($preview['current_schema_version'] ?? self::german_content_schema_version()),
+                'stored_schema_version' => (string) ($preview['stored_schema_version'] ?? ''),
+                'template_version' => (string) ($preview['template_version'] ?? ''),
+                'translation_schema_version' => (string) ($preview['translation_schema_version'] ?? ''),
+                'source_description_field' => (string) ($preview['source_description_field'] ?? ''),
+                'source_description_used' => (string) ($preview['source_description_used'] ?? $preview['source_description'] ?? ''),
+                'stale_reasons' => (array) ($preview['stale_reasons'] ?? []),
+                'stale_reason' => (string) ($preview['stale_reason'] ?? 'current'),
+                'translated_field_value_status' => (array) ($preview['translated_field_value_status'] ?? []),
                 'source_hash' => (string) ($preview['source_hash'] ?? ''),
                 'cached_translation_hash' => (string) ($preview['cached_translation_hash'] ?? ''),
                 'stale' => !empty($preview['stale']),
@@ -2974,6 +3069,22 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function ebay_german_content_translator(): EbayGermanContentTranslator
     {
         return new EbayGermanContentTranslator($this->logger);
+    }
+
+
+    private static function german_content_schema_version(): string
+    {
+        return defined(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') : '2026-06-new-ebay-template-v2';
+    }
+
+    private static function german_content_template_version(): string
+    {
+        return defined(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') : 'ebay-de-product-card-template-v2';
+    }
+
+    private static function german_translation_schema_version(): string
+    {
+        return defined(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v2';
     }
 
     private function ebay_german_content_source($product, int $productId, array $aspectsSource = []): array
