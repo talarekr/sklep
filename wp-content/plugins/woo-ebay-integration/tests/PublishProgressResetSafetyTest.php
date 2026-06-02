@@ -62,9 +62,9 @@ foreach ([
 foreach ([
     'Resetuj postęp publikacji',
     'Refresh eBay listing state',
-    'Readiness audit counters, export run counters, publish run counters, and eBay active listing refresh counters are intentionally separate.',
+    'These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.',
     'processed_this_run',
-    'Exported offers',
+    'exported_this_run',
     'published_this_run',
     'skipped_this_run',
     'errors_this_run',
