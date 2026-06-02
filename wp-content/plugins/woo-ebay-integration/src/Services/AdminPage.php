@@ -2033,10 +2033,15 @@ class AdminPage
         $this->require_manage_options();
         check_admin_referer('wei_publish_ready_products');
         $batchSize = $this->publish_action_batch_size_from_post('batch_size', 5);
+        $autoRunner = !empty($_POST['wei_auto_runner']);
+        $autoRunnerBatchIndex = max(0, absint($_POST['auto_runner_batch_index'] ?? 0));
         $res = $this->run_initial_publish_batch($batchSize);
-        $this->set_status('Publish ready products: ' . wp_json_encode([
+        $remainingReady = (int) ($res['remaining'] ?? $this->initial_publish_remaining());
+        $stoppedReason = $this->publish_ready_products_auto_runner_stopped_reason($res);
+        $payload = [
             'processed' => (int) ($res['processed'] ?? 0),
             'ready' => (int) $this->initial_publish_total_ready($this->initial_publish_candidate_summary()),
+            'remaining_ready' => $remainingReady,
             'exported' => (int) ($res['success'] ?? 0),
             'published' => (int) ($res['success'] ?? 0),
             'skipped_not_ready' => (int) ($res['skipped_not_ready'] ?? 0),
@@ -2049,8 +2054,57 @@ class AdminPage
             'errors' => (int) ($res['failed'] ?? 0),
             'report_url' => (string) ($res['report_url'] ?? ''),
             'status' => (string) ($res['status'] ?? ''),
-        ], JSON_UNESCAPED_UNICODE));
+            'auto_runner_batch_index' => $autoRunnerBatchIndex,
+            'batch_size' => $batchSize,
+            'stopped_reason' => $stoppedReason,
+            'fatal_error' => $stoppedReason !== '',
+        ];
+
+        if ($autoRunner) {
+            $this->logger->info('PUBLISH_READY_PRODUCTS_AUTO_RUNNER_BATCH', [
+                'auto_runner_batch_index' => $autoRunnerBatchIndex,
+                'batch_size' => $batchSize,
+                'processed' => (int) ($payload['processed'] ?? 0),
+                'exported' => (int) ($payload['exported'] ?? 0),
+                'published' => (int) ($payload['published'] ?? 0),
+                'skipped_not_ready' => (int) ($payload['skipped_not_ready'] ?? 0),
+                'errors' => (int) ($payload['errors'] ?? 0),
+                'stopped_reason' => $stoppedReason,
+            ]);
+        }
+
+        $this->set_status('Publish ready products: ' . wp_json_encode($payload, JSON_UNESCAPED_UNICODE));
+
+        if ($autoRunner) {
+            wp_send_json($payload);
+        }
+
         $this->go();
+    }
+
+    private function publish_ready_products_auto_runner_stopped_reason(array $res): string
+    {
+        $status = strtolower((string) ($res['status'] ?? ''));
+        if ($status === 'paused') {
+            return 'publish_paused';
+        }
+
+        if ((int) ($res['failed'] ?? 0) <= 0) {
+            return '';
+        }
+
+        $lastError = strtolower((string) ($res['last_error'] ?? ''));
+        if ($lastError === '') {
+            return '';
+        }
+
+        foreach (['auth', 'oauth', 'token', 'unauthoriz', 'forbidden', 'rate limit', 'ratelimit', '429', 'too many requests', 'api quota', 'system', 'timeout', 'connect', 'curl', 'http 5', '503', '502', '500'] as $fatalNeedle) {
+            if (str_contains($lastError, $fatalNeedle)) {
+                return 'fatal/system/API/auth/rate-limit error: ' . (string) ($res['last_error'] ?? '');
+            }
+        }
+
+        return '';
     }
 
     public function ebay_initial_publish_toggle_pause(): void
@@ -2556,6 +2610,10 @@ class AdminPage
         if ($lastPublishedProductId > 0) {
             update_option('wei_ebay_initial_publish_last_published_product_id', $lastPublishedProductId, false);
             update_option('wei_ebay_initial_publish_last_listing_id', $lastListingId, false);
+        }
+        if (!empty($_POST['wei_auto_runner'])) {
+            $stoppedReasonForLog = $this->publish_ready_products_auto_runner_stopped_reason(['status' => $nextStatus, 'failed' => $failed, 'last_error' => $lastError]);
+            $logs[] = 'PUBLISH_READY_PRODUCTS_AUTO_RUNNER_BATCH auto_runner_batch_index=' . max(0, absint($_POST['auto_runner_batch_index'] ?? 0)) . ' batch_size=' . $batchSize . ' processed=' . $processed . ' exported=' . $success . ' published=' . $success . ' skipped_not_ready=' . (int) ($skipSummary['skipped_not_ready'] ?? 0) . ' errors=' . $failed . ($stoppedReasonForLog !== '' ? ' stopped_reason="' . $this->compact_log_value($stoppedReasonForLog) . '"' : '');
         }
         $logs[] = 'INITIAL_PUBLISH_BATCH_DONE processed=' . $processed . ' success=' . $success . ' failed=' . $failed . ' published_total=' . $successTotal . ' remaining=' . $remaining;
         update_option('wei_ebay_initial_publish_last_batch_log', array_slice($logs, -100), false);

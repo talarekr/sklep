@@ -552,6 +552,9 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
         .wei-admin .description { color:#646970; }
         .wei-admin .wei-muted-list { columns:2; max-width:980px; }
         .wei-admin .wei-danger { border-left:4px solid #b32d2e; background:#fcf0f1; padding:10px 12px; }
+        .wei-admin .wei-auto-runner { border:1px solid #c3c4c7; background:#f6f7f7; padding:12px; margin:12px 0; max-width:980px; }
+        .wei-admin .wei-auto-runner .wei-auto-runner-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:8px 0 12px; }
+        .wei-admin .wei-auto-runner-log { min-height:42px; }
     </style>
 
     <?php if (!empty($_GET['saved'])): ?><div class="notice notice-success"><p>eBay settings saved.</p></div><?php endif; ?>
@@ -657,6 +660,29 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
                 <label>Batch size <input type="number" min="1" max="300" name="batch_size" value="50" /></label>
                 <button class="button button-primary" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Publish ready products</button>
             </form>
+            <section class="wei-auto-runner" id="wei-publish-auto-runner" data-admin-post-url="<?php echo esc_url($adminPostUrl); ?>" data-action="wei_publish_ready_products" data-nonce="<?php echo esc_attr(wp_create_nonce('wei_publish_ready_products')); ?>">
+                <h3>Auto publish runner</h3>
+                <p class="description">Browser-based automation for the existing <strong>Publish ready products</strong> action. It runs one batch at a time, waits for each request to finish, and keeps all existing server-side readiness, stock, German content, category, policy and excluded-product guards.</p>
+                <div class="wei-auto-runner-controls">
+                    <label>Batch size <input id="wei-auto-publish-batch-size" type="number" min="1" max="300" value="50" /></label>
+                    <label>Delay between batches <input id="wei-auto-publish-delay" type="number" min="0" max="3600" step="1" value="5" /> seconds</label>
+                    <button type="button" class="button button-primary" id="wei-auto-publish-start" <?php disabled($initialPublishPublicationStatus === 'paused'); ?>>Start</button>
+                    <button type="button" class="button" id="wei-auto-publish-stop">Stop</button>
+                </div>
+                <div class="wei-grid" id="wei-auto-publish-progress">
+                    <div class="wei-card"><span>batches_completed</span><strong data-counter="batches_completed">0</strong></div>
+                    <div class="wei-card"><span>total_processed</span><strong data-counter="total_processed">0</strong></div>
+                    <div class="wei-card"><span>total_exported</span><strong data-counter="total_exported">0</strong></div>
+                    <div class="wei-card"><span>total_published</span><strong data-counter="total_published">0</strong></div>
+                    <div class="wei-card"><span>total_skipped</span><strong data-counter="total_skipped">0</strong></div>
+                    <div class="wei-card"><span>total_failed</span><strong data-counter="total_failed">0</strong></div>
+                    <div class="wei-card"><span>remaining_ready</span><strong data-counter="remaining_ready">-</strong></div>
+                    <div class="wei-card"><span>running / stopped / completed</span><strong data-counter="state">stopped</strong></div>
+                    <div class="wei-card"><span>stopped_reason</span><strong data-counter="stopped_reason">-</strong></div>
+                </div>
+                <p><strong>last_batch_result</strong></p>
+                <pre class="wei-scroll wei-auto-runner-log" data-counter="last_batch_result">-</pre>
+            </section>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('Reset publish progress / counters? This clears only publish progress, cursors, checkpoints and counters. It does not delete category mappings, German content, OAuth tokens, policies, prices, stock, images or Woo products. Type RESET to confirm.');">
                 <?php wp_nonce_field('wei_ebay_initial_publish_reset'); ?>
                 <input type="hidden" name="action" value="wei_ebay_initial_publish_reset" />
@@ -1177,4 +1203,193 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
             <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>At</th><th>Level</th><th>Summary</th><th>Technical JSON</th></tr></thead><tbody><?php foreach ($recentLogs as $log): ?><?php $message = (string) ($log['message'] ?? ''); $short = strlen($message) > 180 ? substr($message, 0, 177) . '...' : $message; ?><tr><td><?php echo esc_html((string) ($log['at'] ?? '')); ?></td><td><?php echo esc_html((string) ($log['level'] ?? '')); ?></td><td><?php echo esc_html($short); ?></td><td><details><summary>show JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($log['context'] ?? [], 2500)); ?></pre></details></td></tr><?php endforeach; ?></tbody></table></div>
         </details>
     </details>
+    <script>
+    (function () {
+        const runner = document.getElementById('wei-publish-auto-runner');
+        if (!runner) {
+            return;
+        }
+
+        const startButton = document.getElementById('wei-auto-publish-start');
+        const stopButton = document.getElementById('wei-auto-publish-stop');
+        const batchSizeInput = document.getElementById('wei-auto-publish-batch-size');
+        const delayInput = document.getElementById('wei-auto-publish-delay');
+        const fields = {};
+        runner.querySelectorAll('[data-counter]').forEach(function (node) {
+            fields[node.getAttribute('data-counter')] = node;
+        });
+
+        const state = {
+            running: false,
+            stopped: false,
+            inFlight: false,
+            batches_completed: 0,
+            total_processed: 0,
+            total_exported: 0,
+            total_published: 0,
+            total_skipped: 0,
+            total_failed: 0,
+            remaining_ready: '-',
+            stopped_reason: '-',
+            abortController: null,
+            delayTimer: 0,
+        };
+
+        function setField(name, value) {
+            if (fields[name]) {
+                fields[name].textContent = String(value);
+            }
+        }
+
+        function setUiStatus(status, reason) {
+            setField('state', status);
+            setField('stopped_reason', reason || '-');
+            startButton.disabled = status === 'running';
+        }
+
+        function updateCounters(lastBatch) {
+            setField('batches_completed', state.batches_completed);
+            setField('total_processed', state.total_processed);
+            setField('total_exported', state.total_exported);
+            setField('total_published', state.total_published);
+            setField('total_skipped', state.total_skipped);
+            setField('total_failed', state.total_failed);
+            setField('remaining_ready', state.remaining_ready);
+            setField('last_batch_result', lastBatch ? JSON.stringify(lastBatch, null, 2) : '-');
+        }
+
+        function numberFromInput(input, fallback, min, max) {
+            const value = parseInt(input.value, 10);
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function stopRunner(reason) {
+            state.stopped = true;
+            state.running = false;
+            if (state.delayTimer) {
+                window.clearTimeout(state.delayTimer);
+                state.delayTimer = 0;
+            }
+            if (state.abortController) {
+                state.abortController.abort();
+                state.abortController = null;
+            }
+            setUiStatus(reason === 'completed' ? 'completed' : 'stopped', reason || 'manual_stop');
+        }
+
+        function wait(ms) {
+            return new Promise(function (resolve) {
+                state.delayTimer = window.setTimeout(function () {
+                    state.delayTimer = 0;
+                    resolve();
+                }, ms);
+            });
+        }
+
+        async function runBatch(batchIndex) {
+            if (state.inFlight) {
+                throw new Error('double_submit_prevented');
+            }
+            state.inFlight = true;
+            state.abortController = new AbortController();
+
+            const formData = new FormData();
+            formData.append('action', runner.dataset.action || 'wei_publish_ready_products');
+            formData.append('_wpnonce', runner.dataset.nonce || '');
+            formData.append('batch_size', String(numberFromInput(batchSizeInput, 50, 1, 300)));
+            formData.append('wei_auto_runner', '1');
+            formData.append('auto_runner_batch_index', String(batchIndex));
+
+            try {
+                const response = await fetch(runner.dataset.adminPostUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData,
+                    signal: state.abortController.signal,
+                });
+                if (!response.ok) {
+                    throw new Error('request_failed_http_' + response.status);
+                }
+                const result = await response.json();
+                if (result && result.success === true && result.data) {
+                    return result.data;
+                }
+                return result;
+            } finally {
+                state.inFlight = false;
+                state.abortController = null;
+            }
+        }
+
+        async function startRunner() {
+            if (state.running || state.inFlight) {
+                return;
+            }
+            state.running = true;
+            state.stopped = false;
+            state.batches_completed = 0;
+            state.total_processed = 0;
+            state.total_exported = 0;
+            state.total_published = 0;
+            state.total_skipped = 0;
+            state.total_failed = 0;
+            state.remaining_ready = '-';
+            state.stopped_reason = '-';
+            updateCounters(null);
+            setUiStatus('running', '-');
+
+            while (state.running && !state.stopped) {
+                try {
+                    const batchIndex = state.batches_completed + 1;
+                    const batch = await runBatch(batchIndex);
+                    const processed = parseInt(batch.processed || 0, 10) || 0;
+                    const exported = parseInt(batch.exported || 0, 10) || 0;
+                    const published = parseInt(batch.published || 0, 10) || 0;
+                    const skipped = parseInt(batch.skipped_not_ready || 0, 10) || 0;
+                    const failed = parseInt(batch.errors || 0, 10) || 0;
+                    const remaining = parseInt(batch.remaining_ready || 0, 10) || 0;
+
+                    state.batches_completed += 1;
+                    state.total_processed += processed;
+                    state.total_exported += exported;
+                    state.total_published += published;
+                    state.total_skipped += skipped;
+                    state.total_failed += failed;
+                    state.remaining_ready = remaining;
+                    updateCounters(batch);
+
+                    if (batch.fatal_error || batch.stopped_reason) {
+                        stopRunner(batch.stopped_reason || 'fatal_error');
+                        break;
+                    }
+                    if (batch.status === 'completed' || remaining <= 0 || processed <= 0) {
+                        stopRunner('completed');
+                        break;
+                    }
+
+                    await wait(numberFromInput(delayInput, 5, 0, 3600) * 1000);
+                } catch (error) {
+                    if (state.stopped && error.name === 'AbortError') {
+                        break;
+                    }
+                    stopRunner(error && error.message ? error.message : 'fatal_error');
+                    break;
+                }
+            }
+        }
+
+        startButton.addEventListener('click', startRunner);
+        stopButton.addEventListener('click', function () {
+            stopRunner('manual_stop');
+        });
+        window.addEventListener('beforeunload', function () {
+            if (state.running || state.inFlight) {
+                stopRunner('page_unload');
+            }
+        });
+    }());
+    </script>
 </div>
