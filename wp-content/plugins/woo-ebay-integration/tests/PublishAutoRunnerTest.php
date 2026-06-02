@@ -49,7 +49,10 @@ foreach ([
     'await runBatch(batchIndex)' => 'Runner must wait for the previous request to finish before continuing.',
     'await wait(numberFromInput(delayInput, 5, 0, 3600) * 1000)' => 'Runner must wait the configured delay between batches.',
     "batch.fatal_error || batch.stopped_reason" => 'Fatal server errors must stop the runner.',
-    "batch.status === 'completed' || remaining <= 0 || processed <= 0" => 'Runner must stop when no more ready products remain.',
+    "const madeProgress = published > 0 || exported > 0 || processed > 0" => 'Runner must keep going after any successful processed/exported/published batch.',
+    "if (batch.queue_empty === true)" => 'Runner must stop only when the server confirms the global ready queue is empty.',
+    "if (globalRemaining === 0 && !madeProgress)" => 'Runner may stop on global_remaining_ready=0 only after a no-progress confirmation batch.',
+    "if (!madeProgress)" => 'Runner must stop when a batch makes no progress and the queue is not confirmed non-empty.',
     "window.addEventListener('beforeunload'" => 'Runner must stop when the user leaves the page.',
 ] as $needle => $message) {
     $assert(str_contains($viewSource, $needle), $message);
@@ -61,6 +64,9 @@ foreach ([
     'publish_ready_products_auto_runner_stopped_reason($res)' => 'Server handler must classify fatal/system/API/auth/rate-limit stop reasons.',
     '\'auto_runner_batch_index\' => $autoRunnerBatchIndex' => 'Server payload/log must include auto_runner_batch_index.',
     '\'batch_size\' => $batchSize' => 'Server payload/log must include batch_size.',
+    '\'global_remaining_ready\' => $globalRemainingReady' => 'Server payload/log must include global_remaining_ready.',
+    '\'queue_empty\' => $queueEmpty' => 'Server payload/log must include queue_empty.',
+    'count_initial_publish_candidates_from_meta()' => 'Server must calculate the global remaining ready queue after each batch.',
     '\'processed\' => (int) ($payload[\'processed\'] ?? 0)' => 'Auto-runner log must include processed.',
     '\'exported\' => (int) ($payload[\'exported\'] ?? 0)' => 'Auto-runner log must include exported.',
     '\'published\' => (int) ($payload[\'published\'] ?? 0)' => 'Auto-runner log must include published.',

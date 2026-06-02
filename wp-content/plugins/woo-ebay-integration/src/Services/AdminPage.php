@@ -2036,12 +2036,16 @@ class AdminPage
         $autoRunner = !empty($_POST['wei_auto_runner']);
         $autoRunnerBatchIndex = max(0, absint($_POST['auto_runner_batch_index'] ?? 0));
         $res = $this->run_initial_publish_batch($batchSize);
-        $remainingReady = (int) ($res['remaining'] ?? $this->initial_publish_remaining());
+        $globalRemainingReady = $this->count_initial_publish_candidates_from_meta();
+        $remainingReady = $globalRemainingReady;
+        $queueEmpty = $globalRemainingReady <= 0;
         $stoppedReason = $this->publish_ready_products_auto_runner_stopped_reason($res);
         $payload = [
             'processed' => (int) ($res['processed'] ?? 0),
             'ready' => (int) $this->initial_publish_total_ready($this->initial_publish_candidate_summary()),
             'remaining_ready' => $remainingReady,
+            'global_remaining_ready' => $globalRemainingReady,
+            'queue_empty' => $queueEmpty,
             'exported' => (int) ($res['success'] ?? 0),
             'published' => (int) ($res['success'] ?? 0),
             'skipped_not_ready' => (int) ($res['skipped_not_ready'] ?? 0),
@@ -2069,6 +2073,8 @@ class AdminPage
                 'published' => (int) ($payload['published'] ?? 0),
                 'skipped_not_ready' => (int) ($payload['skipped_not_ready'] ?? 0),
                 'errors' => (int) ($payload['errors'] ?? 0),
+                'global_remaining_ready' => (int) ($payload['global_remaining_ready'] ?? 0),
+                'queue_empty' => (bool) ($payload['queue_empty'] ?? false),
                 'stopped_reason' => $stoppedReason,
             ]);
         }
@@ -2480,9 +2486,61 @@ class AdminPage
                 AND export_published_meta.meta_value = 'published'
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
-                AND (listing_status_meta.post_id IS NULL OR current_active_meta.post_id IS NULL)
+                AND listing_status_meta.post_id IS NULL
+                AND export_published_meta.post_id IS NULL
+                AND NOT (
+                    current_active_meta.post_id IS NOT NULL
+                    AND (listing_meta.post_id IS NOT NULL OR item_meta.post_id IS NOT NULL)
+                )
         ";
         return (int) $wpdb->get_var($sql);
+    }
+
+    private function initial_publish_candidate_count_after_cursor(int $cursor): int
+    {
+        global $wpdb;
+
+        $posts = $wpdb->posts;
+        $postmeta = $wpdb->postmeta;
+        $sql = "
+            SELECT COUNT(DISTINCT p.ID)
+            FROM {$posts} p
+            INNER JOIN {$postmeta} ready_meta
+                ON ready_meta.post_id = p.ID
+                AND ready_meta.meta_key = '_wei_ebay_export_status'
+                AND ready_meta.meta_value IN ('ready', 'needs_reexport')
+            LEFT JOIN {$postmeta} listing_meta
+                ON listing_meta.post_id = p.ID
+                AND listing_meta.meta_key = '_wei_ebay_listing_id'
+                AND listing_meta.meta_value <> ''
+            LEFT JOIN {$postmeta} item_meta
+                ON item_meta.post_id = p.ID
+                AND item_meta.meta_key = '_wei_ebay_item_id'
+                AND item_meta.meta_value <> ''
+            LEFT JOIN {$postmeta} listing_status_meta
+                ON listing_status_meta.post_id = p.ID
+                AND listing_status_meta.meta_key = '_wei_ebay_listing_status'
+                AND listing_status_meta.meta_value = 'published'
+            LEFT JOIN {$postmeta} current_active_meta
+                ON current_active_meta.post_id = p.ID
+                AND current_active_meta.meta_key = '_wei_ebay_current_listing_state'
+                AND current_active_meta.meta_value = 'active'
+            LEFT JOIN {$postmeta} export_published_meta
+                ON export_published_meta.post_id = p.ID
+                AND export_published_meta.meta_key = '_wei_ebay_export_status'
+                AND export_published_meta.meta_value = 'published'
+            WHERE p.post_type = 'product'
+                AND p.post_status IN ('publish', 'draft', 'private')
+                AND p.ID > %d
+                AND listing_status_meta.post_id IS NULL
+                AND export_published_meta.post_id IS NULL
+                AND NOT (
+                    current_active_meta.post_id IS NOT NULL
+                    AND (listing_meta.post_id IS NOT NULL OR item_meta.post_id IS NOT NULL)
+                )
+        ";
+
+        return (int) $wpdb->get_var($wpdb->prepare($sql, max(0, $cursor)));
     }
 
     private function count_initial_publish_already_published_products(): int
@@ -2543,6 +2601,14 @@ class AdminPage
         ];
 
         $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
+        $globalReadyBefore = $this->count_initial_publish_candidates_from_meta();
+        if ($ids === [] && $cursor > 0 && $globalReadyBefore > 0) {
+            $logs[] = 'INITIAL_PUBLISH_CURSOR_WRAP cursor=' . $cursor . ' global_remaining_ready=' . $globalReadyBefore;
+            $cursor = 0;
+            $newCursor = 0;
+            $ids = $this->initial_publish_candidate_product_ids($batchSize, $cursor);
+        }
+
         foreach ($ids as $productId) {
             $productId = (int) $productId;
             $newCursor = max($newCursor, $productId);
@@ -2551,8 +2617,14 @@ class AdminPage
             $logs[] = 'INITIAL_PUBLISH_PRODUCT_START product_id=' . $productId;
 
             if ($this->is_initial_publish_already_published($productId)) {
+                $diagnostics = $this->initial_publish_already_published_diagnostics($productId);
                 $skippedTotal++;
-                $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="already_published"';
+                $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId
+                    . ' sku="' . $this->compact_log_value((string) ($diagnostics['sku'] ?? '')) . '"'
+                    . ' offer_id="' . $this->compact_log_value((string) ($diagnostics['offer_id'] ?? '')) . '"'
+                    . ' listing_id="' . $this->compact_log_value((string) ($diagnostics['listing_id'] ?? '')) . '"'
+                    . ' active_listing_state="' . $this->compact_log_value((string) ($diagnostics['active_listing_state'] ?? '')) . '"'
+                    . ' reason="already_published_active_listing"';
                 continue;
             }
 
@@ -2569,6 +2641,17 @@ class AdminPage
                 }
 
                 $res = $this->adapter->export_product($productId, null, true);
+                if (($res['result'] ?? '') === 'skipped' && ($res['status'] ?? '') === 'already_published_active_listing') {
+                    $skippedTotal++;
+                    $diagnostics = is_array($res['diagnostics'] ?? null) ? $res['diagnostics'] : [];
+                    $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId
+                        . ' sku="' . $this->compact_log_value((string) ($diagnostics['sku'] ?? '')) . '"'
+                        . ' offer_id="' . $this->compact_log_value((string) ($diagnostics['offer_id'] ?? '')) . '"'
+                        . ' listing_id="' . $this->compact_log_value((string) ($diagnostics['listing_id'] ?? '')) . '"'
+                        . ' active_listing_state="' . $this->compact_log_value((string) ($diagnostics['active_listing_state'] ?? '')) . '"'
+                        . ' reason="already_published_active_listing"';
+                    continue;
+                }
                 $publishedDetails = $this->initial_publish_published_details($productId, $res);
                 if (!empty($publishedDetails['published'])) {
                     $success++;
@@ -2594,8 +2677,9 @@ class AdminPage
             }
         }
 
-        $remaining = max(0, $totalReady - $successTotal);
-        $nextStatus = empty($ids) || $remaining === 0 ? 'completed' : 'idle';
+        $remaining = $this->initial_publish_candidate_count_after_cursor($newCursor);
+        $globalRemainingReady = $this->count_initial_publish_candidates_from_meta();
+        $nextStatus = empty($ids) || $globalRemainingReady === 0 ? 'completed' : 'idle';
         update_option('wei_ebay_initial_publish_processed', $processedTotal, false);
         update_option('wei_ebay_initial_publish_success', $successTotal, false);
         update_option('wei_ebay_initial_publish_failed', $failedTotal, false);
@@ -2613,9 +2697,9 @@ class AdminPage
         }
         if (!empty($_POST['wei_auto_runner'])) {
             $stoppedReasonForLog = $this->publish_ready_products_auto_runner_stopped_reason(['status' => $nextStatus, 'failed' => $failed, 'last_error' => $lastError]);
-            $logs[] = 'PUBLISH_READY_PRODUCTS_AUTO_RUNNER_BATCH auto_runner_batch_index=' . max(0, absint($_POST['auto_runner_batch_index'] ?? 0)) . ' batch_size=' . $batchSize . ' processed=' . $processed . ' exported=' . $success . ' published=' . $success . ' skipped_not_ready=' . (int) ($skipSummary['skipped_not_ready'] ?? 0) . ' errors=' . $failed . ($stoppedReasonForLog !== '' ? ' stopped_reason="' . $this->compact_log_value($stoppedReasonForLog) . '"' : '');
+            $logs[] = 'PUBLISH_READY_PRODUCTS_AUTO_RUNNER_BATCH auto_runner_batch_index=' . max(0, absint($_POST['auto_runner_batch_index'] ?? 0)) . ' batch_size=' . $batchSize . ' processed=' . $processed . ' exported=' . $success . ' published=' . $success . ' skipped_not_ready=' . (int) ($skipSummary['skipped_not_ready'] ?? 0) . ' errors=' . $failed . ' global_remaining_ready=' . $globalRemainingReady . ' queue_empty=' . ($globalRemainingReady === 0 ? 'true' : 'false') . ($stoppedReasonForLog !== '' ? ' stopped_reason="' . $this->compact_log_value($stoppedReasonForLog) . '"' : '');
         }
-        $logs[] = 'INITIAL_PUBLISH_BATCH_DONE processed=' . $processed . ' success=' . $success . ' failed=' . $failed . ' published_total=' . $successTotal . ' remaining=' . $remaining;
+        $logs[] = 'INITIAL_PUBLISH_BATCH_DONE processed=' . $processed . ' success=' . $success . ' failed=' . $failed . ' published_total=' . $successTotal . ' remaining=' . $remaining . ' global_remaining_ready=' . $globalRemainingReady;
         update_option('wei_ebay_initial_publish_last_batch_log', array_slice($logs, -100), false);
 
         return [
@@ -2626,6 +2710,8 @@ class AdminPage
             'failed' => $failed,
             'published_total' => $successTotal,
             'remaining' => $remaining,
+            'global_remaining_ready' => $globalRemainingReady,
+            'queue_empty' => $globalRemainingReady === 0,
             'cursor' => $newCursor,
             'last_error' => $lastError,
         ] + $skipSummary;
@@ -2711,6 +2797,10 @@ class AdminPage
                 ON current_active_meta.post_id = p.ID
                 AND current_active_meta.meta_key = '_wei_ebay_current_listing_state'
                 AND current_active_meta.meta_value = 'active'
+            LEFT JOIN {$postmeta} export_published_meta
+                ON export_published_meta.post_id = p.ID
+                AND export_published_meta.meta_key = '_wei_ebay_export_status'
+                AND export_published_meta.meta_value = 'published'
             WHERE p.post_type = 'product'
                 AND p.post_status IN ('publish', 'draft', 'private')
                 AND p.ID > %d
@@ -2723,7 +2813,12 @@ class AdminPage
                             AND excluded_meta.meta_value = 'excluded_from_ebay'
                     )
                 )
-                AND (listing_status_meta.post_id IS NULL OR current_active_meta.post_id IS NULL)
+                AND listing_status_meta.post_id IS NULL
+                AND export_published_meta.post_id IS NULL
+                AND NOT (
+                    current_active_meta.post_id IS NOT NULL
+                    AND (listing_meta.post_id IS NOT NULL OR item_meta.post_id IS NOT NULL)
+                )
             GROUP BY p.ID
             ORDER BY p.ID ASC
             LIMIT %d
@@ -2732,13 +2827,34 @@ class AdminPage
         return array_values(array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, max(0, $cursor), $includeExcluded ? 1 : 0, $batchSize))));
     }
 
+    private function initial_publish_already_published_diagnostics(int $productId): array
+    {
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        if ($listingId === '') {
+            $listingId = trim((string) get_post_meta($productId, '_wei_ebay_item_id', true));
+        }
+        $activeListingState = (string) get_post_meta($productId, '_wei_ebay_current_listing_state', true);
+        $listingStatus = (string) get_post_meta($productId, '_wei_ebay_listing_status', true);
+        $exportStatus = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
+        $alreadyPublished = ($listingId !== '' && $activeListingState === 'active')
+            || $listingStatus === 'published'
+            || $exportStatus === 'published';
+
+        return [
+            'product_id' => $productId,
+            'sku' => (string) get_post_meta($productId, '_sku', true),
+            'offer_id' => (string) get_post_meta($productId, '_wei_ebay_offer_id', true),
+            'listing_id' => $listingId,
+            'active_listing_state' => $activeListingState,
+            'skipped_reason' => $alreadyPublished ? 'already_published_active_listing' : '',
+            'already_published' => $alreadyPublished,
+        ];
+    }
+
     private function is_initial_publish_already_published(int $productId): bool
     {
-        return (string) get_post_meta($productId, '_wei_ebay_current_listing_state', true) === 'active'
-            && (
-                (string) get_post_meta($productId, '_wei_ebay_listing_status', true) === 'published'
-                || (string) get_post_meta($productId, '_wei_ebay_export_status', true) === 'published'
-            );
+        $diagnostics = $this->initial_publish_already_published_diagnostics($productId);
+        return !empty($diagnostics['already_published']);
     }
 
     private function initial_publish_status(): array
