@@ -25,11 +25,14 @@ class EbayPriceResolver
 
         $result = [
             'base_price_pln' => $basePricePln,
+            'woo_price_pln' => $basePricePln,
             'markup_percent' => $markup['markup_percent'],
             'markup_source' => $markup['markup_source'],
             'marked_price_pln' => null,
+            'price_after_markup_pln' => null,
             'currency_source' => 'nbp_table_a',
             'nbp_rate' => $rate['nbp_rate'],
+            'exchange_rate' => $rate['nbp_rate'],
             'nbp_effective_date' => $rate['nbp_effective_date'],
             'nbp_table_no' => $rate['nbp_table_no'],
             'ebay_price_eur' => null,
@@ -64,6 +67,7 @@ class EbayPriceResolver
         }
 
         $result['marked_price_pln'] = $markedPricePln;
+        $result['price_after_markup_pln'] = $markedPricePln;
         $result['ebay_price_eur'] = $ebayPriceEur;
         $result['ready'] = true;
         if (!$suppressLog) {

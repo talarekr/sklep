@@ -18,6 +18,7 @@ class AdminPage
         add_action('admin_init', [$this, 'log_build_loaded']);
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_post_wei_save_settings', [$this, 'save_settings']);
+        add_action('admin_post_wei_save_ebay_settings', [$this, 'save_ebay_settings']);
         add_action('admin_post_wei_disconnect', [$this, 'disconnect']);
         add_action('admin_post_wei_test_connection', [$this, 'test_connection']);
         add_action('admin_post_wei_readiness', [$this, 'run_readiness']);
@@ -587,6 +588,53 @@ class AdminPage
         exit;
     }
 
+
+    public function save_ebay_settings(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_save_ebay_settings');
+
+        $s = $this->settings();
+        $defaultMarkupRaw = trim((string) ($_POST['ebay_default_markup_percent'] ?? ''));
+        $defaultMarkup = $defaultMarkupRaw === '' ? 25.0 : (float) str_replace(',', '.', $defaultMarkupRaw);
+        $s['ebay_default_markup_percent'] = $defaultMarkup > 0 ? round($defaultMarkup, 4) : 25;
+
+        $postedShippingPolicyId = static function (string $key): string {
+            $manual = sanitize_text_field((string) ($_POST[$key . '_manual'] ?? ''));
+            if ($manual !== '') {
+                return $manual;
+            }
+            $selected = sanitize_text_field((string) ($_POST[$key] ?? ''));
+            if ($selected !== '') {
+                return $selected;
+            }
+            return sanitize_text_field((string) ($_POST[$key . '_existing'] ?? ''));
+        };
+
+        $s['shipping_policy_30'] = $postedShippingPolicyId('shipping_policy_30');
+        $s['shipping_policy_50'] = $postedShippingPolicyId('shipping_policy_50');
+        $s['shipping_policy_130'] = $postedShippingPolicyId('shipping_policy_130');
+        $s['default_shipping_policy_id'] = $postedShippingPolicyId('default_shipping_policy_id');
+        $s['shipping_policy_name_30'] = sanitize_text_field((string) ($_POST['shipping_policy_name_30'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_30']);
+        $s['shipping_policy_name_50'] = sanitize_text_field((string) ($_POST['shipping_policy_name_50'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_50']);
+        $s['shipping_policy_name_130'] = sanitize_text_field((string) ($_POST['shipping_policy_name_130'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['shipping_policy_130']);
+        $s['default_shipping_policy_name'] = sanitize_text_field((string) ($_POST['default_shipping_policy_name'] ?? '')) ?: $this->cached_fulfillment_policy_name($s, $s['default_shipping_policy_id']);
+        $s['fulfillment_policy_id_30_eur'] = $s['shipping_policy_30'];
+        $s['fulfillment_policy_id_50_eur'] = $s['shipping_policy_50'];
+        $s['fulfillment_policy_id_130_eur'] = $s['shipping_policy_130'];
+        $s['ebay_fulfillment_policy_id'] = $s['shipping_policy_30'];
+        $s['shipping_category_ids_30'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_30'] ?? '')));
+        $s['shipping_category_ids_50'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_50'] ?? '')));
+        $s['shipping_category_ids_130'] = EbayShippingPolicyResolver::normalize_id_list(sanitize_textarea_field((string) ($_POST['shipping_category_ids_130'] ?? '')));
+
+        $conflicts = EbayShippingPolicyResolver::conflict_ids($s);
+        update_option('wei_ebay_shipping_mapping_warnings', $conflicts === [] ? [] : ['conflicts' => $conflicts, 'message' => 'Woo category ID appears in multiple eBay shipping groups. Runtime priority is Wysyłka 130 > Wysyłka 50 > Wysyłka 30.'], false);
+        update_option(Plugin::OPTION_KEY, $s, false);
+
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1&wei_section=ebay-settings' . (!empty($conflicts) ? '&shipping_mapping_conflicts=1' : '')));
+        exit;
+    }
+
     public function shipping_mapping_diagnostics(): void
     {
         $this->require_manage_options();
@@ -599,6 +647,7 @@ class AdminPage
             'blocked' => true,
         ];
         $product = $productId > 0 && function_exists('wc_get_product') ? wc_get_product($productId) : null;
+        $priceResolution = $product ? $this->priceResolver->resolve($product, $productId, $settings, true) : [];
         $diagnostics = [
             'product_id' => $productId,
             'product_title' => $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId),
@@ -607,8 +656,17 @@ class AdminPage
             'matched_woo_category_id' => (int) ($resolution['matched_woo_category_id'] ?? 0),
             'selected_shipping_policy_id' => (string) ($resolution['policy_id'] ?? ''),
             'selected_shipping_policy_name' => (string) ($resolution['policy_name'] ?? ''),
+            'selected_fulfillment_policy_id' => (string) ($resolution['policy_id'] ?? ''),
+            'selected_fulfillment_policy_name' => (string) ($resolution['policy_name'] ?? ''),
             'fallback_default_used' => !empty($resolution['default_used']) ? 'yes' : 'no',
+            'default_policy_used' => !empty($resolution['default_used']) ? 'yes' : 'no',
+            'missing_shipping_policy_mapping' => !empty($resolution['blocked']) || (string) ($resolution['reason'] ?? '') === 'missing_shipping_policy_mapping' ? 'yes' : 'no',
             'reason' => (string) ($resolution['reason'] ?? ''),
+            'woo_price_pln' => $priceResolution['woo_price_pln'] ?? $priceResolution['base_price_pln'] ?? null,
+            'markup_percent' => $priceResolution['markup_percent'] ?? null,
+            'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null,
+            'exchange_rate' => $priceResolution['exchange_rate'] ?? $priceResolution['nbp_rate'] ?? null,
+            'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null,
             'ebay_api_called' => false,
             'product_or_listing_modified' => false,
         ];
