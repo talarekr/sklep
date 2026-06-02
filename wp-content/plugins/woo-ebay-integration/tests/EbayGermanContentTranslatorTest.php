@@ -46,6 +46,7 @@ class WeiFakeGoogleProvider implements TranslationProviderInterface
             'Szary' => 'Grau',
             'Benzyna' => 'Benzin',
             'Typ skrzyni biegów' => 'Getriebeart',
+            'Koła napędowe' => 'Antrieb',
             'Automatyczny' => 'Automatik',
         ];
         $this->targets[] = $target;
@@ -159,9 +160,11 @@ $payload2 = $translator->refresh(10908, ['product_id' => 10908, 'title' => 'Test
     ['polish_label' => 'Stan', 'value' => 'Nowy'],
     ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Manualny'],
     ['polish_label' => 'Koła napędowe', 'value' => 'AWD'],
+    ['polish_label' => 'Koła napędowe', 'value' => 'Przód'],
+    ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Automatyczny'],
 ]], $provider2);
 $overrideValues = array_column($payload2['fields'], 'value');
-foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Allradantrieb'] as $expectedOverride) {
+foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Allradantrieb', 'Frontantrieb', 'Automatik'] as $expectedOverride) {
     if (!in_array($expectedOverride, $overrideValues, true)) {
         $failures[] = 'Expected PL -> DE override value: ' . $expectedOverride;
     }
@@ -204,12 +207,13 @@ $payload3 = $translator->refresh(20002, ['product_id' => 20002, 'title' => 'Test
     ['polish_label' => 'Pozycja kierownicy', 'value' => 'Lewa strona'],
     ['polish_label' => 'Rodzaj paliwa', 'value' => 'Benzyna'],
     ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Mechaniczna'],
+    ['polish_label' => 'Koła napędowe', 'value' => 'Przód'],
 ]], $provider3);
 if (($payload3['german_content_schema_version'] ?? '') !== EbayGermanContentTranslator::SCHEMA_VERSION || ($payload3['template_version'] ?? '') !== EbayGermanContentTranslator::TEMPLATE_VERSION) {
     $failures[] = 'Expected force regeneration/refresh payload to store current schema and template version.';
 }
 $payload3Values = array_column($payload3['fields'], 'value');
-foreach (['Schwarz', 'Vorne', 'Linkslenker', 'Benzin', 'Schaltgetriebe'] as $expectedValue) {
+foreach (['Schwarz', 'Vorne', 'Linkslenker', 'Benzin', 'Schaltgetriebe', 'Frontantrieb'] as $expectedValue) {
     if (!in_array($expectedValue, $payload3Values, true)) {
         $failures[] = 'Expected regenerated content to translate Polish spec value: ' . $expectedValue;
     }
@@ -220,6 +224,7 @@ $cached3 = $translator->cached(20002, ['product_id' => 20002, 'title' => 'Test t
     ['polish_label' => 'Pozycja kierownicy', 'value' => 'Lewa strona'],
     ['polish_label' => 'Rodzaj paliwa', 'value' => 'Benzyna'],
     ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Mechaniczna'],
+    ['polish_label' => 'Koła napędowe', 'value' => 'Przód'],
 ]]);
 if (!empty($cached3['stale']) || ($cached3['stale_reason'] ?? '') !== 'current') {
     $failures[] = 'Expected regenerated content with current schema/template/source to be current.';

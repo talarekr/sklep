@@ -2243,6 +2243,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $sameVehicleCta = (array) ($sameVehicle['metadata'] ?? []);
         $warnings = array_merge($details['warnings'], (array) ($sameVehicle['warnings'] ?? []));
 
+        $templateFieldDiagnostics = $this->german_template_field_diagnostics($details['fields']);
+        $untranslatedTemplateFields = array_values(array_filter($templateFieldDiagnostics, static fn(array $field): bool => !empty($field['warning'])));
+        foreach ($untranslatedTemplateFields as $warningField) {
+            $untranslatedFields[] = [
+                'label' => (string) ($warningField['german_label'] ?? ''),
+                'polish_label' => (string) ($warningField['polish_label'] ?? ''),
+                'value' => (string) ($warningField['value_used_in_template'] ?? ''),
+                'message' => 'Value used in the German template appears to remain in Polish.',
+            ];
+        }
+        $warnings = array_merge($warnings, array_map(static fn(array $field): array => [
+            'code' => 'untranslated_spec_values',
+            'label' => (string) ($field['german_label'] ?? ''),
+            'polish_label' => (string) ($field['polish_label'] ?? ''),
+            'value' => (string) ($field['value_used_in_template'] ?? ''),
+            'message' => 'German listing template would render an untranslated Polish specification value.',
+        ], $untranslatedTemplateFields));
+
         $specRows = $this->render_ebay_template_specification_rows($details['fields']);
 
         $buttonHtml = $this->render_ebay_same_vehicle_cta_html($sameVehicleUrl, $sameVehicleToken);
@@ -2304,12 +2322,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'translation_schema_version' => (string) ($germanContent['translation_schema_version'] ?? ''),
             'source_description_field' => (string) ($germanContent['source_description_field'] ?? $source['description_source'] ?? 'post_content'),
             'source_description_used' => $sourceDescription,
-            'stale_reasons' => (array) ($germanContent['stale_reasons'] ?? []),
-            'stale_reason' => (string) ($germanContent['stale_reason'] ?? (!empty($germanContent['stale']) ? 'old_source_hash' : 'current')),
+            'stale_reasons' => array_values(array_unique(array_merge((array) ($germanContent['stale_reasons'] ?? []), $untranslatedTemplateFields !== [] ? ['untranslated_spec_values'] : []))),
+            'stale_reason' => $untranslatedTemplateFields !== [] ? 'untranslated_spec_values' : (string) ($germanContent['stale_reason'] ?? (!empty($germanContent['stale']) ? 'old_source_hash' : 'current')),
             'translated_field_value_status' => $this->german_translated_field_value_status($details['fields'], $untranslatedFields),
+            'template_field_value_diagnostics' => $templateFieldDiagnostics,
             'source_hash' => (string) ($germanContent['source_hash'] ?? $this->ebay_german_content_translator()->source_hash($source)),
             'cached_translation_hash' => (string) ($germanContent['cached_translation_hash'] ?? $germanContent['content_hash'] ?? ''),
-            'stale' => !empty($germanContent['stale']),
+            'stale' => !empty($germanContent['stale']) || $untranslatedTemplateFields !== [],
             'google_api_called_during_regeneration' => !empty($germanContent['google_api_called']),
             'preview_called_google_api' => false,
             'translated_fields' => (array) ($germanContent['translated_fields'] ?? []),
@@ -2338,7 +2357,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $status = [];
         foreach ($fields as $field) {
             $label = (string) ($field['german_label'] ?? $field['label'] ?? $field['polish_label'] ?? '');
-            $value = (string) ($field['value'] ?? '');
+            $value = $this->template_field_value($field);
             $status[] = [
                 'label' => $label,
                 'value' => $value,
@@ -2533,8 +2552,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
             $fullMapping[] = $row;
             if ($value !== '') {
-                $fields[] = $row + ['value' => $value];
-                $used[] = $row + ['value' => $value];
+                $fields[] = $row + ['value' => $value, 'source_value' => $value];
+                $used[] = $row + ['value' => $value, 'source_value' => $value];
             } else {
                 $missing[] = $row;
             }
@@ -2592,6 +2611,39 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $warnings;
     }
 
+
+    private function template_field_value(array $field): string
+    {
+        foreach (['translated_value', 'value', 'source_value'] as $key) {
+            $value = $this->clean_template_value((string) ($field[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
+    }
+
+    private function german_template_field_diagnostics(array $fields): array
+    {
+        $diagnostics = [];
+        $polishPattern = '/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|diesel|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        foreach ($fields as $field) {
+            $sourceValue = $this->clean_template_value((string) ($field['source_value'] ?? $field['value'] ?? ''));
+            $translatedValue = $this->clean_template_value((string) ($field['translated_value'] ?? ''));
+            $valueUsed = $this->template_field_value($field);
+            $warning = $valueUsed !== '' && preg_match($polishPattern, $valueUsed) ? 'untranslated_spec_values' : '';
+            $diagnostics[] = [
+                'polish_label' => (string) ($field['polish_label'] ?? $field['source_label'] ?? ''),
+                'german_label' => (string) ($field['german_label'] ?? $field['label'] ?? ''),
+                'source_value' => $sourceValue,
+                'translated_value' => $translatedValue,
+                'value_used_in_template' => $valueUsed,
+                'warning' => $warning,
+            ];
+        }
+        return $diagnostics;
+    }
+
     private function fallback_product_details_rows(int $productId): array
     {
         $rows = [];
@@ -2620,7 +2672,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function normalize_template_label(string $label): string
     {
-        $label = remove_accents($label);
+        if (function_exists('remove_accents')) {
+            $label = remove_accents($label);
+        } else {
+            $label = strtr($label, ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z', 'Ą' => 'A', 'Ć' => 'C', 'Ę' => 'E', 'Ł' => 'L', 'Ń' => 'N', 'Ó' => 'O', 'Ś' => 'S', 'Ź' => 'Z', 'Ż' => 'Z']);
+        }
         $label = function_exists('mb_strtolower') ? mb_strtolower($label) : strtolower($label);
         return preg_replace('/[^a-z0-9]+/u', '', $label) ?: '';
     }
@@ -2672,7 +2728,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $seenLabels = [];
         foreach ($fields as $field) {
             $label = (string) ($field['german_label'] ?? '');
-            $value = (string) ($field['value'] ?? '');
+            $value = $this->template_field_value($field);
             $normalizedLabel = $this->normalize_template_label($label);
             if ($normalizedLabel === '' || $normalizedLabel === 'zustand' || isset($seenLabels[$normalizedLabel])) {
                 continue;
@@ -3024,6 +3080,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'stale_reasons' => (array) ($preview['stale_reasons'] ?? []),
                 'stale_reason' => (string) ($preview['stale_reason'] ?? 'current'),
                 'translated_field_value_status' => (array) ($preview['translated_field_value_status'] ?? []),
+                'template_field_value_diagnostics' => (array) ($preview['template_field_value_diagnostics'] ?? []),
                 'source_hash' => (string) ($preview['source_hash'] ?? ''),
                 'cached_translation_hash' => (string) ($preview['cached_translation_hash'] ?? ''),
                 'stale' => !empty($preview['stale']),
@@ -3164,17 +3221,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private static function german_content_schema_version(): string
     {
-        return defined(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') : '2026-06-new-ebay-template-v2';
+        return defined(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::SCHEMA_VERSION') : '2026-06-new-ebay-template-v3';
     }
 
     private static function german_content_template_version(): string
     {
-        return defined(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') : 'ebay-de-product-card-template-v2';
+        return defined(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TEMPLATE_VERSION') : 'ebay-de-product-card-template-v3';
     }
 
     private static function german_translation_schema_version(): string
     {
-        return defined(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v2';
+        return defined(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayGermanContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v3';
     }
 
     private function ebay_german_content_source($product, int $productId, array $aspectsSource = []): array

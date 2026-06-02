@@ -3270,6 +3270,7 @@ class AdminPage
             'stale_reason' => (string) ($res['stale_reason'] ?? ''),
             'stale_reasons' => (array) ($res['stale_reasons'] ?? []),
             'translated_field_value_status' => (array) ($res['translated_field_value_status'] ?? []),
+            'template_field_value_diagnostics' => (array) ($res['template_field_value_diagnostics'] ?? []),
             'source_hash' => (string) ($res['source_hash'] ?? ''),
             'cached_translation_hash' => (string) ($res['cached_translation_hash'] ?? ''),
             'stale' => !empty($res['stale']),
@@ -3293,6 +3294,7 @@ class AdminPage
             'warnings' => (array) ($res['warnings'] ?? []),
             'safety' => (array) ($res['safety'] ?? []),
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
+        echo '<h2>Template field value diagnostics</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['template_field_value_diagnostics'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Used fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['used_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Missing fields</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['missing_fields'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
         echo '<h2>Field mapping</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode((array) ($res['field_mapping'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre>';
