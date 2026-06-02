@@ -5,6 +5,7 @@ declare(strict_types=1);
 $root = dirname(__DIR__);
 $view = file_get_contents($root . '/views/admin-page.php');
 $admin = file_get_contents($root . '/src/Services/AdminPage.php');
+$adapter = file_get_contents($root . '/src/Adapters/EbayAdapter.php');
 $failures = [];
 
 $assertContains = static function (string $haystack, string $needle, string $label) use (&$failures): void {
@@ -27,7 +28,7 @@ $categories = $section($view, 'data-wei-module="ebay-categories"', 'data-wei-mod
 $publish = $section($view, 'data-wei-module="publish"', '<summary>Advanced / Debug');
 $advanced = $section($view, '<summary>Advanced / Debug');
 
-foreach (['1. German Content', 'Generate / refresh German content for all products', 'Generate / refresh stale German content only', 'Preview German listing template'] as $needle) {
+foreach (['1. German Content', 'Generate / refresh German content for one product', 'Product ID / SKU', 'Generate / refresh German content for this product', 'Generate / refresh German content for all products', 'Generate / refresh stale German content only', 'Preview German listing template'] as $needle) {
     $assertContains($german, $needle, 'German Content module');
 }
 foreach (['called_ebay_api' => 'false', 'updated_ebay_listing' => 'false', 'wei_generate_german_content_batch'] as $needle => $expected) {
@@ -68,6 +69,33 @@ $guardBlock = $notReadyPos === false ? '' : substr($admin, $notReadyPos, 600);
 $assertContains($guardBlock, 'continue;', 'Publish batch skips not_ready before publish');
 $assertContains($guardBlock, "'_wei_ebay_last_sync_status', 'not_ready'", 'Publish batch records not_ready reason');
 
+
+$singleStart = strpos($adapter, 'public function generate_german_content_meta_only_for_identifier');
+$singleBlock = $singleStart === false ? '' : substr($adapter, $singleStart, 6000);
+foreach ([
+    'resolve_product_by_id_or_sku($identifier)' => 'single refresh resolves product ID or SKU',
+    'generate_german_content_meta_only($productId, $forceRefresh)' => 'single refresh delegates to current schema/template generator',
+    "'source_description_field'" => 'single summary includes source description field',
+    "'source_description_used'" => 'single summary includes source description used',
+    "'schema_version'" => 'single summary includes schema version',
+    "'title_generated'" => 'single summary includes generated title',
+    "'description_generated'" => 'single summary includes generated description',
+    "'translated_fields_count'" => 'single summary includes translated fields count',
+    "'google_api_called'" => 'single summary includes Google API called flag',
+    "'called_ebay_api' => false" => 'single refresh never calls eBay API',
+    "'updated_ebay_listing' => false" => 'single refresh never updates active listings',
+] as $needle => $label) {
+    $assertContains($singleBlock, $needle, $label);
+}
+foreach (['createOrReplaceInventoryItem', 'publishOffer', 'revise', 'updateOffer'] as $forbiddenWrite) {
+    if (str_contains($singleBlock, $forbiddenWrite)) {
+        $failures[] = 'Single German content refresh must not include eBay/listing write call: ' . $forbiddenWrite;
+    }
+}
+
+$assertContains($admin, "add_action('admin_post_wei_generate_german_content_single'", 'German content single hook');
+$assertContains($admin, 'generate_german_content_meta_only_for_identifier($input, true)', 'German content single forces explicit refresh');
+$assertContains($admin, 'Preview German listing template for this product', 'German content single preview convenience');
 $assertContains($admin, "add_action('admin_post_wei_generate_german_content_batch'", 'German content batch hook');
 $assertContains($admin, 'called_ebay_api' . "' => false", 'German content batch no eBay API flag');
 $assertContains($admin, 'updated_ebay_listing' . "' => false", 'German content batch no listing update flag');

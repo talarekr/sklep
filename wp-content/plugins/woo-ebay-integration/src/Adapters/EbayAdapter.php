@@ -2760,6 +2760,96 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $marketplaceId === 'EBAY_DE' && !empty($settings['enable_ebay_de_description_template']);
     }
 
+    public function generate_german_content_meta_only_for_identifier(string $productOrSku, bool $forceRefresh = true): array
+    {
+        $identifier = trim($productOrSku);
+        $safety = [
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+            'modified_woo_product' => false,
+            'ebay_api_calls' => false,
+            'published' => false,
+            'offer_write_calls' => false,
+        ];
+
+        if ($identifier === '') {
+            return array_merge([
+                'result' => 'error',
+                'product_id' => 0,
+                'sku' => '',
+                'product_title' => '',
+                'generated' => 'no',
+                'stale_before' => false,
+                'stale_reasons' => [],
+                'source_description_field' => '',
+                'source_description_used' => '',
+                'schema_version' => self::german_content_schema_version(),
+                'title_generated' => '',
+                'description_generated' => '',
+                'translated_fields_count' => 0,
+                'errors' => ['missing_input'],
+                'google_api_called' => false,
+            ], $safety);
+        }
+
+        $resolved = $this->resolve_product_by_id_or_sku($identifier);
+        $productId = (int) ($resolved['product_id'] ?? 0);
+        $product = $resolved['product'] ?? null;
+        if ($productId <= 0 || !$product) {
+            return array_merge([
+                'result' => 'error',
+                'product_id' => $productId,
+                'sku' => '',
+                'product_title' => '',
+                'generated' => 'no',
+                'stale_before' => false,
+                'stale_reasons' => [],
+                'source_description_field' => '',
+                'source_description_used' => '',
+                'schema_version' => self::german_content_schema_version(),
+                'title_generated' => '',
+                'description_generated' => '',
+                'translated_fields_count' => 0,
+                'errors' => ['product_not_found'],
+                'google_api_called' => false,
+            ], $safety);
+        }
+
+        $source = $this->ebay_german_content_source($product, $productId);
+        $result = $this->generate_german_content_meta_only($productId, $forceRefresh);
+        $errors = [];
+        if (($result['result'] ?? '') === 'error') {
+            $errors[] = (string) (($result['reason'] ?? '') ?: ($result['error_message'] ?? 'generation_failed'));
+        }
+        $title = (string) ($result['translated_title'] ?? get_post_meta($productId, EbayGermanContentTranslator::META_TITLE, true));
+        $description = (string) get_post_meta($productId, EbayGermanContentTranslator::META_DESCRIPTION, true);
+        if ($description === '') {
+            $description = (string) ($result['translated_description_preview'] ?? '');
+        }
+        $schemaVersion = (string) (($result['stored_schema_version'] ?? '') ?: ($result['current_schema_version'] ?? self::german_content_schema_version()));
+
+        return array_merge($result, [
+            'product_id' => $productId,
+            'sku' => method_exists($product, 'get_sku') ? (string) $product->get_sku() : '',
+            'product_title' => method_exists($product, 'get_name') ? (string) $product->get_name() : '',
+            'generated' => in_array((string) ($result['result'] ?? ''), ['success', 'generated'], true) ? 'yes' : 'no',
+            'stale_before' => !empty($result['stale_before']),
+            'stale_reasons' => (array) ($result['stale_reasons'] ?? []),
+            'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
+            'source_description_used' => (string) ($source['description'] ?? ''),
+            'schema_version' => $schemaVersion,
+            'title_generated' => $title,
+            'description_generated' => $description,
+            'translated_fields_count' => (int) ($result['translated_fields_count'] ?? 0),
+            'translated_fields_count_label' => 'translated_fields count',
+            'errors' => $errors,
+            'google_api_called' => !empty($result['google_api_called']),
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+        ], $safety);
+    }
+
     private function resolve_product_by_id_or_sku(string $identifier): array
     {
         $productId = ctype_digit($identifier) ? (int) $identifier : 0;
