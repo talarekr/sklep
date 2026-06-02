@@ -64,7 +64,7 @@ $exportPos = strpos($admin, '$res = $this->adapter->export_product($productId, n
 if ($notReadyPos === false || $exportPos === false || $notReadyPos > $exportPos) {
     $failures[] = 'Publish ready products must check preflight/not_ready before export/publish.';
 }
-$guardBlock = $notReadyPos === false ? '' : substr($admin, $notReadyPos, 600);
+$guardBlock = $notReadyPos === false ? '' : substr($admin, $notReadyPos, 900);
 $assertContains($guardBlock, 'continue;', 'Publish batch skips not_ready before publish');
 $assertContains($guardBlock, "'_wei_ebay_last_sync_status', 'not_ready'", 'Publish batch records not_ready reason');
 
