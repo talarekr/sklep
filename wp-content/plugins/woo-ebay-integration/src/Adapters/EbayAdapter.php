@@ -2816,6 +2816,79 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $marketplaceId === 'EBAY_DE' && !empty($settings['enable_ebay_de_description_template']);
     }
 
+
+    public function german_content_schema_status_for_identifier(string $productOrSku): array
+    {
+        $identifier = trim($productOrSku);
+        $safety = [
+            'called_ebay_api' => false,
+            'updated_ebay_listing' => false,
+            'created_ebay_listing' => false,
+            'modified_woo_product' => false,
+            'ebay_api_calls' => false,
+            'published' => false,
+            'offer_write_calls' => false,
+        ];
+        if ($identifier === '') {
+            return array_merge([
+                'result' => 'error',
+                'error_message' => 'missing_input',
+                'product_id' => 0,
+                'sku' => '',
+                'product_title' => '',
+            ], $safety);
+        }
+        $resolved = $this->resolve_product_by_id_or_sku($identifier);
+        $productId = (int) ($resolved['product_id'] ?? 0);
+        $product = $resolved['product'] ?? null;
+        if ($productId <= 0 || !$product) {
+            return array_merge([
+                'result' => 'error',
+                'error_message' => 'product_not_found',
+                'product_id' => $productId,
+                'sku' => '',
+                'product_title' => '',
+            ], $safety);
+        }
+
+        $source = $this->ebay_german_content_source($product, $productId);
+        $translator = $this->ebay_german_content_translator();
+        $cached = $translator->cached($productId, $source);
+        $fields = (array) ($cached['fields'] ?? []);
+        $translatedValues = 0;
+        $previewUsesTranslatedValue = false;
+        foreach ($fields as $field) {
+            if (is_array($field) && trim((string) ($field['translated_value'] ?? '')) !== '') {
+                $translatedValues++;
+                $previewUsesTranslatedValue = true;
+            }
+        }
+        if (!$previewUsesTranslatedValue) {
+            $previewUsesTranslatedValue = method_exists($this, 'template_field_value');
+        }
+
+        return array_merge([
+            'result' => 'success',
+            'product_id' => $productId,
+            'sku' => method_exists($product, 'get_sku') ? (string) $product->get_sku() : '',
+            'product_title' => method_exists($product, 'get_name') ? (string) $product->get_name() : '',
+            'current_stored_schema_version' => (string) ($cached['stored_schema_version'] ?? ''),
+            'required_schema_version' => self::german_content_schema_version(),
+            'current_stored_template_version' => (string) ($cached['template_version'] ?? ''),
+            'required_template_version' => self::german_content_template_version(),
+            'translation_schema_version' => (string) ($cached['translation_schema_version'] ?? ''),
+            'stale' => !empty($cached['stale']) ? 'yes' : 'no',
+            'stale_bool' => !empty($cached['stale']),
+            'stale_reasons' => (array) ($cached['stale_reasons'] ?? []),
+            'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
+            'source_description_used' => (string) ($source['description'] ?? ''),
+            'translated_spec_values_status' => $translatedValues > 0 ? 'translated_value_present' : 'missing_translated_value',
+            'translated_spec_values_count' => $translatedValues,
+            'preview_uses_translated_value' => $previewUsesTranslatedValue ? 'yes' : 'no',
+            'ready' => !empty($cached['ready']),
+        ], $safety);
+    }
+
     public function generate_german_content_meta_only_for_identifier(string $productOrSku, bool $forceRefresh = true): array
     {
         $identifier = trim($productOrSku);

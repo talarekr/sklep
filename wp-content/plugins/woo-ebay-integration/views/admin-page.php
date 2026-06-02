@@ -584,6 +584,21 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
     <div class="wei-box" data-wei-module="german-content">
         <h2>1. German Content</h2>
         <p class="description">Generate German title, description, listing template data, Spezifikationen and Artikelmerkmale for eBay.de. These actions write only local German-content meta and do not call eBay APIs.</p>
+        <p class="notice notice-warning" style="padding:8px 12px;"><strong>This updates local German content only. It does not update active eBay listings.</strong></p>
+        <?php $germanMigration = is_array($german_content_audit_summary ?? null) ? $german_content_audit_summary : []; ?>
+        <div class="wei-grid">
+            <div class="wei-card"><span>Migration status</span><strong><?php echo !empty($germanMigration['migration_run_id']) ? (!empty($germanMigration['complete']) ? 'COMPLETE' : 'IN PROGRESS') : 'Not started'; ?></strong></div>
+            <div class="wei-card"><span>Processed / total</span><strong><?php echo esc_html((string) ((int) ($germanMigration['processed_total'] ?? 0)) . ' / ' . (string) ((int) ($germanMigration['total_target_products'] ?? 0))); ?></strong></div>
+            <div class="wei-card"><span>Remaining</span><strong><?php echo esc_html((string) ($germanMigration['remaining_products'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Regenerated total</span><strong><?php echo esc_html((string) ($germanMigration['regenerated_total'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Already current schema</span><strong><?php echo esc_html((string) ($germanMigration['already_current_schema_total'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Migration errors</span><strong><?php echo esc_html((string) ($germanMigration['errors_total'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Current schema version</span><strong><?php echo esc_html((string) ($germanMigration['schema_version'] ?? \WEI\Services\EbayGermanContentTranslator::SCHEMA_VERSION)); ?></strong></div>
+            <div class="wei-card"><span>Target schema version</span><strong><?php echo esc_html(\WEI\Services\EbayGermanContentTranslator::SCHEMA_VERSION); ?></strong></div>
+        </div>
+        <?php if (!empty($germanMigration['complete'])): ?>
+            <p class="notice notice-success" style="padding:8px 12px;">German content schema migration complete: <?php echo esc_html((string) ($germanMigration['processed_total'] ?? 0)); ?> / <?php echo esc_html((string) ($germanMigration['total_target_products'] ?? 0)); ?> products processed.</p>
+        <?php endif; ?>
         <div class="wei-grid">
             <div class="wei-card"><span>Translation provider</span><strong><?php echo esc_html($translationLabel); ?></strong></div>
             <div class="wei-card"><span>Last processed</span><strong><?php echo esc_html((string) ($german_content_audit_summary['processed'] ?? '-')); ?></strong></div>
@@ -623,6 +638,23 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <label><input type="checkbox" name="include_excluded_from_ebay" value="1" /> Include excluded_from_ebay products</label>
                 <button class="button button-secondary">Force regenerate all German content with current template/schema</button>
             </form>
+            <?php if (!empty($germanMigration['migration_run_id']) && empty($germanMigration['complete'])): ?>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_german_content_batch'); ?>
+                <input type="hidden" name="action" value="wei_generate_german_content_batch" />
+                <input type="hidden" name="mode" value="force_current_schema" />
+                <input type="hidden" name="continue_migration" value="1" />
+                <label>Batch size <input type="number" min="1" max="200" name="batch_size" value="<?php echo esc_attr((string) ($germanMigration['batch_size'] ?? 50)); ?>" /></label>
+                <button class="button button-primary">Continue German content schema migration</button>
+            </form>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_german_content_schema_diagnostic'); ?>
+                <input type="hidden" name="action" value="wei_german_content_schema_diagnostic" />
+                <strong>German content schema status diagnostic</strong>
+                <label>Product ID / SKU <input type="text" name="product_or_sku" placeholder="Woo product ID or SKU" required /></label>
+                <button class="button">Check German content schema status</button>
+            </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_description_template_preview'); ?>
                 <input type="hidden" name="action" value="wei_description_template_preview" />
@@ -630,7 +662,40 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <button class="button">Preview German listing template</button>
             </form>
         </div>
-        <details><summary>German Content last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['processed_total' => (int) ($german_content_audit_summary['processed_total'] ?? $german_content_audit_summary['processed'] ?? 0), 'processed' => (int) ($german_content_audit_summary['processed'] ?? 0), 'regenerated' => (int) ($german_content_audit_summary['regenerated'] ?? $german_content_audit_summary['generated'] ?? 0), 'generated' => (int) ($german_content_audit_summary['generated'] ?? 0), 'already_current_schema' => (int) ($german_content_audit_summary['already_current_schema'] ?? 0), 'already_fresh' => (int) ($german_content_audit_summary['already_ready'] ?? $german_content_audit_summary['already_fresh'] ?? 0), 'stale_fixed' => (int) ($german_content_audit_summary['stale_fixed'] ?? 0), 'errors' => (int) ($german_content_audit_summary['failed'] ?? $german_content_audit_summary['errors'] ?? 0), 'google_api_called' => !empty($german_content_audit_summary['google_api_called']), 'called_ebay_api' => false, 'updated_ebay_listing' => false, 'report_url' => (string) ($german_content_audit_summary['reports']['csv']['url'] ?? '')], 4000)); ?></pre></details>
+        <?php if (!empty($germanMigration['reports'])): ?>
+            <p><strong>German content migration CSV reports:</strong>
+            <?php foreach ((array) $germanMigration['reports'] as $report): $reportPath = is_array($report) ? (string) ($report['path'] ?? '') : ''; if ($reportPath === '') continue; ?>
+                <a class="button" href="<?php echo esc_url(admin_url('admin-post.php?action=download_wei_report&file=' . rawurlencode(basename($reportPath)))); ?>"><?php echo esc_html(basename($reportPath)); ?></a>
+            <?php endforeach; ?>
+            </p>
+        <?php endif; ?>
+        <?php $sampleProducts = array_slice((array) ($germanMigration['sample_products'] ?? []), 0, 20); ?>
+        <?php if ($sampleProducts !== []): ?>
+            <details open><summary>Last German content migration batch sample (max 20 products)</summary>
+                <table class="widefat striped">
+                    <thead><tr><th>Product ID</th><th>SKU</th><th>Title</th><th>Regenerated</th><th>Stale before</th><th>Stale after</th><th>Stale reasons</th><th>Old schema</th><th>New schema</th><th>Source field</th><th>Preview</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($sampleProducts as $sample): $sample = is_array($sample) ? $sample : []; ?>
+                        <tr>
+                            <td><?php echo esc_html((string) ($sample['product_id'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['sku'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['product_title'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['regenerated'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['stale_before'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['stale_after'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['stale_reasons'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['old_schema_version'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['new_schema_version'] ?? '')); ?></td>
+                            <td><?php echo esc_html((string) ($sample['source_description_field'] ?? '')); ?></td>
+                            <td><?php $previewUrl = (string) ($sample['preview_url'] ?? ''); if ($previewUrl !== ''): ?><a class="button button-small" href="<?php echo esc_url($previewUrl); ?>">Preview</a><?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <p class="description">Displayed product IDs and samples are capped; use the full CSV reports for the complete migration run.</p>
+            </details>
+        <?php endif; ?>
+        <details><summary>German Content last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(array_merge(['processed_total' => (int) ($german_content_audit_summary['processed_total'] ?? $german_content_audit_summary['processed'] ?? 0), 'processed' => (int) ($german_content_audit_summary['processed'] ?? 0), 'regenerated' => (int) ($german_content_audit_summary['regenerated_total'] ?? $german_content_audit_summary['regenerated'] ?? $german_content_audit_summary['generated'] ?? 0), 'generated' => (int) ($german_content_audit_summary['generated'] ?? 0), 'already_current_schema' => (int) ($german_content_audit_summary['already_current_schema_total'] ?? $german_content_audit_summary['already_current_schema'] ?? 0), 'already_fresh' => (int) ($german_content_audit_summary['already_ready'] ?? $german_content_audit_summary['already_fresh'] ?? 0), 'stale_fixed' => (int) ($german_content_audit_summary['stale_fixed_total'] ?? $german_content_audit_summary['stale_fixed'] ?? 0), 'errors' => (int) ($german_content_audit_summary['errors_total'] ?? $german_content_audit_summary['failed'] ?? $german_content_audit_summary['errors'] ?? 0), 'google_api_called' => !empty($german_content_audit_summary['google_api_called']), 'called_ebay_api' => false, 'updated_ebay_listing' => false], $germanMigration), 4000)); ?></pre></details>
     </div>
 
     <div class="wei-box" data-wei-module="ebay-categories">
