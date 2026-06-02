@@ -17,7 +17,7 @@ $assert(str_contains($adminSource, "add_action('admin_post_wei_vehicle_compatibi
 $assert(str_contains($adminSource, "add_action('admin_post_wei_run_vehicle_compatibility_audit'"), 'Batch vehicle compatibility audit admin hook must be registered.');
 $assert(str_contains($viewSource, 'Vehicle compatibility diagnostics'), 'Admin must render vehicle compatibility diagnostics block outside Kategorie eBay.');
 $categoryStart = strpos($viewSource, 'data-wei-module="ebay-categories"');
-$categoryEnd = strpos($viewSource, 'data-wei-module="publish"', $categoryStart === false ? 0 : $categoryStart);
+$categoryEnd = strpos($viewSource, 'data-wei-module="ebay-settings"', $categoryStart === false ? 0 : $categoryStart);
 $categorySection = $categoryStart === false ? '' : substr($viewSource, $categoryStart, $categoryEnd === false ? null : $categoryEnd - $categoryStart);
 $assert(!str_contains($categorySection, 'Run vehicle compatibility readiness audit'), 'Kategorie eBay module must stay focused on category mapping and not expose vehicle audit controls.');
 $assert(str_contains($viewSource, 'name="action" value="wei_run_vehicle_compatibility_audit"'), 'Batch audit button must submit dedicated action.');

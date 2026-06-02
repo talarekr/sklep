@@ -23,19 +23,27 @@ $section = static function (string $html, string $start, string $end = ''): stri
     return substr($html, $startPos, $endPos === false ? null : $endPos - $startPos);
 };
 
+$publish = $section($view, 'data-wei-module="publish"', 'data-wei-module="german-content"');
 $german = $section($view, 'data-wei-module="german-content"', 'data-wei-module="ebay-categories"');
-$categories = $section($view, 'data-wei-module="ebay-categories"', 'data-wei-module="publish"');
-$publish = $section($view, 'data-wei-module="publish"', '<summary>Advanced / Debug');
+$categories = $section($view, 'data-wei-module="ebay-categories"', 'data-wei-module="ebay-settings"');
 $advanced = $section($view, '<summary>Advanced / Debug');
 
-foreach (['1. German Content', 'Generate / refresh German content for one product', 'Product ID / SKU', 'Generate / refresh German content for this product', 'Generate / refresh German content for all products', 'Generate / refresh stale German content only', 'Preview German listing template'] as $needle) {
+$publishPos = strpos($view, 'data-wei-module="publish"');
+$germanPos = strpos($view, 'data-wei-module="german-content"');
+$categoriesPos = strpos($view, 'data-wei-module="ebay-categories"');
+$settingsPos = strpos($view, 'data-wei-module="ebay-settings"');
+if ($publishPos === false || $germanPos === false || $categoriesPos === false || $settingsPos === false || !($publishPos < $germanPos && $germanPos < $categoriesPos && $categoriesPos < $settingsPos)) {
+    $failures[] = 'Admin module order must be Publish, German Content, Kategorie eBay, then Ustawienia eBay.';
+}
+
+foreach (['2. German Content', 'Generate / refresh German content for one product', 'Product ID / SKU', 'Generate / refresh German content for this product', 'Generate / refresh German content for all products', 'Generate / refresh stale German content only', 'Preview German listing template'] as $needle) {
     $assertContains($german, $needle, 'German Content module');
 }
 foreach (['called_ebay_api' => 'false', 'updated_ebay_listing' => 'false', 'wei_generate_german_content_batch'] as $needle => $expected) {
     $assertContains($german, is_string($needle) ? $needle : $expected, 'German Content safety summary');
 }
 
-foreach (['2. Kategorie eBay', 'Section 1 — Status / Audyt', 'Section 2 — Ręczne mapowanie kategoriami', 'Section 3 — Diagnostyka mappingu', 'Section 4 — Automatyczne sugestie / legacy tools', 'Section 5 — Ovoko / Supplier import, future', 'Run category readiness audit', 'Generate category-mapping-worklist.csv', 'Import filled category-mapping-worklist.csv', 'Generate blocked category fix report'] as $needle) {
+foreach (['3. Kategorie eBay', 'Section 1 — Status / Audyt', 'Section 2 — Ręczne mapowanie kategoriami', 'Section 3 — Diagnostyka mappingu', 'Section 4 — Automatyczne sugestie / legacy tools', 'Section 5 — Ovoko / Supplier import, future', 'Run category readiness audit', 'Generate category-mapping-worklist.csv', 'Import filled category-mapping-worklist.csv', 'Generate blocked category fix report'] as $needle) {
     $assertContains($categories, $needle, 'Kategorie eBay module');
 }
 foreach (['Generate all eBay.de category suggestions', 'Auto category mapping', 'Debug batch 50', 'Debug continue batch', 'Resetuj progress sugestii'] as $debugNeedle) {
@@ -50,7 +58,7 @@ foreach (['wei_export_product', 'wei_publish_product_offer_only', 'wei_sync_stoc
     }
 }
 
-foreach (['3. Publish', 'Run readiness scan', 'Export ready products to eBay', 'Publish ready offers', 'Publish ready products', 'Resetuj postęp publikacji', 'Refresh eBay listing state'] as $needle) {
+foreach (['1. Publish', 'Run readiness scan', 'Export ready products to eBay', 'Publish ready offers', 'Publish ready products', 'Resetuj postęp publikacji', 'Refresh eBay listing state'] as $needle) {
     $assertContains($publish, $needle, 'Publish module');
 }
 foreach (['Inspect offer before publish', 'Manual publish offer only', 'Export single product', 'Regenerate German content for one product', 'OAuth', 'Product sync status rows', 'Raw logs'] as $debugNeedle) {

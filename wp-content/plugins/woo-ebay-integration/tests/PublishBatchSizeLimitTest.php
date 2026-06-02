@@ -26,7 +26,7 @@ $methodBlock = static function (string $source, string $signature): string {
 };
 
 $publishSectionStart = strpos($viewSource, 'data-wei-module="publish"');
-$publishSectionEnd = $publishSectionStart === false ? false : strpos($viewSource, '<summary>Advanced / Debug', $publishSectionStart);
+$publishSectionEnd = $publishSectionStart === false ? false : strpos($viewSource, 'data-wei-module="german-content"', $publishSectionStart);
 $publishSection = $publishSectionStart === false ? '' : substr($viewSource, $publishSectionStart, $publishSectionEnd === false ? null : $publishSectionEnd - $publishSectionStart);
 
 foreach ([
@@ -44,15 +44,20 @@ foreach ([
     'name="action" value="wei_ebay_initial_publish_batch"' => 'Publish ready offers form missing action.',
     'name="action" value="wei_publish_ready_products"' => 'Publish ready products form missing action.',
     'min="1" max="300" name="batch_size" value="20"' => 'Export ready products batch-size input must allow 1 through 300 and keep default 20.',
-    'min="1" max="300" name="batch_size" value="5"' => 'Publish batch-size inputs must allow 1 through 300 and keep default 5.',
+    'min="1" max="300" name="batch_size" value="5"' => 'Publish ready offers batch-size input must allow 1 through 300 and keep default 5.',
+    'min="1" max="300" name="batch_size" value="50"' => 'Publish ready products batch-size input must allow 1 through 300 and default to 50.',
 ] as $needle => $message) {
     $assert(str_contains($publishSection, $needle), $message);
 }
 
-$assert(substr_count($publishSection, 'min="1" max="300" name="batch_size" value="5"') >= 2, 'Both publish-ready offers and publish-ready products inputs must allow 300 while keeping default 5.');
+$assert(substr_count($publishSection, 'min="1" max="300" name="batch_size" value="5"') >= 1, 'Publish-ready offers input must allow 300 while keeping default 5.');
+$publishReadyProductsFormStart = strpos($publishSection, 'name="action" value="wei_publish_ready_products"');
+$publishReadyProductsForm = $publishReadyProductsFormStart === false ? '' : substr($publishSection, $publishReadyProductsFormStart, 500);
+$assert(str_contains($publishReadyProductsForm, 'min="1" max="300" name="batch_size" value="50"'), 'Publish ready products input must default to 50 while remaining manually editable and capped at 300.');
 $assert(str_contains($viewSource, 'id="wei-export-batch-size" type="number" min="1" max="300"'), 'Saved export batch-size setting input must allow up to 300.');
 $assert(!str_contains($publishSection, 'max="50" name="batch_size" value="20"'), 'Export ready products input must no longer cap batch size at 50.');
-$assert(!str_contains($publishSection, 'max="50" name="batch_size" value="5"'), 'Publish ready inputs must no longer cap batch size at 50.');
+$assert(!str_contains($publishSection, 'max="50" name="batch_size" value="5"'), 'Publish ready offers input must no longer cap batch size at 50.');
+$assert(!str_contains($publishSection, 'max="50" name="batch_size" value="50"'), 'Publish ready products input must no longer cap batch size at 50.');
 
 foreach ([
     'public function auto_sync_export_now()' => ['run_export_batch($batchSize)', "publish_action_batch_size_from_post('batch_size', 20)"],
