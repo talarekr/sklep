@@ -260,6 +260,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $product = wc_get_product($variation_id ?: $product_id);
         if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
 
+        $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+        if (!empty($stockGuard['blocked'])) {
+            return $this->stock_guard_skip_response($product_id, $variation_id, $stockGuard, 'export_preflight');
+        }
+
         $exclusion = $this->ebay_publish_exclusion($product_id);
         if (!empty($exclusion['excluded'])) {
             $preflight = $this->excluded_from_ebay_preflight($product_id, $exclusion);
@@ -284,10 +289,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return ['result' => 'error', 'error' => $preflight['status'], 'message' => $preflight['message'], 'details' => $preflight];
         }
 
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+        $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+        if (!empty($stockGuard['blocked'])) {
+            return $this->stock_guard_skip_response($product_id, $variation_id, $stockGuard, 'export_inventory_pre_api');
+        }
+
         $descriptionResolution = $this->resolve_inventory_item_description($product, $product_id, $content, $aspects, $category, $settings, $marketplaceId);
         $listingDescriptionResolution = $this->resolve_offer_listing_description($product, $product_id, $content, $aspects, $category, $settings, $marketplaceId);
         $itemPayload = [
-            'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
+            'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $stockGuard['stock_quantity'])]],
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
@@ -361,7 +373,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'categoryId' => $categoryId,
             'listingPolicies' => $listingPolicies,
             'format' => 'FIXED_PRICE',
-            'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
+            'availableQuantity' => max(0, (int) $stockGuard['stock_quantity']),
             'listingDuration' => 'GTC',
             'pricingSummary' => ['price' => ['value' => (string) $priceValue, 'currency' => $priceCurrency]],
         ];
@@ -449,6 +461,14 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ]), $product_id, $sku);
         }
 
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+        $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+        if (!empty($stockGuard['blocked'])) {
+            return $this->stock_guard_skip_response($product_id, $variation_id, $stockGuard, 'export_offer_pre_api', $sku);
+        }
+        $offerPayload['availableQuantity'] = max(0, (int) $stockGuard['stock_quantity']);
+
         $this->log_shipping_policy_change_state($offer_id, $product_id, $sku, $marketplaceId, $shippingPolicyResolution);
 
         $this->logger->info('eBay offer payload before updateOffer', [
@@ -502,6 +522,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'wrote_allegro' => false,
             ]);
         } else {
+            $product = wc_get_product($variation_id ?: $product_id);
+            if (!$product) return ['result' => 'error', 'error' => 'product_not_found'];
+            $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+            if (!empty($stockGuard['blocked'])) {
+                return $this->stock_guard_skip_response($product_id, $variation_id, $stockGuard, 'publish_offer_pre_api', $sku);
+            }
             $published = $this->client->publish_offer($offer_id, [
                 'stage' => 'publishOffer',
                 'product_id' => $product_id,
@@ -910,6 +936,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $offerInspection = $this->inspect_offer_before_publish($product_id, $variation_id, $offerId, $sku, $marketplaceId);
         $baseResult['inspect_offer_before_publish'] = $offerInspection;
 
+        $product = wc_get_product($variation_id ?: $product_id);
+        if (!$product) {
+            return array_merge($baseResult, ['status' => 'not_ready', 'message' => 'Product not found.']);
+        }
+        $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+        if (!empty($stockGuard['blocked'])) {
+            $result = array_merge($baseResult, $this->stock_guard_result_fields($product_id, $variation_id, $stockGuard, 'manual_publish_pre_api', $sku));
+            $this->record_manual_publish_result($product_id, $metaProductId, $result);
+            $this->logger->warning('Skipped product because stock is not available', $result);
+            return $result;
+        }
+
         $published = $this->client->publish_offer($offerId, [
             'stage' => 'manualPublishOfferOnly',
             'product_id' => $product_id,
@@ -1196,6 +1234,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : $this->resolve_ebay_sku($product, $product_id, $variation_id, $settings);
         $sku = (string) ($skuResolution['sku'] ?? $mapping['sku'] ?? get_post_meta($metaProductId, '_wei_ebay_sku', true));
+        $stockGuard = $this->stock_availability_guard($product, $product_id, $variation_id);
+        if (!empty($stockGuard['blocked'])) {
+            return $this->stock_guard_result_fields($product_id, $variation_id, $stockGuard, 'verify_api_publishing_readiness', $sku);
+        }
         $category = is_array($preflight['category'] ?? null) ? $preflight['category'] : [];
         $categoryId = (string) ($category['category_id'] ?? '');
         $aspects = is_array($preflight['aspects'] ?? null) ? $preflight['aspects'] : [];
@@ -1218,7 +1260,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'returnPolicyId' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
         ];
         $inventoryPayload = [
-            'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $product->get_stock_quantity())]],
+            'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $stockGuard['stock_quantity'])]],
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => (string) ($content['title'] ?? ''),
@@ -1234,7 +1276,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'categoryId' => $categoryId,
             'listingPolicies' => $listingPolicies,
             'format' => 'FIXED_PRICE',
-            'availableQuantity' => max(0, (int) $product->get_stock_quantity()),
+            'availableQuantity' => max(0, (int) $stockGuard['stock_quantity']),
             'listingDuration' => 'GTC',
             'pricingSummary' => ['price' => ['value' => (string) $priceValue, 'currency' => $this->offer_currency($marketplaceId)]],
         ];
@@ -3683,6 +3725,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $missingAspects = array_values(array_unique($missingAspects));
         }
         $priceResolution = $this->resolve_price($product, $product_id, $settings);
+        $stockGuard = $this->stock_availability_guard($product, $product_id, null);
         if ($this->verbose_debug_enabled($settings) && !$this->suppressVerboseLogs) {
             $this->logger->info('Resolved eBay category for preflight/export', [
                 'product_id' => $product_id,
@@ -3735,7 +3778,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
         if (empty($priceResolution['ready'])) { $priceError = (string) ($priceResolution['error'] ?? 'invalid_price'); $errors[] = $priceError === 'missing_exchange_rate' ? 'NBP EUR exchange rate missing' : 'price invalid'; $status = $priceError === 'missing_exchange_rate' ? 'missing_exchange_rate' : 'invalid_price'; }
-        if ((int) $product->get_stock_quantity() < 0) $errors[] = 'stock invalid';
+        if (!empty($stockGuard['blocked'])) { $errors[] = (string) ($stockGuard['stock_block_reason'] ?? 'stock_unavailable'); $status = 'blocked_by_stock'; }
         if (!$product->get_image_id()) $errors[] = 'image missing';
 
         $ready = $errors === [];
@@ -3747,9 +3790,97 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'stock_quantity' => $stockGuard['stock_quantity'], 'stock_status' => $stockGuard['stock_status'], 'manage_stock' => $stockGuard['manage_stock'], 'purchasable' => $stockGuard['purchasable'], 'ovoko_status' => $stockGuard['ovoko_status'], 'stock_block_reason' => $stockGuard['stock_block_reason'], 'stock_guard' => $stockGuard, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
+
+    private function stock_availability_guard($product, int $productId, ?int $variationId = null): array
+    {
+        $metaProductId = $variationId ?: (is_object($product) && method_exists($product, 'get_id') ? (int) $product->get_id() : $productId);
+        $stockQuantityRaw = is_object($product) && method_exists($product, 'get_stock_quantity') ? $product->get_stock_quantity() : get_post_meta($metaProductId, '_stock', true);
+        $stockQuantity = $stockQuantityRaw === null || $stockQuantityRaw === '' ? null : (int) $stockQuantityRaw;
+        $stockStatus = is_object($product) && method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : (string) get_post_meta($metaProductId, '_stock_status', true);
+        $manageStock = is_object($product) && method_exists($product, 'get_manage_stock') ? (bool) $product->get_manage_stock() : ((string) get_post_meta($metaProductId, '_manage_stock', true) === 'yes');
+        $purchasable = is_object($product) && method_exists($product, 'is_purchasable') ? (bool) $product->is_purchasable() : true;
+        $ovoko = $this->ovoko_status_guard($productId, $metaProductId);
+        $reason = '';
+
+        if (!empty($ovoko['blocked'])) {
+            $reason = 'ovoko_sold_or_unavailable';
+        } elseif ($stockQuantity === null) {
+            $reason = 'missing_stock_quantity';
+        } elseif ($stockQuantity <= 0) {
+            $reason = 'stock_quantity_zero';
+        } elseif ($stockStatus === 'outofstock') {
+            $reason = 'stock_status_outofstock';
+        } elseif (!$purchasable) {
+            $reason = 'product_not_purchasable';
+        }
+
+        return [
+            'blocked' => $reason !== '',
+            'stock_quantity' => $stockQuantity,
+            'stock_status' => $stockStatus,
+            'manage_stock' => $manageStock ? 'yes' : 'no',
+            'purchasable' => $purchasable ? 'yes' : 'no',
+            'ovoko_status' => (string) ($ovoko['ovoko_status'] ?? ''),
+            'stock_block_reason' => $reason,
+            'product_id' => $productId,
+            'variation_id' => $variationId,
+            'meta_product_id' => $metaProductId,
+        ];
+    }
+
+    private function ovoko_status_guard(int $productId, int $metaProductId): array
+    {
+        $keys = ['_ovoko_status', 'ovoko_status', 'ovoko_sale_sync_status', '_ovoko_availability', 'ovoko_availability', '_ovoko_sold', 'ovoko_sold', 'is_sold', '_sold', '_availability'];
+        $blockedValues = ['sold', 'sprzedany', 'kupiony', 'deleted', 'removed', 'inactive', 'unavailable', 'reserved', 'rezerwacja', 'not_available', 'outofstock', 'out_of_stock', '0', 'false', 'no'];
+        foreach (array_values(array_unique([$metaProductId, $productId])) as $id) {
+            foreach ($keys as $key) {
+                $raw = get_post_meta($id, $key, true);
+                if ($raw === '' || $raw === null) {
+                    continue;
+                }
+                $value = strtolower(trim((string) $raw));
+                if (in_array($value, $blockedValues, true) || (str_contains($key, 'sold') && in_array($value, ['1', 'true', 'yes', 'y'], true))) {
+                    return ['blocked' => true, 'ovoko_status' => (string) $raw, 'meta_key' => $key];
+                }
+            }
+        }
+        return ['blocked' => false, 'ovoko_status' => ''];
+    }
+
+    private function stock_guard_result_fields(int $productId, ?int $variationId, array $stockGuard, string $stage, string $sku = ''): array
+    {
+        return [
+            'result' => 'skipped',
+            'error' => 'blocked_by_stock',
+            'status' => 'blocked_by_stock',
+            'message' => 'Skipped product because stock is not available',
+            'product_id' => $productId,
+            'variation_id' => $variationId,
+            'sku' => $sku,
+            'stock_quantity' => $stockGuard['stock_quantity'],
+            'stock_status' => $stockGuard['stock_status'],
+            'manage_stock' => $stockGuard['manage_stock'],
+            'purchasable' => $stockGuard['purchasable'],
+            'ovoko_status' => $stockGuard['ovoko_status'],
+            'stock_block_reason' => $stockGuard['stock_block_reason'],
+            'stage' => $stage,
+            'preflight' => ['ready' => false, 'status' => 'blocked_by_stock'] + $stockGuard,
+        ];
+    }
+
+    private function stock_guard_skip_response(int $productId, ?int $variationId, array $stockGuard, string $stage, string $sku = ''): array
+    {
+        $result = $this->stock_guard_result_fields($productId, $variationId, $stockGuard, $stage, $sku);
+        update_post_meta($productId, '_wei_ebay_export_status', 'blocked_by_stock');
+        update_post_meta($productId, '_wei_ebay_readiness_reason', (string) $stockGuard['stock_block_reason']);
+        update_post_meta($productId, '_wei_ebay_last_sync_status', 'skipped_stock_unavailable');
+        update_post_meta($productId, '_wei_ebay_last_sync_error', 'Skipped product because stock is not available');
+        $this->logger->warning('Skipped product because stock is not available', $result);
+        return $result;
+    }
 
     private function part_number_readiness_diagnostics($product, int $productId, string $sku, array $content, array $aspects, array $category, array $settings, array $requiredAspects): array
     {

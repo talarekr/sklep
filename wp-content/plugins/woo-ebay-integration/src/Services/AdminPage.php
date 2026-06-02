@@ -2146,8 +2146,8 @@ class AdminPage
 
                 $stockReason = $this->initial_publish_stock_not_ready_reason($productId);
                 if ($stockReason !== '') {
-                    $summary['other'] = (int) ($summary['other'] ?? 0) + 1;
-                    $this->save_initial_publish_readiness_reason($productId, 'other', $stockReason);
+                    $summary['blocked_by_stock'] = (int) ($summary['blocked_by_stock'] ?? 0) + 1;
+                    $this->save_initial_publish_readiness_reason($productId, 'blocked_by_stock', $stockReason);
                     continue;
                 }
 
@@ -2198,6 +2198,7 @@ class AdminPage
         $summary['skipped_reasons'] = [
             'already_published' => (int) ($summary['already_published'] ?? 0),
             'blocked_by_category' => (int) ($summary['blocked_by_category'] ?? 0),
+            'blocked_by_stock' => (int) ($summary['blocked_by_stock'] ?? 0),
             'missing_aspects' => (int) ($summary['missing_aspects'] ?? 0),
             'content_not_ready' => (int) ($summary['content_not_ready'] ?? 0),
             'price_not_ready' => (int) ($summary['price_not_ready'] ?? 0),
@@ -2223,6 +2224,7 @@ class AdminPage
             'ready' => 0,
             'already_published' => 0,
             'blocked_by_category' => 0,
+            'blocked_by_stock' => 0,
             'missing_aspects' => 0,
             'content_not_ready' => 0,
             'price_not_ready' => 0,
@@ -2273,7 +2275,7 @@ class AdminPage
 
     private function save_initial_publish_readiness_reason(int $productId, string $reason, string $message): void
     {
-        $reason = in_array($reason, ['ready', 'blocked_by_category', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'excluded_from_ebay', 'excluded_no_woo_category', 'excluded_bez_kategorii', 'already_published', 'other'], true) ? $reason : 'other';
+        $reason = in_array($reason, ['ready', 'blocked_by_category', 'blocked_by_stock', 'missing_aspects', 'content_not_ready', 'price_not_ready', 'excluded_from_ebay', 'excluded_no_woo_category', 'excluded_bez_kategorii', 'already_published', 'other'], true) ? $reason : 'other';
         if ($reason !== 'ready') {
             $exportStatus = in_array($reason, ['excluded_no_woo_category', 'excluded_bez_kategorii'], true) ? 'excluded_from_ebay' : $reason;
             update_post_meta($productId, '_wei_ebay_export_status', $exportStatus);
@@ -2293,6 +2295,9 @@ class AdminPage
         $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
         if ($status === 'excluded_from_ebay') {
             return 'excluded_from_ebay';
+        }
+        if ($status === 'blocked_by_stock' || (string) ($preflight['stock_block_reason'] ?? '') !== '' || str_contains($message, 'stock_quantity_zero') || str_contains($message, 'stock_status_outofstock') || str_contains($message, 'product_not_purchasable') || str_contains($message, 'ovoko_sold_or_unavailable') || str_contains($message, 'missing_stock_quantity')) {
+            return 'blocked_by_stock';
         }
         if (in_array($status, ['needs_category_review', 'low_confidence_auto', 'category_sanity_failed', 'taxonomy_api_forbidden', 'suggestion_failed', 'unmapped'], true)) {
             return 'blocked_by_category';
@@ -2317,11 +2322,17 @@ class AdminPage
         }
         $stockStatus = method_exists($product, 'get_stock_status') ? (string) $product->get_stock_status() : '';
         if ($stockStatus === 'outofstock') {
-            return 'Product stock status is outofstock.';
+            return 'stock_status_outofstock';
         }
         $stockQuantity = $product->get_stock_quantity();
-        if ($stockQuantity !== null && (int) $stockQuantity < 0) {
-            return 'Product stock quantity is invalid.';
+        if ($stockQuantity === null || $stockQuantity === '') {
+            return 'missing_stock_quantity';
+        }
+        if ((int) $stockQuantity <= 0) {
+            return 'stock_quantity_zero';
+        }
+        if (method_exists($product, 'is_purchasable') && !$product->is_purchasable()) {
+            return 'product_not_purchasable';
         }
         return '';
     }
@@ -2344,6 +2355,9 @@ class AdminPage
         }
         if ($status === 'blocked_by_category' || $status === 'missing_category') {
             return 'blocked_by_category';
+        }
+        if ($status === 'blocked_by_stock') {
+            return 'blocked_by_stock';
         }
         if ($status === 'missing_required_aspects' || $status === 'missing_aspects') {
             return 'missing_aspects';
@@ -2461,6 +2475,7 @@ class AdminPage
         $skipSummary = [
             'skipped_not_ready' => 0,
             'blocked_by_category' => 0,
+            'blocked_by_stock' => 0,
             'stale_german_content' => 0,
             'missing_required_aspects' => 0,
             'missing_image' => 0,
@@ -2561,6 +2576,11 @@ class AdminPage
         $message = strtolower((string) ($preflight['message'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($preflight['errors'] ?? []))));
         if ($status === 'excluded_from_ebay') {
             $summary['excluded_from_ebay'] = (int) ($summary['excluded_from_ebay'] ?? 0) + 1;
+            return;
+        }
+        if ($status === 'blocked_by_stock' || str_contains($message, 'stock_quantity_zero') || str_contains($message, 'stock_status_outofstock') || str_contains($message, 'product_not_purchasable') || str_contains($message, 'ovoko_sold_or_unavailable') || str_contains($message, 'missing_stock_quantity')) {
+            $summary['blocked_by_stock'] = (int) ($summary['blocked_by_stock'] ?? 0) + 1;
+            $summary['missing_stock'] = (int) ($summary['missing_stock'] ?? 0) + 1;
             return;
         }
         if ($status === 'blocked_by_category' || $status === 'missing_category' || str_contains($message, 'category')) {
