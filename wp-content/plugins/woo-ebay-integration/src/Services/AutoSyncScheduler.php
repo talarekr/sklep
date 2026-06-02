@@ -277,9 +277,6 @@ class AutoSyncScheduler
         update_option(self::FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION, $state, false);
         update_option('wei_ebay_readiness_summary', $summary, false);
         update_option('wei_ebay_publish_readiness_audit_summary', $summary, false);
-        if (!empty($summary['complete']) || (string) ($summary['status'] ?? '') === 'completed') {
-            update_option('wei_ebay_last_completed_readiness_summary', $summary, false);
-        }
         $this->logger->info(!empty($summary['complete']) ? 'eBay full publish readiness audit completed' : 'eBay full publish readiness audit batch completed', $this->readiness_log_context($summary) + [
             'processed_this_batch' => $processedThisBatch,
             'processed_total' => (int) $summary['processed_total'],
@@ -1782,28 +1779,18 @@ class AutoSyncScheduler
             return ['result' => 'skipped', 'reason' => 'auto_export_disabled', 'skipped' => 0, 'exported' => 0, 'published' => 0, 'errors' => 0];
         }
         $ids = $this->product_ids_by_export_status('ready', $batchSize);
-        $summary = ['result' => 'success', 'exported' => 0, 'published' => 0, 'skipped' => 0, 'errors' => 0, 'processed_this_run' => 0, 'success_this_run' => 0, 'failed_this_run' => 0, 'skipped_this_run' => 0, 'remaining_after_run' => 0, 'batch_size' => $batchSize, 'error_items' => []];
+        $summary = ['result' => 'success', 'exported' => 0, 'published' => 0, 'skipped' => 0, 'errors' => 0];
         foreach ($ids as $productId) {
-            $summary['processed_this_run']++;
             update_post_meta($productId, '_wei_ebay_export_status', 'queued_for_export');
             $res = $this->adapter->export_product($productId);
             if (($res['result'] ?? '') === 'success') {
                 $summary['exported']++;
-                $summary['success_this_run']++;
                 $status = (string) get_post_meta($productId, '_wei_ebay_export_status', true);
                 if ($status === 'published') {
                     $summary['published']++;
                 }
-            } elseif (($res['result'] ?? '') === 'skipped') {
-                $summary['skipped']++;
-                $summary['skipped_this_run']++;
             } else {
                 $summary['errors']++;
-                $summary['failed_this_run']++;
-                $errorMessage = (string) ($res['message'] ?? $res['error'] ?? 'export_error');
-                $errorStage = (string) ($res['stage'] ?? 'export');
-                $summary['error_items'][] = ['product_id' => (int) $productId, 'sku' => (string) get_post_meta((int) $productId, '_wei_ebay_sku', true), 'offer_id' => (string) get_post_meta((int) $productId, '_wei_ebay_offer_id', true), 'listing_id' => (string) get_post_meta((int) $productId, '_wei_ebay_listing_id', true), 'error_stage' => $errorStage, 'error_message' => $errorMessage, 'status' => 'export_error'];
-                update_post_meta($productId, '_wei_ebay_last_error_stage', $errorStage);
                 if (($res['stage'] ?? '') === 'publishOffer' && $this->is_account_restriction_result($res)) {
                     update_post_meta($productId, '_wei_ebay_export_status', 'publish_blocked_account');
                     $summary['status'] = 'blocked_by_ebay_account_restriction';
@@ -1811,10 +1798,9 @@ class AutoSyncScheduler
                     break;
                 }
                 update_post_meta($productId, '_wei_ebay_export_status', 'export_error');
-                update_post_meta($productId, '_wei_ebay_last_preflight_error', $errorMessage);
+                update_post_meta($productId, '_wei_ebay_last_preflight_error', (string) ($res['message'] ?? $res['error'] ?? 'export_error'));
             }
         }
-        $summary['remaining_after_run'] = count($this->product_ids_by_export_status('ready', $batchSize));
         update_option('wei_ebay_export_summary', $summary + ['last_run' => gmdate('Y-m-d H:i:s')], false);
         return $summary;
     }
