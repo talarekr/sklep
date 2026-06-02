@@ -167,6 +167,64 @@ foreach (['Linkslenker', 'Weiß', 'Silber', 'Neu', 'Schaltgetriebe', 'Allradantr
     }
 }
 
+
+// Stale detection for legacy German content caches generated under older source/template rules.
+$GLOBALS['wei_test_meta'] = [];
+$currentHash = $translator->source_hash($source);
+update_post_meta(20001, EbayGermanContentTranslator::META_HASH, $currentHash);
+update_post_meta(20001, EbayGermanContentTranslator::META_PAYLOAD, [
+    'title' => 'Alter Titel',
+    'description' => 'Hallo, das Angebot gilt für ein altes Allegro Angebot. TEIL IN FUNKTIONSFÄHIGEM ZUSTAND.',
+    'fields' => [
+        ['german_label' => 'Farbe', 'value' => 'Czarny'],
+        ['german_label' => 'Einbauposition', 'value' => 'Przód'],
+        ['german_label' => 'Lenkradposition', 'value' => 'Lewa strona'],
+        ['german_label' => 'Kraftstoffart', 'value' => 'Benzyna'],
+        ['german_label' => 'Getriebeart', 'value' => 'Mechaniczna'],
+    ],
+    'aspects' => [],
+    'source_hash' => $currentHash,
+    'translation_source' => 'legacy_cache',
+]);
+$legacyCached = $translator->cached(20001, $source);
+foreach (['old_schema_version', 'old_template_version', 'old_allegro_description_marker', 'untranslated_spec_values'] as $expectedReason) {
+    if (!in_array($expectedReason, $legacyCached['stale_reasons'] ?? [], true)) {
+        $failures[] = 'Expected legacy cached content to be stale because of ' . $expectedReason;
+    }
+}
+if (empty($legacyCached['stale'])) {
+    $failures[] = 'Expected old cached content without schema version and old Allegro markers to be stale.';
+}
+
+$GLOBALS['wei_test_meta'] = [];
+$provider3 = new WeiFakeGoogleProvider();
+$payload3 = $translator->refresh(20002, ['product_id' => 20002, 'title' => 'Test title', 'description' => 'Opis produktu Woo', 'description_source' => 'post_content', 'fields' => [
+    ['polish_label' => 'Kolor', 'value' => 'Czarny'],
+    ['polish_label' => 'Pozycja', 'value' => 'Przód'],
+    ['polish_label' => 'Pozycja kierownicy', 'value' => 'Lewa strona'],
+    ['polish_label' => 'Rodzaj paliwa', 'value' => 'Benzyna'],
+    ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Mechaniczna'],
+]], $provider3);
+if (($payload3['german_content_schema_version'] ?? '') !== EbayGermanContentTranslator::SCHEMA_VERSION || ($payload3['template_version'] ?? '') !== EbayGermanContentTranslator::TEMPLATE_VERSION) {
+    $failures[] = 'Expected force regeneration/refresh payload to store current schema and template version.';
+}
+$payload3Values = array_column($payload3['fields'], 'value');
+foreach (['Schwarz', 'Vorne', 'Linkslenker', 'Benzin', 'Schaltgetriebe'] as $expectedValue) {
+    if (!in_array($expectedValue, $payload3Values, true)) {
+        $failures[] = 'Expected regenerated content to translate Polish spec value: ' . $expectedValue;
+    }
+}
+$cached3 = $translator->cached(20002, ['product_id' => 20002, 'title' => 'Test title', 'description' => 'Opis produktu Woo', 'description_source' => 'post_content', 'fields' => [
+    ['polish_label' => 'Kolor', 'value' => 'Czarny'],
+    ['polish_label' => 'Pozycja', 'value' => 'Przód'],
+    ['polish_label' => 'Pozycja kierownicy', 'value' => 'Lewa strona'],
+    ['polish_label' => 'Rodzaj paliwa', 'value' => 'Benzyna'],
+    ['polish_label' => 'Typ skrzyni biegów', 'value' => 'Mechaniczna'],
+]]);
+if (!empty($cached3['stale']) || ($cached3['stale_reason'] ?? '') !== 'current') {
+    $failures[] = 'Expected regenerated content with current schema/template/source to be current.';
+}
+
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
     exit(1);

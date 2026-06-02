@@ -607,6 +607,15 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <label>Batch size <input type="number" min="1" max="200" name="batch_size" value="50" /></label>
                 <button class="button">Generate / refresh stale German content only</button>
             </form>
+
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_generate_german_content_batch'); ?>
+                <input type="hidden" name="action" value="wei_generate_german_content_batch" />
+                <input type="hidden" name="mode" value="force_current_schema" />
+                <label>Batch size <input type="number" min="1" max="200" name="batch_size" value="50" /></label>
+                <label><input type="checkbox" name="include_excluded_from_ebay" value="1" /> Include excluded_from_ebay products</label>
+                <button class="button button-secondary">Force regenerate all German content with current template/schema</button>
+            </form>
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_description_template_preview'); ?>
                 <input type="hidden" name="action" value="wei_description_template_preview" />
@@ -614,7 +623,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <button class="button">Preview German listing template</button>
             </form>
         </div>
-        <details><summary>German Content last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['processed' => (int) ($german_content_audit_summary['processed'] ?? 0), 'generated' => (int) ($german_content_audit_summary['generated'] ?? 0), 'already_fresh' => (int) ($german_content_audit_summary['already_ready'] ?? $german_content_audit_summary['already_fresh'] ?? 0), 'stale_fixed' => (int) ($german_content_audit_summary['stale_fixed'] ?? 0), 'errors' => (int) ($german_content_audit_summary['failed'] ?? $german_content_audit_summary['errors'] ?? 0), 'google_api_called' => !empty($german_content_audit_summary['google_api_called']), 'called_ebay_api' => false, 'updated_ebay_listing' => false, 'report_url' => (string) ($german_content_audit_summary['reports']['csv']['url'] ?? '')], 4000)); ?></pre></details>
+        <details><summary>German Content last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['processed_total' => (int) ($german_content_audit_summary['processed_total'] ?? $german_content_audit_summary['processed'] ?? 0), 'processed' => (int) ($german_content_audit_summary['processed'] ?? 0), 'regenerated' => (int) ($german_content_audit_summary['regenerated'] ?? $german_content_audit_summary['generated'] ?? 0), 'generated' => (int) ($german_content_audit_summary['generated'] ?? 0), 'already_current_schema' => (int) ($german_content_audit_summary['already_current_schema'] ?? 0), 'already_fresh' => (int) ($german_content_audit_summary['already_ready'] ?? $german_content_audit_summary['already_fresh'] ?? 0), 'stale_fixed' => (int) ($german_content_audit_summary['stale_fixed'] ?? 0), 'errors' => (int) ($german_content_audit_summary['failed'] ?? $german_content_audit_summary['errors'] ?? 0), 'google_api_called' => !empty($german_content_audit_summary['google_api_called']), 'called_ebay_api' => false, 'updated_ebay_listing' => false, 'report_url' => (string) ($german_content_audit_summary['reports']['csv']['url'] ?? '')], 4000)); ?></pre></details>
     </div>
 
     <div class="wei-box" data-wei-module="ebay-categories">
