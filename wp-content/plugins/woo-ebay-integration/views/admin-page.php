@@ -59,7 +59,7 @@ $findPolicyName = static function (array $policies, string $id, string $idKey): 
         }
     }
 
-    return $id;
+    return '';
 };
 $renderFulfillmentPolicyControl = static function (string $field, string $selectedId, string $manualId, string $placeholder) use ($fulfillmentPolicies): void {
     $selectedId = trim($selectedId);
@@ -88,7 +88,42 @@ $renderFulfillmentPolicyControl = static function (string $field, string $select
     </select>
     <input type="hidden" name="<?php echo esc_attr($field . '_existing'); ?>" value="<?php echo esc_attr($selectedId); ?>" />
     <input class="regular-text" name="<?php echo esc_attr($field . '_manual'); ?>" value="<?php echo esc_attr($manualValue); ?>" placeholder="or paste exact fulfillment policy ID" />
-    <?php if ($selectedId !== '' && !$idInCachedPolicies): ?><span class="description">Current saved ID: <code><?php echo esc_html($selectedId); ?></code> (not in cached policy list)</span><?php endif; ?>
+    <?php if ($selectedId !== ''): ?><span class="description">Current saved ID: <code><?php echo esc_html($selectedId); ?></code><?php if (!$idInCachedPolicies): ?> (not in cached policy list)<?php endif; ?></span><?php endif; ?>
+    <?php
+};
+
+
+$renderBusinessPolicyControl = static function (string $field, string $selectedId, array $policies, string $idKey, string $placeholder, string $currentName = ''): void {
+    $selectedId = trim($selectedId);
+    $idInCachedPolicies = false;
+    $cachedName = '';
+    foreach ($policies as $policy) {
+        if ((string) ($policy[$idKey] ?? '') === $selectedId) {
+            $idInCachedPolicies = true;
+            $cachedName = (string) ($policy['name'] ?? '');
+            break;
+        }
+    }
+    $displayName = trim($currentName) !== '' ? trim($currentName) : $cachedName;
+    ?>
+    <select name="<?php echo esc_attr($field); ?>">
+        <option value=""><?php echo esc_html($placeholder); ?></option>
+        <?php foreach ($policies as $policy): ?>
+            <?php
+            $policyId = (string) ($policy[$idKey] ?? '');
+            if ($policyId === '') {
+                continue;
+            }
+            $policyName = (string) ($policy['name'] ?? $policyId);
+            $label = $policyName . ' — ' . $policyId;
+            ?>
+            <option value="<?php echo esc_attr($policyId); ?>" <?php selected($selectedId, $policyId); ?>><?php echo esc_html($label); ?></option>
+        <?php endforeach; ?>
+    </select>
+    <input type="hidden" name="<?php echo esc_attr($field . '_existing'); ?>" value="<?php echo esc_attr($selectedId); ?>" />
+    <input class="regular-text" name="<?php echo esc_attr($field . '_manual'); ?>" value="" placeholder="or paste exact policy ID" />
+    <?php if ($selectedId !== ''): ?><span class="description">Current saved ID: <code><?php echo esc_html($selectedId); ?></code><?php if (!$idInCachedPolicies): ?> (not in cached policy list)<?php endif; ?></span><?php endif; ?>
+    <?php if ($displayName !== ''): ?><br /><span class="description">Current saved name: <code><?php echo esc_html($displayName); ?></code></span><?php endif; ?>
     <?php
 };
 $locationKey = (string) ($s['inventory_location_key'] ?? 'gpswiss-pl');
@@ -96,11 +131,13 @@ $fulfillmentId = (string) ($s['ebay_fulfillment_policy_id'] ?? '');
 $fulfillmentId30 = (string) ($s['shipping_policy_30'] ?? $s['fulfillment_policy_id_30_eur'] ?? $fulfillmentId);
 $fulfillmentId50 = (string) ($s['shipping_policy_50'] ?? $s['fulfillment_policy_id_50_eur'] ?? '');
 $fulfillmentId130 = (string) ($s['shipping_policy_130'] ?? $s['fulfillment_policy_id_130_eur'] ?? '');
-$defaultShippingPolicyId = (string) ($s['default_shipping_policy_id'] ?? '');
+$defaultShippingPolicyId = (string) ($s['default_shipping_policy_id'] ?? $s['default_shipping_policy'] ?? '');
 $shippingMappingWarnings = get_option('wei_ebay_shipping_mapping_warnings', []);
 $shippingMappingWarnings = is_array($shippingMappingWarnings) ? $shippingMappingWarnings : [];
 $paymentId = (string) ($s['ebay_payment_policy_id'] ?? '');
+$paymentName = (string) (($s['ebay_payment_policy_name'] ?? '') ?: $findPolicyName($paymentPolicies, $paymentId, 'paymentPolicyId'));
 $returnId = (string) ($s['ebay_return_policy_id'] ?? '');
+$returnName = (string) (($s['ebay_return_policy_name'] ?? '') ?: $findPolicyName($returnPolicies, $returnId, 'returnPolicyId'));
 $accountSetupConfigured = $locationKey !== '' && $fulfillmentId30 !== '' && $fulfillmentId50 !== '' && $fulfillmentId130 !== '' && $paymentId !== '' && $returnId !== '';
 
 $provider = (string) ($s['translation_provider'] ?? 'disabled');
@@ -834,7 +871,7 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                     <th><label for="wei-visible-shipping-category-ids-30">Wysyłka 30</label></th>
                     <td>
                         <textarea id="wei-visible-shipping-category-ids-30" class="large-text code" rows="2" name="shipping_category_ids_30" placeholder="Woo product_cat IDs, e.g. 5063,5066"><?php echo esc_textarea((string) ($s['shipping_category_ids_30'] ?? '')); ?></textarea>
-                        <p><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select existing Wysyłka 30 euro fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_30" value="<?php echo esc_attr((string) ($s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /></p>
+                        <p><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select existing Wysyłka 30 euro fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_30_name" value="<?php echo esc_attr((string) ($s['shipping_policy_30_name'] ?? $s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /></p>
                     </td>
                 </tr>
                 <tr>
@@ -854,11 +891,54 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                 <tr>
                     <th><label for="wei-visible-default-shipping-policy">Default shipping policy</label></th>
                     <td>
-                        <?php $renderFulfillmentPolicyControl('default_shipping_policy_id', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input id="wei-visible-default-shipping-policy" class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" />
+                        <?php $renderFulfillmentPolicyControl('default_shipping_policy', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input id="wei-visible-default-shipping-policy" class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" />
                         <p class="description">Used only if no configured Woo category ID matches this product.</p>
                     </td>
                 </tr>
             </table>
+        <div class="wei-box">
+            <h3>SECTION C — Business policies</h3>
+            <p class="description">Use existing eBay Business Policies only. Saving this form does not create policies and does not call the eBay API.</p>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th><label for="wei-payment-policy">Payment policy</label></th>
+                    <td>
+                        <?php $renderBusinessPolicyControl('ebay_payment_policy_id', $paymentId, $paymentPolicies, 'paymentPolicyId', 'Select existing payment policy', $paymentName); ?>
+                        <input type="hidden" name="ebay_payment_policy_name" value="<?php echo esc_attr($paymentName); ?>" />
+                        <p class="description">Manual ID fallback supports <code>259264220013</code> when cached policies are unavailable.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="wei-return-policy">Return policy</label></th>
+                    <td>
+                        <?php $renderBusinessPolicyControl('ebay_return_policy_id', $returnId, $returnPolicies, 'returnPolicyId', 'Select existing return policy', $returnName); ?>
+                        <input type="hidden" name="ebay_return_policy_name" value="<?php echo esc_attr($returnName); ?>" />
+                        <p class="description">Manual ID fallback supports <code>259264151013</code> when cached policies are unavailable.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Fulfillment / shipping policy diagnostic summary</th>
+                    <td>
+                        <p class="description">Fulfillment policy is resolved by the Woo category shipping mapping.</p>
+                        <ul>
+                            <li>shipping_30 policy ID: <code><?php echo esc_html($fulfillmentId30 !== '' ? $fulfillmentId30 : 'not configured'); ?></code></li>
+                            <li>shipping_50 policy ID: <code><?php echo esc_html($fulfillmentId50 !== '' ? $fulfillmentId50 : 'not configured'); ?></code></li>
+                            <li>shipping_130 policy ID: <code><?php echo esc_html($fulfillmentId130 !== '' ? $fulfillmentId130 : 'not configured'); ?></code></li>
+                            <li>default fulfillment policy ID: <code><?php echo esc_html($defaultShippingPolicyId !== '' ? $defaultShippingPolicyId : 'not configured'); ?></code></li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="wei-business-merchant-location-key">Merchant location key</label></th>
+                    <td>
+                        <input id="wei-business-merchant-location-key" class="regular-text" name="inventory_location_key" value="<?php echo esc_attr($locationKey); ?>" />
+                        <p class="description">Current saved value: <code><?php echo esc_html($locationKey !== '' ? $locationKey : 'not configured'); ?></code></p>
+                        <p class="description">Required by eBay Inventory API offer creation.</p>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
             <p><button class="button button-primary">Save eBay settings</button></p>
         </form>
 
@@ -938,15 +1018,14 @@ $sectionLayout = ['Dashboard / Status', 'German Content', 'Kategorie eBay', 'Pub
                     <tr><th><label for="wei-marketplace-id">Marketplace</label></th><td><input id="wei-marketplace-id" class="regular-text" name="marketplace_id" value="<?php echo esc_attr((string) $setting('marketplace_id', 'EBAY_DE')); ?>" placeholder="EBAY_DE" /></td></tr>
                     <tr><th><label for="wei-location-key">Merchant location key</label></th><td><input id="wei-location-key" class="regular-text" name="inventory_location_key" value="<?php echo esc_attr((string) $setting('inventory_location_key', 'gpswiss-pl')); ?>" /></td></tr>
                     <tr><th colspan="2"><h3>eBay shipping category mapping</h3><p class="description">Paste Woo <code>product_cat</code> IDs, not eBay category IDs. Select existing eBay fulfillment policies only; this plugin does not create shipping policies. Conflicts are allowed but warned; runtime priority is Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30.</p></th></tr>
-                    <tr><th><label for="wei-shipping-policy-30">Wysyłka 30 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select exact Wysyłka 30 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_30" value="<?php echo esc_attr((string) ($s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Choose the exact existing eBay fulfillment policy; duplicate names are disambiguated by policy ID.</p></td></tr>
+                    <tr><th><label for="wei-shipping-policy-30">Wysyłka 30 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_30', $fulfillmentId30, $fulfillmentId30, 'Select exact Wysyłka 30 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_30_name" value="<?php echo esc_attr((string) ($s['shipping_policy_30_name'] ?? $s['shipping_policy_name_30'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Choose the exact existing eBay fulfillment policy; duplicate names are disambiguated by policy ID.</p></td></tr>
                     <tr><th><label for="wei-shipping-policy-50">Wysyłka 50 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_50', $fulfillmentId50, $fulfillmentId50, 'Select exact Wysyłka 50 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_50" value="<?php echo esc_attr((string) ($s['shipping_policy_name_50'] ?? '')); ?>" placeholder="optional policy name" /></td></tr>
                     <tr><th><label for="wei-shipping-policy-130">Wysyłka 130 policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('shipping_policy_130', $fulfillmentId130, $fulfillmentId130, 'Select exact Wysyłka 130 fulfillment policy'); ?> <input class="regular-text" name="shipping_policy_name_130" value="<?php echo esc_attr((string) ($s['shipping_policy_name_130'] ?? '')); ?>" placeholder="optional policy name" /></td></tr>
-                    <tr><th><label for="wei-default-shipping-policy">Default shipping policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('default_shipping_policy_id', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Used only when no Woo category ID matches any shipping group.</p></td></tr>
+                    <tr><th><label for="wei-default-shipping-policy">Default shipping policy ID/name</label></th><td><?php $renderFulfillmentPolicyControl('default_shipping_policy', $defaultShippingPolicyId, $defaultShippingPolicyId, 'Select optional default fulfillment policy'); ?> <input class="regular-text" name="default_shipping_policy_name" value="<?php echo esc_attr((string) ($s['default_shipping_policy_name'] ?? '')); ?>" placeholder="optional policy name" /><p class="description">Used only when no Woo category ID matches any shipping group.</p></td></tr>
                     <tr><th><label for="wei-shipping-category-ids-30">Wysyłka 30</label></th><td><textarea id="wei-shipping-category-ids-30" class="large-text code" rows="2" name="shipping_category_ids_30" placeholder="5063,5066,5069,5122"><?php echo esc_textarea((string) ($s['shipping_category_ids_30'] ?? '')); ?></textarea></td></tr>
                     <tr><th><label for="wei-shipping-category-ids-50">Wysyłka 50</label></th><td><textarea id="wei-shipping-category-ids-50" class="large-text code" rows="2" name="shipping_category_ids_50"><?php echo esc_textarea((string) ($s['shipping_category_ids_50'] ?? '')); ?></textarea></td></tr>
                     <tr><th><label for="wei-shipping-category-ids-130">Wysyłka 130</label></th><td><textarea id="wei-shipping-category-ids-130" class="large-text code" rows="2" name="shipping_category_ids_130"><?php echo esc_textarea((string) ($s['shipping_category_ids_130'] ?? '')); ?></textarea></td></tr>
-                    <tr><th><label for="wei-payment-policy">Payment policy ID</label></th><td><input id="wei-payment-policy" class="regular-text" name="ebay_payment_policy_id" value="<?php echo esc_attr($paymentId); ?>" /></td></tr>
-                    <tr><th><label for="wei-return-policy">Return policy ID</label></th><td><input id="wei-return-policy" class="regular-text" name="ebay_return_policy_id" value="<?php echo esc_attr($returnId); ?>" /></td></tr>
+                    <tr><th>Business policies</th><td><span class="description">Payment, return, fulfillment and merchant location settings are managed in SECTION C — Business policies above.</span></td></tr>
                     <tr><th><label for="wei-markup">Default markup %</label></th><td><input id="wei-markup" type="number" step="0.01" name="ebay_default_markup_percent" value="<?php echo esc_attr((string) $setting('ebay_default_markup_percent', 25)); ?>" /></td></tr>
                     <tr><th><label for="wei-ebay-seller-username">eBay seller username/store slug</label></th><td><input id="wei-ebay-seller-username" class="regular-text" name="ebay_seller_username" value="<?php echo esc_attr((string) $setting('ebay_seller_username', \WEI\Plugin::DEFAULT_EBAY_SELLER_USERNAME)); ?>" placeholder="<?php echo esc_attr(\WEI\Plugin::DEFAULT_EBAY_SELLER_USERNAME); ?>" /> <span class="description">Primary source for the eBay.de same-vehicle CTA seller search, for example <code>https://www.ebay.de/sch/i.html?_ssn=gpswiss&amp;_nkw=456</code>.</span></td></tr>
                     <tr><th>Auto publish</th><td><label><input type="checkbox" name="auto_publish_enabled" value="1" <?php checked(!empty($s['auto_publish_enabled'])); ?> /> enabled</label></td></tr>
