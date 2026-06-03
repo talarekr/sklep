@@ -420,10 +420,29 @@ $stockSyncDiagnostics = is_array($stock_sync_diagnostics ?? null) ? $stock_sync_
 $stockSyncNextRun = !empty($stockSyncStatus['next_scheduled_run']) ? gmdate('Y-m-d H:i:s', (int) $stockSyncStatus['next_scheduled_run']) : '-';
 
 $oauthDiagnostics = is_array($oauth_diagnostics ?? null) ? $oauth_diagnostics : [];
+$frPluginVersion = defined('WEI_FR_PLUGIN_VERSION') ? (string) WEI_FR_PLUGIN_VERSION : (string) ($oauthDiagnostics['fr_plugin_version'] ?? '0.1.0');
+$frPluginCommit = defined('WEI_FR_BUILD_COMMIT') ? (string) WEI_FR_BUILD_COMMIT : (string) ($oauthDiagnostics['fr_plugin_commit'] ?? 'unknown');
+$oauthCallbackFlowVersion = defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : (string) ($oauthDiagnostics['oauth_callback_flow_version'] ?? '2026-06-03-fr-capability-diagnostics-v2');
+$frBuildMarker = [
+    'fr_plugin_version' => $frPluginVersion,
+    'fr_plugin_commit' => $frPluginCommit,
+    'oauth_callback_flow_version' => $oauthCallbackFlowVersion,
+];
 $oauthCallbackDebug = [
+    'fr_plugin_version' => $frPluginVersion,
+    'fr_plugin_commit' => $frPluginCommit,
+    'oauth_callback_flow_version' => $oauthCallbackFlowVersion,
     'oauth_status' => (string) ($oauthDiagnostics['oauth_status'] ?? ''),
     'callback_intercepted_by_admin_init' => $oauthDiagnostics['callback_intercepted_by_admin_init'] ?? null,
+    'intercept_hook' => (string) ($oauthDiagnostics['intercept_hook'] ?? ''),
     'callback_page_registered' => $oauthDiagnostics['callback_page_registered'] ?? null,
+    'current_user_id' => (int) ($oauthDiagnostics['current_user_id'] ?? 0),
+    'is_user_logged_in' => $oauthDiagnostics['is_user_logged_in'] ?? null,
+    'current_user_can_manage_options' => $oauthDiagnostics['current_user_can_manage_options'] ?? null,
+    'required_capability' => (string) ($oauthDiagnostics['required_capability'] ?? 'manage_options'),
+    'callback_hook_stage' => (string) ($oauthDiagnostics['callback_hook_stage'] ?? ''),
+    'code_exists_in_get_before_capability_rejection' => $oauthDiagnostics['code_exists_in_get_before_capability_rejection'] ?? null,
+    'state_exists_in_get_before_capability_rejection' => $oauthDiagnostics['state_exists_in_get_before_capability_rejection'] ?? null,
     'page_param' => (string) ($oauthDiagnostics['page_param'] ?? ''),
     'code_received' => $oauthDiagnostics['code_received'] ?? null,
     'state_received' => $oauthDiagnostics['state_received'] ?? null,
@@ -560,6 +579,8 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
         .wei-admin .wei-auto-runner { border:1px solid #c3c4c7; background:#f6f7f7; padding:12px; margin:12px 0; max-width:980px; }
         .wei-admin .wei-auto-runner .wei-auto-runner-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:8px 0 12px; }
         .wei-admin .wei-auto-runner-log { min-height:42px; }
+        .wei-admin .wei-build-footer { margin:18px 0 0; padding:10px 12px; border:1px solid #c3c4c7; background:#fff; color:#1d2327; font-size:12px; }
+        .wei-admin .wei-build-footer code { margin-right:12px; }
     </style>
 
     <?php if (!empty($_GET['saved'])): ?><div class="notice notice-success"><p>eBay settings saved.</p></div><?php endif; ?>
@@ -1464,4 +1485,11 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
         });
     }());
     </script>
+    <div class="wei-build-footer" data-wei-fr-build-marker="1">
+        <strong>FR plugin build marker</strong>
+        <code>fr_plugin_version=<?php echo esc_html($frPluginVersion); ?></code>
+        <code>fr_plugin_commit=<?php echo esc_html($frPluginCommit); ?></code>
+        <code>oauth_callback_flow_version=<?php echo esc_html($oauthCallbackFlowVersion); ?></code>
+        <pre class="wei-scroll"><?php echo esc_html($technicalPreview($frBuildMarker, 1000)); ?></pre>
+    </div>
 </div>

@@ -91,6 +91,9 @@ namespace {
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
     $assert(($diagnostics['token_exchange_attempted'] ?? true) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
+    $assert(($diagnostics['fr_plugin_version'] ?? '') === '0.1.0', 'FR OAuth diagnostics must expose fr_plugin_version.');
+    $assert(($diagnostics['fr_plugin_commit'] ?? '') !== '', 'FR OAuth diagnostics must expose fr_plugin_commit.');
+    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-fr-capability-diagnostics-v2', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
         'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
@@ -130,6 +133,7 @@ namespace {
     $pluginSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
     $bootstrapSource = file_get_contents(__DIR__ . '/../woo-ebay-integration-fr.php');
     $adminSource = file_get_contents(__DIR__ . '/../src/Services/AdminPage.php');
+    $viewSource = file_get_contents(__DIR__ . '/../views/admin-page.php');
     $assert(str_contains($adminSource, "'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [\$this, 'render_oauth_callback'], 'oauth callback menu'"), 'Hidden FR callback page must be registered with the FR callback slug and manage_options capability.');
     $assert(str_contains($pluginSource, "add_action('admin_init', [\$auth, 'handle_oauth_callback'], 0)"), 'Plugin must register the OAuth callback interceptor on global admin_init priority 0.');
     $assert(str_contains($pluginSource, "add_action('current_screen', [\$auth, 'handle_current_screen_oauth_callback'], 0)"), 'Plugin must register current_screen OAuth callback fallback.');
@@ -137,6 +141,18 @@ namespace {
     $assert(str_contains($pluginSource, "add_action('load-woocommerce_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_woocommerce_load_oauth_callback'], 0)"), 'Plugin must register WooCommerce submenu load OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('admin_post_nopriv_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION"), 'Plugin must register nopriv admin-post OAuth callback fallback.');
     $assert(str_contains($bootstrapSource, 'handle_admin_bootstrap_oauth_callback'), 'Main plugin file must register a bootstrap-level callback interceptor before WooCommerce-dependent boot.');
+    $assert(str_contains($bootstrapSource, "define('WEI_FR_PLUGIN_VERSION', '0.1.0')"), 'FR bootstrap must define a visible plugin version marker.');
+    $assert(str_contains($bootstrapSource, 'WEI_FR_BUILD_COMMIT'), 'FR bootstrap must define a visible plugin commit marker.');
+    $assert(str_contains($bootstrapSource, 'WEI_FR_OAUTH_CALLBACK_FLOW_VERSION'), 'FR bootstrap must define a visible OAuth callback flow version marker.');
+    $assert(str_contains($viewSource, 'FR plugin build marker'), 'FR admin footer must render the FR plugin build marker.');
+    $assert(str_contains($viewSource, "'fr_plugin_version' => $" . "frPluginVersion"), 'Displayed OAuth JSON must include fr_plugin_version.');
+    $assert(str_contains($viewSource, "'fr_plugin_commit' => $" . "frPluginCommit"), 'Displayed OAuth JSON must include fr_plugin_commit.');
+    $assert(str_contains($viewSource, "'oauth_callback_flow_version' => $" . "oauthCallbackFlowVersion"), 'Displayed OAuth JSON must include oauth_callback_flow_version.');
+    $assert(str_contains($viewSource, "'current_user_id' => (int) ($" . "oauthDiagnostics['current_user_id']"), 'Displayed OAuth JSON must include current_user_id for not_wordpress_administrator diagnostics.');
+    $assert(str_contains($viewSource, "'is_user_logged_in' => $" . "oauthDiagnostics['is_user_logged_in']"), 'Displayed OAuth JSON must include is_user_logged_in for not_wordpress_administrator diagnostics.');
+    $assert(str_contains($viewSource, "'current_user_can_manage_options' => $" . "oauthDiagnostics['current_user_can_manage_options']"), 'Displayed OAuth JSON must include current_user_can_manage_options for not_wordpress_administrator diagnostics.');
+    $assert(str_contains($viewSource, "'required_capability' => (string) ($" . "oauthDiagnostics['required_capability']"), 'Displayed OAuth JSON must include required_capability for not_wordpress_administrator diagnostics.');
+    $assert(str_contains($viewSource, "'callback_hook_stage' => (string) ($" . "oauthDiagnostics['callback_hook_stage']"), 'Displayed OAuth JSON must include callback_hook_stage for not_wordpress_administrator diagnostics.');
     $assert(str_contains($source, "store_intercept_diagnostics('plugins_loaded', false, 'plugins_loaded_deferred_to_admin_init')"), 'FR bootstrap callback detection must defer processing until admin_init user/capability context is available.');
     $assert(str_contains($source, 'add_action(' . "'admin_init'" . ', [$this, ' . "'handle_oauth_callback'" . '], 0)'), 'FR bootstrap callback handler must register an admin_init retry instead of processing at plugins_loaded.');
     $assert(!str_contains($source, "maybe_intercept_oauth_callback('plugins_loaded')"), 'FR callback must not process OAuth at plugins_loaded before WordPress administrator capabilities are available.');
