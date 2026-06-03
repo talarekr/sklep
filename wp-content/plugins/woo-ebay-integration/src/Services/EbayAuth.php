@@ -80,6 +80,17 @@ class EbayAuth
         $this->maybe_intercept_oauth_callback('load-woocommerce_page_ebay-auth-callback');
     }
 
+    public static function register_shared_oauth_admin_init_router(): void
+    {
+        if (!function_exists('add_action')) {
+            return;
+        }
+
+        add_action('admin_init', static function (): void {
+            (new self(new Logger()))->route_foreign_fr_oauth_callback();
+        }, 0);
+    }
+
     public function handle_admin_bootstrap_oauth_callback(): void
     {
         if (!$this->is_oauth_callback_request()) {
@@ -98,11 +109,6 @@ class EbayAuth
                 'token_exchange_attempted' => false,
             ], false);
 
-            if (function_exists('add_action')) {
-                add_action('admin_init', [$this, 'route_foreign_fr_oauth_callback'], 0);
-                $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_REGISTERED', $context);
-            }
-
             return;
         }
 
@@ -111,7 +117,7 @@ class EbayAuth
 
     public function route_foreign_fr_oauth_callback(): void
     {
-        if (!$this->is_oauth_callback_request() || !$this->is_foreign_fr_state()) {
+        if (!$this->is_shared_fr_oauth_callback_request()) {
             return;
         }
 
@@ -507,6 +513,20 @@ class EbayAuth
     {
         $state = $this->request_value('state');
         return str_starts_with($state, 'wei_fr:');
+    }
+
+    private function is_shared_fr_oauth_callback_request(): bool
+    {
+        $page = $this->sanitize_raw((string) ($_GET['page'] ?? ''));
+        if ($page !== self::CALLBACK_PAGE_SLUG) {
+            return false;
+        }
+
+        if (!$this->is_foreign_fr_state()) {
+            return false;
+        }
+
+        return $this->request_value('code') !== '' || $this->request_value('error') !== '';
     }
 
     private function write_shared_fr_callback_debug(string $hook, string $routedPluginAttempt, bool $includeCapability = false, string $event = '', array $extra = []): void
