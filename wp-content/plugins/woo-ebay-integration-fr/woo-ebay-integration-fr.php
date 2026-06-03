@@ -13,8 +13,10 @@ if (!defined('ABSPATH')) {
 
 define('WEI_FR_PLUGIN_FILE', __FILE__);
 define('WEI_FR_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('WEI_FR_BUILD_COMMIT', '9d9c575-diagnostics');
-define('WEI_FR_BUILD_ID', '2026-05-08-admin-menu-null-slug-diagnostics');
+define('WEI_FR_PLUGIN_VERSION', '0.1.0');
+define('WEI_FR_BUILD_COMMIT', '4c51538-fr-build-marker');
+define('WEI_FR_BUILD_ID', '2026-06-03-fr-admin-diagnostics-build-marker');
+define('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-fr-capability-diagnostics-v2');
 
 spl_autoload_register(function (string $class): void {
     if (strpos($class, 'WEI_FR\\') !== 0) {

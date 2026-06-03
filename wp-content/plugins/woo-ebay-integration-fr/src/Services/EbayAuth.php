@@ -244,6 +244,9 @@ class EbayAuth
         $oauthRedirectParam = $this->oauth_redirect_param($s);
 
         return [
+            'fr_plugin_version' => $this->fr_plugin_version(),
+            'fr_plugin_commit' => $this->fr_plugin_commit(),
+            'oauth_callback_flow_version' => $this->oauth_callback_flow_version(),
             'client_id_configured' => (string) ($s['client_id'] ?? '') !== '',
             'runame_configured' => $ebayRuname !== '',
             'oauth_status' => (string) ($s['oauth_status'] ?? ($hasRefreshToken ? 'connected' : 'not_connected')),
@@ -422,6 +425,21 @@ class EbayAuth
         ], false);
     }
 
+    private function fr_plugin_version(): string
+    {
+        return defined('WEI_FR_PLUGIN_VERSION') ? (string) WEI_FR_PLUGIN_VERSION : '0.1.0';
+    }
+
+    private function fr_plugin_commit(): string
+    {
+        return defined('WEI_FR_BUILD_COMMIT') ? (string) WEI_FR_BUILD_COMMIT : 'unknown';
+    }
+
+    private function oauth_callback_flow_version(): string
+    {
+        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-fr-capability-diagnostics-v2';
+    }
+
     private function callback_capability_diagnostics(string $callbackHookStage, string $requiredCapability): array
     {
         $currentUserId = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
@@ -543,7 +561,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];
