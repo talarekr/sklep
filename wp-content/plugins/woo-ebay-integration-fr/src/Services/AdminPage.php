@@ -120,15 +120,10 @@ class AdminPage
 
         $this->add_traced_submenu_page('woocommerce', 'eBay.fr Integration', 'eBay.fr Integration', 'manage_options', 'woo-ebay-fr', [$this, 'render'], 'main admin menu');
 
-        // WordPress normalizes both parent and menu slugs through plugin_basename().
-        // Passing null as the parent slug for a hidden callback page reaches
-        // wp_normalize_path(null), which emits PHP 8.1+ deprecations from
-        // wp_is_stream()/str_replace() in wp-includes/functions.php. Register
-        // under WooCommerce with a real slug, then remove the submenu entry so
-        // the callback remains hidden without sending null into WordPress core.
-        $this->add_traced_submenu_page('woocommerce', 'eBay OAuth Callback', 'eBay OAuth Callback', 'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [$this, 'render_oauth_callback'], 'oauth callback menu');
-        $this->auth->mark_callback_page_registered();
-        remove_submenu_page('woocommerce', EbayAuth::CALLBACK_PAGE_SLUG);
+        // The shared OAuth callback page slug is owned by the DE plugin/router.
+        // FR intentionally avoids registering the same hidden submenu slug so
+        // WordPress cannot resolve duplicate callback-page capabilities before
+        // the shared admin_init router dispatches the FR state.
     }
 
 

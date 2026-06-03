@@ -199,30 +199,43 @@ namespace {
     $debugPath = $GLOBALS['wei_shared_router_uploads_basedir'] . '/wei-ebay-integration-fr/oauth-shared-callback-debug.json';
     $debugPayload = is_readable($debugPath) ? (array) json_decode((string) file_get_contents($debugPath), true) : [];
     $registeredAdminInitRouter = false;
+    $registeredAdminInitCallback = null;
     foreach ($GLOBALS['wei_shared_router_actions'] as $action) {
         if (($action['hook'] ?? '') === 'admin_init' && ($action['priority'] ?? null) === 0) {
             $registeredAdminInitRouter = true;
+            $registeredAdminInitCallback = $action['callback'] ?? null;
             break;
         }
     }
 
     $redirectLocation = '';
     try {
-        (new DeEbayAuth(new DeLogger()))->maybe_intercept_oauth_callback('admin_init');
+        if (is_callable($registeredAdminInitCallback)) {
+            call_user_func($registeredAdminInitCallback);
+        }
     } catch (WeiSharedRouterRedirect $redirect) {
         $redirectLocation = $redirect->location;
     }
+    $adminInitDebugPayload = is_readable($debugPath) ? (array) json_decode((string) file_get_contents($debugPath), true) : [];
 
     $deSettings = $GLOBALS['wei_shared_router_options'][DePlugin::OPTION_KEY];
     $frSettings = $GLOBALS['wei_shared_router_options'][FrPlugin::OPTION_KEY];
     $remotePost = $GLOBALS['wei_shared_router_remote_posts'][0] ?? [];
+    $deAuthSource = file_get_contents(__DIR__ . '/../src/Services/EbayAuth.php');
 
     $assert($registeredAdminInitRouter, 'Exact shared callback URL must register an admin_init router before WordPress can render an insufficient-permissions admin page.');
+    $assert(is_callable($registeredAdminInitCallback), 'Registered admin_init priority 0 shared router callback must be callable.');
     $assert(($debugPayload['hook_name'] ?? '') === 'plugins_loaded', 'DE bootstrap must write the early shared callback debug file at plugins_loaded.');
     $assert(($debugPayload['page'] ?? '') === 'ebay-auth-callback', 'Early shared callback debug file must record the callback page parameter.');
     $assert(($debugPayload['state_prefix'] ?? '') === 'wei_fr', 'Early shared callback debug file must record the FR state prefix.');
     $assert(($debugPayload['has_code'] ?? null) === true, 'Early shared callback debug file must record that the OAuth code is present.');
     $assert(($debugPayload['routed_plugin_attempt'] ?? '') === 'FR', 'Early shared callback debug file must record the FR routed plugin attempt.');
+    $assert(($debugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_DETECTED', 'Early shared callback debug file must record the explicit FR detection event.');
+    $assert(($adminInitDebugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', 'admin_init priority 0 router must record that it executed before admin page render.');
+    $assert(($adminInitDebugPayload['fr_handler_callable_found'] ?? null) === true, 'admin_init router diagnostics must show that the FR handler callable was found.');
+    $assert(($adminInitDebugPayload['current_user_id'] ?? null) === 7, 'admin_init router diagnostics must include current_user_id.');
+    $assert(($adminInitDebugPayload['is_user_logged_in'] ?? null) === true, 'admin_init router diagnostics must include is_user_logged_in.');
+    $assert(($adminInitDebugPayload['current_user_can_manage_options'] ?? null) === true, 'admin_init router diagnostics must include manage_options capability.');
     $assert($redirectLocation === 'https://gpswiss.pl/wp-admin/admin.php?page=woo-ebay-fr&ebay_connected=1&oauth_status=connected', 'FR callback must redirect back to the FR plugin admin page after success.');
     $assert(($frSettings['refresh_token'] ?? '') === 'FR_REFRESH_TOKEN', 'FR handler must save the returned refresh token in FR-specific options.');
     $assert(($frSettings['access_token'] ?? '') === 'FR_ACCESS_TOKEN', 'FR handler must save the returned access token in FR-specific options.');
@@ -242,6 +255,9 @@ namespace {
     $assert(($GLOBALS['wei_shared_router_wp_die_called'] ?? false) === false, 'Logged-in admin callback must not produce a WordPress insufficient-permissions wp_die page.');
     $assert(($deSettings['token_exchange_attempted'] ?? null) === false, 'DE handler must not process/token-exchange FR-prefixed state.');
     $assert(($deSettings['routed_plugin'] ?? '') === 'FR', 'DE shared router diagnostics must show FR routing for FR-prefixed state.');
+    $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_REGISTERED'), 'DE shared router source must log admin_init router registration for FR callbacks.');
+    $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING'), 'DE shared router source must log before handing off to FR and exiting.');
+    $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND'), 'DE shared router source must log and write debug output when the FR handler cannot be found.');
 
     if ($failures !== []) {
         fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);

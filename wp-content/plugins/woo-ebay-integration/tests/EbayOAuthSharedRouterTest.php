@@ -97,10 +97,11 @@ namespace {
     $auth->maybe_intercept_oauth_callback('admin_init');
     $diagnostics = $GLOBALS['wei_de_test_options'][Plugin::OPTION_KEY];
 
-    $assert(($GLOBALS['wei_de_test_current_user_can_calls'] ?? 0) === 0, 'DE router must not validate or process FR-prefixed state.');
+    $assert(($GLOBALS['wei_de_test_current_user_can_calls'] ?? 0) >= 1, 'DE shared admin_init router must record manage_options capability diagnostics for FR-prefixed state.');
     $assert(($diagnostics['routed_plugin'] ?? '') === 'FR', 'DE diagnostics should show FR-prefixed callbacks are routed away from DE.');
     $assert(($diagnostics['routed_marketplace'] ?? '') === 'EBAY_FR', 'DE diagnostics should identify FR marketplace when skipping FR-prefixed state.');
     $assert(($diagnostics['token_exchange_attempted'] ?? null) === false, 'DE router must not attempt token exchange for FR-prefixed state.');
+    $assert(str_contains(file_get_contents(__DIR__ . '/../src/Services/EbayAuth.php'), 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND'), 'DE router must log a clear handler-not-found event for FR-prefixed callbacks when FR is unavailable.');
 
     $oauthDiagnostics = $auth->get_diagnostic_oauth_context();
     $assert(($oauthDiagnostics['oauth_shared_callback'] ?? null) === true, 'DE diagnostics must mark the shared callback.');

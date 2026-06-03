@@ -87,7 +87,9 @@ class EbayAuth
         }
 
         if ($this->is_foreign_fr_state()) {
-            $this->write_shared_fr_callback_debug('plugins_loaded', 'FR', true);
+            $context = $this->shared_fr_router_context('plugins_loaded', false);
+            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_DETECTED', $context);
+            $this->write_shared_fr_callback_debug('plugins_loaded', 'FR', true, 'WEI_SHARED_OAUTH_FR_DETECTED', $context);
             $this->store_oauth_diagnostics([
                 'oauth_shared_callback' => true,
                 'oauth_callback_router' => 'state_prefix',
@@ -98,6 +100,7 @@ class EbayAuth
 
             if (function_exists('add_action')) {
                 add_action('admin_init', [$this, 'route_foreign_fr_oauth_callback'], 0);
+                $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_REGISTERED', $context);
             }
 
             return;
@@ -108,7 +111,45 @@ class EbayAuth
 
     public function route_foreign_fr_oauth_callback(): void
     {
-        $this->maybe_intercept_oauth_callback('admin_init');
+        if (!$this->is_oauth_callback_request() || !$this->is_foreign_fr_state()) {
+            return;
+        }
+
+        $frHandlerCallableFound = false;
+        $frAuth = null;
+        if (class_exists('WEI_FR\\Services\\EbayAuth') && class_exists('WEI_FR\\Services\\Logger')) {
+            $frAuth = new \WEI_FR\Services\EbayAuth(new \WEI_FR\Services\Logger());
+            $frHandlerCallableFound = is_callable([$frAuth, 'maybe_intercept_oauth_callback']);
+        }
+
+        $context = $this->shared_fr_router_context('admin_init', $frHandlerCallableFound);
+        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
+        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
+
+        if (!$frHandlerCallableFound || !$frAuth instanceof \WEI_FR\Services\EbayAuth) {
+            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            return;
+        }
+
+        if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
+            return;
+        }
+
+        if (function_exists('current_user_can') && !current_user_can('manage_options')) {
+            return;
+        }
+
+        $this->store_oauth_diagnostics([
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'FR',
+            'routed_marketplace' => 'EBAY_FR',
+            'token_exchange_attempted' => false,
+        ], false);
+        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING', $context);
+        $frAuth->maybe_intercept_oauth_callback('admin_init');
+        exit;
     }
 
     public function handle_admin_post_oauth_callback(): void
@@ -133,10 +174,8 @@ class EbayAuth
                 'token_exchange_attempted' => false,
             ], false);
 
-            if ($hook === 'admin_init' && class_exists('WEI_FR\\Services\\EbayAuth') && class_exists('WEI_FR\\Services\\Logger')) {
-                $frAuth = new \WEI_FR\Services\EbayAuth(new \WEI_FR\Services\Logger());
-                $frAuth->maybe_intercept_oauth_callback($hook);
-                exit;
+            if ($hook === 'admin_init') {
+                $this->route_foreign_fr_oauth_callback();
             }
 
             return;
@@ -469,7 +508,7 @@ class EbayAuth
         return str_starts_with($state, 'wei_fr:');
     }
 
-    private function write_shared_fr_callback_debug(string $hook, string $routedPluginAttempt, bool $includeCapability = false): void
+    private function write_shared_fr_callback_debug(string $hook, string $routedPluginAttempt, bool $includeCapability = false, string $event = '', array $extra = []): void
     {
         $state = $this->request_value('state');
         if ($this->request_value('page') !== self::CALLBACK_PAGE_SLUG || !str_starts_with($state, 'wei_fr:')) {
@@ -506,6 +545,7 @@ class EbayAuth
 
         $payload = [
             'timestamp' => function_exists('current_time') ? current_time('mysql') : gmdate('Y-m-d H:i:s'),
+            'event' => $event,
             'hook_name' => $hook,
             'page' => $this->request_value('page'),
             'state_prefix' => 'wei_fr',
@@ -515,6 +555,7 @@ class EbayAuth
             'current_user_can_manage_options' => $canManageOptions,
             'routed_plugin_attempt' => $routedPluginAttempt,
         ];
+        $payload = array_merge($payload, $extra);
 
         $json = function_exists('wp_json_encode')
             ? wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
@@ -523,6 +564,29 @@ class EbayAuth
         if (is_string($json)) {
             @file_put_contents($dir . '/oauth-shared-callback-debug.json', $json);
         }
+    }
+
+
+    private function shared_fr_router_context(string $hook, ?bool $frHandlerCallableFound): array
+    {
+        return [
+            'request_uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
+            'state_prefix' => 'wei_fr',
+            'has_code' => $this->request_value('code') !== '',
+            'hook' => $hook,
+            'current_user_id' => function_exists('get_current_user_id') ? get_current_user_id() : 0,
+            'is_user_logged_in' => function_exists('is_user_logged_in') ? is_user_logged_in() : null,
+            'current_user_can_manage_options' => function_exists('current_user_can') ? current_user_can('manage_options') : null,
+            'fr_handler_callable_found' => $frHandlerCallableFound,
+        ];
+    }
+
+    private function log_shared_fr_router_event(string $event, array $context): void
+    {
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            : json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        error_log($event . ': ' . (is_string($json) ? $json : '[]'));
     }
 
     private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit): void
