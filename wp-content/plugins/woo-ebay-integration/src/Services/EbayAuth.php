@@ -10,6 +10,7 @@ class EbayAuth
     private const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
     public const CALLBACK_PAGE_SLUG = 'ebay-auth-callback';
     public const ADMIN_POST_CALLBACK_ACTION = 'wei_ebay_auth_callback';
+    private const STATE_PREFIX = 'wei_de:';
     public const APP_SCOPE = 'https://api.ebay.com/oauth/api_scope';
     private const SCOPES = 'https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
 
@@ -20,8 +21,8 @@ class EbayAuth
     public function get_authorize_url(): string
     {
         $s = $this->settings();
-        $state = wp_generate_password(20, false, false);
-        set_transient('wei_oauth_state_' . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
+        $state = self::STATE_PREFIX . wp_generate_password(20, false, false);
+        set_transient('wei_oauth_state_' . $state, ['user_id' => get_current_user_id(), 'routed_plugin' => 'DE'], 10 * MINUTE_IN_SECONDS);
 
         $oauthRedirectParam = $this->oauth_redirect_param($s);
 
@@ -36,6 +37,10 @@ class EbayAuth
         $this->store_oauth_diagnostics([
             'oauth_status' => ((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected',
             'oauth_redirect_param_used' => $oauthRedirectParam,
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'DE',
+            'routed_marketplace' => 'EBAY_DE',
             'token_exchange_attempted' => false,
         ], false);
 
@@ -92,6 +97,17 @@ class EbayAuth
             return;
         }
 
+        if ($this->is_foreign_fr_state()) {
+            $this->store_oauth_diagnostics([
+                'oauth_shared_callback' => true,
+                'oauth_callback_router' => 'state_prefix',
+                'routed_plugin' => 'FR',
+                'routed_marketplace' => 'EBAY_FR',
+                'token_exchange_attempted' => false,
+            ], false);
+            return;
+        }
+
         $this->store_intercept_diagnostics($hook, true);
         $this->process_oauth_callback(true);
         exit;
@@ -128,6 +144,10 @@ class EbayAuth
                 'token_exchange_attempted' => false,
                 'token_exchange_success' => false,
                 'token_exchange_error' => 'not_wordpress_administrator',
+                'oauth_shared_callback' => true,
+                'oauth_callback_router' => 'state_prefix',
+                'routed_plugin' => 'DE',
+                'routed_marketplace' => 'EBAY_DE',
             ]);
             wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
         }
@@ -157,6 +177,10 @@ class EbayAuth
             'error_description' => $errorDescription,
             'redirect_uri_used' => $redirectUri,
             'oauth_redirect_param_used' => $redirectUri,
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'DE',
+            'routed_marketplace' => 'EBAY_DE',
         ]);
 
         if (!$stateValid) {
@@ -245,6 +269,11 @@ class EbayAuth
             'callback_url' => $callbackUrl,
             'browser_callback_url' => $callbackUrl,
             'admin_post_callback_url' => $this->admin_post_callback_url(),
+            'oauth_shared_callback' => $s['oauth_shared_callback'] ?? true,
+            'oauth_callback_router' => (string) ($s['oauth_callback_router'] ?? 'state_prefix'),
+            'routed_plugin' => (string) ($s['routed_plugin'] ?? 'DE'),
+            'routed_marketplace' => (string) ($s['routed_marketplace'] ?? 'EBAY_DE'),
+            'oauth_last_attempt_id' => (string) ($s['oauth_last_attempt_id'] ?? ''),
             'ebay_runame' => $ebayRuname,
             'oauth_redirect_param_used' => (string) ($s['oauth_redirect_param_used'] ?? $oauthRedirectParam),
             'redirect_uri_configured' => $oauthRedirectParam,
@@ -286,6 +315,10 @@ class EbayAuth
             'token_exchange_error' => '',
             'oauth_redirect_param_used' => $redirectUri,
             'redirect_uri_used' => $redirectUri,
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'DE',
+            'routed_marketplace' => 'EBAY_DE',
         ]);
         $auth = base64_encode(($s['client_id'] ?? '') . ':' . ($s['client_secret'] ?? ''));
         $r = wp_remote_post(self::TOKEN_URL, [
@@ -319,7 +352,7 @@ class EbayAuth
 
         $this->persist_token($data);
         $refreshTokenSaved = (string) ($data['refresh_token'] ?? '') !== '' || (string) ($this->settings()['refresh_token'] ?? '') !== '';
-        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_attempted' => true, 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => $refreshTokenSaved]);
+        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_attempted' => true, 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => $refreshTokenSaved, 'oauth_shared_callback' => true, 'oauth_callback_router' => 'state_prefix', 'routed_plugin' => 'DE', 'routed_marketplace' => 'EBAY_DE']);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay&ebay_connected=1&oauth_status=connected'));
         exit;
     }
@@ -381,6 +414,12 @@ class EbayAuth
         return $getPage === self::CALLBACK_PAGE_SLUG
             || $requestPage === self::CALLBACK_PAGE_SLUG
             || strpos($requestUri, 'page=' . self::CALLBACK_PAGE_SLUG) !== false;
+    }
+
+    private function is_foreign_fr_state(): bool
+    {
+        $state = $this->request_value('state');
+        return str_starts_with($state, 'wei_fr:');
     }
 
     private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit): void
@@ -495,7 +534,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used', 'oauth_shared_callback', 'oauth_callback_router', 'routed_plugin', 'routed_marketplace', 'oauth_last_attempt_id'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];

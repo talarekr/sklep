@@ -8,9 +8,12 @@ class EbayAuth
 {
     private const AUTH_URL = 'https://auth.ebay.com/oauth2/authorize';
     private const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
-    public const CALLBACK_PAGE_SLUG = 'ebay-fr-auth-callback';
+    public const CALLBACK_PAGE_SLUG = 'ebay-auth-callback';
+    public const LEGACY_CALLBACK_PAGE_SLUG = 'ebay-fr-auth-callback';
     public const ADMIN_POST_CALLBACK_ACTION = 'wei_fr_ebay_auth_callback';
+    private const STATE_PREFIX = 'wei_fr:';
     private const STATE_TRANSIENT_PREFIX = 'wei_fr_oauth_state_';
+    private const SHARED_EBAY_RUNAME = 'GP_SWISS-GPSWISS-GPSwiss-jigmn';
     public const APP_SCOPE = 'https://api.ebay.com/oauth/api_scope';
     private const SCOPES = 'https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
 
@@ -21,8 +24,8 @@ class EbayAuth
     public function get_authorize_url(bool $startNewAttempt = false): string
     {
         $s = $this->settings();
-        $state = wp_generate_password(20, false, false);
         $attemptId = $this->new_oauth_attempt_id();
+        $state = self::STATE_PREFIX . wp_generate_password(20, false, false);
         set_transient(self::STATE_TRANSIENT_PREFIX . $state, ['user_id' => get_current_user_id(), 'attempt_id' => $attemptId], 10 * MINUTE_IN_SECONDS);
 
         $oauthRedirectParam = $this->oauth_redirect_param($s);
@@ -67,12 +70,12 @@ class EbayAuth
 
     public function handle_load_oauth_callback(): void
     {
-        $this->maybe_intercept_oauth_callback('load-admin_page_ebay-fr-auth-callback');
+        $this->maybe_intercept_oauth_callback('load-admin_page_ebay-auth-callback');
     }
 
     public function handle_woocommerce_load_oauth_callback(): void
     {
-        $this->maybe_intercept_oauth_callback('load-woocommerce_page_ebay-fr-auth-callback');
+        $this->maybe_intercept_oauth_callback('load-woocommerce_page_ebay-auth-callback');
     }
 
     public function handle_admin_bootstrap_oauth_callback(): void
@@ -144,6 +147,10 @@ class EbayAuth
                 'token_exchange_success' => false,
                 'token_exchange_error' => 'not_wordpress_administrator',
                 'oauth_last_attempt_id' => $callbackAttemptId,
+                'oauth_shared_callback' => true,
+                'oauth_callback_router' => 'state_prefix',
+                'routed_plugin' => 'FR',
+                'routed_marketplace' => 'EBAY_FR',
             ]);
             wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration-fr'), esc_html__('eBay OAuth callback', 'woo-ebay-integration-fr'), ['response' => 403]);
         }
@@ -180,6 +187,10 @@ class EbayAuth
             'error_description' => $errorDescription,
             'redirect_uri_used' => $redirectUri,
             'oauth_redirect_param_used' => $redirectUri,
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'FR',
+            'routed_marketplace' => 'EBAY_FR',
         ]);
 
         if (!$stateValid) {
@@ -282,6 +293,11 @@ class EbayAuth
             'ebay_runame' => $ebayRuname,
             'oauth_redirect_param_used' => (string) ($s['oauth_redirect_param_used'] ?? $oauthRedirectParam),
             'redirect_uri_configured' => $oauthRedirectParam,
+            'oauth_shared_callback' => $s['oauth_shared_callback'] ?? true,
+            'oauth_callback_router' => (string) ($s['oauth_callback_router'] ?? 'state_prefix'),
+            'routed_plugin' => (string) ($s['routed_plugin'] ?? 'FR'),
+            'routed_marketplace' => (string) ($s['routed_marketplace'] ?? 'EBAY_FR'),
+            'cached_policies' => $this->normalize_fr_cached_policies($s['wei_fr_cached_policies'] ?? []),
             'state_valid' => $s['state_valid'] ?? null,
             'token_exchange_attempted' => $s['token_exchange_attempted'] ?? null,
             'token_exchange_success' => $s['token_exchange_success'] ?? null,
@@ -321,6 +337,10 @@ class EbayAuth
             'token_exchange_error' => '',
             'oauth_redirect_param_used' => $redirectUri,
             'redirect_uri_used' => $redirectUri,
+            'oauth_shared_callback' => true,
+            'oauth_callback_router' => 'state_prefix',
+            'routed_plugin' => 'FR',
+            'routed_marketplace' => 'EBAY_FR',
         ]);
         $auth = base64_encode(($s['client_id'] ?? '') . ':' . ($s['client_secret'] ?? ''));
         $r = wp_remote_post(self::TOKEN_URL, [
@@ -354,7 +374,7 @@ class EbayAuth
 
         $this->persist_token($data);
         $refreshTokenSaved = (string) ($data['refresh_token'] ?? '') !== '' || (string) ($this->settings()['refresh_token'] ?? '') !== '';
-        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_attempted' => true, 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => $refreshTokenSaved]);
+        $this->store_oauth_diagnostics(['oauth_status' => 'connected', 'token_exchange_attempted' => true, 'token_exchange_success' => true, 'token_exchange_error' => '', 'state_valid' => true, 'redirect_uri_used' => $redirectUri, 'oauth_redirect_param_used' => $redirectUri, 'refresh_token_saved' => $refreshTokenSaved, 'oauth_shared_callback' => true, 'oauth_callback_router' => 'state_prefix', 'routed_plugin' => 'FR', 'routed_marketplace' => 'EBAY_FR']);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay-fr&ebay_connected=1&oauth_status=connected'));
         exit;
     }
@@ -412,10 +432,15 @@ class EbayAuth
         $getPage = $this->sanitize_raw((string) ($_GET['page'] ?? ''));
         $requestPage = $this->sanitize_raw((string) ($_REQUEST['page'] ?? ''));
         $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
-
-        return $getPage === self::CALLBACK_PAGE_SLUG
+        $state = $this->request_value('state');
+        $isSharedCallback = $getPage === self::CALLBACK_PAGE_SLUG
             || $requestPage === self::CALLBACK_PAGE_SLUG
             || strpos($requestUri, 'page=' . self::CALLBACK_PAGE_SLUG) !== false;
+        $isLegacyFrCallback = $getPage === self::LEGACY_CALLBACK_PAGE_SLUG
+            || $requestPage === self::LEGACY_CALLBACK_PAGE_SLUG
+            || strpos($requestUri, 'page=' . self::LEGACY_CALLBACK_PAGE_SLUG) !== false;
+
+        return ($isSharedCallback && str_starts_with($state, self::STATE_PREFIX)) || $isLegacyFrCallback;
     }
 
     private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit, ?string $callbackHookStage = null): void
@@ -464,6 +489,10 @@ class EbayAuth
         $s['oauth_last_attempt_id'] = $attemptId;
         $s['oauth_status'] = ((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected';
         $s['oauth_redirect_param_used'] = $oauthRedirectParam;
+        $s['oauth_shared_callback'] = true;
+        $s['oauth_callback_router'] = 'state_prefix';
+        $s['routed_plugin'] = 'FR';
+        $s['routed_marketplace'] = 'EBAY_FR';
         $s['last_oauth_attempt_started_at'] = current_time('mysql');
         update_option(Plugin::OPTION_KEY, $s, false);
     }
@@ -520,6 +549,10 @@ class EbayAuth
             'oauth_error',
             'error_description',
             'refresh_token_saved',
+            'oauth_shared_callback',
+            'oauth_callback_router',
+            'routed_plugin',
+            'routed_marketplace',
         ];
     }
 
@@ -554,7 +587,7 @@ class EbayAuth
 
     private function oauth_callback_flow_version(): string
     {
-        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-fr-admin-init-only-v3';
+        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-shared-oauth-router-v1';
     }
 
     private function callback_capability_diagnostics(string $callbackHookStage, string $requiredCapability): array
@@ -672,13 +705,31 @@ class EbayAuth
         }
 
         $legacyRedirectUri = trim((string) ($settings['redirect_uri'] ?? ''));
-        return filter_var($legacyRedirectUri, FILTER_VALIDATE_URL) ? '' : $legacyRedirectUri;
+        if ($legacyRedirectUri !== '' && !filter_var($legacyRedirectUri, FILTER_VALIDATE_URL)) {
+            return $legacyRedirectUri;
+        }
+
+        return self::SHARED_EBAY_RUNAME;
+    }
+
+
+    private function normalize_fr_cached_policies($cached): array
+    {
+        if (!is_array($cached)) {
+            return ['marketplace_id' => 'EBAY_FR'];
+        }
+
+        if ((string) ($cached['marketplace_id'] ?? '') !== 'EBAY_FR') {
+            $cached['marketplace_id'] = 'EBAY_FR';
+        }
+
+        return $cached;
     }
 
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'oauth_last_attempt_id', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'oauth_last_attempt_id', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used', 'oauth_shared_callback', 'oauth_callback_router', 'routed_plugin', 'routed_marketplace'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];

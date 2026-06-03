@@ -13,6 +13,7 @@ class AdminPage
     private const PUBLISH_ACTION_MAX_BATCH_SIZE = 300;
 
     private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_fr_ebay_french_content_schema_migration_state';
+    private const SHARED_EBAY_RUNAME = 'GP_SWISS-GPSWISS-GPSwiss-jigmn';
 
     public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync)
     {
@@ -500,7 +501,7 @@ class AdminPage
         $postedCallbackUrl = esc_url_raw((string) ($_POST['redirect_uri'] ?? ''));
         $postedRuname = sanitize_text_field((string) ($_POST['runame'] ?? ''));
         $s['redirect_uri'] = $this->normalize_fr_callback_url($postedCallbackUrl);
-        $s['runame'] = $postedRuname;
+        $s['runame'] = $postedRuname !== '' ? $postedRuname : self::SHARED_EBAY_RUNAME;
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_FR'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
         $defaultItemCondition = strtoupper(sanitize_text_field((string) ($_POST['default_item_condition'] ?? EbayConditionResolver::DEFAULT_ITEM_CONDITION)));
@@ -4371,6 +4372,9 @@ class AdminPage
             $s['inventory_location_address_line_1'] = '';
         }
         $s['redirect_uri'] = $this->normalize_fr_callback_url((string) ($s['redirect_uri'] ?? ''));
+        if (trim((string) ($s['runame'] ?? '')) === '') {
+            $s['runame'] = self::SHARED_EBAY_RUNAME;
+        }
         $s['wei_fr_cached_policies'] = $this->normalize_fr_cached_policies($s['wei_fr_cached_policies'] ?? []);
         if (!isset($s['sku_category_overrides'])) {
             $s['sku_category_overrides'] = "CFM-001=179847";
