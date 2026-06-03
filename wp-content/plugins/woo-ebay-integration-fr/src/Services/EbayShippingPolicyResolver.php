@@ -78,18 +78,25 @@ class EbayShippingPolicyResolver
             }
         }
 
+        $defaultPolicyId = self::default_policy_id($settings);
+        $defaultPolicyName = self::default_policy_name($settings);
+        $fallbackDisabled = self::global_policy_fallback_disabled($settings);
         $defaultUsed = false;
-        if ($group === '') {
-            $defaultPolicyId = self::default_policy_id($settings);
-            if ($defaultPolicyId !== '') {
-                $group = 'default';
-                $source = 'default_shipping_policy';
-                $defaultUsed = true;
-            }
+        if ($group === '' && $defaultPolicyId !== '' && !$fallbackDisabled) {
+            $group = 'default';
+            $source = 'default_shipping_policy';
+            $defaultUsed = true;
         }
 
-        $policyId = $group === 'default' ? self::default_policy_id($settings) : self::policy_id_for_group($group, $settings);
-        $policyName = $group === 'default' ? self::default_policy_name($settings) : self::policy_name_for_group($group, $settings);
+        $policyId = $group === 'default' ? $defaultPolicyId : self::policy_id_for_group($group, $settings);
+        $policyName = $group === 'default' ? $defaultPolicyName : self::policy_name_for_group($group, $settings);
+        if ($group !== '' && $policyId === '' && $defaultPolicyId !== '' && !$fallbackDisabled) {
+            $policyId = $defaultPolicyId;
+            $policyName = $defaultPolicyName;
+            $source = $source . '_global_default_fallback';
+            $defaultUsed = true;
+        }
+
         $reason = '';
         $blocked = false;
         if ($group === '') {
@@ -140,12 +147,30 @@ class EbayShippingPolicyResolver
 
     public static function default_policy_id(array $settings): string
     {
-        return self::first_setting($settings, ['default_shipping_policy_id', 'default_shipping_policy', 'ebay_default_shipping_policy_id']);
+        return self::first_setting($settings, ['default_shipping_policy_id', 'default_shipping_policy', 'ebay_default_shipping_policy_id', 'ebay_fulfillment_policy_id']);
     }
 
     public static function default_policy_name(array $settings): string
     {
-        return self::first_setting($settings, ['default_shipping_policy_name', 'ebay_default_shipping_policy_name']);
+        return self::first_setting($settings, ['default_shipping_policy_name', 'ebay_default_shipping_policy_name', 'ebay_fulfillment_policy_name']);
+    }
+
+    public static function global_policy_fallback_disabled(array $settings): bool
+    {
+        foreach (['disable_global_policy_fallback', 'disable_default_shipping_policy_fallback', 'shipping_policy_disable_fallback'] as $key) {
+            $value = $settings[$key] ?? null;
+            if (is_bool($value)) {
+                return $value;
+            }
+            if (is_string($value) && in_array(strtolower(trim($value)), ['1', 'yes', 'true', 'on'], true)) {
+                return true;
+            }
+            if (is_int($value) && $value === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** @return array<string,array<int,int>> */
