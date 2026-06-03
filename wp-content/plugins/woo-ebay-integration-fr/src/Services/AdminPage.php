@@ -24,6 +24,8 @@ class AdminPage
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_post_wei_fr_save_settings', [$this, 'save_settings']);
         add_action('admin_post_wei_fr_save_ebay_settings', [$this, 'save_ebay_settings']);
+        add_action('admin_post_wei_fr_start_oauth_connect', [$this, 'start_oauth_connect']);
+        add_action('admin_post_wei_fr_clear_oauth_diagnostics', [$this, 'clear_oauth_diagnostics']);
         add_action('admin_post_wei_fr_disconnect', [$this, 'disconnect']);
         add_action('admin_post_wei_fr_test_connection', [$this, 'test_connection']);
         add_action('admin_post_wei_fr_readiness', [$this, 'run_readiness']);
@@ -345,7 +347,7 @@ class AdminPage
         $ebay_sku_status = $this->light_ebay_sku_status();
         $ebay_sku_generation_status = $this->skuGenerator->current_status();
         $nbp_rate_status = $this->cached_nbp_rate_status();
-        $connect_url = (string) $this->auth->get_authorize_url();
+        $connect_url = wp_nonce_url(admin_url('admin-post.php?action=wei_fr_start_oauth_connect'), 'wei_fr_start_oauth_connect');
         $oauth_diagnostics = $this->auth->get_diagnostic_oauth_context();
         $auto_sync_status = $this->light_auto_sync_status($s);
         $stock_sync_status = $this->stockSync->status();
@@ -1208,6 +1210,8 @@ class AdminPage
         ];
     }
 
+    public function start_oauth_connect(): void { $this->require_manage_options(); check_admin_referer('wei_fr_start_oauth_connect'); wp_safe_redirect($this->auth->get_authorize_url(true)); exit; }
+    public function clear_oauth_diagnostics(): void { $this->require_manage_options(); check_admin_referer('wei_fr_clear_oauth_diagnostics'); $this->auth->clear_oauth_diagnostics(); $this->set_status('FR OAuth diagnostics cleared.'); $this->go(); }
     public function disconnect(): void { $this->require_manage_options(); check_admin_referer('wei_fr_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
     public function test_connection(): void { $this->require_manage_options(); check_admin_referer('wei_fr_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }
     public function run_readiness(): void { $this->require_manage_options(); check_admin_referer('wei_fr_readiness'); $res = $this->adapter->readiness_check(); $this->set_status('Readiness: '.wp_json_encode($res)); $this->go(); }

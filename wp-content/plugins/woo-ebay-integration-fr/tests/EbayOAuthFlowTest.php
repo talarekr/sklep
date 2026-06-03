@@ -96,7 +96,7 @@ namespace {
     ];
 
     $auth = new EbayAuth(new Logger());
-    $authorizeUrl = $auth->get_authorize_url();
+    $authorizeUrl = $auth->get_authorize_url(true);
     parse_str((string) parse_url($authorizeUrl, PHP_URL_QUERY), $authorizeParams);
     $diagnostics = $auth->get_diagnostic_oauth_context();
 
@@ -107,10 +107,10 @@ namespace {
     $assert(($diagnostics['browser_callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'Diagnostics browser_callback_url must be the full browser callback URL.');
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
-    $assert(($diagnostics['token_exchange_attempted'] ?? true) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
+    $assert(($diagnostics['token_exchange_attempted'] ?? false) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
     $assert(($diagnostics['fr_plugin_version'] ?? '') === '0.1.0', 'FR OAuth diagnostics must expose fr_plugin_version.');
     $assert(($diagnostics['fr_plugin_commit'] ?? '') !== '', 'FR OAuth diagnostics must expose fr_plugin_commit.');
-    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-fr-capability-diagnostics-v2', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
+    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-fr-admin-init-only-v3', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
         'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
@@ -119,7 +119,7 @@ namespace {
         'runame' => '',
         'refresh_token' => '',
     ];
-    $legacyAuthorizeUrl = $auth->get_authorize_url();
+    $legacyAuthorizeUrl = $auth->get_authorize_url(true);
     parse_str((string) parse_url($legacyAuthorizeUrl, PHP_URL_QUERY), $legacyAuthorizeParams);
     $assert(($legacyAuthorizeParams['redirect_uri'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'FR Connect must rewrite copied DE callback settings to the FR callback helper URL.');
     $assert(!str_contains($legacyAuthorizeUrl, 'page%3Debay-auth-callback') && !str_contains($legacyAuthorizeUrl, 'ebay-auth-callback'), 'FR Connect URL must never include the DE callback slug even when legacy settings were copied.');
@@ -189,6 +189,27 @@ namespace {
         'state_received' => true,
         'token_exchange_success' => false,
     ];
+
+    $auth->get_authorize_url(true);
+    $newAttemptDiagnostics = $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY];
+    $assert(!array_key_exists('token_exchange_error', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale token_exchange_error diagnostics.');
+    $assert(!array_key_exists('code_received', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale code_received diagnostics.');
+    $assert(!array_key_exists('state_received', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale state_received diagnostics.');
+    $assert(!array_key_exists('token_exchange_success', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale token_exchange_success diagnostics.');
+    $assert(($newAttemptDiagnostics['oauth_last_attempt_id'] ?? '') !== '', 'Starting a new Connect attempt must write oauth_last_attempt_id.');
+
+    $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
+        'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
+        'client_secret' => 'secret',
+        'redirect_uri' => 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback',
+        'runame' => '',
+        'refresh_token' => '',
+        'oauth_status' => 'not_connected',
+        'token_exchange_error' => 'not_wordpress_administrator',
+        'code_received' => true,
+        'state_received' => true,
+        'token_exchange_success' => false,
+    ];
     $GLOBALS['wei_fr_test_current_user_can_calls'] = 0;
     $GLOBALS['wei_fr_test_current_user_id'] = 0;
     $GLOBALS['wei_fr_test_is_user_logged_in'] = false;
@@ -199,8 +220,8 @@ namespace {
     $auth->handle_admin_bootstrap_oauth_callback();
     $bootstrapDiagnostics = $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY];
     $assert(($bootstrapDiagnostics['callback_detected_at_plugins_loaded'] ?? null) === true, 'plugins_loaded must only record neutral callback_detected_at_plugins_loaded diagnostics.');
-    $assert(($bootstrapDiagnostics['intercept_hook'] ?? '') === 'plugins_loaded', 'plugins_loaded diagnostics must record the detection hook.');
-    $assert(($bootstrapDiagnostics['token_exchange_error'] ?? '') === '', 'plugins_loaded must clear stale token_exchange_error and never write not_wordpress_administrator.');
+    $assert(!array_key_exists('intercept_hook', $bootstrapDiagnostics), 'plugins_loaded diagnostics must not write an intercept hook that can look like finalized callback processing.');
+    $assert(($bootstrapDiagnostics['token_exchange_error'] ?? '') === 'not_wordpress_administrator', 'plugins_loaded must not rewrite token_exchange_error; stale values are cleared only when starting a new Connect attempt.');
     $assert(($bootstrapDiagnostics['oauth_status'] ?? '') === 'not_connected', 'plugins_loaded must not finalize OAuth callback failure status.');
     $assert(($bootstrapDiagnostics['code_received'] ?? null) === true, 'plugins_loaded must not rewrite code_received from its previous value.');
     $assert(($bootstrapDiagnostics['state_received'] ?? null) === true, 'plugins_loaded must not rewrite state_received from its previous value.');
