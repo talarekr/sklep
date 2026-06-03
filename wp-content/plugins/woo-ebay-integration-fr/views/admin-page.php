@@ -894,8 +894,34 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
                 <button class="button">Preview French listing template</button>
             </form>
         </div>
+        <section class="wei-auto-runner" id="wei-french-content-auto-runner" data-admin-post-url="<?php echo esc_url($adminPostUrl); ?>" data-action="wei_fr_regenerate_french_content_batch" data-nonce="<?php echo esc_attr(wp_create_nonce('wei_fr_regenerate_french_content_batch')); ?>">
+            <h3>Auto French Content runner</h3>
+            <p class="description">Browser-based automation for regenerating French content in batches. It runs one batch at a time, waits for each request to finish, and only updates local FR content meta. No eBay API calls, no listing updates, no publishing.</p>
+            <div class="wei-auto-runner-controls">
+                <label>Batch size <input id="wei-auto-french-content-batch-size" type="number" min="1" max="200" value="50" /></label>
+                <label>Delay between batches <input id="wei-auto-french-content-delay" type="number" min="0" max="3600" step="1" value="5" /> seconds</label>
+                <label><input id="wei-auto-french-content-include-excluded" type="checkbox" value="1" /> Include excluded_from_ebay products</label>
+                <button type="button" class="button button-primary" id="wei-auto-french-content-start">Start</button>
+                <button type="button" class="button" id="wei-auto-french-content-stop">Stop</button>
+            </div>
+            <div class="wei-grid" id="wei-auto-french-content-progress">
+                <div class="wei-card"><span>batches_completed</span><strong data-counter="batches_completed">0</strong></div>
+                <div class="wei-card"><span>total_processed</span><strong data-counter="total_processed">0</strong></div>
+                <div class="wei-card"><span>total_regenerated</span><strong data-counter="total_regenerated">0</strong></div>
+                <div class="wei-card"><span>total_already_current</span><strong data-counter="total_already_current">0</strong></div>
+                <div class="wei-card"><span>total_stale_fixed</span><strong data-counter="total_stale_fixed">0</strong></div>
+                <div class="wei-card"><span>total_skipped</span><strong data-counter="total_skipped">0</strong></div>
+                <div class="wei-card"><span>total_failed</span><strong data-counter="total_failed">0</strong></div>
+                <div class="wei-card"><span>remaining_products</span><strong data-counter="remaining_products">-</strong></div>
+                <div class="wei-card"><span>total_target_products</span><strong data-counter="total_target_products">-</strong></div>
+                <div class="wei-card"><span>running / stopped / completed</span><strong data-counter="state">stopped</strong></div>
+                <div class="wei-card"><span>stopped_reason</span><strong data-counter="stopped_reason">-</strong></div>
+            </div>
+            <p><strong>last_batch_result</strong></p>
+            <pre class="wei-scroll wei-auto-runner-log" data-counter="last_batch_result">-</pre>
+        </section>
         <?php if (!empty($frenchMigration['reports'])): ?>
-            <p><strong>French content migration CSV reports:</strong>
+            <p><strong>French content reports:</strong>
             <?php foreach ((array) $frenchMigration['reports'] as $report): $reportPath = is_array($report) ? (string) ($report['path'] ?? '') : ''; if ($reportPath === '') continue; ?>
                 <a class="button" href="<?php echo esc_url(admin_url('admin-post.php?action=download_wei_fr_report&file=' . rawurlencode(basename($reportPath)))); ?>"><?php echo esc_html(basename($reportPath)); ?></a>
             <?php endforeach; ?>
@@ -1578,6 +1604,216 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
                 stopRunner('page_unload');
             }
         });
+    }());
+    </script>
+
+    <script>
+    (function () {
+        const runner = document.getElementById('wei-french-content-auto-runner');
+        if (!runner) {
+            return;
+        }
+
+        const startButton = document.getElementById('wei-auto-french-content-start');
+        const stopButton = document.getElementById('wei-auto-french-content-stop');
+        const batchSizeInput = document.getElementById('wei-auto-french-content-batch-size');
+        const delayInput = document.getElementById('wei-auto-french-content-delay');
+        const includeExcludedInput = document.getElementById('wei-auto-french-content-include-excluded');
+        const fields = {};
+        runner.querySelectorAll('[data-counter]').forEach(function (node) {
+            fields[node.dataset.counter] = node;
+        });
+
+        const state = {
+            running: false,
+            stopped: true,
+            inFlight: false,
+            abortController: null,
+            delayTimer: 0,
+            batches_completed: 0,
+            total_processed: 0,
+            total_regenerated: 0,
+            total_already_current: 0,
+            total_stale_fixed: 0,
+            total_skipped: 0,
+            total_failed: 0,
+            remaining_products: '-',
+            total_target_products: '-',
+            stopped_reason: '-',
+        };
+
+        function setField(name, value) {
+            if (fields[name]) {
+                fields[name].textContent = String(value);
+            }
+        }
+
+        function setUiStatus(status, reason) {
+            setField('state', status);
+            setField('stopped_reason', reason || '-');
+            startButton.disabled = status === 'running';
+            stopButton.disabled = status !== 'running';
+        }
+
+        function updateCounters(lastBatch) {
+            setField('batches_completed', state.batches_completed);
+            setField('total_processed', state.total_processed);
+            setField('total_regenerated', state.total_regenerated);
+            setField('total_already_current', state.total_already_current);
+            setField('total_stale_fixed', state.total_stale_fixed);
+            setField('total_skipped', state.total_skipped);
+            setField('total_failed', state.total_failed);
+            setField('remaining_products', state.remaining_products);
+            setField('total_target_products', state.total_target_products);
+            setField('last_batch_result', lastBatch ? JSON.stringify(lastBatch, null, 2) : '-');
+        }
+
+        function numberFromInput(input, fallback, min, max) {
+            const value = parseInt(input.value, 10);
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function stopRunner(reason) {
+            state.stopped = true;
+            state.running = false;
+            if (state.delayTimer) {
+                window.clearTimeout(state.delayTimer);
+                state.delayTimer = 0;
+            }
+            if (state.abortController) {
+                state.abortController.abort();
+                state.abortController = null;
+            }
+            setUiStatus(reason === 'completed' ? 'completed' : 'stopped', reason || 'manual_stop');
+        }
+
+        function wait(ms) {
+            return new Promise(function (resolve) {
+                state.delayTimer = window.setTimeout(function () {
+                    state.delayTimer = 0;
+                    resolve();
+                }, ms);
+            });
+        }
+
+        async function runBatch(batchIndex) {
+            if (state.inFlight) {
+                throw new Error('double_submit_prevented');
+            }
+            state.inFlight = true;
+            state.abortController = new AbortController();
+
+            const formData = new FormData();
+            formData.append('action', runner.dataset.action || 'wei_fr_regenerate_french_content_batch');
+            formData.append('_wpnonce', runner.dataset.nonce || '');
+            formData.append('batch_size', String(numberFromInput(batchSizeInput, 50, 1, 200)));
+            formData.append('include_excluded_from_ebay', includeExcludedInput.checked ? '1' : '0');
+            formData.append('force_current_schema', '1');
+            formData.append('wei_fr_auto_french_content_runner', '1');
+            formData.append('auto_runner_batch_index', String(batchIndex));
+
+            try {
+                const response = await fetch(runner.dataset.adminPostUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData,
+                    signal: state.abortController.signal,
+                });
+                if (!response.ok) {
+                    throw new Error('request_failed_http_' + response.status);
+                }
+                const result = await response.json();
+                if (result && result.success === true && result.data) {
+                    return result.data;
+                }
+                return result;
+            } finally {
+                state.inFlight = false;
+                state.abortController = null;
+            }
+        }
+
+        async function startRunner() {
+            if (state.running || state.inFlight) {
+                return;
+            }
+            state.running = true;
+            state.stopped = false;
+            state.batches_completed = 0;
+            state.total_processed = 0;
+            state.total_regenerated = 0;
+            state.total_already_current = 0;
+            state.total_stale_fixed = 0;
+            state.total_skipped = 0;
+            state.total_failed = 0;
+            state.remaining_products = '-';
+            state.total_target_products = '-';
+            state.stopped_reason = '-';
+            updateCounters(null);
+            setUiStatus('running', '-');
+
+            while (state.running && !state.stopped) {
+                try {
+                    const batchIndex = state.batches_completed + 1;
+                    const batch = await runBatch(batchIndex);
+                    const processed = parseInt(batch.processed || 0, 10) || 0;
+                    const regenerated = parseInt(batch.regenerated || 0, 10) || 0;
+                    const alreadyCurrent = parseInt(batch.already_current_schema || 0, 10) || 0;
+                    const staleFixed = parseInt(batch.stale_fixed || 0, 10) || 0;
+                    const skipped = parseInt(batch.skipped || 0, 10) || 0;
+                    const failed = parseInt(batch.failed || 0, 10) || 0;
+                    const remaining = Object.prototype.hasOwnProperty.call(batch, 'remaining_products') ? (parseInt(batch.remaining_products || 0, 10) || 0) : '-';
+                    const totalTarget = Object.prototype.hasOwnProperty.call(batch, 'total_target_products') ? (parseInt(batch.total_target_products || 0, 10) || 0) : '-';
+                    const madeProgress = regenerated > 0 || alreadyCurrent > 0 || processed > 0;
+
+                    state.batches_completed += 1;
+                    state.total_processed += processed;
+                    state.total_regenerated += regenerated;
+                    state.total_already_current += alreadyCurrent;
+                    state.total_stale_fixed += staleFixed;
+                    state.total_skipped += skipped;
+                    state.total_failed += failed;
+                    state.remaining_products = remaining;
+                    state.total_target_products = totalTarget;
+                    updateCounters(batch);
+
+                    if (batch.fatal_error || batch.stopped_reason) {
+                        stopRunner(batch.stopped_reason || 'fatal_error');
+                        break;
+                    }
+                    if (batch.queue_empty === true || remaining === 0) {
+                        stopRunner('completed');
+                        break;
+                    }
+                    if (!madeProgress) {
+                        stopRunner('no_progress');
+                        break;
+                    }
+
+                    await wait(numberFromInput(delayInput, 5, 0, 3600) * 1000);
+                } catch (error) {
+                    if (state.stopped && error.name === 'AbortError') {
+                        break;
+                    }
+                    stopRunner(error && error.message ? error.message : 'fatal_error');
+                    break;
+                }
+            }
+        }
+
+        startButton.addEventListener('click', startRunner);
+        stopButton.addEventListener('click', function () {
+            stopRunner('manual_stop');
+        });
+        window.addEventListener('beforeunload', function () {
+            if (state.running || state.inFlight) {
+                stopRunner('page_unload');
+            }
+        });
+        setUiStatus('stopped', '-');
     }());
     </script>
     <div class="wei-build-footer" data-wei-fr-build-marker="1">
