@@ -67,9 +67,35 @@ class EbayClient
         return $this->request('POST', '/sell/inventory/v1/offer/' . rawurlencode($offer_id) . '/publish', [], [], $context);
     }
 
-    public function bulk_update_price_quantity(array $requests)
+    public function bulk_update_price_quantity(array $requests, array $context = [])
     {
-        return $this->request('POST', '/sell/inventory/v1/bulk_update_price_quantity', ['requests' => $requests]);
+        return $this->request('POST', '/sell/inventory/v1/bulk_update_price_quantity', ['requests' => $requests], [], $context);
+    }
+
+    public function end_fixed_price_item_by_listing_id(string $listing_id, string $ending_reason = 'NotAvailable', array $context = [])
+    {
+        $listing_id = trim($listing_id);
+        if ($listing_id === '') {
+            return new \WP_Error('wei_ebay_listing_id_missing', 'listing_id is required when ending an eBay listing');
+        }
+
+        $allowedReasons = ['NotAvailable', 'LostOrBroken', 'Incorrect', 'OtherListingError'];
+        if (!in_array($ending_reason, $allowedReasons, true)) {
+            $ending_reason = 'NotAvailable';
+        }
+
+        $xml = '<?xml version="1.0" encoding="utf-8"?>'
+            . '<EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+            . '<ErrorLanguage>en_US</ErrorLanguage>'
+            . '<WarningLevel>High</WarningLevel>'
+            . '<ItemID>' . htmlspecialchars($listing_id, ENT_QUOTES | ENT_XML1, 'UTF-8') . '</ItemID>'
+            . '<EndingReason>' . htmlspecialchars($ending_reason, ENT_QUOTES | ENT_XML1, 'UTF-8') . '</EndingReason>'
+            . '</EndFixedPriceItemRequest>';
+
+        return $this->trading_request('EndFixedPriceItem', $xml, array_merge($context, [
+            'listing_id' => $listing_id,
+            'ending_reason' => $ending_reason,
+        ]));
     }
 
     public function get_policies(string $type, string $marketplace_id = 'EBAY_DE')
@@ -209,6 +235,84 @@ class EbayClient
     {
         $context = array_merge($this->taxonomy_oauth_context(), $context, ['stage' => (string) ($context['stage'] ?? 'taxonomy')]);
         return $this->request($method, $path, $body, $query, $context, 'application');
+    }
+
+    private function trading_request(string $callName, string $xml, array $context = [])
+    {
+        $token = $this->auth->get_valid_access_token();
+        if (is_wp_error($token)) {
+            return $token;
+        }
+
+        $headers = [
+            'X-EBAY-API-CALL-NAME' => $callName,
+            'X-EBAY-API-SITEID' => (string) ($context['site_id'] ?? '77'),
+            'X-EBAY-API-COMPATIBILITY-LEVEL' => '1231',
+            'X-EBAY-API-IAF-TOKEN' => $token,
+            'Content-Type' => 'text/xml',
+            'Accept' => 'text/xml',
+        ];
+
+        $args = [
+            'method' => 'POST',
+            'timeout' => 25,
+            'headers' => $headers,
+            'body' => $xml,
+        ];
+
+        $url = self::BASE . '/ws/api.dll';
+        for ($attempt = 1; $attempt <= 4; $attempt++) {
+            $res = wp_remote_request($url, $args);
+            if (is_wp_error($res)) {
+                if ($attempt === 4) {
+                    return $res;
+                }
+                sleep($attempt);
+                continue;
+            }
+
+            $status = (int) wp_remote_retrieve_response_code($res);
+            $raw_body = (string) wp_remote_retrieve_body($res);
+            if ($status >= 200 && $status < 300 && preg_match('/<Ack>(Success|Warning)<\/Ack>/i', $raw_body)) {
+                return [
+                    'ack' => preg_match('/<Ack>([^<]+)<\/Ack>/i', $raw_body, $m) ? $m[1] : 'Success',
+                    'raw_response' => $raw_body,
+                ];
+            }
+
+            if (in_array($status, [429, 500, 502, 503, 504], true) && $attempt < 4) {
+                sleep($attempt);
+                continue;
+            }
+
+            $message = $this->extract_xml_error_message($raw_body);
+            if ($message === '') {
+                $message = 'eBay Trading API HTTP ' . $status . ' error';
+            }
+
+            $errorContext = array_merge([
+                'stage' => (string) ($context['stage'] ?? 'unknown'),
+                'endpoint' => '/ws/api.dll',
+                'method' => 'POST',
+                'call_name' => $callName,
+                'http_status' => $status,
+                'listing_id' => (string) ($context['listing_id'] ?? ''),
+                'response_body' => $raw_body,
+                'request_headers' => $this->sanitize_sensitive_data($headers),
+            ], $this->sanitize_sensitive_data($context));
+            $this->logger->error('eBay Trading API request failed', $errorContext);
+            return new \WP_Error('wei_ebay_trading_http_error', $message, $errorContext);
+        }
+
+        return new \WP_Error('wei_ebay_trading_http_error', 'eBay Trading API retries exhausted');
+    }
+
+    private function extract_xml_error_message(string $xml): string
+    {
+        if (preg_match('/<LongMessage>(.*?)<\/LongMessage>/is', $xml, $m) || preg_match('/<ShortMessage>(.*?)<\/ShortMessage>/is', $xml, $m)) {
+            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_XML1, 'UTF-8'));
+        }
+        return '';
     }
 
     private function request(string $method, string $path, ?array $body = null, array $query = [], array $context = [], string $tokenType = 'user')
