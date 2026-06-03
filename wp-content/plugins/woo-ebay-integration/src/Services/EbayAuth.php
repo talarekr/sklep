@@ -105,6 +105,13 @@ class EbayAuth
                 'routed_marketplace' => 'EBAY_FR',
                 'token_exchange_attempted' => false,
             ], false);
+
+            if ($hook === 'admin_init' && class_exists('WEI_FR\\Services\\EbayAuth') && class_exists('WEI_FR\\Services\\Logger')) {
+                $frAuth = new \WEI_FR\Services\EbayAuth(new \WEI_FR\Services\Logger());
+                $frAuth->maybe_intercept_oauth_callback($hook);
+                exit;
+            }
+
             return;
         }
 
