@@ -431,6 +431,13 @@ $stockSyncLastRun = is_array($stockSyncStatus['last_run'] ?? null) ? $stockSyncS
 $stockSyncReports = is_array($stockSyncStatus['reports'] ?? null) ? $stockSyncStatus['reports'] : [];
 $stockSyncDiagnostics = is_array($stock_sync_diagnostics ?? null) ? $stock_sync_diagnostics : [];
 $stockSyncNextRun = !empty($stockSyncStatus['next_scheduled_run']) ? gmdate('Y-m-d H:i:s', (int) $stockSyncStatus['next_scheduled_run']) : '-';
+$frPublishReportStatus = is_array($fr_publish_report_status ?? null) ? $fr_publish_report_status : [];
+$frPublishLastRun = is_array($fr_publish_last_run ?? null) ? $fr_publish_last_run : [];
+$frPublishReports = is_array($frPublishReportStatus['reports'] ?? null) ? $frPublishReportStatus['reports'] : [];
+$frPublishActions = array_slice(is_array($fr_publish_last_actions ?? null) ? $fr_publish_last_actions : (is_array($frPublishLastRun['actions'] ?? null) ? $frPublishLastRun['actions'] : []), -25);
+$frPublishPublishedListings = array_slice(is_array($frPublishLastRun['last_published_listings'] ?? null) ? $frPublishLastRun['last_published_listings'] : $frPublishActions, -25);
+$frPublishReportWriteError = is_array($frPublishLastRun['report_write_error'] ?? null) ? $frPublishLastRun['report_write_error'] : (is_array($frPublishReportStatus['report_write_error'] ?? null) ? $frPublishReportStatus['report_write_error'] : []);
+$frPublishListingDiagnostics = is_array($fr_publish_listing_diagnostics ?? null) ? $fr_publish_listing_diagnostics : [];
 
 $oauthDiagnostics = is_array($oauth_diagnostics ?? null) ? $oauth_diagnostics : [];
 $frPluginVersion = defined('WEI_FR_PLUGIN_VERSION') ? (string) WEI_FR_PLUGIN_VERSION : (string) ($oauthDiagnostics['fr_plugin_version'] ?? '0.1.0');
@@ -702,6 +709,70 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
             <div class="wei-card"><span>ready_at_publish_start</span><strong><?php echo esc_html((string) $initialPublishTotalReady); ?></strong></div>
             <div class="wei-card"><span>blocked_this_publish_run</span><strong><?php echo esc_html((string) $initialPublishBlockedCount); ?></strong></div>
         </div>
+        <h3>Latest FR publish/export logs</h3>
+        <?php if (!empty($frPublishReportWriteError)): ?>
+            <div class="notice notice-error inline"><p><strong>report_write_error:</strong> target path <code><?php echo esc_html((string) ($frPublishReportWriteError['target_path'] ?? '')); ?></code>; reason: <?php echo esc_html((string) ($frPublishReportWriteError['reason'] ?? '')); ?></p></div>
+        <?php endif; ?>
+        <h4>Last publish run summary</h4>
+        <div class="wei-grid">
+            <div class="wei-card"><span>started_at</span><strong><?php echo esc_html($displayValue($frPublishLastRun['started_at'] ?? '')); ?></strong></div>
+            <div class="wei-card"><span>finished_at</span><strong><?php echo esc_html($displayValue($frPublishLastRun['finished_at'] ?? '')); ?></strong></div>
+            <div class="wei-card"><span>exported</span><strong><?php echo esc_html((string) ($frPublishLastRun['exported'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>published</span><strong><?php echo esc_html((string) ($frPublishLastRun['published'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>skipped</span><strong><?php echo esc_html((string) ($frPublishLastRun['skipped_this_run'] ?? $frPublishLastRun['skipped'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>errors</span><strong><?php echo esc_html((string) ($frPublishLastRun['errors'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>result</span><strong><?php echo esc_html($displayValue($frPublishLastRun['result'] ?? '')); ?></strong></div>
+            <div class="wei-card"><span>run_id</span><strong><?php echo esc_html($displayValue($frPublishLastRun['run_id'] ?? '')); ?></strong></div>
+        </div>
+        <h4>Last published listings</h4>
+        <table class="widefat striped">
+            <thead><tr><th>product_id</th><th>title</th><th>ebay_sku</th><th>listing_id</th><th>offer_id</th><th>price</th><th>result</th><th>listing_url</th></tr></thead>
+            <tbody>
+            <?php if ($frPublishPublishedListings === []): ?>
+                <tr><td colspan="8">No FR publish/export rows recorded yet.</td></tr>
+            <?php else: ?>
+                <?php foreach (array_reverse($frPublishPublishedListings) as $row): ?>
+                    <?php $listingUrl = (string) ($row['listing_url'] ?? ''); ?>
+                    <tr>
+                        <td><?php echo esc_html((string) ($row['product_id'] ?? '')); ?></td>
+                        <td><?php echo esc_html((string) ($row['title'] ?? '')); ?></td>
+                        <td><?php echo esc_html((string) ($row['ebay_sku'] ?? '')); ?></td>
+                        <td><?php echo esc_html((string) ($row['listing_id'] ?? '')); ?></td>
+                        <td><?php echo esc_html((string) ($row['offer_id'] ?? '')); ?></td>
+                        <td><?php echo esc_html(trim((string) ($row['price'] ?? '') . ' ' . (string) ($row['currency'] ?? ''))); ?></td>
+                        <td><?php echo esc_html((string) ($row['result'] ?? '')); ?></td>
+                        <td><?php if ($listingUrl !== ''): ?><a href="<?php echo esc_url($listingUrl); ?>" target="_blank" rel="noopener">Open on eBay.fr</a><?php else: ?>—<?php endif; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            <?php endif; ?>
+            </tbody>
+        </table>
+        <h4>Report links</h4>
+        <p class="wei-actions">
+            <?php foreach (['last_run' => 'last-run JSON', 'actions' => 'actions CSV', 'errors' => 'errors CSV'] as $reportKey => $reportLabel): ?>
+                <?php $reportUrl = (string) ($frPublishReports[$reportKey]['url'] ?? ''); $reportPath = (string) ($frPublishReports[$reportKey]['path'] ?? ''); ?>
+                <?php if ($reportUrl !== ''): ?><a class="button" href="<?php echo esc_url($reportUrl); ?>" target="_blank" rel="noopener"><?php echo esc_html($reportLabel); ?></a><?php endif; ?>
+                <?php if ($reportPath !== ''): ?><span class="description"><code><?php echo esc_html($reportPath); ?></code></span><?php endif; ?>
+            <?php endforeach; ?>
+        </p>
+        <details><summary>Latest FR publish/export action rows JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($frPublishActions, 10000)); ?></pre></details>
+        <h4>Product-level FR listing meta diagnostics</h4>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_fr_publish_listing_diagnostics'); ?>
+            <input type="hidden" name="action" value="wei_fr_publish_listing_diagnostics" />
+            <label>product_id <input type="number" min="1" name="product_id" value="<?php echo esc_attr((string) ($frPublishListingDiagnostics['product_id'] ?? '')); ?>" /></label>
+            <button class="button">Show FR listing meta</button>
+        </form>
+        <?php if ($frPublishListingDiagnostics !== []): ?>
+            <table class="widefat striped">
+                <tbody>
+                <?php foreach (['_wei_fr_ebay_listing_id','_wei_fr_ebay_offer_id','_wei_fr_ebay_inventory_item_id','_wei_fr_ebay_listing_url','_wei_fr_ebay_published_at','_wei_fr_ebay_marketplace'] as $metaKey): ?>
+                    <tr><th><code><?php echo esc_html($metaKey); ?></code></th><td><?php $metaValue = (string) ($frPublishListingDiagnostics[$metaKey] ?? ''); ?><?php if ($metaKey === '_wei_fr_ebay_listing_url' && $metaValue !== ''): ?><a href="<?php echo esc_url($metaValue); ?>" target="_blank" rel="noopener"><?php echo esc_html($metaValue); ?></a><?php else: ?><?php echo esc_html($metaValue); ?><?php endif; ?></td></tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+
         <h3>Latest eBay state refresh</h3>
         <div class="wei-grid">
             <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>

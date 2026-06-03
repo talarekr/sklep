@@ -590,6 +590,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         update_post_meta($metaProductId, '_wei_fr_ebay_listing_id', $listing_id);
         update_post_meta($metaProductId, '_wei_fr_ebay_public_url', $this->listing_public_url($listing_id, $marketplaceId));
         update_post_meta($metaProductId, '_wei_fr_ebay_listing_url', $this->listing_public_url($listing_id, $marketplaceId));
+        update_post_meta($metaProductId, '_wei_fr_ebay_marketplace', $marketplaceId);
         update_post_meta($metaProductId, '_wei_fr_ebay_last_export_at', gmdate('Y-m-d H:i:s'));
         update_post_meta($metaProductId, '_wei_fr_ebay_last_sync_at', gmdate('Y-m-d H:i:s'));
         update_post_meta($metaProductId, '_wei_fr_ebay_last_sync_status', $syncStatus);
@@ -615,7 +616,31 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'last_sync_at' => gmdate('Y-m-d H:i:s'),
         ]);
 
-        return ['result' => 'success', 'offer_id' => $offer_id, 'listing_id' => $listing_id, 'inventory_id' => $sku, 'aspects' => $aspects, 'condition_resolution' => ['condition' => $conditionResolution['condition'], 'source' => $conditionResolution['source']], 'content_source' => $content['source'], 'sku_resolution' => $skuResolution, 'price_resolution' => $priceResolution];
+        return [
+            'result' => 'success',
+            'offer_id' => $offer_id,
+            'listing_id' => $listing_id,
+            'listing_url' => $this->listing_public_url($listing_id, $marketplaceId),
+            'inventory_id' => $sku,
+            'inventory_item_id' => $sku,
+            'marketplace' => $marketplaceId,
+            'category_id' => $categoryId,
+            'price' => $priceValue,
+            'currency' => $priceCurrency,
+            'quantity' => max(0, (int) $product->get_stock_quantity()),
+            'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''),
+            'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
+            'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
+            'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''),
+            'description_source_used' => (string) ($descriptionPayloadDiagnostics['description_source_used'] ?? ''),
+            'sent_description_is_html_template' => (string) ($descriptionPayloadDiagnostics['sent_description_is_html_template'] ?? ''),
+            'contains_template_markers' => (string) ($descriptionPayloadDiagnostics['contains_template_markers'] ?? ''),
+            'aspects' => $aspects,
+            'condition_resolution' => ['condition' => $conditionResolution['condition'], 'source' => $conditionResolution['source']],
+            'content_source' => $content['source'],
+            'sku_resolution' => $skuResolution,
+            'price_resolution' => $priceResolution,
+        ];
     }
 
 
