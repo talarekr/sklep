@@ -53,6 +53,22 @@ foreach ([
     "'unknown_sku'",
     "'local_stock_recheck_not_zero'",
     "'auth' => '[REDACTED]'",
+    "EVENT_QUEUE_OPTION = 'wei_ebay_stock_sync_event_queue'",
+    "PROCESSED_EVENTS_OPTION = 'wei_ebay_stock_sync_processed_event_ids'",
+    "LAST_SUCCESSFUL_SYNC_OPTION = 'wei_ebay_stock_sync_last_successful_timestamp'",
+    "'woo_stock_zero'",
+    "'woo_order_sold'",
+    "'woo_outofstock'",
+    "fallback_active_listing_scan",
+    "'_wei_ebay_listing_id'",
+    "'_wei_ebay_offer_id'",
+    "'_wei_ebay_listing_status'",
+    "'listing_status'",
+    "'active', 'published'",
+    "inventoryItemSku",
+    "set_woo_stock_zero_outofstock_mark_sold_enqueue_marketplace_cleanup",
+    "_wei_marketplace_cleanup_needed",
+    "wei_marketplace_cleanup_requested",
 ] as $needle) {
     $assertContains($service, $needle, 'Stock sync service');
 }
@@ -83,6 +99,8 @@ foreach ([
 foreach ([
     'list_active_mappings',
     "status NOT IN ('ended','sold','inactive','unavailable')",
+    "status IN ('active','published')",
+    "remote_listing_id <> ''",
 ] as $needle) {
     $assertContains($repo, $needle, 'Mapping repository active listing lookup');
 }

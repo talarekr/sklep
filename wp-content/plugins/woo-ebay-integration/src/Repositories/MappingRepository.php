@@ -55,7 +55,7 @@ class MappingRepository
         global $wpdb;
         $table = $wpdb->prefix . 'marketplace_mappings';
         $limit = max(1, min(500, $limit));
-        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND status NOT IN ('ended','sold','inactive','unavailable') AND (remote_offer_id IS NOT NULL OR remote_listing_id IS NOT NULL OR sku <> '') ORDER BY updated_at DESC LIMIT %d", 'ebay', $limit);
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND status NOT IN ('ended','sold','inactive','unavailable') AND status IN ('active','published') AND (remote_offer_id IS NOT NULL AND remote_offer_id <> '' OR remote_listing_id IS NOT NULL AND remote_listing_id <> '') ORDER BY updated_at DESC LIMIT %d", 'ebay', $limit);
         $rows = $wpdb->get_results($sql, ARRAY_A);
         return is_array($rows) ? $rows : [];
     }
