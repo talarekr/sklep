@@ -14,9 +14,9 @@ if (!defined('ABSPATH')) {
 define('WEI_FR_PLUGIN_FILE', __FILE__);
 define('WEI_FR_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WEI_FR_PLUGIN_VERSION', '0.1.0');
-define('WEI_FR_BUILD_COMMIT', '90f70ef-fr-oauth-admin-init-deferral');
-define('WEI_FR_BUILD_ID', '2026-06-03-fr-admin-init-only-v3-build-marker');
-define('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-fr-admin-init-only-v3');
+define('WEI_FR_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router');
+define('WEI_FR_BUILD_ID', '2026-06-03-shared-oauth-state-router-v4-build-marker');
+define('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-shared-oauth-state-router-v4');
 
 spl_autoload_register(function (string $class): void {
     if (strpos($class, 'WEI_FR\\') !== 0) {

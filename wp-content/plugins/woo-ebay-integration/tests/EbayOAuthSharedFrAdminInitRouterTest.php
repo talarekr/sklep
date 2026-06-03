@@ -34,6 +34,8 @@ namespace {
     $GLOBALS['wei_shared_router_wp_die_called'] = false;
     $GLOBALS['wei_shared_router_current_user_can_calls'] = 0;
     $GLOBALS['wei_shared_router_remote_posts'] = [];
+    $GLOBALS['wei_shared_router_actions'] = [];
+    $GLOBALS['wei_shared_router_uploads_basedir'] = sys_get_temp_dir() . '/wei-shared-router-test-' . getmypid();
 
     function get_option(string $key, $default = false)
     {
@@ -65,6 +67,22 @@ namespace {
     {
         $GLOBALS['wei_shared_router_current_user_can_calls']++;
         return $capability === 'manage_options';
+    }
+
+    function add_action(string $hook, $callback, int $priority = 10, int $accepted_args = 1): bool
+    {
+        $GLOBALS['wei_shared_router_actions'][] = compact('hook', 'callback', 'priority', 'accepted_args');
+        return true;
+    }
+
+    function wp_upload_dir($time = null, bool $create_dir = true, bool $refresh_cache = false): array
+    {
+        return ['basedir' => $GLOBALS['wei_shared_router_uploads_basedir']];
+    }
+
+    function wp_mkdir_p(string $target): bool
+    {
+        return is_dir($target) || mkdir($target, 0775, true);
     }
 
     function get_transient(string $key)
@@ -176,6 +194,18 @@ namespace {
     $_REQUEST = $_GET;
     $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&state=wei_fr:RETURNED_STATE&code=FR_CODE&expires_in=299';
 
+    $bootstrapAuth = new DeEbayAuth(new DeLogger());
+    $bootstrapAuth->handle_admin_bootstrap_oauth_callback();
+    $debugPath = $GLOBALS['wei_shared_router_uploads_basedir'] . '/wei-ebay-integration-fr/oauth-shared-callback-debug.json';
+    $debugPayload = is_readable($debugPath) ? (array) json_decode((string) file_get_contents($debugPath), true) : [];
+    $registeredAdminInitRouter = false;
+    foreach ($GLOBALS['wei_shared_router_actions'] as $action) {
+        if (($action['hook'] ?? '') === 'admin_init' && ($action['priority'] ?? null) === 0) {
+            $registeredAdminInitRouter = true;
+            break;
+        }
+    }
+
     $redirectLocation = '';
     try {
         (new DeEbayAuth(new DeLogger()))->maybe_intercept_oauth_callback('admin_init');
@@ -187,6 +217,12 @@ namespace {
     $frSettings = $GLOBALS['wei_shared_router_options'][FrPlugin::OPTION_KEY];
     $remotePost = $GLOBALS['wei_shared_router_remote_posts'][0] ?? [];
 
+    $assert($registeredAdminInitRouter, 'Exact shared callback URL must register an admin_init router before WordPress can render an insufficient-permissions admin page.');
+    $assert(($debugPayload['hook_name'] ?? '') === 'plugins_loaded', 'DE bootstrap must write the early shared callback debug file at plugins_loaded.');
+    $assert(($debugPayload['page'] ?? '') === 'ebay-auth-callback', 'Early shared callback debug file must record the callback page parameter.');
+    $assert(($debugPayload['state_prefix'] ?? '') === 'wei_fr', 'Early shared callback debug file must record the FR state prefix.');
+    $assert(($debugPayload['has_code'] ?? null) === true, 'Early shared callback debug file must record that the OAuth code is present.');
+    $assert(($debugPayload['routed_plugin_attempt'] ?? '') === 'FR', 'Early shared callback debug file must record the FR routed plugin attempt.');
     $assert($redirectLocation === 'https://gpswiss.pl/wp-admin/admin.php?page=woo-ebay-fr&ebay_connected=1&oauth_status=connected', 'FR callback must redirect back to the FR plugin admin page after success.');
     $assert(($frSettings['refresh_token'] ?? '') === 'FR_REFRESH_TOKEN', 'FR handler must save the returned refresh token in FR-specific options.');
     $assert(($frSettings['access_token'] ?? '') === 'FR_ACCESS_TOKEN', 'FR handler must save the returned access token in FR-specific options.');

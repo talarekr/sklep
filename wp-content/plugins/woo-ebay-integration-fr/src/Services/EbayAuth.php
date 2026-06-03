@@ -722,7 +722,7 @@ class EbayAuth
 
     private function oauth_callback_flow_version(): string
     {
-        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-shared-oauth-router-v1';
+        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-shared-oauth-state-router-v4';
     }
 
     private function callback_capability_diagnostics(string $callbackHookStage, string $requiredCapability): array

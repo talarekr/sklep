@@ -124,7 +124,7 @@ namespace {
     $assert(($diagnostics['token_exchange_attempted'] ?? false) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
     $assert(($diagnostics['fr_plugin_version'] ?? '') === '0.1.0', 'FR OAuth diagnostics must expose fr_plugin_version.');
     $assert(($diagnostics['fr_plugin_commit'] ?? '') !== '', 'FR OAuth diagnostics must expose fr_plugin_commit.');
-    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-shared-oauth-router-v1', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
+    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-shared-oauth-state-router-v4', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
     $assert(($diagnostics['oauth_shared_callback'] ?? null) === true, 'FR OAuth diagnostics must mark the shared callback.');
     $assert(($diagnostics['oauth_callback_router'] ?? '') === 'state_prefix', 'FR OAuth diagnostics must identify the state-prefix router.');
     $assert(($diagnostics['routed_plugin'] ?? '') === 'FR', 'FR OAuth diagnostics must identify the routed plugin.');
