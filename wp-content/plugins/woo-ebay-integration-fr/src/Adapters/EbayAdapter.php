@@ -3867,7 +3867,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_fr_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_fr_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'nbp_eur_rate_status' => (string) ($priceResolution['nbp_eur_rate_status'] ?? ''), 'nbp_eur_rate_value' => $priceResolution['nbp_eur_rate_value'] ?? $priceResolution['nbp_rate'] ?? null, 'nbp_eur_rate_date' => (string) ($priceResolution['nbp_eur_rate_date'] ?? $priceResolution['nbp_effective_date'] ?? ''), 'nbp_eur_rate_source' => (string) ($priceResolution['nbp_eur_rate_source'] ?? $priceResolution['currency_source'] ?? 'nbp_table_a'), 'nbp_eur_rate_cached_at' => (string) ($priceResolution['nbp_eur_rate_cached_at'] ?? ''), 'nbp_eur_rate_fetch_error' => (string) ($priceResolution['nbp_eur_rate_fetch_error'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'marque_readiness' => $marqueDiagnostics, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'stock_quantity' => $stockGuard['stock_quantity'], 'stock_status' => $stockGuard['stock_status'], 'manage_stock' => $stockGuard['manage_stock'], 'purchasable' => $stockGuard['purchasable'], 'ovoko_status' => $stockGuard['ovoko_status'], 'stock_block_reason' => $stockGuard['stock_block_reason'], 'stock_guard' => $stockGuard, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_fr_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_fr_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'nbp_eur_rate_status' => (string) ($priceResolution['nbp_eur_rate_status'] ?? ''), 'nbp_eur_rate_value' => $priceResolution['nbp_eur_rate_value'] ?? $priceResolution['nbp_rate'] ?? null, 'nbp_eur_rate_date' => (string) ($priceResolution['nbp_eur_rate_date'] ?? $priceResolution['nbp_effective_date'] ?? ''), 'nbp_eur_rate_source' => (string) ($priceResolution['nbp_eur_rate_source'] ?? $priceResolution['currency_source'] ?? 'nbp_table_a'), 'nbp_eur_rate_cached_at' => (string) ($priceResolution['nbp_eur_rate_cached_at'] ?? ''), 'nbp_eur_rate_fetch_error' => (string) ($priceResolution['nbp_eur_rate_fetch_error'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'marque_readiness' => $marqueDiagnostics, 'mpn_oe_readiness' => $partNumberDiagnostics, 'numero_piece_fabricant_source' => (string) ($partNumberDiagnostics['numero_piece_fabricant_source'] ?? ''), 'numero_piece_fabricant_value' => (string) ($partNumberDiagnostics['numero_piece_fabricant_value'] ?? ''), 'numero_piece_fabricant_confidence' => (string) ($partNumberDiagnostics['numero_piece_fabricant_confidence'] ?? ''), 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'stock_quantity' => $stockGuard['stock_quantity'], 'stock_status' => $stockGuard['stock_status'], 'manage_stock' => $stockGuard['manage_stock'], 'purchasable' => $stockGuard['purchasable'], 'ovoko_status' => $stockGuard['ovoko_status'], 'stock_block_reason' => $stockGuard['stock_block_reason'], 'stock_guard' => $stockGuard, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
 
@@ -3965,7 +3965,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $resolved = $this->resolve_mpn_aspect_value($product, $productId, $sku, $content);
         $partNumber = (string) ($resolved['value'] ?? '');
-        $mappedNames = ['Herstellernummer', 'Manufacturer Part Number', 'MPN'];
+        $mappedNames = $this->marketplace_id() === 'EBAY_FR'
+            ? ['Numéro de pièce fabricant', 'Numéro de pièce', 'Numer części', 'Herstellernummer', 'Manufacturer Part Number', 'MPN']
+            : ['Herstellernummer', 'Manufacturer Part Number', 'MPN'];
         if (!empty($aspects['OE/OEM Referenznummer']) || !empty($aspects['OE/OEM number']) || !empty($aspects['OE/OEM Referenznummer(n)'])) {
             $mappedNames[] = 'OE/OEM number';
         }
@@ -3986,7 +3988,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'present_item_specific_names' => $presentNames,
             'present_in_final_item_specifics_payload' => $partNumber !== '' && $presentNames !== [],
             'required' => $required,
-            'preferred_item_specific_name' => 'Herstellernummer',
+            'preferred_item_specific_name' => $this->marketplace_id() === 'EBAY_FR' ? 'Numéro de pièce fabricant' : 'Herstellernummer',
+            'numero_piece_fabricant_source' => (string) ($resolved['source'] ?? 'none'),
+            'numero_piece_fabricant_value' => $partNumber,
+            'numero_piece_fabricant_confidence' => (string) ($resolved['confidence'] ?? '0'),
             'issue' => $required && ($partNumber === '' || $presentNames === []) ? 'missing_manufacturer_part_number_item_specific' : '',
         ];
     }
@@ -4746,6 +4751,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_mpn_aspect_value($product, int $product_id, string $sku, array $content = []): array
     {
+        if ($this->marketplace_id() === 'EBAY_FR') {
+            $contentValue = $this->part_number_from_french_content($content, ['Numéro de pièce']);
+            if ($contentValue !== '') {
+                return ['value' => $contentValue, 'source' => 'french_content:Numéro de pièce', 'source_type' => 'french_content', 'source_key' => 'Numéro de pièce', 'rejected_tokens' => [], 'confidence' => 0.97, 'skipped_weak_part_number' => false];
+            }
+
+            $contentValue = $this->part_number_from_french_content($content, ['Numer części']);
+            if ($contentValue !== '') {
+                return ['value' => $contentValue, 'source' => 'source_content:Numer części', 'source_type' => 'source_content', 'source_key' => 'Numer części', 'rejected_tokens' => [], 'confidence' => 0.96, 'skipped_weak_part_number' => false];
+            }
+        }
+
         foreach (['_mpn', 'mpn', '_part_number', 'part_number', '_oem_number', 'oem_number', '_oe_number', '_catalog_number', 'catalog_number'] as $metaKey) {
             $value = $this->normalize_part_number_value((string) get_post_meta($product_id, $metaKey, true));
             if ($value !== '') {
@@ -4753,7 +4770,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        foreach (['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'] as $attributeName) {
+        foreach (['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numéro de pièce', 'Numéro de pièce fabricant', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'] as $attributeName) {
             if (!method_exists($product, 'get_attribute')) {
                 continue;
             }
@@ -4768,13 +4785,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (method_exists($product, 'get_name')) {
             $texts[] = (string) $product->get_name();
         }
-        if (method_exists($product, 'get_description')) {
-            $texts[] = (string) $product->get_description();
+        if ($this->marketplace_id() !== 'EBAY_FR') {
+            if (method_exists($product, 'get_description')) {
+                $texts[] = (string) $product->get_description();
+            }
+            if (method_exists($product, 'get_short_description')) {
+                $texts[] = (string) $product->get_short_description();
+            }
         }
-        if (method_exists($product, 'get_short_description')) {
-            $texts[] = (string) $product->get_short_description();
-        }
-        foreach (['title', 'description'] as $contentKey) {
+        foreach ($this->marketplace_id() === 'EBAY_FR' ? ['title'] : ['title', 'description'] as $contentKey) {
             if (!empty($content[$contentKey])) {
                 $texts[] = (string) $content[$contentKey];
             }
@@ -4782,16 +4801,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
         foreach ($texts as $text) {
             $value = $this->extract_part_number_from_text($text, $rejectedTokens);
             if ($value !== '') {
-                return ['value' => $value, 'source' => 'title_parse', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.72, 'skipped_weak_part_number' => !empty($rejectedTokens)];
+                return ['value' => $value, 'source' => 'title_parse', 'source_type' => 'title', 'source_key' => 'product_title', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.90, 'skipped_weak_part_number' => !empty($rejectedTokens)];
             }
         }
 
-        if (method_exists($product, 'get_sku')) {
+        if ($this->marketplace_id() !== 'EBAY_FR' && method_exists($product, 'get_sku')) {
             $wooSku = $this->normalize_part_number_value((string) $product->get_sku());
             if ($wooSku !== '' && !$this->is_generated_ebay_sku($wooSku)) {
                 return ['value' => $wooSku, 'source' => 'inventory_cache', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.86, 'skipped_weak_part_number' => !empty($rejectedTokens)];
             }
         }
+
+        // EBAY_FR does not use Woo/eBay SKU as manufacturer part number by default; SKU is inventory identity, not OE/OEM identity.
 
         return ['value' => '', 'source' => 'none', 'rejected_tokens' => array_values(array_unique($rejectedTokens)), 'confidence' => 0.0, 'skipped_weak_part_number' => !empty($rejectedTokens)];
     }
@@ -4820,7 +4841,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        foreach (['MPN', 'Herstellernummer', 'Manufacturer Part Number'] as $standardAlias) {
+        foreach (['MPN', 'Herstellernummer', 'Manufacturer Part Number', 'Numéro de pièce fabricant'] as $standardAlias) {
             if (empty($aspects[$standardAlias])) {
                 $aspects[$standardAlias] = [$partNumber];
             }
@@ -4834,7 +4855,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function part_number_aspect_aliases(): array
     {
-        return ['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'];
+        return ['MPN', 'Herstellernummer', 'Hersteller Teilenummer', 'OE/OEM Referenznummer(n)', 'Referenznummer(n) OE', 'Referenznummer(n) OEM', 'Teilenummer', 'Artikelnummer', 'OEM', 'OE', 'Numéro de pièce', 'Numéro de pièce fabricant', 'Numer części', 'Numer czesci', 'Numer katalogowy', 'Numer OE', 'Part Number', 'Manufacturer Part Number'];
     }
 
     private function is_part_number_aspect_alias(string $name): bool
@@ -4901,7 +4922,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     $rejectedTokens[] = $value;
                     continue;
                 }
-                if (preg_match('/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{5,20}$/', $value)) {
+                $pattern = $this->marketplace_id() === 'EBAY_FR'
+                    ? '/^(?=.*[A-Z])(?=(?:.*[0-9]){3,})[A-Z0-9]{7,20}$/'
+                    : '/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{5,20}$/';
+                if (preg_match($pattern, $value)) {
                     return $value;
                 }
             }
@@ -5003,6 +5027,36 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return ['value' => $default, 'source' => $default !== '' ? 'default_hersteller_fallback' : 'none', 'source_key' => $default !== '' ? 'default_hersteller_fallback' : ''];
     }
 
+
+    private function part_number_from_french_content(array $content, array $labels): string
+    {
+        $wanted = array_map(fn(string $label): string => $this->normalize_aspect_alias_name($label), $labels);
+        foreach ((array) ($content['aspects'] ?? []) as $label => $values) {
+            if (in_array($this->normalize_aspect_alias_name((string) $label), $wanted, true)) {
+                $value = $this->normalize_part_number_value((string) (is_array($values) ? reset($values) : $values));
+                if ($value !== '') {
+                    return $value;
+                }
+            }
+        }
+        foreach ((array) ($content['fields'] ?? []) as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $fieldLabels = [(string) ($field['french_label'] ?? ''), (string) ($field['source_label'] ?? ''), (string) ($field['polish_label'] ?? '')];
+            foreach ($fieldLabels as $label) {
+                if ($label !== '' && in_array($this->normalize_aspect_alias_name($label), $wanted, true)) {
+                    foreach (['source_value', 'value', 'translated_value'] as $valueKey) {
+                        $value = $this->normalize_part_number_value((string) ($field[$valueKey] ?? ''));
+                        if ($value !== '') {
+                            return $value;
+                        }
+                    }
+                }
+            }
+        }
+        return '';
+    }
 
     private function manufacturer_from_french_content(array $content, array $labels): string
     {
