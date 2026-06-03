@@ -80,16 +80,14 @@ class EbayAuth
         $this->maybe_intercept_oauth_callback('load-woocommerce_page_ebay-auth-callback');
     }
 
+    /**
+     * @deprecated The shared FR OAuth router is registered at main plugin file load.
+     * Registering it here would be too late when this service is constructed from
+     * admin_init/admin_menu bootstrap paths.
+     */
     public static function register_shared_oauth_admin_init_router(): void
     {
-        if (!function_exists('add_action')) {
-            return;
-        }
-
-        error_log('WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED: {"hook":"admin_init","priority":0,"source":"EbayAuth::register_shared_oauth_admin_init_router"}');
-        add_action('admin_init', static function (): void {
-            (new self(new Logger()))->route_foreign_fr_oauth_callback();
-        }, 0);
+        error_log('WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTRATION_SKIPPED_LATE_SOURCE: {"source":"EbayAuth::register_shared_oauth_admin_init_router"}');
     }
 
     public function handle_admin_bootstrap_oauth_callback(): void
@@ -142,11 +140,17 @@ class EbayAuth
         $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
 
         if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
-            wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
+            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_PERMISSION_DENIED', $context);
+            $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_ADMIN_PERMISSION_DENIED', $context);
+            $this->redirect_shared_fr_callback_error('fr_admin_permission_denied');
+            return;
         }
 
         if (function_exists('current_user_can') && !current_user_can('manage_options')) {
-            wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
+            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_PERMISSION_DENIED', $context);
+            $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_ADMIN_PERMISSION_DENIED', $context);
+            $this->redirect_shared_fr_callback_error('fr_admin_permission_denied');
+            return;
         }
 
         $this->store_oauth_diagnostics([

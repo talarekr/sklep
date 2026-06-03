@@ -13,9 +13,9 @@ if (!defined('ABSPATH')) {
 
 define('WEI_PLUGIN_FILE', __FILE__);
 define('WEI_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('WEI_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router');
-define('WEI_BUILD_ID', '2026-06-03-bootstrap-fr-oauth-router-v5-build-marker');
-define('WEI_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-bootstrap-fr-oauth-router-v5');
+define('WEI_BUILD_COMMIT', 'file-load-fr-oauth-router');
+define('WEI_BUILD_ID', '2026-06-03-file-load-fr-oauth-router-v6-build-marker');
+define('WEI_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-file-load-fr-oauth-router-v6');
 
 spl_autoload_register(function (string $class): void {
     if (strpos($class, 'WEI\\') !== 0) {
@@ -67,8 +67,8 @@ if (!function_exists('wei_shared_oauth_fr_bootstrap_router')) {
 }
 
 if (function_exists('add_action')) {
-    error_log('WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED: {"hook":"admin_init","priority":0,"source":"woo-ebay-integration.php"}');
     add_action('admin_init', 'wei_shared_oauth_fr_bootstrap_router', 0);
+    error_log('WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED_AT_FILE_LOAD: {"hook":"admin_init","priority":0,"source":"woo-ebay-integration.php"}');
 }
 
 add_action('plugins_loaded', static function (): void {

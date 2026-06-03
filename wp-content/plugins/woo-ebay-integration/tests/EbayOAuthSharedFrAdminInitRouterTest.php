@@ -35,6 +35,8 @@ namespace {
     $GLOBALS['wei_shared_router_current_user_can_calls'] = 0;
     $GLOBALS['wei_shared_router_remote_posts'] = [];
     $GLOBALS['wei_shared_router_actions'] = [];
+    $GLOBALS['wei_shared_router_action_sequence'] = 0;
+    $GLOBALS['wei_shared_router_admin_menu_ran'] = false;
     $GLOBALS['wei_shared_router_uploads_basedir'] = sys_get_temp_dir() . '/wei-shared-router-test-' . getmypid();
 
     function get_option(string $key, $default = false)
@@ -94,7 +96,8 @@ namespace {
 
     function add_action(string $hook, $callback, int $priority = 10, int $accepted_args = 1): bool
     {
-        $GLOBALS['wei_shared_router_actions'][] = compact('hook', 'callback', 'priority', 'accepted_args');
+        $sequence = ++$GLOBALS['wei_shared_router_action_sequence'];
+        $GLOBALS['wei_shared_router_actions'][] = compact('hook', 'callback', 'priority', 'accepted_args', 'sequence');
         return true;
     }
 
@@ -114,10 +117,16 @@ namespace {
 
     function do_action(string $hook, ...$args): void
     {
-        foreach ($GLOBALS['wei_shared_router_actions'] as $action) {
-            if (($action['hook'] ?? '') === $hook && is_callable($action['callback'] ?? null)) {
-                call_user_func_array($action['callback'], array_slice($args, 0, (int) ($action['accepted_args'] ?? 1)));
-            }
+        $actions = array_values(array_filter(
+            $GLOBALS['wei_shared_router_actions'],
+            static fn (array $action): bool => ($action['hook'] ?? '') === $hook && is_callable($action['callback'] ?? null)
+        ));
+        usort($actions, static function (array $a, array $b): int {
+            return [($a['priority'] ?? 10), ($a['sequence'] ?? 0)] <=> [($b['priority'] ?? 10), ($b['sequence'] ?? 0)];
+        });
+
+        foreach ($actions as $action) {
+            call_user_func_array($action['callback'], array_slice($args, 0, (int) ($action['accepted_args'] ?? 1)));
         }
     }
 
@@ -263,6 +272,10 @@ namespace {
     $earlyReturnRemotePostCount = count($GLOBALS['wei_shared_router_remote_posts']);
     $earlyReturnWpDieCalled = (bool) ($GLOBALS['wei_shared_router_wp_die_called'] ?? false);
 
+    add_action('admin_menu', static function (): void {
+        $GLOBALS['wei_shared_router_admin_menu_ran'] = true;
+    });
+
     $_GET = ['page' => 'ebay-auth-callback', 'state' => $state, 'code' => 'FR_CODE', 'expires_in' => '299'];
     $_REQUEST = $_GET;
     $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&state=wei_fr:RETURNED_STATE&code=FR_CODE&expires_in=299';
@@ -274,9 +287,8 @@ namespace {
 
     $redirectLocation = '';
     try {
-        if (is_callable($registeredAdminInitCallback)) {
-            call_user_func($registeredAdminInitCallback);
-        }
+        do_action('admin_init');
+        do_action('admin_menu');
     } catch (WeiSharedRouterRedirect $redirect) {
         $redirectLocation = $redirect->location;
     }
@@ -327,9 +339,29 @@ namespace {
     $frAuthSource = file_get_contents(__DIR__ . '/../../woo-ebay-integration-fr/src/Services/EbayAuth.php');
     $assert(str_contains($frMainSource, "add_action('wei_fr_handle_shared_oauth_callback'"), 'FR plugin must register the shared OAuth callback handler action.');
     $assert(str_contains($frAuthSource, 'handle_shared_callback'), 'FR OAuth service must expose a shared callback handler method.');
-    $assert(str_contains($deMainSource, "add_action('admin_init', 'wei_shared_oauth_fr_bootstrap_router', 0)"), 'DE plugin main file must directly register the bootstrap shared OAuth admin_init router.');
-    $assert(str_contains($deMainSource, 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED'), 'DE plugin main file must log when the bootstrap router is registered.');
-    $assert(str_contains($deAuthSource, 'register_shared_oauth_admin_init_router'), 'DE shared router source must expose the permanent bootstrap registration method.');
+    $directRegistrationNeedle = "add_action('admin_init', 'wei_shared_oauth_fr_bootstrap_router', 0)";
+    $directRegistrationPos = strpos($deMainSource, $directRegistrationNeedle);
+    $fileLoadLogPos = strpos($deMainSource, 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED_AT_FILE_LOAD');
+    $pluginsLoadedPos = strpos($deMainSource, "add_action('plugins_loaded'");
+    $routerFunctionPos = strpos($deMainSource, 'function wei_shared_oauth_fr_bootstrap_router');
+    $authLazyMethodPos = strpos($deAuthSource, 'function register_shared_oauth_admin_init_router');
+    $authNextMethodPos = strpos($deAuthSource, 'function handle_admin_bootstrap_oauth_callback');
+    $authLazyMethodSource = ($authLazyMethodPos !== false && $authNextMethodPos !== false) ? substr($deAuthSource, $authLazyMethodPos, $authNextMethodPos - $authLazyMethodPos) : '';
+    $adminPageSource = file_get_contents(__DIR__ . '/../src/Services/AdminPage.php');
+    $adminPageRegisterMenuPos = strpos($adminPageSource, 'function register_menu');
+    $adminPageBuildLogPos = strpos($adminPageSource, 'WEI_BUILD_LOADED');
+
+    $assert($directRegistrationPos !== false, 'DE plugin main file must directly register the bootstrap shared OAuth admin_init router.');
+    $assert($routerFunctionPos !== false && $directRegistrationPos !== false && $directRegistrationPos > $routerFunctionPos, 'DE plugin main file must register the router at top-level immediately after the router function is declared.');
+    $assert($fileLoadLogPos !== false, 'DE plugin main file must emit WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED_AT_FILE_LOAD at bootstrap load.');
+    $assert($directRegistrationPos !== false && $fileLoadLogPos !== false && $fileLoadLogPos > $directRegistrationPos, 'DE plugin main file must log file-load router registration immediately after add_action registration.');
+    $assert($pluginsLoadedPos !== false && $directRegistrationPos !== false && $directRegistrationPos < $pluginsLoadedPos, 'DE bootstrap router registration must happen before plugins_loaded callbacks can run.');
+    $assert($pluginsLoadedPos !== false && $fileLoadLogPos !== false && $fileLoadLogPos < $pluginsLoadedPos, 'DE bootstrap router registration log must be emitted before plugins_loaded/AdminPage build logging paths.');
+    $assert($adminPageRegisterMenuPos !== false && $adminPageBuildLogPos !== false, 'AdminPage source must retain register_menu and build logging for the static timing guard.');
+    $assert(!str_contains($adminPageSource, 'wei_shared_oauth_fr_bootstrap_router'), 'AdminPage::register_menu must not register or reference the shared FR OAuth bootstrap router.');
+    $assert(str_contains($deAuthSource, 'register_shared_oauth_admin_init_router'), 'DE shared router source must retain the deprecated compatibility method name.');
+    $assert(!str_contains($authLazyMethodSource, 'add_action('), 'Deprecated EbayAuth::register_shared_oauth_admin_init_router must not lazily register admin_init callbacks.');
+    $assert(($GLOBALS['wei_shared_router_admin_menu_ran'] ?? false) === false, 'Simulated callback lifecycle must route and redirect during admin_init before admin_menu registration can run.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_HIT'), 'DE shared router source must log when the bootstrap router matches an FR callback.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND'), 'DE shared router source must log when the FR shared handler is found.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED'), 'DE shared router source must log before calling the FR shared handler.');
