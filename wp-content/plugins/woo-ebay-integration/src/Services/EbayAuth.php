@@ -82,7 +82,33 @@ class EbayAuth
 
     public function handle_admin_bootstrap_oauth_callback(): void
     {
+        if (!$this->is_oauth_callback_request()) {
+            return;
+        }
+
+        if ($this->is_foreign_fr_state()) {
+            $this->write_shared_fr_callback_debug('plugins_loaded', 'FR', true);
+            $this->store_oauth_diagnostics([
+                'oauth_shared_callback' => true,
+                'oauth_callback_router' => 'state_prefix',
+                'routed_plugin' => 'FR',
+                'routed_marketplace' => 'EBAY_FR',
+                'token_exchange_attempted' => false,
+            ], false);
+
+            if (function_exists('add_action')) {
+                add_action('admin_init', [$this, 'route_foreign_fr_oauth_callback'], 0);
+            }
+
+            return;
+        }
+
         $this->maybe_intercept_oauth_callback('plugins_loaded');
+    }
+
+    public function route_foreign_fr_oauth_callback(): void
+    {
+        $this->maybe_intercept_oauth_callback('admin_init');
     }
 
     public function handle_admin_post_oauth_callback(): void
@@ -98,6 +124,7 @@ class EbayAuth
         }
 
         if ($this->is_foreign_fr_state()) {
+            $this->write_shared_fr_callback_debug($hook, 'FR', false);
             $this->store_oauth_diagnostics([
                 'oauth_shared_callback' => true,
                 'oauth_callback_router' => 'state_prefix',
@@ -427,6 +454,62 @@ class EbayAuth
     {
         $state = $this->request_value('state');
         return str_starts_with($state, 'wei_fr:');
+    }
+
+    private function write_shared_fr_callback_debug(string $hook, string $routedPluginAttempt, bool $includeCapability = false): void
+    {
+        $state = $this->request_value('state');
+        if ($this->request_value('page') !== self::CALLBACK_PAGE_SLUG || !str_starts_with($state, 'wei_fr:')) {
+            return;
+        }
+
+        $uploadBase = '';
+        if (function_exists('wp_upload_dir')) {
+            $uploads = wp_upload_dir(null, false);
+            if (is_array($uploads) && (string) ($uploads['basedir'] ?? '') !== '') {
+                $uploadBase = (string) $uploads['basedir'];
+            }
+        }
+
+        if ($uploadBase === '' && defined('WP_CONTENT_DIR')) {
+            $uploadBase = rtrim((string) WP_CONTENT_DIR, '/\\') . '/uploads';
+        }
+
+        if ($uploadBase === '') {
+            return;
+        }
+
+        $dir = rtrim($uploadBase, '/\\') . '/wei-ebay-integration-fr';
+        if (function_exists('wp_mkdir_p')) {
+            wp_mkdir_p($dir);
+        } elseif (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+
+        $canManageOptions = null;
+        if ($includeCapability && function_exists('current_user_can')) {
+            $canManageOptions = current_user_can('manage_options');
+        }
+
+        $payload = [
+            'timestamp' => function_exists('current_time') ? current_time('mysql') : gmdate('Y-m-d H:i:s'),
+            'hook_name' => $hook,
+            'page' => $this->request_value('page'),
+            'state_prefix' => 'wei_fr',
+            'has_code' => $this->request_value('code') !== '',
+            'is_user_logged_in' => function_exists('is_user_logged_in') ? is_user_logged_in() : null,
+            'current_user_id' => function_exists('get_current_user_id') ? get_current_user_id() : 0,
+            'current_user_can_manage_options' => $canManageOptions,
+            'routed_plugin_attempt' => $routedPluginAttempt,
+        ];
+
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            : json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        if (is_string($json)) {
+            @file_put_contents($dir . '/oauth-shared-callback-debug.json', $json);
+        }
     }
 
     private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit): void
