@@ -48,6 +48,7 @@ class AdminPage
         add_action('admin_post_wei_fr_ebay_regenerate_french_content', [$this, 'regenerate_french_content']);
         add_action('admin_post_wei_fr_generate_french_content_single', [$this, 'generate_french_content_single']);
         add_action('admin_post_wei_fr_generate_french_content_batch', [$this, 'generate_french_content_batch']);
+        add_action('admin_post_wei_fr_regenerate_french_content_batch', [$this, 'regenerate_french_content_batch_ajax']);
         add_action('admin_post_wei_fr_french_content_schema_diagnostic', [$this, 'french_content_schema_diagnostic']);
         add_action('admin_post_wei_fr_update_shipping_policy_one', [$this, 'update_shipping_policy_one']);
         add_action('admin_post_wei_fr_shipping_policy_bulk_start', [$this, 'shipping_policy_bulk_start']);
@@ -3834,7 +3835,99 @@ class AdminPage
     }
 
 
+    public function regenerate_french_content_batch_ajax(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_regenerate_french_content_batch');
+
+        $batchSize = max(1, min(200, absint($_POST['batch_size'] ?? 50)));
+        $includeExcluded = !empty($_POST['include_excluded_from_ebay']);
+        $forceCurrentSchema = !array_key_exists('force_current_schema', $_POST) || !empty($_POST['force_current_schema']);
+        $autoRunnerBatchIndex = max(0, absint($_POST['auto_runner_batch_index'] ?? 0));
+
+        try {
+            if (!$forceCurrentSchema) {
+                wp_send_json([
+                    'result' => 'error',
+                    'processed' => 0,
+                    'regenerated' => 0,
+                    'already_current_schema' => 0,
+                    'stale_fixed' => 0,
+                    'skipped' => 0,
+                    'failed' => 1,
+                    'errors' => ['force_current_schema_required'],
+                    'remaining_products' => $this->french_content_target_product_count($includeExcluded),
+                    'total_target_products' => $this->french_content_target_product_count($includeExcluded),
+                    'queue_empty' => false,
+                    'fatal_error' => true,
+                    'stopped_reason' => 'force_current_schema_required',
+                    'called_ebay_api' => false,
+                    'updated_ebay_listing' => false,
+                    'published' => false,
+                    'exported' => false,
+                    'modified_woo_source_content' => false,
+                    'auto_runner_batch_index' => $autoRunnerBatchIndex,
+                    'batch_size' => $batchSize,
+                ]);
+            }
+
+            $payload = $this->process_french_content_schema_migration_batch($batchSize, $includeExcluded, true);
+            $payload['auto_runner_batch_index'] = $autoRunnerBatchIndex;
+            $payload['batch_size'] = $batchSize;
+            $payload['stopped_reason'] = (string) ($payload['stopped_reason'] ?? '');
+            $payload['fatal_error'] = !empty($payload['fatal_error']);
+
+            $this->logger->info('FRENCH_CONTENT_AUTO_RUNNER_BATCH', [
+                'auto_runner_batch_index' => $autoRunnerBatchIndex,
+                'batch_size' => $batchSize,
+                'processed' => (int) ($payload['processed'] ?? 0),
+                'regenerated' => (int) ($payload['regenerated'] ?? 0),
+                'already_current_schema' => (int) ($payload['already_current_schema'] ?? 0),
+                'stale_fixed' => (int) ($payload['stale_fixed'] ?? 0),
+                'skipped' => (int) ($payload['skipped'] ?? 0),
+                'failed' => (int) ($payload['failed'] ?? 0),
+                'remaining_products' => (int) ($payload['remaining_products'] ?? 0),
+                'queue_empty' => (bool) ($payload['queue_empty'] ?? false),
+                'stopped_reason' => (string) ($payload['stopped_reason'] ?? ''),
+                'called_ebay_api' => false,
+            ]);
+
+            wp_send_json($payload);
+        } catch (\Throwable $e) {
+            wp_send_json([
+                'result' => 'error',
+                'processed' => 0,
+                'regenerated' => 0,
+                'already_current_schema' => 0,
+                'stale_fixed' => 0,
+                'skipped' => 0,
+                'failed' => 1,
+                'errors' => [$e->getMessage()],
+                'remaining_products' => $this->french_content_target_product_count($includeExcluded),
+                'total_target_products' => $this->french_content_target_product_count($includeExcluded),
+                'queue_empty' => false,
+                'fatal_error' => true,
+                'stopped_reason' => 'fatal_error',
+                'called_ebay_api' => false,
+                'updated_ebay_listing' => false,
+                'published' => false,
+                'exported' => false,
+                'modified_woo_source_content' => false,
+                'auto_runner_batch_index' => $autoRunnerBatchIndex,
+                'batch_size' => $batchSize,
+            ]);
+        }
+    }
+
+
     private function run_french_content_schema_migration_batch(int $batchSize, bool $includeExcluded, bool $continue): void
+    {
+        $state = $this->process_french_content_schema_migration_batch($batchSize, $includeExcluded, $continue);
+        $this->set_status('French content schema migration: ' . wp_json_encode($state, JSON_UNESCAPED_UNICODE));
+        $this->go();
+    }
+
+    private function process_french_content_schema_migration_batch(int $batchSize, bool $includeExcluded, bool $continue): array
     {
         $state = $continue ? get_option(self::GERMAN_CONTENT_MIGRATION_STATE_OPTION, []) : [];
         $state = is_array($state) ? $state : [];
@@ -3853,6 +3946,11 @@ class AdminPage
         $alreadyCurrentSchemaProductIds = [];
         $errorProductIds = [];
         $sampleProducts = [];
+        $batchProcessed = 0;
+        $batchRegenerated = 0;
+        $batchAlreadyCurrent = 0;
+        $batchStaleFixed = 0;
+        $batchFailed = 0;
         foreach ($productIds as $productId) {
             $productId = (int) $productId;
             if (count($processedProductIds) < 100) {
@@ -3881,17 +3979,22 @@ class AdminPage
             $staleFixed = !empty($before['stale_bool']) && empty($after['stale_bool']);
 
             $state['processed_total'] = (int) ($state['processed_total'] ?? 0) + 1;
+            $batchProcessed++;
             if ($regenerated) {
                 $state['regenerated_total'] = (int) ($state['regenerated_total'] ?? 0) + 1;
+                $batchRegenerated++;
             }
             if ($alreadyCurrent) {
                 $state['already_current_schema_total'] = (int) ($state['already_current_schema_total'] ?? 0) + 1;
+                $batchAlreadyCurrent++;
             }
             if ($staleFixed) {
                 $state['stale_fixed_total'] = (int) ($state['stale_fixed_total'] ?? 0) + 1;
+                $batchStaleFixed++;
             }
             if ((!$regenerated && !$alreadyCurrent) || $error !== '') {
                 $state['errors_total'] = (int) ($state['errors_total'] ?? 0) + 1;
+                $batchFailed++;
             }
             if ($regenerated && count($regeneratedProductIds) < 100) {
                 $regeneratedProductIds[] = $productId;
@@ -3961,10 +4064,25 @@ class AdminPage
             $state['remaining_products'] = 0;
         }
         $state['reports'] = $this->append_french_content_migration_reports($state, $rows);
+        $state['result'] = !empty($state['complete']) ? 'completed' : 'success';
+        $state['processed'] = $batchProcessed;
+        $state['regenerated'] = $batchRegenerated;
+        $state['already_current_schema'] = $batchAlreadyCurrent;
+        $state['stale_fixed'] = $batchStaleFixed;
+        $state['skipped'] = max(0, $batchSize - $batchProcessed);
+        $state['failed'] = $batchFailed;
+        $state['errors'] = $errorProductIds;
+        $state['queue_empty'] = !empty($state['complete']) || (int) ($state['remaining_products'] ?? 0) <= 0;
+        $state['fatal_error'] = false;
+        $state['stopped_reason'] = '';
+        $state['called_ebay_api'] = false;
+        $state['updated_ebay_listing'] = false;
+        $state['published'] = false;
+        $state['exported'] = false;
+        $state['modified_woo_source_content'] = false;
         update_option(self::GERMAN_CONTENT_MIGRATION_STATE_OPTION, $state, false);
         update_option('wei_fr_ebay_french_content_audit_summary', $state, false);
-        $this->set_status('French content schema migration: ' . wp_json_encode($state, JSON_UNESCAPED_UNICODE));
-        $this->go();
+        return $state;
     }
 
     private function new_french_content_schema_migration_state(int $batchSize, bool $includeExcluded): array
@@ -4001,7 +4119,7 @@ class AdminPage
     private function french_content_target_product_count(bool $includeExcluded): int
     {
         global $wpdb;
-        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p WHERE p.post_type = 'product' AND p.post_status IN ('publish', 'draft', 'private') AND (%d = 1 OR NOT EXISTS (SELECT 1 FROM {$wpdb->postmeta} excluded_meta WHERE excluded_meta.post_id = p.ID AND excluded_meta.meta_key = '_wei_fr_ebay_export_status' AND excluded_meta.meta_value = 'excluded_from_ebay'))";
+        $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p WHERE p.post_type = 'product' AND p.post_status IN ('publish', 'draft', 'private') AND (%d = 1 OR NOT EXISTS (SELECT 1 FROM {$wpdb->postmeta} excluded_meta WHERE excluded_meta.post_id = p.ID AND excluded_meta.meta_key = '_wei_fr_ebay_export_status' AND excluded_meta.meta_value = 'excluded_from_ebay')) AND EXISTS (SELECT 1 FROM {$wpdb->term_relationships} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'product_cat' INNER JOIN {$wpdb->terms} t ON t.term_id = tt.term_id WHERE tr.object_id = p.ID AND t.name <> 'Bez kategorii' AND t.slug <> 'bez-kategorii' AND t.slug <> 'uncategorized')";
         return (int) $wpdb->get_var($wpdb->prepare($sql, $includeExcluded ? 1 : 0));
     }
 
@@ -4019,6 +4137,9 @@ class AdminPage
         $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration-fr';
         wp_mkdir_p($baseDir);
         $files = [
+            'last_run' => 'french-content-last-run.json',
+            'actions' => 'french-content-actions.csv',
+            'runner_errors' => 'french-content-errors.csv',
             'full' => 'french-content-migration-full.csv',
             'errors' => 'french-content-migration-errors.csv',
             'stale_fixed' => 'french-content-migration-stale-fixed.csv',
@@ -4047,11 +4168,17 @@ class AdminPage
         $reports = (array) ($state['reports'] ?? $this->french_content_migration_report_paths());
         $headers = ['product_id','sku','product_title','old_schema_version','new_schema_version','old_template_version','new_template_version','stale_before','stale_after','stale_reasons','regenerated','already_current_schema','source_description_field','source_description_used','error_message'];
         $sets = [
+            'actions' => $rows,
+            'runner_errors' => array_values(array_filter($rows, static fn(array $row): bool => trim((string) ($row['error_message'] ?? '')) !== '')),
             'full' => $rows,
             'errors' => array_values(array_filter($rows, static fn(array $row): bool => trim((string) ($row['error_message'] ?? '')) !== '')),
             'stale_fixed' => array_values(array_filter($rows, static fn(array $row): bool => ($row['stale_before'] ?? '') === 'yes' && ($row['stale_after'] ?? '') === 'no')),
             'already_current' => array_values(array_filter($rows, static fn(array $row): bool => ($row['already_current_schema'] ?? '') === 'yes')),
         ];
+        $lastRunPath = (string) ($reports['last_run']['path'] ?? '');
+        if ($lastRunPath !== '') {
+            file_put_contents($lastRunPath, wp_json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        }
         foreach ($sets as $key => $setRows) {
             $path = (string) ($reports[$key]['path'] ?? '');
             if ($path === '') {
@@ -4112,6 +4239,15 @@ class AdminPage
                             AND excluded_meta.meta_key = '_wei_fr_ebay_export_status'
                             AND excluded_meta.meta_value = 'excluded_from_ebay'
                     )
+                )
+                AND EXISTS (
+                    SELECT 1 FROM {$wpdb->term_relationships} tr
+                    INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'product_cat'
+                    INNER JOIN {$wpdb->terms} t ON t.term_id = tt.term_id
+                    WHERE tr.object_id = p.ID
+                        AND t.name <> 'Bez kategorii'
+                        AND t.slug <> 'bez-kategorii'
+                        AND t.slug <> 'uncategorized'
                 )
             GROUP BY p.ID
             ORDER BY p.ID ASC
