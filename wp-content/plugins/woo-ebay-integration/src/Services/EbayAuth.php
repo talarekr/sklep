@@ -87,7 +87,7 @@ class EbayAuth
         }
 
         if ($this->is_foreign_fr_state()) {
-            $context = $this->shared_fr_router_context('plugins_loaded', false);
+            $context = $this->shared_fr_router_context('plugins_loaded', $this->fr_shared_handler_callable_found());
             $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_DETECTED', $context);
             $this->write_shared_fr_callback_debug('plugins_loaded', 'FR', true, 'WEI_SHARED_OAUTH_FR_DETECTED', $context);
             $this->store_oauth_diagnostics([
@@ -115,29 +115,28 @@ class EbayAuth
             return;
         }
 
-        $frHandlerCallableFound = false;
-        $frAuth = null;
-        if (class_exists('WEI_FR\\Services\\EbayAuth') && class_exists('WEI_FR\\Services\\Logger')) {
-            $frAuth = new \WEI_FR\Services\EbayAuth(new \WEI_FR\Services\Logger());
-            $frHandlerCallableFound = is_callable([$frAuth, 'maybe_intercept_oauth_callback']);
-        }
+        $frHandlerCallableFound = $this->fr_shared_handler_callable_found();
 
         $context = $this->shared_fr_router_context('admin_init', $frHandlerCallableFound);
         $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
         $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
 
-        if (!$frHandlerCallableFound || !$frAuth instanceof \WEI_FR\Services\EbayAuth) {
+        if (!$frHandlerCallableFound) {
             $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
             $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            $this->redirect_shared_fr_callback_error('fr_handler_missing');
             return;
         }
 
+        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
+        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
+
         if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
-            return;
+            wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
         }
 
         if (function_exists('current_user_can') && !current_user_can('manage_options')) {
-            return;
+            wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
         }
 
         $this->store_oauth_diagnostics([
@@ -147,8 +146,10 @@ class EbayAuth
             'routed_marketplace' => 'EBAY_FR',
             'token_exchange_attempted' => false,
         ], false);
+        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
+        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
         $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING', $context);
-        $frAuth->maybe_intercept_oauth_callback('admin_init');
+        $this->call_fr_shared_oauth_handler($_GET);
         exit;
     }
 
@@ -564,6 +565,42 @@ class EbayAuth
         if (is_string($json)) {
             @file_put_contents($dir . '/oauth-shared-callback-debug.json', $json);
         }
+    }
+
+
+    private function fr_shared_handler_callable_found(): bool
+    {
+        if (function_exists('has_action') && has_action('wei_fr_handle_shared_oauth_callback') !== false) {
+            return true;
+        }
+
+        return function_exists('wei_fr_handle_shared_oauth_callback');
+    }
+
+    /**
+     * @param array<string, mixed> $request
+     */
+    private function call_fr_shared_oauth_handler(array $request): void
+    {
+        if (function_exists('do_action') && function_exists('has_action') && has_action('wei_fr_handle_shared_oauth_callback') !== false) {
+            do_action('wei_fr_handle_shared_oauth_callback', $request);
+            return;
+        }
+
+        if (function_exists('wei_fr_handle_shared_oauth_callback')) {
+            wei_fr_handle_shared_oauth_callback($request);
+        }
+    }
+
+    private function redirect_shared_fr_callback_error(string $error): void
+    {
+        if (!function_exists('wp_safe_redirect')) {
+            return;
+        }
+
+        $target = admin_url('admin.php?page=woo-ebay&oauth_status=error&oauth_error=' . rawurlencode($error) . '&routed_plugin=FR');
+        wp_safe_redirect($target);
+        exit;
     }
 
 
