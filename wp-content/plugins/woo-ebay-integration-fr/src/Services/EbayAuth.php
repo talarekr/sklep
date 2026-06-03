@@ -78,13 +78,18 @@ class EbayAuth
 
     public function handle_admin_bootstrap_oauth_callback(): void
     {
-        $this->maybe_intercept_oauth_callback('plugins_loaded');
+        if (!$this->is_oauth_callback_request()) {
+            return;
+        }
+
+        $this->store_intercept_diagnostics('plugins_loaded', false, 'plugins_loaded_deferred_to_admin_init');
+        add_action('admin_init', [$this, 'handle_oauth_callback'], 0);
     }
 
     public function handle_admin_post_oauth_callback(): void
     {
         $this->store_intercept_diagnostics('admin_post_' . self::ADMIN_POST_CALLBACK_ACTION, false);
-        $this->process_oauth_callback(false);
+        $this->process_oauth_callback(false, 'admin_post_' . self::ADMIN_POST_CALLBACK_ACTION);
     }
 
     public function maybe_intercept_oauth_callback(string $hook): void
@@ -94,7 +99,7 @@ class EbayAuth
         }
 
         $this->store_intercept_diagnostics($hook, true);
-        $this->process_oauth_callback(true);
+        $this->process_oauth_callback(true, $hook);
         exit;
     }
 
@@ -118,14 +123,17 @@ class EbayAuth
         return $this->oauth_redirect_param($this->settings());
     }
 
-    private function process_oauth_callback(bool $interceptedByAdminInit = false): void
+    private function process_oauth_callback(bool $interceptedByAdminInit = false, string $callbackHookStage = 'process_oauth_callback'): void
     {
-        if (!current_user_can('manage_options')) {
-            $this->store_oauth_diagnostics([
+        $capabilityDiagnostics = $this->callback_capability_diagnostics($callbackHookStage, 'manage_options');
+        if (!$capabilityDiagnostics['current_user_can_manage_options']) {
+            $this->store_oauth_diagnostics($capabilityDiagnostics + [
                 'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
                 'page_param' => $this->request_value('page'),
                 'code_received' => $this->request_value('code') !== '',
                 'state_received' => $this->request_value('state') !== '',
+                'code_exists_in_get_before_capability_rejection' => array_key_exists('code', $_GET) && $this->sanitize_raw((string) $_GET['code']) !== '',
+                'state_exists_in_get_before_capability_rejection' => array_key_exists('state', $_GET) && $this->sanitize_raw((string) $_GET['state']) !== '',
                 'token_exchange_attempted' => false,
                 'token_exchange_success' => false,
                 'token_exchange_error' => 'not_wordpress_administrator',
@@ -145,6 +153,11 @@ class EbayAuth
         $this->store_oauth_diagnostics([
             'oauth_status' => $error !== '' ? 'callback_error' : 'callback_received',
             'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
+            'current_user_id' => $capabilityDiagnostics['current_user_id'],
+            'is_user_logged_in' => $capabilityDiagnostics['is_user_logged_in'],
+            'current_user_can_manage_options' => $capabilityDiagnostics['current_user_can_manage_options'],
+            'required_capability' => $capabilityDiagnostics['required_capability'],
+            'callback_hook_stage' => $capabilityDiagnostics['callback_hook_stage'],
             'page_param' => $this->request_value('page'),
             'code_received' => $code !== '',
             'state_received' => $state !== '',
@@ -239,6 +252,13 @@ class EbayAuth
             'intercept_hook' => (string) ($s['intercept_hook'] ?? ''),
             'request_uri' => (string) ($s['request_uri'] ?? ''),
             'raw_get_keys' => is_array($s['raw_get_keys'] ?? null) ? $s['raw_get_keys'] : [],
+            'current_user_id' => (int) ($s['current_user_id'] ?? 0),
+            'is_user_logged_in' => $s['is_user_logged_in'] ?? null,
+            'current_user_can_manage_options' => $s['current_user_can_manage_options'] ?? null,
+            'required_capability' => (string) ($s['required_capability'] ?? 'manage_options'),
+            'callback_hook_stage' => (string) ($s['callback_hook_stage'] ?? ''),
+            'code_exists_in_get_before_capability_rejection' => $s['code_exists_in_get_before_capability_rejection'] ?? null,
+            'state_exists_in_get_before_capability_rejection' => $s['state_exists_in_get_before_capability_rejection'] ?? null,
             'callback_page_registered' => $s['callback_page_registered'] ?? false,
             'page_param' => (string) ($s['page_param'] ?? ''),
             'code_received' => $s['code_received'] ?? null,
@@ -384,12 +404,12 @@ class EbayAuth
             || strpos($requestUri, 'page=' . self::CALLBACK_PAGE_SLUG) !== false;
     }
 
-    private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit): void
+    private function store_intercept_diagnostics(string $hook, bool $interceptedByAdminInit, ?string $callbackHookStage = null): void
     {
         $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
         error_log('WEI OAuth callback intercept hit: request_uri=' . $requestUri . ' hook=' . $hook);
 
-        $this->store_oauth_diagnostics([
+        $this->store_oauth_diagnostics($this->callback_capability_diagnostics($callbackHookStage ?? $hook, 'manage_options') + [
             'callback_intercepted_by_admin_init' => $interceptedByAdminInit,
             'intercept_hook' => $hook,
             'request_uri' => $requestUri,
@@ -400,6 +420,21 @@ class EbayAuth
             'expires_in_received' => $this->request_value('expires_in'),
             'token_exchange_attempted' => false,
         ], false);
+    }
+
+    private function callback_capability_diagnostics(string $callbackHookStage, string $requiredCapability): array
+    {
+        $currentUserId = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+        $isUserLoggedIn = function_exists('is_user_logged_in') ? (bool) is_user_logged_in() : $currentUserId > 0;
+        $canManageOptions = function_exists('current_user_can') ? (bool) current_user_can($requiredCapability) : false;
+
+        return [
+            'current_user_id' => $currentUserId,
+            'is_user_logged_in' => $isUserLoggedIn,
+            'current_user_can_manage_options' => $canManageOptions,
+            'required_capability' => $requiredCapability,
+            'callback_hook_stage' => $callbackHookStage,
+        ];
     }
 
     private function request_value(string $key): string
@@ -508,7 +543,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['oauth_status', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];

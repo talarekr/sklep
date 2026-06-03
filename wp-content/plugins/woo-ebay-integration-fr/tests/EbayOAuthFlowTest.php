@@ -113,6 +113,14 @@ namespace {
     $assert(str_contains($source, 'intercept_hook'), 'OAuth diagnostics must store the hook that intercepted the callback.');
     $assert(str_contains($source, 'request_uri'), 'OAuth diagnostics must store the raw callback request URI.');
     $assert(str_contains($source, 'raw_get_keys'), 'OAuth diagnostics must store raw GET keys for callback debugging.');
+    $assert(str_contains($source, 'callback_capability_diagnostics'), 'FR OAuth callback must collect capability diagnostics before rejecting callbacks.');
+    $assert(str_contains($source, 'current_user_id'), 'FR OAuth diagnostics must include current_user_id.');
+    $assert(str_contains($source, 'is_user_logged_in'), 'FR OAuth diagnostics must include is_user_logged_in.');
+    $assert(str_contains($source, 'current_user_can_manage_options'), 'FR OAuth diagnostics must include current_user_can_manage_options.');
+    $assert(str_contains($source, 'required_capability'), 'FR OAuth diagnostics must include the required callback capability.');
+    $assert(str_contains($source, 'callback_hook_stage'), 'FR OAuth diagnostics must include callback_hook_stage.');
+    $assert(str_contains($source, 'code_exists_in_get_before_capability_rejection'), 'FR OAuth diagnostics must record whether code existed in $_GET before capability rejection.');
+    $assert(str_contains($source, 'state_exists_in_get_before_capability_rejection'), 'FR OAuth diagnostics must record whether state existed in $_GET before capability rejection.');
     $assert(str_contains($source, 'WEI OAuth callback intercept hit: request_uri='), 'OAuth callback intercept must emit temporary error_log diagnostics.');
     $assert(str_contains($source, 'Please log in as WordPress administrator and retry eBay Connect.'), 'Non-admin callback must show a clear administrator login message.');
     $assert(str_contains($source, '\'code_received\' => $code !== \'\''), 'Callback diagnostics must record code_received for code callbacks.');
@@ -121,12 +129,17 @@ namespace {
 
     $pluginSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
     $bootstrapSource = file_get_contents(__DIR__ . '/../woo-ebay-integration-fr.php');
+    $adminSource = file_get_contents(__DIR__ . '/../src/Services/AdminPage.php');
+    $assert(str_contains($adminSource, "'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [\$this, 'render_oauth_callback'], 'oauth callback menu'"), 'Hidden FR callback page must be registered with the FR callback slug and manage_options capability.');
     $assert(str_contains($pluginSource, "add_action('admin_init', [\$auth, 'handle_oauth_callback'], 0)"), 'Plugin must register the OAuth callback interceptor on global admin_init priority 0.');
     $assert(str_contains($pluginSource, "add_action('current_screen', [\$auth, 'handle_current_screen_oauth_callback'], 0)"), 'Plugin must register current_screen OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('load-admin_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_load_oauth_callback'], 0)"), 'Plugin must register load-admin_page OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('load-woocommerce_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_woocommerce_load_oauth_callback'], 0)"), 'Plugin must register WooCommerce submenu load OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('admin_post_nopriv_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION"), 'Plugin must register nopriv admin-post OAuth callback fallback.');
     $assert(str_contains($bootstrapSource, 'handle_admin_bootstrap_oauth_callback'), 'Main plugin file must register a bootstrap-level callback interceptor before WooCommerce-dependent boot.');
+    $assert(str_contains($source, "store_intercept_diagnostics('plugins_loaded', false, 'plugins_loaded_deferred_to_admin_init')"), 'FR bootstrap callback detection must defer processing until admin_init user/capability context is available.');
+    $assert(str_contains($source, 'add_action(' . "'admin_init'" . ', [$this, ' . "'handle_oauth_callback'" . '], 0)'), 'FR bootstrap callback handler must register an admin_init retry instead of processing at plugins_loaded.');
+    $assert(!str_contains($source, "maybe_intercept_oauth_callback('plugins_loaded')"), 'FR callback must not process OAuth at plugins_loaded before WordPress administrator capabilities are available.');
 
     $isCallbackRequest = $ref->getMethod('is_oauth_callback_request');
     $isCallbackRequest->setAccessible(true);
