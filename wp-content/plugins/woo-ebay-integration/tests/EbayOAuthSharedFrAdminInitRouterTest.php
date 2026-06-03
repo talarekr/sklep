@@ -195,6 +195,8 @@ namespace {
         (new FrEbayAuth(new FrLogger()))->handle_shared_callback($request);
     }, 10, 1);
 
+    DeEbayAuth::register_shared_oauth_admin_init_router();
+
     $failures = [];
     $assert = static function (bool $condition, string $message) use (&$failures): void {
         if (!$condition) {
@@ -219,14 +221,6 @@ namespace {
         'attempt_id' => 'attempt-fr-1',
     ];
 
-    $_GET = ['page' => 'ebay-auth-callback', 'state' => $state, 'code' => 'FR_CODE', 'expires_in' => '299'];
-    $_REQUEST = $_GET;
-    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&state=wei_fr:RETURNED_STATE&code=FR_CODE&expires_in=299';
-
-    $bootstrapAuth = new DeEbayAuth(new DeLogger());
-    $bootstrapAuth->handle_admin_bootstrap_oauth_callback();
-    $debugPath = $GLOBALS['wei_shared_router_uploads_basedir'] . '/wei-ebay-integration-fr/oauth-shared-callback-debug.json';
-    $debugPayload = is_readable($debugPath) ? (array) json_decode((string) file_get_contents($debugPath), true) : [];
     $registeredAdminInitRouter = false;
     $registeredAdminInitCallback = null;
     foreach ($GLOBALS['wei_shared_router_actions'] as $action) {
@@ -236,6 +230,24 @@ namespace {
             break;
         }
     }
+
+    $_GET = ['page' => 'woo-ebay'];
+    $_REQUEST = $_GET;
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=woo-ebay';
+    if (is_callable($registeredAdminInitCallback)) {
+        call_user_func($registeredAdminInitCallback);
+    }
+    $earlyReturnRemotePostCount = count($GLOBALS['wei_shared_router_remote_posts']);
+    $earlyReturnWpDieCalled = (bool) ($GLOBALS['wei_shared_router_wp_die_called'] ?? false);
+
+    $_GET = ['page' => 'ebay-auth-callback', 'state' => $state, 'code' => 'FR_CODE', 'expires_in' => '299'];
+    $_REQUEST = $_GET;
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&state=wei_fr:RETURNED_STATE&code=FR_CODE&expires_in=299';
+
+    $bootstrapAuth = new DeEbayAuth(new DeLogger());
+    $bootstrapAuth->handle_admin_bootstrap_oauth_callback();
+    $debugPath = $GLOBALS['wei_shared_router_uploads_basedir'] . '/wei-ebay-integration-fr/oauth-shared-callback-debug.json';
+    $debugPayload = is_readable($debugPath) ? (array) json_decode((string) file_get_contents($debugPath), true) : [];
 
     $redirectLocation = '';
     try {
@@ -251,9 +263,12 @@ namespace {
     $frSettings = $GLOBALS['wei_shared_router_options'][FrPlugin::OPTION_KEY];
     $remotePost = $GLOBALS['wei_shared_router_remote_posts'][0] ?? [];
     $deAuthSource = file_get_contents(__DIR__ . '/../src/Services/EbayAuth.php');
+    $deMainSource = file_get_contents(__DIR__ . '/../woo-ebay-integration.php');
 
-    $assert($registeredAdminInitRouter, 'Exact shared callback URL must register an admin_init router before WordPress can render an insufficient-permissions admin page.');
+    $assert($registeredAdminInitRouter, 'DE plugin bootstrap must register an admin_init priority 0 shared callback router unconditionally.');
     $assert(is_callable($registeredAdminInitCallback), 'Registered admin_init priority 0 shared router callback must be callable.');
+    $assert($earlyReturnRemotePostCount === 0, 'Shared admin_init router must return immediately for non-OAuth admin requests.');
+    $assert($earlyReturnWpDieCalled === false, 'Shared admin_init router must not invoke wp_die for non-OAuth admin requests.');
     $assert(($debugPayload['hook_name'] ?? '') === 'plugins_loaded', 'DE bootstrap must write the early shared callback debug file at plugins_loaded.');
     $assert(($debugPayload['page'] ?? '') === 'ebay-auth-callback', 'Early shared callback debug file must record the callback page parameter.');
     $assert(($debugPayload['state_prefix'] ?? '') === 'wei_fr', 'Early shared callback debug file must record the FR state prefix.');
@@ -288,7 +303,8 @@ namespace {
     $frAuthSource = file_get_contents(__DIR__ . '/../../woo-ebay-integration-fr/src/Services/EbayAuth.php');
     $assert(str_contains($frMainSource, "add_action('wei_fr_handle_shared_oauth_callback'"), 'FR plugin must register the shared OAuth callback handler action.');
     $assert(str_contains($frAuthSource, 'handle_shared_callback'), 'FR OAuth service must expose a shared callback handler method.');
-    $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_REGISTERED'), 'DE shared router source must log admin_init router registration for FR callbacks.');
+    $assert(str_contains($deMainSource, 'register_shared_oauth_admin_init_router'), 'DE plugin main file must register the shared OAuth admin_init router during bootstrap.');
+    $assert(str_contains($deAuthSource, 'register_shared_oauth_admin_init_router'), 'DE shared router source must expose the permanent bootstrap registration method.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND'), 'DE shared router source must log when the FR shared handler is found.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED'), 'DE shared router source must log before calling the FR shared handler.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING'), 'DE shared router source must log before handing off to FR and exiting.');
