@@ -497,7 +497,7 @@ class AdminPage
         }
         $postedCallbackUrl = esc_url_raw((string) ($_POST['redirect_uri'] ?? ''));
         $postedRuname = sanitize_text_field((string) ($_POST['runame'] ?? ''));
-        $s['redirect_uri'] = $postedCallbackUrl !== '' ? $postedCallbackUrl : admin_url('admin.php?page=' . EbayAuth::CALLBACK_PAGE_SLUG);
+        $s['redirect_uri'] = $this->normalize_fr_callback_url($postedCallbackUrl);
         $s['runame'] = $postedRuname;
         $s['marketplace_id'] = sanitize_text_field((string) ($_POST['marketplace_id'] ?? 'EBAY_FR'));
         $s['default_category_id'] = sanitize_text_field((string) ($_POST['default_category_id'] ?? ''));
@@ -4366,9 +4366,8 @@ class AdminPage
         if (!isset($s['inventory_location_address_line_1'])) {
             $s['inventory_location_address_line_1'] = '';
         }
-        if (!isset($s['wei_fr_cached_policies'])) {
-            $s['wei_fr_cached_policies'] = [];
-        }
+        $s['redirect_uri'] = $this->normalize_fr_callback_url((string) ($s['redirect_uri'] ?? ''));
+        $s['wei_fr_cached_policies'] = $this->normalize_fr_cached_policies($s['wei_fr_cached_policies'] ?? []);
         if (!isset($s['sku_category_overrides'])) {
             $s['sku_category_overrides'] = "CFM-001=179847";
         }
@@ -4467,6 +4466,42 @@ class AdminPage
         return $s;
     }
 
+
+
+    private function normalize_fr_callback_url(string $callbackUrl): string
+    {
+        $callbackUrl = trim($callbackUrl);
+        if ($callbackUrl === '' || $this->is_wordpress_callback_url($callbackUrl)) {
+            return admin_url('admin.php?page=' . EbayAuth::CALLBACK_PAGE_SLUG);
+        }
+
+        return $callbackUrl;
+    }
+
+    private function is_wordpress_callback_url(string $url): bool
+    {
+        return filter_var($url, FILTER_VALIDATE_URL)
+            && strpos($url, '/wp-admin/admin.php') !== false
+            && strpos($url, 'page=') !== false;
+    }
+
+    private function normalize_fr_cached_policies($cached): array
+    {
+        if (!is_array($cached)) {
+            return [];
+        }
+
+        $marketplaceId = (string) ($cached['marketplace_id'] ?? '');
+        if ($marketplaceId !== '' && $marketplaceId !== 'EBAY_FR') {
+            return [];
+        }
+
+        if ($marketplaceId === '') {
+            $cached['marketplace_id'] = 'EBAY_FR';
+        }
+
+        return $cached;
+    }
 
     private function with_shipping_policy_defaults(array $s): array
     {

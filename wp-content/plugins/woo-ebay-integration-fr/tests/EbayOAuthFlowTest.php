@@ -84,15 +84,31 @@ namespace {
     $diagnostics = $auth->get_diagnostic_oauth_context();
 
     $assert(($authorizeParams['redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Authorization URL must use eBay RuName as redirect_uri.');
+    $assert(!str_contains($authorizeUrl, 'ebay-auth-callback'), 'FR Connect URL must not contain the DE callback page slug.');
+    $assert(isset($GLOBALS['wei_fr_test_transients']['wei_fr_oauth_state_STATE1234567890']), 'FR Connect must store state under the FR-specific OAuth state key.');
     $assert(($diagnostics['callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'Diagnostics callback_url must be the full browser callback URL.');
     $assert(($diagnostics['browser_callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'Diagnostics browser_callback_url must be the full browser callback URL.');
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
     $assert(($diagnostics['token_exchange_attempted'] ?? true) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
 
+    $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
+        'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
+        'client_secret' => 'secret',
+        'redirect_uri' => 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-auth-callback',
+        'runame' => '',
+        'refresh_token' => '',
+    ];
+    $legacyAuthorizeUrl = $auth->get_authorize_url();
+    parse_str((string) parse_url($legacyAuthorizeUrl, PHP_URL_QUERY), $legacyAuthorizeParams);
+    $assert(($legacyAuthorizeParams['redirect_uri'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'FR Connect must rewrite copied DE callback settings to the FR callback helper URL.');
+    $assert(!str_contains($legacyAuthorizeUrl, 'page%3Debay-auth-callback') && !str_contains($legacyAuthorizeUrl, 'ebay-auth-callback'), 'FR Connect URL must never include the DE callback slug even when legacy settings were copied.');
+
     $ref = new ReflectionClass(EbayAuth::class);
     $source = file_get_contents($ref->getFileName());
     $assert(str_contains($source, '\'redirect_uri\' => $redirectUri'), 'Token exchange body must use the same OAuth redirect parameter variable.');
+    $assert(str_contains($source, "STATE_TRANSIENT_PREFIX = 'wei_fr_oauth_state_'"), 'OAuth state option/transient prefix must be FR-specific.');
+    $assert(!str_contains($source, "'wei_oauth_state_") && !str_contains($source, "'wei_ebay_oauth_state_"), 'FR OAuth state handling must not use DE state keys.');
     $assert(str_contains($source, 'callback_intercepted_by_admin_init'), 'OAuth diagnostics must track admin_init callback interception.');
     $assert(str_contains($source, 'intercept_hook'), 'OAuth diagnostics must store the hook that intercepted the callback.');
     $assert(str_contains($source, 'request_uri'), 'OAuth diagnostics must store the raw callback request URI.');

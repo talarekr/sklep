@@ -5594,13 +5594,31 @@ class EbayAdapter implements MarketplaceAdapterInterface
         return $shippingServices;
     }
 
+
+    private function normalize_fr_cached_policies($cached): array
+    {
+        if (!is_array($cached)) {
+            return [];
+        }
+
+        $marketplaceId = (string) ($cached['marketplace_id'] ?? '');
+        if ($marketplaceId !== '' && $marketplaceId !== 'EBAY_FR') {
+            return [];
+        }
+
+        if ($marketplaceId === '') {
+            $cached['marketplace_id'] = 'EBAY_FR';
+        }
+
+        return $cached;
+    }
+
     private function settings(): array
     {
         $settings = get_option(Plugin::OPTION_KEY, []);
         $settings = is_array($settings) ? $settings : [];
-        if (!isset($settings['marketplace_id'])) {
-            $settings['marketplace_id'] = 'EBAY_FR';
-        }
+        $settings['marketplace_id'] = 'EBAY_FR';
+        $settings['wei_fr_cached_policies'] = $this->normalize_fr_cached_policies($settings['wei_fr_cached_policies'] ?? []);
         if (!isset($settings['inventory_location_key'])) {
             $settings['inventory_location_key'] = 'gpswiss-pl';
         }
