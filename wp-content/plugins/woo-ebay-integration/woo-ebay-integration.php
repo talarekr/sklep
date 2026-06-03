@@ -13,8 +13,9 @@ if (!defined('ABSPATH')) {
 
 define('WEI_PLUGIN_FILE', __FILE__);
 define('WEI_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('WEI_BUILD_COMMIT', '9d9c575-diagnostics');
-define('WEI_BUILD_ID', '2026-05-08-admin-menu-null-slug-diagnostics');
+define('WEI_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router');
+define('WEI_BUILD_ID', '2026-06-03-shared-oauth-state-router-v4-build-marker');
+define('WEI_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-shared-oauth-state-router-v4');
 
 spl_autoload_register(function (string $class): void {
     if (strpos($class, 'WEI\\') !== 0) {

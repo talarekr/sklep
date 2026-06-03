@@ -420,8 +420,12 @@ $stockSyncDiagnostics = is_array($stock_sync_diagnostics ?? null) ? $stock_sync_
 $stockSyncNextRun = !empty($stockSyncStatus['next_scheduled_run']) ? gmdate('Y-m-d H:i:s', (int) $stockSyncStatus['next_scheduled_run']) : '-';
 
 $oauthDiagnostics = is_array($oauth_diagnostics ?? null) ? $oauth_diagnostics : [];
+$dePluginCommit = defined('WEI_BUILD_COMMIT') ? (string) WEI_BUILD_COMMIT : (string) ($oauthDiagnostics['de_plugin_commit'] ?? 'unknown');
+$oauthCallbackFlowVersion = defined('WEI_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_OAUTH_CALLBACK_FLOW_VERSION : (string) ($oauthDiagnostics['oauth_callback_flow_version'] ?? '2026-06-03-shared-oauth-state-router-v4');
 $oauthCallbackDebug = [
     'oauth_status' => (string) ($oauthDiagnostics['oauth_status'] ?? ''),
+    'de_plugin_commit' => $dePluginCommit,
+    'oauth_callback_flow_version' => $oauthCallbackFlowVersion,
     'callback_intercepted_by_admin_init' => $oauthDiagnostics['callback_intercepted_by_admin_init'] ?? null,
     'callback_page_registered' => $oauthDiagnostics['callback_page_registered'] ?? null,
     'page_param' => (string) ($oauthDiagnostics['page_param'] ?? ''),

@@ -197,6 +197,7 @@ class AdminPage
         error_log('WEI_BUILD_LOADED ' . $this->encode_log_context([
             'commit' => defined('WEI_BUILD_COMMIT') ? WEI_BUILD_COMMIT : 'unknown',
             'build' => defined('WEI_BUILD_ID') ? WEI_BUILD_ID : 'unknown',
+            'oauth_callback_flow_version' => defined('WEI_OAUTH_CALLBACK_FLOW_VERSION') ? WEI_OAUTH_CALLBACK_FLOW_VERSION : 'unknown',
             'plugin_file' => defined('WEI_PLUGIN_FILE') ? WEI_PLUGIN_FILE : '',
             'admin_page_sha1' => sha1_file(__FILE__) ?: '',
             'backtrace' => $this->backtrace_summary(),
