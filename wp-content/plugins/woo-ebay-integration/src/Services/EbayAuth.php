@@ -97,7 +97,8 @@ class EbayAuth
         }
 
         if ($this->is_foreign_fr_state()) {
-            $context = $this->shared_fr_router_context('plugins_loaded', $this->fr_shared_handler_callable_found());
+            $frHandlerCallableFound = $this->fr_shared_handler_callable_found();
+            $context = $this->shared_fr_router_context('plugins_loaded', $frHandlerCallableFound);
             $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_DETECTED', $context);
             $this->write_shared_fr_callback_debug('plugins_loaded', 'FR', true, 'WEI_SHARED_OAUTH_FR_DETECTED', $context);
             $this->store_oauth_diagnostics([
@@ -107,6 +108,10 @@ class EbayAuth
                 'routed_marketplace' => 'EBAY_FR',
                 'token_exchange_attempted' => false,
             ], false);
+
+            if ($this->is_shared_fr_oauth_callback_request()) {
+                $this->route_foreign_fr_oauth_callback('plugins_loaded');
+            }
 
             return;
         }
@@ -123,21 +128,13 @@ class EbayAuth
         $frHandlerCallableFound = $this->fr_shared_handler_callable_found();
 
         $context = $this->shared_fr_router_context($hook, $frHandlerCallableFound);
-        $routerHitEvent = $hook === 'bootstrap_admin_init'
-            ? 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_HIT'
-            : 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT';
+        $routerHitEvent = match ($hook) {
+            'bootstrap_admin_init' => 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_HIT',
+            'plugins_loaded' => 'WEI_SHARED_OAUTH_FR_PLUGINS_LOADED_ROUTER_HIT',
+            default => 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT',
+        };
         $this->log_shared_fr_router_event($routerHitEvent, $context);
         $this->write_shared_fr_callback_debug($hook, 'FR', true, $routerHitEvent, $context);
-
-        if (!$frHandlerCallableFound) {
-            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
-            $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
-            $this->redirect_shared_fr_callback_error('fr_handler_missing');
-            return;
-        }
-
-        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
-        $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
 
         if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
             $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_PERMISSION_DENIED', $context);
@@ -153,6 +150,16 @@ class EbayAuth
             return;
         }
 
+        if (!$frHandlerCallableFound) {
+            $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            $this->redirect_shared_fr_callback_error('fr_handler_missing');
+            return;
+        }
+
+        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
+
         $this->store_oauth_diagnostics([
             'oauth_shared_callback' => true,
             'oauth_callback_router' => 'state_prefix',
@@ -160,9 +167,16 @@ class EbayAuth
             'routed_marketplace' => 'EBAY_FR',
             'token_exchange_attempted' => false,
         ], false);
-        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
-        $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
-        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING', $context);
+        $handlerCalledEvent = $hook === 'plugins_loaded'
+            ? 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED_FROM_PLUGINS_LOADED'
+            : 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED';
+        $routedAndExitingEvent = $hook === 'plugins_loaded'
+            ? 'WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING_FROM_PLUGINS_LOADED'
+            : 'WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING';
+        $this->log_shared_fr_router_event($handlerCalledEvent, $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, $handlerCalledEvent, $context);
+        $this->log_shared_fr_router_event($routedAndExitingEvent, $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, $routedAndExitingEvent, $context);
         $this->call_fr_shared_oauth_handler($_GET);
         exit;
     }

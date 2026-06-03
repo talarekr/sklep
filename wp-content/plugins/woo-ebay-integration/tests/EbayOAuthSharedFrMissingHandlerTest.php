@@ -138,7 +138,7 @@ namespace {
     $auth = new DeEbayAuth(new DeLogger());
     $redirectLocation = '';
     try {
-        $auth->route_foreign_fr_oauth_callback();
+        $auth->handle_admin_bootstrap_oauth_callback();
     } catch (WeiSharedMissingHandlerRedirect $redirect) {
         $redirectLocation = $redirect->location;
     }
@@ -148,6 +148,7 @@ namespace {
     $deSettings = $GLOBALS['wei_shared_missing_options'][DePlugin::OPTION_KEY];
 
     $assert(($debugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', 'Missing-handler debug file must record WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND.');
+    $assert(($debugPayload['hook'] ?? '') === 'plugins_loaded', 'Missing-handler debug file must show plugins_loaded handled the FR callback without admin_init.');
     $assert(($debugPayload['fr_handler_callable_found'] ?? null) === false, 'Missing-handler debug file must record fr_handler_callable_found=false.');
     $assert(str_contains($redirectLocation, 'page=woo-ebay'), 'Missing handler must redirect to the controlled DE admin error page.');
     $assert(str_contains($redirectLocation, 'oauth_error=fr_handler_missing'), 'Missing handler redirect must include a controlled fr_handler_missing error.');
