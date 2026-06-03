@@ -1211,7 +1211,7 @@ class AdminPage
         ];
     }
 
-    public function start_oauth_connect(): void { $this->require_manage_options(); check_admin_referer('wei_fr_start_oauth_connect'); wp_safe_redirect($this->auth->get_authorize_url(true)); exit; }
+    public function start_oauth_connect(): void { $this->require_manage_options(); check_admin_referer('wei_fr_start_oauth_connect'); $this->auth->redirect_to_authorize_url(); exit; }
     public function clear_oauth_diagnostics(): void { $this->require_manage_options(); check_admin_referer('wei_fr_clear_oauth_diagnostics'); $this->auth->clear_oauth_diagnostics(); $this->set_status('FR OAuth diagnostics cleared.'); $this->go(); }
     public function disconnect(): void { $this->require_manage_options(); check_admin_referer('wei_fr_disconnect'); $this->auth->disconnect(); $this->set_status('Disconnected'); $this->go(); }
     public function test_connection(): void { $this->require_manage_options(); check_admin_referer('wei_fr_test'); $res = $this->auth->get_valid_access_token(); $this->set_status(is_wp_error($res) ? 'Test failed: '.$res->get_error_message() : 'Connection OK'); $this->go(); }

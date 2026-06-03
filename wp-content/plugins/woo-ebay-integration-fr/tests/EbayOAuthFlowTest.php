@@ -69,6 +69,12 @@ namespace {
         return '2026-05-31 00:00:00';
     }
 
+    function wp_redirect(string $location, int $status = 302, string $x_redirect_by = 'WordPress')
+    {
+        $GLOBALS['wei_fr_test_wp_redirects'][] = compact('location', 'status', 'x_redirect_by');
+        return $location !== '';
+    }
+
     if (!defined('MINUTE_IN_SECONDS')) {
         define('MINUTE_IN_SECONDS', 60);
     }
@@ -107,6 +113,14 @@ namespace {
     $assert(($diagnostics['browser_callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-auth-callback', 'Diagnostics browser_callback_url must be the shared browser callback URL.');
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
+    $assert(($diagnostics['oauth_authorize_url_host'] ?? '') === 'auth.ebay.com', 'Diagnostics must record that the generated OAuth URL targets the eBay authorization host.');
+    $assert(($diagnostics['oauth_authorize_url_has_client_id'] ?? null) === true, 'Diagnostics must confirm the generated OAuth URL includes client_id.');
+    $assert(($diagnostics['oauth_authorize_url_redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics must record the generated OAuth URL redirect_uri RuName.');
+    $assert(($diagnostics['oauth_authorize_url_state_prefix'] ?? '') === 'wei_fr:', 'Diagnostics must record the generated OAuth URL FR state prefix.');
+    $assert(($diagnostics['oauth_authorize_url_has_scope'] ?? null) === true, 'Diagnostics must confirm the generated OAuth URL includes scopes.');
+    $assert(($diagnostics['oauth_connect_redirect_attempted'] ?? null) === false, 'URL generation alone must not mark the browser redirect as attempted.');
+    $assert(($diagnostics['oauth_connect_redirect_target_type'] ?? '') === 'ebay_authorize_url', 'Diagnostics must classify the generated Connect redirect target as an eBay authorize URL.');
+    $assert(!str_contains((string) ($diagnostics['oauth_authorize_url_redacted'] ?? ''), 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46'), 'Diagnostics must redact client_id in the stored OAuth authorize URL.');
     $assert(($diagnostics['token_exchange_attempted'] ?? false) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
     $assert(($diagnostics['fr_plugin_version'] ?? '') === '0.1.0', 'FR OAuth diagnostics must expose fr_plugin_version.');
     $assert(($diagnostics['fr_plugin_commit'] ?? '') !== '', 'FR OAuth diagnostics must expose fr_plugin_commit.');
@@ -179,6 +193,7 @@ namespace {
     $assert(str_contains($source, "store_intercept_diagnostics('plugins_loaded', false, 'plugins_loaded_deferred_to_admin_init')"), 'FR bootstrap callback detection must defer processing until admin_init user/capability context is available.');
     $assert(str_contains($source, 'add_action(' . "'admin_init'" . ', [$this, ' . "'handle_oauth_callback'" . '], 0)'), 'FR bootstrap callback handler must register an admin_init retry instead of processing at plugins_loaded.');
     $assert(!str_contains($source, "maybe_intercept_oauth_callback('plugins_loaded')"), 'FR callback must not process OAuth at plugins_loaded before WordPress administrator capabilities are available.');
+    $assert(str_contains($source, 'wp_redirect($authorizeUrl)'), 'FR Connect must use wp_redirect for the external eBay authorization URL instead of wp_safe_redirect.');
 
 
 
@@ -202,6 +217,34 @@ namespace {
     $assert(!array_key_exists('state_received', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale state_received diagnostics.');
     $assert(!array_key_exists('token_exchange_success', $newAttemptDiagnostics), 'Starting a new Connect attempt must clear stale token_exchange_success diagnostics.');
     $assert(($newAttemptDiagnostics['oauth_last_attempt_id'] ?? '') !== '', 'Starting a new Connect attempt must write oauth_last_attempt_id.');
+    $assert(($newAttemptDiagnostics['oauth_authorize_url_host'] ?? '') === 'auth.ebay.com', 'Starting a new Connect attempt must record the eBay authorize URL host.');
+    $assert(($newAttemptDiagnostics['oauth_authorize_url_has_client_id'] ?? null) === true, 'Starting a new Connect attempt must record that client_id is present.');
+    $assert(($newAttemptDiagnostics['oauth_authorize_url_redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Starting a new Connect attempt must record the RuName redirect_uri.');
+    $assert(($newAttemptDiagnostics['oauth_authorize_url_state_prefix'] ?? '') === 'wei_fr:', 'Starting a new Connect attempt must record the FR state prefix.');
+    $assert(($newAttemptDiagnostics['oauth_authorize_url_has_scope'] ?? null) === true, 'Starting a new Connect attempt must record that scopes are present.');
+
+    $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
+        'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
+        'client_secret' => 'secret',
+        'redirect_uri' => 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback',
+        'runame' => '',
+        'refresh_token' => '',
+    ];
+    $GLOBALS['wei_fr_test_wp_redirects'] = [];
+    $auth->redirect_to_authorize_url();
+    $redirectDiagnostics = $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY];
+    $redirectLocation = (string) ($GLOBALS['wei_fr_test_wp_redirects'][0]['location'] ?? '');
+    parse_str((string) parse_url($redirectLocation, PHP_URL_QUERY), $redirectParams);
+    $assert((string) parse_url($redirectLocation, PHP_URL_HOST) === 'auth.ebay.com', 'FR Connect must redirect the browser to eBay OAuth authorize host.');
+    $assert((string) parse_url($redirectLocation, PHP_URL_PATH) === '/oauth2/authorize', 'FR Connect must redirect the browser to eBay OAuth authorize endpoint.');
+    $assert(($redirectParams['client_id'] ?? '') === 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46', 'FR Connect redirect URL must include client_id.');
+    $assert(($redirectParams['response_type'] ?? '') === 'code', 'FR Connect redirect URL must request an authorization code.');
+    $assert(($redirectParams['redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'FR Connect redirect URL must use the eBay RuName redirect_uri.');
+    $assert(str_starts_with((string) ($redirectParams['state'] ?? ''), 'wei_fr:'), 'FR Connect redirect URL must include an FR-prefixed state.');
+    $assert((string) ($redirectParams['scope'] ?? '') !== '', 'FR Connect redirect URL must include scopes.');
+    $assert(($redirectDiagnostics['oauth_connect_redirect_attempted'] ?? null) === true, 'FR Connect must record that wp_redirect was attempted.');
+    $assert(($redirectDiagnostics['oauth_connect_redirect_target_type'] ?? '') === 'ebay_authorize_url', 'FR Connect must record an eBay authorize redirect target type.');
+    $assert(($redirectDiagnostics['oauth_connect_redirect_result'] ?? null) === true, 'FR Connect must record successful wp_redirect result.');
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
         'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
