@@ -458,6 +458,10 @@ $oauthCallbackDebug = [
     'browser_callback_url' => (string) ($oauthDiagnostics['browser_callback_url'] ?? ($oauthDiagnostics['callback_url'] ?? '')),
     'ebay_runame' => (string) ($oauthDiagnostics['ebay_runame'] ?? ''),
     'oauth_redirect_param_used' => (string) ($oauthDiagnostics['oauth_redirect_param_used'] ?? ''),
+    'oauth_shared_callback' => $oauthDiagnostics['oauth_shared_callback'] ?? true,
+    'oauth_callback_router' => (string) ($oauthDiagnostics['oauth_callback_router'] ?? 'state_prefix'),
+    'routed_plugin' => (string) ($oauthDiagnostics['routed_plugin'] ?? 'FR'),
+    'routed_marketplace' => (string) ($oauthDiagnostics['routed_marketplace'] ?? 'EBAY_FR'),
 ];
 $oauthCallbackMessage = [
     'oauth_error' => isset($_GET['oauth_error']) ? sanitize_text_field(wp_unslash((string) $_GET['oauth_error'])) : '',
@@ -1229,7 +1233,7 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
                     <tr><th><label for="wei-client-id">Client ID</label></th><td><input id="wei-client-id" class="regular-text" name="client_id" value="<?php echo esc_attr((string) $setting('client_id')); ?>" /></td></tr>
                     <tr><th><label for="wei-client-secret">Client secret</label></th><td><input id="wei-client-secret" class="regular-text" type="password" name="client_secret" value="<?php echo esc_attr((string) $setting('client_secret')); ?>" autocomplete="new-password" /> <span class="description"><?php echo esc_html($maskSecret((string) $setting('client_secret'))); ?></span></td></tr>
                     <tr><th><label for="wei-runame">eBay RuName</label></th><td><input id="wei-runame" class="large-text" name="runame" value="<?php echo esc_attr((string) $setting('runame', (string) ($oauthCallbackDebug['ebay_runame'] ?? ''))); ?>" /> <span class="description">Used as the OAuth <code>redirect_uri</code> parameter in the eBay authorization URL and token exchange.</span></td></tr>
-                    <tr><th><label for="wei-redirect-uri">Browser callback URL</label></th><td><input id="wei-redirect-uri" class="large-text" name="redirect_uri" value="<?php echo esc_attr((string) $setting('redirect_uri', (string) ($oauthCallbackDebug['browser_callback_url'] ?? ''))); ?>" /> <span class="description">Accepted/Declined URL configured in the eBay Developer App. WordPress intercepts this URL at <code>admin_init</code>.</span></td></tr>
+                    <tr><th><label for="wei-redirect-uri">Shared eBay OAuth callback URL</label></th><td><input id="wei-redirect-uri" class="large-text" name="redirect_uri" value="<?php echo esc_attr((string) $setting('redirect_uri', (string) ($oauthCallbackDebug['browser_callback_url'] ?? ''))); ?>" /> <span class="description">Shared eBay OAuth callback URL, routed by state to FR. Use this Accepted/Declined URL in the eBay Developer App.</span></td></tr>
                 </table>
                 <p><button class="button button-primary">Save settings</button></p>
             </form>

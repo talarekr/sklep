@@ -33,11 +33,13 @@ $assert(!str_contains($bootstrap, "strpos($" . "class, 'WEI\\\\')"), 'FR autoloa
 $assert(str_contains($plugin, "public const OPTION_KEY = 'wei_fr_ebay_settings'"), 'FR settings option key must be separate.');
 $assert(str_contains($plugin, 'gpswiss ebay-fr categories compare-auto'), 'FR category comparison WP-CLI command must be registered.');
 $assert(str_contains($admin, "'woo-ebay-fr'"), 'FR admin menu slug must be FR-specific.');
-$assert(str_contains($auth, "CALLBACK_PAGE_SLUG = 'ebay-fr-auth-callback'"), 'FR OAuth callback page slug must be FR-specific.');
-$assert(!str_contains($auth . $admin . $view, 'ebay-auth-callback'), 'FR OAuth/admin diagnostics must not hardcode the DE callback page slug.');
+$assert(str_contains($auth, "CALLBACK_PAGE_SLUG = 'ebay-auth-callback'"), 'FR OAuth callback page slug must use the shared eBay callback.');
+$assert(str_contains($auth, "LEGACY_CALLBACK_PAGE_SLUG = 'ebay-fr-auth-callback'"), 'FR OAuth may retain legacy FR callback detection for compatibility.');
+$assert(str_contains($auth . $view, 'state_prefix'), 'FR OAuth/admin diagnostics must identify the state-prefix callback router.');
+$assert(str_contains($view, 'Shared eBay OAuth callback URL, routed by state to FR'), 'FR settings must label the shared callback routing clearly.');
 $assert(str_contains($auth, "STATE_TRANSIENT_PREFIX = 'wei_fr_oauth_state_'"), 'FR OAuth state key prefix must be FR-specific.');
 $assert(!str_contains($auth, 'wei_ebay_oauth_state_') && !str_contains($auth, 'wei_oauth_state_'), 'FR OAuth state validation must not use DE state keys.');
-$assert(str_contains($auth, 'self::CALLBACK_PAGE_SLUG'), 'FR OAuth URLs must be generated from the FR callback helper/slug.');
+$assert(str_contains($auth, 'self::CALLBACK_PAGE_SLUG'), 'FR OAuth browser callback URLs must be generated from the shared callback slug.');
 $assert(str_contains($admin, 'AutoSyncScheduler::HOOK_DELTA_SYNC'), 'FR diagnostics must render the FR scheduler hook constant.');
 $assert(!str_contains($admin . $view, 'wei_ebay_run_scheduled_sync'), 'FR diagnostics must not use the DE scheduler hook.');
 $assert(!str_contains($admin . $adapter, 'wei_ebay_cached_policies'), 'FR diagnostics must not use DE cached policy option keys.');

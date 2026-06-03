@@ -437,6 +437,11 @@ $oauthCallbackDebug = [
     'browser_callback_url' => (string) ($oauthDiagnostics['browser_callback_url'] ?? ($oauthDiagnostics['callback_url'] ?? '')),
     'ebay_runame' => (string) ($oauthDiagnostics['ebay_runame'] ?? ''),
     'oauth_redirect_param_used' => (string) ($oauthDiagnostics['oauth_redirect_param_used'] ?? ''),
+    'oauth_shared_callback' => $oauthDiagnostics['oauth_shared_callback'] ?? true,
+    'oauth_callback_router' => (string) ($oauthDiagnostics['oauth_callback_router'] ?? 'state_prefix'),
+    'routed_plugin' => (string) ($oauthDiagnostics['routed_plugin'] ?? 'DE'),
+    'routed_marketplace' => (string) ($oauthDiagnostics['routed_marketplace'] ?? 'EBAY_DE'),
+    'oauth_last_attempt_id' => (string) ($oauthDiagnostics['oauth_last_attempt_id'] ?? ''),
 ];
 $oauthCallbackMessage = [
     'oauth_error' => isset($_GET['oauth_error']) ? sanitize_text_field(wp_unslash((string) $_GET['oauth_error'])) : '',

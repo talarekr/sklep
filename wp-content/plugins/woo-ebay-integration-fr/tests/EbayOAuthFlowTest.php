@@ -101,16 +101,21 @@ namespace {
     $diagnostics = $auth->get_diagnostic_oauth_context();
 
     $assert(($authorizeParams['redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Authorization URL must use eBay RuName as redirect_uri.');
-    $assert(!str_contains($authorizeUrl, 'ebay-auth-callback'), 'FR Connect URL must not contain the DE callback page slug.');
-    $assert(isset($GLOBALS['wei_fr_test_transients']['wei_fr_oauth_state_STATE1234567890']), 'FR Connect must store state under the FR-specific OAuth state key.');
-    $assert(($diagnostics['callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'Diagnostics callback_url must be the full browser callback URL.');
-    $assert(($diagnostics['browser_callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'Diagnostics browser_callback_url must be the full browser callback URL.');
+    $assert(str_starts_with((string) ($authorizeParams['state'] ?? ''), 'wei_fr:'), 'FR Connect state must use the FR state prefix.');
+    $assert(isset($GLOBALS['wei_fr_test_transients']['wei_fr_oauth_state_wei_fr:STATE1234567890']), 'FR Connect must store state under the FR-specific OAuth state key.');
+    $assert(($diagnostics['callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-auth-callback', 'Diagnostics callback_url must be the shared browser callback URL.');
+    $assert(($diagnostics['browser_callback_url'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-auth-callback', 'Diagnostics browser_callback_url must be the shared browser callback URL.');
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
     $assert(($diagnostics['token_exchange_attempted'] ?? false) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
     $assert(($diagnostics['fr_plugin_version'] ?? '') === '0.1.0', 'FR OAuth diagnostics must expose fr_plugin_version.');
     $assert(($diagnostics['fr_plugin_commit'] ?? '') !== '', 'FR OAuth diagnostics must expose fr_plugin_commit.');
-    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-fr-admin-init-only-v3', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
+    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-shared-oauth-router-v1', 'FR OAuth diagnostics must expose oauth_callback_flow_version.');
+    $assert(($diagnostics['oauth_shared_callback'] ?? null) === true, 'FR OAuth diagnostics must mark the shared callback.');
+    $assert(($diagnostics['oauth_callback_router'] ?? '') === 'state_prefix', 'FR OAuth diagnostics must identify the state-prefix router.');
+    $assert(($diagnostics['routed_plugin'] ?? '') === 'FR', 'FR OAuth diagnostics must identify the routed plugin.');
+    $assert(($diagnostics['routed_marketplace'] ?? '') === 'EBAY_FR', 'FR OAuth diagnostics must identify the routed marketplace.');
+    $assert(($diagnostics['cached_policies']['marketplace_id'] ?? '') === 'EBAY_FR', 'FR diagnostics cached_policies.marketplace_id must remain EBAY_FR.');
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
         'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
@@ -121,8 +126,8 @@ namespace {
     ];
     $legacyAuthorizeUrl = $auth->get_authorize_url(true);
     parse_str((string) parse_url($legacyAuthorizeUrl, PHP_URL_QUERY), $legacyAuthorizeParams);
-    $assert(($legacyAuthorizeParams['redirect_uri'] ?? '') === 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback', 'FR Connect must rewrite copied DE callback settings to the FR callback helper URL.');
-    $assert(!str_contains($legacyAuthorizeUrl, 'page%3Debay-auth-callback') && !str_contains($legacyAuthorizeUrl, 'ebay-auth-callback'), 'FR Connect URL must never include the DE callback slug even when legacy settings were copied.');
+    $assert(($legacyAuthorizeParams['redirect_uri'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'FR Connect must use the shared OAuth RuName even when a copied WordPress callback URL is configured.');
+    $assert(str_starts_with((string) ($legacyAuthorizeParams['state'] ?? ''), 'wei_fr:'), 'FR legacy-setting Connect state must remain routed to FR.');
 
     $ref = new ReflectionClass(EbayAuth::class);
     $source = file_get_contents($ref->getFileName());
@@ -214,9 +219,9 @@ namespace {
     $GLOBALS['wei_fr_test_current_user_id'] = 0;
     $GLOBALS['wei_fr_test_is_user_logged_in'] = false;
     $GLOBALS['wei_fr_test_current_user_can_manage_options'] = false;
-    $_GET = ['page' => 'ebay-fr-auth-callback', 'code' => 'CODE_BOOTSTRAP', 'state' => 'STATE_BOOTSTRAP'];
+    $_GET = ['page' => 'ebay-auth-callback', 'code' => 'CODE_BOOTSTRAP', 'state' => 'wei_fr:STATE_BOOTSTRAP'];
     $_REQUEST = $_GET;
-    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-fr-auth-callback&code=CODE_BOOTSTRAP&state=STATE_BOOTSTRAP';
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&code=CODE_BOOTSTRAP&state=wei_fr:STATE_BOOTSTRAP';
     $auth->handle_admin_bootstrap_oauth_callback();
     $bootstrapDiagnostics = $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY];
     $assert(($bootstrapDiagnostics['callback_detected_at_plugins_loaded'] ?? null) === true, 'plugins_loaded must only record neutral callback_detected_at_plugins_loaded diagnostics.');
@@ -235,19 +240,19 @@ namespace {
     $isCallbackRequest = $ref->getMethod('is_oauth_callback_request');
     $isCallbackRequest->setAccessible(true);
 
-    $_GET = ['page' => 'ebay-fr-auth-callback', 'code' => 'CODE1', 'state' => 'STATE1'];
+    $_GET = ['page' => 'ebay-auth-callback', 'code' => 'CODE1', 'state' => 'wei_fr:STATE1'];
     $_REQUEST = $_GET;
-    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-fr-auth-callback&code=CODE1&state=STATE1';
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&code=CODE1&state=wei_fr:STATE1';
     $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via $_GET page.');
 
     $_GET = ['code' => 'CODE2'];
-    $_REQUEST = ['page' => 'ebay-fr-auth-callback', 'code' => 'CODE2'];
+    $_REQUEST = ['page' => 'ebay-auth-callback', 'code' => 'CODE2', 'state' => 'wei_fr:STATE2'];
     $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php';
     $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via $_REQUEST page.');
 
     $_GET = ['code' => 'CODE3'];
-    $_REQUEST = ['code' => 'CODE3'];
-    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-fr-auth-callback&code=CODE3';
+    $_REQUEST = ['code' => 'CODE3', 'state' => 'wei_fr:STATE3'];
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-auth-callback&code=CODE3&state=wei_fr:STATE3';
     $assert($isCallbackRequest->invoke($auth) === true, 'Callback detector must catch admin.php callback via REQUEST_URI.');
 
     $_GET = ['page' => 'woo-ebay-fr'];
