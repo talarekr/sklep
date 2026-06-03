@@ -3861,6 +3861,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         if (!empty($ovoko['blocked'])) {
             $reason = 'ovoko_sold_or_unavailable';
+        } elseif ((string) get_post_meta($metaProductId, '_wei_ebay_sold_at', true) !== '' || in_array(strtolower((string) get_post_meta($metaProductId, '_wei_ebay_listing_status', true)), ['sold', 'ended', 'unavailable'], true)) {
+            $reason = 'wei_ebay_sold_or_unavailable';
         } elseif ($stockQuantity === null) {
             $reason = 'missing_stock_quantity';
         } elseif ($stockQuantity <= 0) {
@@ -5631,6 +5633,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings['write_generated_sku_to_woo'] = 0;
         if (!isset($settings['stock_sync_mode'])) {
             $settings['stock_sync_mode'] = 'set_zero';
+        }
+        if (!isset($settings['stock_sync_enabled'])) {
+            $settings['stock_sync_enabled'] = 1;
+        }
+        if (!isset($settings['stock_sync_dry_run'])) {
+            $settings['stock_sync_dry_run'] = 1;
         }
         if (!isset($settings['ebay_stock_sync_mode'])) {
             $settings['ebay_stock_sync_mode'] = 'max_one';

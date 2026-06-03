@@ -49,6 +49,17 @@ class MappingRepository
         return is_array($row) ? $row : null;
     }
 
+
+    public function list_active_mappings(int $limit = 50): array
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        $limit = max(1, min(500, $limit));
+        $sql = $wpdb->prepare("SELECT * FROM {$table} WHERE marketplace=%s AND status NOT IN ('ended','sold','inactive','unavailable') AND (remote_offer_id IS NOT NULL OR remote_listing_id IS NOT NULL OR sku <> '') ORDER BY updated_at DESC LIMIT %d", 'ebay', $limit);
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
     public function find_by_offer_id(string $offer_id): ?array
     {
         global $wpdb;

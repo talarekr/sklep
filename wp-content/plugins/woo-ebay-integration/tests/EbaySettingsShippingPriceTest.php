@@ -59,7 +59,7 @@ $viewSource = file_get_contents(__DIR__ . '/../views/admin-page.php');
 $adminSource = file_get_contents(__DIR__ . '/../src/Services/AdminPage.php');
 $adapterSource = file_get_contents(__DIR__ . '/../src/Adapters/EbayAdapter.php');
 $schedulerSource = file_get_contents(__DIR__ . '/../src/Services/AutoSyncScheduler.php');
-$assert(str_contains($viewSource, '4. Ustawienia eBay') || str_contains($viewSource, '>Ustawienia eBay<'), 'UI must expose Ustawienia eBay as a normal admin module.');
+$assert(str_contains($viewSource, '5. Ustawienia eBay') || str_contains($viewSource, '>Ustawienia eBay<'), 'UI must expose Ustawienia eBay as a normal admin module.');
 $assert(str_contains($viewSource, 'Preview shipping/price resolution'), 'UI must expose product-level shipping/price diagnostics in the eBay settings module.');
 $assert(str_contains($viewSource, 'If set to 25, eBay prices are 25% higher than WooCommerce prices before currency conversion.'), 'UI must include markup helper text.');
 $assert(str_contains($adminSource, "add_action('admin_post_wei_save_ebay_settings'") && str_contains($adminSource, 'public function save_ebay_settings'), 'Dedicated visible eBay settings save handler must exist.');

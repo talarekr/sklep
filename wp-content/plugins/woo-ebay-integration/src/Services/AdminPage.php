@@ -14,7 +14,7 @@ class AdminPage
 
     private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_ebay_german_content_schema_migration_state';
 
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync)
     {
     }
 
@@ -105,6 +105,10 @@ class AdminPage
         add_action('admin_post_wei_ebay_initial_publish_toggle_pause', [$this, 'ebay_initial_publish_toggle_pause']);
         add_action('admin_post_wei_ebay_initial_publish_reset', [$this, 'ebay_initial_publish_reset']);
         add_action('admin_post_wei_refresh_ebay_listing_state', [$this, 'refresh_ebay_listing_state']);
+        add_action('admin_post_wei_save_stock_sync_settings', [$this, 'save_stock_sync_settings']);
+        add_action('admin_post_wei_run_stock_sync_dry_run', [$this, 'run_stock_sync_dry_run']);
+        add_action('admin_post_wei_run_stock_sync_now', [$this, 'run_stock_sync_now']);
+        add_action('admin_post_wei_stock_sync_diagnostics', [$this, 'stock_sync_diagnostics']);
     }
 
     public function register_menu(): void
@@ -344,6 +348,9 @@ class AdminPage
         $connect_url = (string) $this->auth->get_authorize_url();
         $oauth_diagnostics = $this->auth->get_diagnostic_oauth_context();
         $auto_sync_status = $this->light_auto_sync_status($s);
+        $stock_sync_status = $this->stockSync->status();
+        $stock_sync_diagnostics = get_option('wei_ebay_stock_sync_last_diagnostics', []);
+        $stock_sync_diagnostics = is_array($stock_sync_diagnostics) ? $stock_sync_diagnostics : [];
         $initial_publish_candidate_summary = $this->initial_publish_candidate_summary();
         $initial_publish_status = $this->initial_publish_status();
         $ebay_listing_state_summary = $this->ebay_listing_state_summary();
@@ -635,6 +642,56 @@ class AdminPage
         };
     }
 
+
+    public function save_stock_sync_settings(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_save_stock_sync_settings');
+
+        $s = $this->settings();
+        $s['stock_sync_enabled'] = (!empty($_POST['stock_sync_woo_to_ebay_enabled']) || !empty($_POST['stock_sync_ebay_to_woo_enabled'])) ? 1 : 0;
+        $s['stock_sync_woo_to_ebay_enabled'] = !empty($_POST['stock_sync_woo_to_ebay_enabled']) ? 1 : 0;
+        $s['stock_sync_ebay_to_woo_enabled'] = !empty($_POST['stock_sync_ebay_to_woo_enabled']) ? 1 : 0;
+        $interval = sanitize_key((string) ($_POST['stock_sync_cron_interval'] ?? 'every_15_minutes'));
+        $s['stock_sync_cron_interval'] = in_array($interval, ['every_5_minutes', 'every_15_minutes', 'hourly'], true) ? $interval : 'every_15_minutes';
+        $s['stock_sync_dry_run'] = !empty($_POST['stock_sync_dry_run']) ? 1 : 0;
+        $s['stock_sync_safety_limit'] = max(1, min(500, absint($_POST['stock_sync_safety_limit'] ?? 50)));
+        $zeroAction = sanitize_key((string) ($_POST['stock_sync_woo_zero_action'] ?? 'end_listing'));
+        $s['stock_sync_woo_zero_action'] = in_array($zeroAction, ['end_listing', 'set_quantity_zero'], true) ? $zeroAction : 'end_listing';
+        update_option(Plugin::OPTION_KEY, $s, false);
+        wp_clear_scheduled_hook(StockSyncService::CRON_HOOK);
+        $this->stockSync->ensure_scheduled();
+        $this->set_status('Stock synchronization settings saved.');
+        $this->go();
+    }
+
+    public function run_stock_sync_dry_run(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_run_stock_sync_dry_run');
+        $summary = $this->stockSync->run(true);
+        $this->set_status('Stock sync dry run: ' . wp_json_encode($summary));
+        $this->go();
+    }
+
+    public function run_stock_sync_now(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_run_stock_sync_now');
+        $summary = $this->stockSync->run(false);
+        $this->set_status('Stock sync run: ' . wp_json_encode($summary));
+        $this->go();
+    }
+
+    public function stock_sync_diagnostics(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_stock_sync_diagnostics');
+        $diag = $this->stockSync->product_diagnostics(sanitize_text_field((string) ($_POST['product_or_sku'] ?? '')));
+        update_option('wei_ebay_stock_sync_last_diagnostics', $diag, false);
+        $this->set_status('Stock sync diagnostics: ' . wp_json_encode($diag));
+        $this->go();
+    }
 
     public function save_ebay_settings(): void
     {
@@ -4340,6 +4397,29 @@ class AdminPage
         $s['write_generated_sku_to_woo'] = 0;
         if (!isset($s['stock_sync_mode'])) {
             $s['stock_sync_mode'] = 'set_zero';
+        }
+        if (!isset($s['stock_sync_enabled'])) {
+            $s['stock_sync_enabled'] = 1;
+        }
+        if (!isset($s['stock_sync_woo_to_ebay_enabled'])) {
+            $s['stock_sync_woo_to_ebay_enabled'] = 1;
+        }
+        if (!isset($s['stock_sync_ebay_to_woo_enabled'])) {
+            $s['stock_sync_ebay_to_woo_enabled'] = 1;
+        }
+        if (!isset($s['stock_sync_dry_run'])) {
+            $s['stock_sync_dry_run'] = 1;
+        }
+        if (!isset($s['stock_sync_cron_interval'])) {
+            $s['stock_sync_cron_interval'] = 'every_15_minutes';
+        }
+        if (!isset($s['stock_sync_safety_limit'])) {
+            $s['stock_sync_safety_limit'] = 50;
+        } else {
+            $s['stock_sync_safety_limit'] = max(1, min(500, (int) $s['stock_sync_safety_limit']));
+        }
+        if (!isset($s['stock_sync_woo_zero_action'])) {
+            $s['stock_sync_woo_zero_action'] = 'end_listing';
         }
         if (!isset($s['auto_sync_mode'])) {
             $s['auto_sync_mode'] = 'disabled';
