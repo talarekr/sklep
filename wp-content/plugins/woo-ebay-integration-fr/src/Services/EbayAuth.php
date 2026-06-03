@@ -37,12 +37,43 @@ class EbayAuth
             'scope' => self::SCOPES,
             'state' => $state,
         ];
+        $authorizeUrl = self::AUTH_URL . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
 
         if ($startNewAttempt) {
-            $this->start_oauth_attempt_diagnostics($attemptId, $oauthRedirectParam);
+            $this->start_oauth_attempt_diagnostics($attemptId, $oauthRedirectParam, $authorizeUrl, $state);
+        } else {
+            $this->store_authorize_url_diagnostics($authorizeUrl, $oauthRedirectParam, $state);
         }
 
-        return self::AUTH_URL . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        return $authorizeUrl;
+    }
+
+    public function redirect_to_authorize_url(): void
+    {
+        $authorizeUrl = $this->get_authorize_url(true);
+        $headersAlreadySent = headers_sent($headersFile, $headersLine);
+        $this->store_oauth_diagnostics([
+            'oauth_connect_redirect_attempted' => true,
+            'oauth_connect_redirect_target_type' => $this->redirect_target_type($authorizeUrl),
+            'oauth_connect_redirect_headers_sent' => $headersAlreadySent,
+            'oauth_connect_redirect_headers_sent_at' => $headersAlreadySent ? ($headersFile . ':' . $headersLine) : '',
+            'oauth_connect_redirect_result' => false,
+            'oauth_connect_redirect_error' => $headersAlreadySent ? 'headers_already_sent' : '',
+        ], false);
+
+        if ($headersAlreadySent) {
+            return;
+        }
+
+        $redirected = wp_redirect($authorizeUrl);
+        $this->store_oauth_diagnostics([
+            'oauth_connect_redirect_attempted' => true,
+            'oauth_connect_redirect_target_type' => $this->redirect_target_type($authorizeUrl),
+            'oauth_connect_redirect_headers_sent' => false,
+            'oauth_connect_redirect_headers_sent_at' => '',
+            'oauth_connect_redirect_result' => (bool) $redirected,
+            'oauth_connect_redirect_error' => $redirected ? '' : 'wp_redirect_returned_false',
+        ], false);
     }
 
     public function disconnect(): void
@@ -309,6 +340,18 @@ class EbayAuth
             'access_token_expires_at' => (int) ($s['expires_at'] ?? 0),
             'scope_requested' => self::SCOPES,
             'scope_last_returned' => (string) ($s['scope_last_returned'] ?? ''),
+            'oauth_authorize_url_redacted' => (string) ($s['oauth_authorize_url_redacted'] ?? ''),
+            'oauth_authorize_url_host' => (string) ($s['oauth_authorize_url_host'] ?? ''),
+            'oauth_authorize_url_has_client_id' => $s['oauth_authorize_url_has_client_id'] ?? null,
+            'oauth_authorize_url_redirect_uri' => (string) ($s['oauth_authorize_url_redirect_uri'] ?? ''),
+            'oauth_authorize_url_state_prefix' => (string) ($s['oauth_authorize_url_state_prefix'] ?? ''),
+            'oauth_authorize_url_has_scope' => $s['oauth_authorize_url_has_scope'] ?? null,
+            'oauth_connect_redirect_attempted' => $s['oauth_connect_redirect_attempted'] ?? null,
+            'oauth_connect_redirect_target_type' => (string) ($s['oauth_connect_redirect_target_type'] ?? ''),
+            'oauth_connect_redirect_headers_sent' => $s['oauth_connect_redirect_headers_sent'] ?? null,
+            'oauth_connect_redirect_headers_sent_at' => (string) ($s['oauth_connect_redirect_headers_sent_at'] ?? ''),
+            'oauth_connect_redirect_result' => $s['oauth_connect_redirect_result'] ?? null,
+            'oauth_connect_redirect_error' => (string) ($s['oauth_connect_redirect_error'] ?? ''),
             'required_publish_scopes' => [
                 'https://api.ebay.com/oauth/api_scope/sell.inventory',
                 'https://api.ebay.com/oauth/api_scope/sell.account',
@@ -477,7 +520,7 @@ class EbayAuth
         update_option(Plugin::OPTION_KEY, $s, false);
     }
 
-    private function start_oauth_attempt_diagnostics(string $attemptId, string $oauthRedirectParam): void
+    private function start_oauth_attempt_diagnostics(string $attemptId, string $oauthRedirectParam, string $authorizeUrl, string $state): void
     {
         $s = $this->settings();
         foreach ($this->stale_oauth_attempt_keys() as $key) {
@@ -494,7 +537,63 @@ class EbayAuth
         $s['routed_plugin'] = 'FR';
         $s['routed_marketplace'] = 'EBAY_FR';
         $s['last_oauth_attempt_started_at'] = current_time('mysql');
+        $s = array_merge($s, $this->authorize_url_diagnostics($authorizeUrl, $oauthRedirectParam, $state));
         update_option(Plugin::OPTION_KEY, $s, false);
+    }
+
+    private function store_authorize_url_diagnostics(string $authorizeUrl, string $oauthRedirectParam, string $state): void
+    {
+        $s = $this->settings();
+        $s = array_merge($s, $this->authorize_url_diagnostics($authorizeUrl, $oauthRedirectParam, $state));
+        update_option(Plugin::OPTION_KEY, $s, false);
+    }
+
+    private function authorize_url_diagnostics(string $authorizeUrl, string $oauthRedirectParam, string $state): array
+    {
+        parse_str((string) parse_url($authorizeUrl, PHP_URL_QUERY), $query);
+
+        return [
+            'oauth_authorize_url_redacted' => $this->redact_authorize_url($authorizeUrl),
+            'oauth_authorize_url_host' => (string) parse_url($authorizeUrl, PHP_URL_HOST),
+            'oauth_authorize_url_has_client_id' => (string) ($query['client_id'] ?? '') !== '',
+            'oauth_authorize_url_redirect_uri' => (string) ($query['redirect_uri'] ?? $oauthRedirectParam),
+            'oauth_authorize_url_state_prefix' => str_starts_with((string) ($query['state'] ?? $state), self::STATE_PREFIX) ? self::STATE_PREFIX : '',
+            'oauth_authorize_url_has_scope' => (string) ($query['scope'] ?? '') !== '',
+            'oauth_connect_redirect_attempted' => false,
+            'oauth_connect_redirect_target_type' => $this->redirect_target_type($authorizeUrl),
+            'oauth_connect_redirect_headers_sent' => null,
+            'oauth_connect_redirect_headers_sent_at' => '',
+            'oauth_connect_redirect_result' => null,
+            'oauth_connect_redirect_error' => '',
+        ];
+    }
+
+    private function redact_authorize_url(string $authorizeUrl): string
+    {
+        if ($authorizeUrl === '') {
+            return '';
+        }
+
+        return (string) preg_replace('/([?&]client_id=)[^&]*/', '$1redacted', $authorizeUrl);
+    }
+
+    private function redirect_target_type(string $url): string
+    {
+        if ($url === '') {
+            return 'empty';
+        }
+
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if ($host === 'auth.ebay.com' && $path === '/oauth2/authorize') {
+            return 'ebay_authorize_url';
+        }
+
+        if (str_contains($path, '/wp-admin/') || str_contains($url, 'wp-admin')) {
+            return 'wp_admin';
+        }
+
+        return 'other';
     }
 
     private function new_oauth_attempt_id(): string
@@ -553,6 +652,18 @@ class EbayAuth
             'oauth_callback_router',
             'routed_plugin',
             'routed_marketplace',
+            'oauth_authorize_url_redacted',
+            'oauth_authorize_url_host',
+            'oauth_authorize_url_has_client_id',
+            'oauth_authorize_url_redirect_uri',
+            'oauth_authorize_url_state_prefix',
+            'oauth_authorize_url_has_scope',
+            'oauth_connect_redirect_attempted',
+            'oauth_connect_redirect_target_type',
+            'oauth_connect_redirect_headers_sent',
+            'oauth_connect_redirect_headers_sent_at',
+            'oauth_connect_redirect_result',
+            'oauth_connect_redirect_error',
         ];
     }
 
@@ -572,6 +683,18 @@ class EbayAuth
             'oauth_last_attempt_id',
             'last_oauth_attempt_started_at',
             'last_oauth_callback_at',
+            'oauth_authorize_url_redacted',
+            'oauth_authorize_url_host',
+            'oauth_authorize_url_has_client_id',
+            'oauth_authorize_url_redirect_uri',
+            'oauth_authorize_url_state_prefix',
+            'oauth_authorize_url_has_scope',
+            'oauth_connect_redirect_attempted',
+            'oauth_connect_redirect_target_type',
+            'oauth_connect_redirect_headers_sent',
+            'oauth_connect_redirect_headers_sent_at',
+            'oauth_connect_redirect_result',
+            'oauth_connect_redirect_error',
         ])));
     }
 
@@ -729,7 +852,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'oauth_last_attempt_id', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used', 'oauth_shared_callback', 'oauth_callback_router', 'routed_plugin', 'routed_marketplace'];
+        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'oauth_last_attempt_id', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used', 'oauth_shared_callback', 'oauth_callback_router', 'routed_plugin', 'routed_marketplace', 'oauth_authorize_url_redacted', 'oauth_authorize_url_host', 'oauth_authorize_url_has_client_id', 'oauth_authorize_url_redirect_uri', 'oauth_authorize_url_state_prefix', 'oauth_authorize_url_has_scope', 'oauth_connect_redirect_attempted', 'oauth_connect_redirect_target_type', 'oauth_connect_redirect_headers_sent', 'oauth_connect_redirect_headers_sent_at', 'oauth_connect_redirect_result', 'oauth_connect_redirect_error'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];
