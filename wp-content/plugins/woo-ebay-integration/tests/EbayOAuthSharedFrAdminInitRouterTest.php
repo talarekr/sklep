@@ -48,9 +48,32 @@ namespace {
         return true;
     }
 
+    if (!defined('ABSPATH')) {
+        define('ABSPATH', dirname(__DIR__, 4) . '/');
+    }
+
+    function plugin_dir_path(string $file): string
+    {
+        return rtrim(dirname($file), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    }
+
+    function register_activation_hook(string $file, $callback): void
+    {
+    }
+
     function admin_url(string $path = ''): string
     {
         return 'https://gpswiss.pl/wp-admin/' . ltrim($path, '/');
+    }
+
+    function is_admin(): bool
+    {
+        return true;
+    }
+
+    function wp_unslash($value)
+    {
+        return $value;
     }
 
     function get_current_user_id(): int
@@ -195,7 +218,7 @@ namespace {
         (new FrEbayAuth(new FrLogger()))->handle_shared_callback($request);
     }, 10, 1);
 
-    DeEbayAuth::register_shared_oauth_admin_init_router();
+    require_once __DIR__ . '/../woo-ebay-integration.php';
 
     $failures = [];
     $assert = static function (bool $condition, string $message) use (&$failures): void {
@@ -275,7 +298,8 @@ namespace {
     $assert(($debugPayload['has_code'] ?? null) === true, 'Early shared callback debug file must record that the OAuth code is present.');
     $assert(($debugPayload['routed_plugin_attempt'] ?? '') === 'FR', 'Early shared callback debug file must record the FR routed plugin attempt.');
     $assert(($debugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_DETECTED', 'Early shared callback debug file must record the explicit FR detection event.');
-    $assert(($adminInitDebugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', 'admin_init priority 0 router must record that it called the FR shared handler.');
+    $assert(($adminInitDebugPayload['event'] ?? '') === 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', 'bootstrap admin_init priority 0 router must record that it called the FR shared handler.');
+    $assert(($adminInitDebugPayload['hook'] ?? '') === 'bootstrap_admin_init', 'Shared callback diagnostics must show the direct bootstrap admin_init router handled the callback.');
     $assert(($adminInitDebugPayload['fr_handler_callable_found'] ?? null) === true, 'admin_init router diagnostics must show that the FR handler callable was found.');
     $assert(($adminInitDebugPayload['current_user_id'] ?? null) === 7, 'admin_init router diagnostics must include current_user_id.');
     $assert(($adminInitDebugPayload['is_user_logged_in'] ?? null) === true, 'admin_init router diagnostics must include is_user_logged_in.');
@@ -303,8 +327,10 @@ namespace {
     $frAuthSource = file_get_contents(__DIR__ . '/../../woo-ebay-integration-fr/src/Services/EbayAuth.php');
     $assert(str_contains($frMainSource, "add_action('wei_fr_handle_shared_oauth_callback'"), 'FR plugin must register the shared OAuth callback handler action.');
     $assert(str_contains($frAuthSource, 'handle_shared_callback'), 'FR OAuth service must expose a shared callback handler method.');
-    $assert(str_contains($deMainSource, 'register_shared_oauth_admin_init_router'), 'DE plugin main file must register the shared OAuth admin_init router during bootstrap.');
+    $assert(str_contains($deMainSource, "add_action('admin_init', 'wei_shared_oauth_fr_bootstrap_router', 0)"), 'DE plugin main file must directly register the bootstrap shared OAuth admin_init router.');
+    $assert(str_contains($deMainSource, 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED'), 'DE plugin main file must log when the bootstrap router is registered.');
     $assert(str_contains($deAuthSource, 'register_shared_oauth_admin_init_router'), 'DE shared router source must expose the permanent bootstrap registration method.');
+    $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_HIT'), 'DE shared router source must log when the bootstrap router matches an FR callback.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND'), 'DE shared router source must log when the FR shared handler is found.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED'), 'DE shared router source must log before calling the FR shared handler.');
     $assert(str_contains($deAuthSource, 'WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING'), 'DE shared router source must log before handing off to FR and exiting.');

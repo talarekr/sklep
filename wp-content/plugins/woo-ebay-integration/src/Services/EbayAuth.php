@@ -86,6 +86,7 @@ class EbayAuth
             return;
         }
 
+        error_log('WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_REGISTERED: {"hook":"admin_init","priority":0,"source":"EbayAuth::register_shared_oauth_admin_init_router"}');
         add_action('admin_init', static function (): void {
             (new self(new Logger()))->route_foreign_fr_oauth_callback();
         }, 0);
@@ -115,7 +116,7 @@ class EbayAuth
         $this->maybe_intercept_oauth_callback('plugins_loaded');
     }
 
-    public function route_foreign_fr_oauth_callback(): void
+    public function route_foreign_fr_oauth_callback(string $hook = 'admin_init'): void
     {
         if (!$this->is_shared_fr_oauth_callback_request()) {
             return;
@@ -123,19 +124,22 @@ class EbayAuth
 
         $frHandlerCallableFound = $this->fr_shared_handler_callable_found();
 
-        $context = $this->shared_fr_router_context('admin_init', $frHandlerCallableFound);
-        $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
-        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT', $context);
+        $context = $this->shared_fr_router_context($hook, $frHandlerCallableFound);
+        $routerHitEvent = $hook === 'bootstrap_admin_init'
+            ? 'WEI_SHARED_OAUTH_FR_BOOTSTRAP_ROUTER_HIT'
+            : 'WEI_SHARED_OAUTH_FR_ADMIN_INIT_ROUTER_HIT';
+        $this->log_shared_fr_router_event($routerHitEvent, $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, $routerHitEvent, $context);
 
         if (!$frHandlerCallableFound) {
             $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
-            $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
+            $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_NOT_FOUND', $context);
             $this->redirect_shared_fr_callback_error('fr_handler_missing');
             return;
         }
 
         $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
-        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_FOUND', $context);
 
         if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
             wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration'), esc_html__('eBay OAuth callback', 'woo-ebay-integration'), ['response' => 403]);
@@ -153,7 +157,7 @@ class EbayAuth
             'token_exchange_attempted' => false,
         ], false);
         $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
-        $this->write_shared_fr_callback_debug('admin_init', 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
+        $this->write_shared_fr_callback_debug($hook, 'FR', true, 'WEI_SHARED_OAUTH_FR_HANDLER_CALLED', $context);
         $this->log_shared_fr_router_event('WEI_SHARED_OAUTH_FR_ROUTED_AND_EXITING', $context);
         $this->call_fr_shared_oauth_handler($_GET);
         exit;
@@ -614,12 +618,18 @@ class EbayAuth
 
     private function redirect_shared_fr_callback_error(string $error): void
     {
-        if (!function_exists('wp_safe_redirect')) {
-            return;
+        $target = function_exists('admin_url')
+            ? admin_url('admin.php?page=woo-ebay&oauth_status=error&oauth_error=' . rawurlencode($error) . '&routed_plugin=FR')
+            : '/wp-admin/admin.php?page=woo-ebay&oauth_status=error&oauth_error=' . rawurlencode($error) . '&routed_plugin=FR';
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect($target);
+            exit;
         }
 
-        $target = admin_url('admin.php?page=woo-ebay&oauth_status=error&oauth_error=' . rawurlencode($error) . '&routed_plugin=FR');
-        wp_safe_redirect($target);
+        if (!headers_sent()) {
+            header('Location: ' . $target, true, 302);
+        }
         exit;
     }
 
