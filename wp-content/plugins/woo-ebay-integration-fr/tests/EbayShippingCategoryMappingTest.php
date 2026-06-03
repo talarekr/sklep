@@ -60,6 +60,18 @@ $GLOBALS['wei_fr_test_product_terms'][5] = [$term(9999)];
 $r = EbayShippingPolicyResolver::resolve_for_product(5, $settings + ['default_shipping_policy_id' => 'DEFAULTPOLICY']);
 $assert($r['default_used'] === true && $r['policy_id'] === 'DEFAULTPOLICY', 'Product with no matching Woo category must use default shipping policy when configured.');
 
+$r = EbayShippingPolicyResolver::resolve_for_product(5, $settings + ['ebay_fulfillment_policy_id' => 'GLOBALFULFILLMENT']);
+$assert($r['default_used'] === true && $r['policy_id'] === 'GLOBALFULFILLMENT', 'Product with no matching Woo category must inherit the global FR fulfillment policy ID when configured.');
+
+$missingGroupPolicySettings = $settings + ['default_shipping_policy_id' => 'DEFAULTPOLICY'];
+$missingGroupPolicySettings['shipping_policy_50'] = '';
+$GLOBALS['wei_fr_test_product_terms'][7] = [$term(6001)];
+$r = EbayShippingPolicyResolver::resolve_for_product(7, $missingGroupPolicySettings);
+$assert($r['group'] === EbayShippingPolicyResolver::GROUP_SHIPPING_50 && $r['policy_id'] === 'DEFAULTPOLICY' && $r['default_used'] === true && $r['blocked'] === false, 'Missing category/shipping-specific FR fulfillment policy must fallback to the global default policy.');
+
+$r = EbayShippingPolicyResolver::resolve_for_product(7, $missingGroupPolicySettings + ['disable_global_policy_fallback' => 'yes']);
+$assert($r['blocked'] === true && $r['reason'] === 'missing_fr_shipping_policy_mapping', 'Explicitly disabling global fallback must keep missing category/shipping-specific policies blocked.');
+
 $r = EbayShippingPolicyResolver::resolve_for_product(5, $settings);
 $assert($r['blocked'] === true && $r['reason'] === 'missing_fr_shipping_policy_mapping', 'FR product with no matching Woo category and no default must be blocked by missing_fr_shipping_policy_mapping.');
 

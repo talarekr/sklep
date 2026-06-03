@@ -207,7 +207,7 @@ class AutoSyncScheduler
     {
         $state = get_option(self::FULL_PUBLISH_READINESS_AUDIT_STATE_OPTION, []);
         $state = is_array($state) ? $state : [];
-        if ($restart || empty($state) || !empty($state['complete']) || (string) ($state['status'] ?? '') !== 'in_progress') {
+        if ($restart || empty($state) || !empty($state['complete']) || (string) ($state['status'] ?? '') !== 'in_progress' || (string) ($state['schema_version'] ?? '') !== 'publish_readiness_audit_v3') {
             $state = $this->new_full_publish_readiness_audit_state($batchSize);
         }
 
@@ -315,7 +315,7 @@ class AutoSyncScheduler
             'source' => 'latest readiness scan',
             'audit_type' => 'full_publish_readiness',
             'audit_run_id' => $runId,
-            'schema_version' => 'publish_readiness_audit_v2',
+            'schema_version' => 'publish_readiness_audit_v3',
             'status' => 'in_progress',
             'result' => 'partial',
             'complete' => false,
@@ -346,6 +346,12 @@ class AutoSyncScheduler
             'missing_image' => 0,
             'missing_stock' => 0,
             'missing_policies_location' => 0,
+            'missing_fulfillment_policy_count' => 0,
+            'missing_payment_policy_count' => 0,
+            'missing_return_policy_count' => 0,
+            'missing_merchant_location_count' => 0,
+            'business_policy_problem_reason_count' => 0,
+            'policies_ok_but_other_blocker_count' => 0,
             'blocked_by_shipping_policy' => 0,
             'missing_shipping_policy_mapping' => 0,
             'excluded_from_ebay' => 0,
@@ -450,9 +456,24 @@ class AutoSyncScheduler
             $state['missing_stock'] = (int) ($state['missing_stock'] ?? 0) + 1;
             $this->append_limited($state['missing_stock_items'], $item, self::READINESS_BUCKET_LIMIT);
         }
-        if (!empty($blockedBy['policies_location'])) {
+        $policyLocationProblem = $this->has_publish_readiness_policy_location_problem($result);
+        $policyProblemCounters = [
+            'missing_fulfillment_policy_count' => !empty($result['missing_fulfillment_policy']),
+            'missing_payment_policy_count' => !empty($result['missing_payment_policy']),
+            'missing_return_policy_count' => !empty($result['missing_return_policy']),
+            'missing_merchant_location_count' => !empty($result['missing_merchant_location']),
+            'business_policy_problem_reason_count' => (string) ($result['business_policy_problem_reason'] ?? '') !== '',
+        ];
+        foreach ($policyProblemCounters as $counter => $present) {
+            if ($present) {
+                $state[$counter] = (int) ($state[$counter] ?? 0) + 1;
+            }
+        }
+        if ($policyLocationProblem) {
             $state['missing_policies_location'] = (int) ($state['missing_policies_location'] ?? 0) + 1;
             $this->append_limited($state['missing_policies_location_items'], $item, self::READINESS_BUCKET_LIMIT);
+        } else {
+            $state['policies_ok_but_other_blocker_count'] = (int) ($state['policies_ok_but_other_blocker_count'] ?? 0) + 1;
         }
         if (!empty($blockedBy['shipping_policy'])) {
             $state['blocked_by_shipping_policy'] = (int) ($state['blocked_by_shipping_policy'] ?? 0) + 1;
@@ -704,9 +725,18 @@ class AutoSyncScheduler
             'images' => str_contains($errorText, 'image'),
             'french_content' => in_array($status, ['not_ready_missing_french_content', 'stale_french_content'], true) || str_contains($errorText, 'french'),
             'required_aspects' => $status === 'missing_required_aspects' || (array) ($result['missing_aspects'] ?? []) !== [] || str_contains($errorText, 'missing required aspect'),
-            'policies_location' => str_contains($errorText, 'polic') || str_contains($errorText, 'location'),
+            'policies_location' => $this->has_publish_readiness_policy_location_problem($result),
             'shipping_policy' => in_array($status, ['missing_shipping_policy_mapping', 'blocked_by_shipping_policy'], true) || str_contains($errorText, 'missing_shipping_policy_mapping'),
         ];
+    }
+
+    private function has_publish_readiness_policy_location_problem(array $result): bool
+    {
+        return !empty($result['missing_fulfillment_policy'])
+            || !empty($result['missing_payment_policy'])
+            || !empty($result['missing_return_policy'])
+            || !empty($result['missing_merchant_location'])
+            || (string) ($result['business_policy_problem_reason'] ?? '') !== '';
     }
 
     private function readiness_item(int $productId, array $result): array

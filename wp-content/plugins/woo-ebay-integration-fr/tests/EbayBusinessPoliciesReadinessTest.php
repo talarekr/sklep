@@ -78,6 +78,12 @@ $saveSource = $saveStart !== false && $saveEnd !== false ? substr($adminSource, 
 foreach (['selected_fulfillment_policy_id', 'selected_payment_policy_id', 'selected_return_policy_id', 'merchant_location_key', 'missing_payment_policy', 'missing_return_policy', 'missing_merchant_location', 'business_policy_problem_reason'] as $field) {
     $assert(str_contains($adapterSource, $field) && str_contains($adminSource, $field), 'Readiness and diagnostics must include ' . $field . '.');
 }
+$schedulerSource = file_get_contents(__DIR__ . '/../src/Services/AutoSyncScheduler.php');
+foreach (['missing_fulfillment_policy_count', 'missing_payment_policy_count', 'missing_return_policy_count', 'missing_merchant_location_count', 'business_policy_problem_reason_count', 'policies_ok_but_other_blocker_count'] as $field) {
+    $assert(str_contains($schedulerSource, $field), 'Readiness summary must include diagnostic counter ' . $field . '.');
+}
+$assert(str_contains($schedulerSource, 'has_publish_readiness_policy_location_problem') && str_contains($schedulerSource, "'policies_location' => $" . 'this->has_publish_readiness_policy_location_problem($result)'), 'missing_policies_location must be based on actual policy/location missing flags, not generic error text.');
+$assert(str_contains($schedulerSource, "'schema_version' => 'publish_readiness_audit_v3'"), 'New checkpointed readiness audits must start from the clean current readiness counter schema.');
 $assert(str_contains($adapterSource, "'fulfillmentPolicyId'") && str_contains($adapterSource, 'selected_fulfillment_policy_id'), 'Offer payload must use resolved fulfillment policy ID.');
 $assert(str_contains($adapterSource, "'paymentPolicyId'") && str_contains($adapterSource, 'selected_payment_policy_id'), 'Offer payload must use saved payment policy ID.');
 $assert(str_contains($adapterSource, "'returnPolicyId'") && str_contains($adapterSource, 'selected_return_policy_id'), 'Offer payload must use saved return policy ID.');
