@@ -38,7 +38,24 @@ namespace {
 
     function get_current_user_id(): int
     {
-        return 7;
+        return (int) ($GLOBALS['wei_fr_test_current_user_id'] ?? 7);
+    }
+
+    function is_user_logged_in(): bool
+    {
+        return (bool) ($GLOBALS['wei_fr_test_is_user_logged_in'] ?? true);
+    }
+
+    function current_user_can(string $capability): bool
+    {
+        $GLOBALS['wei_fr_test_current_user_can_calls'] = (int) ($GLOBALS['wei_fr_test_current_user_can_calls'] ?? 0) + 1;
+        return (bool) ($GLOBALS['wei_fr_test_current_user_can_manage_options'] ?? true);
+    }
+
+    function add_action(string $hook_name, callable $callback, int $priority = 10, int $accepted_args = 1): true
+    {
+        $GLOBALS['wei_fr_test_actions'][] = compact('hook_name', 'callback', 'priority', 'accepted_args');
+        return true;
     }
 
     function set_transient(string $key, $value, int $expiration): bool
@@ -148,6 +165,7 @@ namespace {
     $assert(str_contains($viewSource, "'fr_plugin_version' => $" . "frPluginVersion"), 'Displayed OAuth JSON must include fr_plugin_version.');
     $assert(str_contains($viewSource, "'fr_plugin_commit' => $" . "frPluginCommit"), 'Displayed OAuth JSON must include fr_plugin_commit.');
     $assert(str_contains($viewSource, "'oauth_callback_flow_version' => $" . "oauthCallbackFlowVersion"), 'Displayed OAuth JSON must include oauth_callback_flow_version.');
+    $assert(str_contains($viewSource, "'callback_detected_at_plugins_loaded' => $" . "oauthDiagnostics['callback_detected_at_plugins_loaded']"), 'Displayed OAuth JSON must include callback_detected_at_plugins_loaded.');
     $assert(str_contains($viewSource, "'current_user_id' => (int) ($" . "oauthDiagnostics['current_user_id']"), 'Displayed OAuth JSON must include current_user_id for not_wordpress_administrator diagnostics.');
     $assert(str_contains($viewSource, "'is_user_logged_in' => $" . "oauthDiagnostics['is_user_logged_in']"), 'Displayed OAuth JSON must include is_user_logged_in for not_wordpress_administrator diagnostics.');
     $assert(str_contains($viewSource, "'current_user_can_manage_options' => $" . "oauthDiagnostics['current_user_can_manage_options']"), 'Displayed OAuth JSON must include current_user_can_manage_options for not_wordpress_administrator diagnostics.');
@@ -156,6 +174,42 @@ namespace {
     $assert(str_contains($source, "store_intercept_diagnostics('plugins_loaded', false, 'plugins_loaded_deferred_to_admin_init')"), 'FR bootstrap callback detection must defer processing until admin_init user/capability context is available.');
     $assert(str_contains($source, 'add_action(' . "'admin_init'" . ', [$this, ' . "'handle_oauth_callback'" . '], 0)'), 'FR bootstrap callback handler must register an admin_init retry instead of processing at plugins_loaded.');
     $assert(!str_contains($source, "maybe_intercept_oauth_callback('plugins_loaded')"), 'FR callback must not process OAuth at plugins_loaded before WordPress administrator capabilities are available.');
+
+
+
+    $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
+        'client_id' => 'GPSWISS-GPSwiss-PRD-dbddbd5ea-53182c46',
+        'client_secret' => 'secret',
+        'redirect_uri' => 'https://gpswiss.pl/wp-admin/admin.php?page=ebay-fr-auth-callback',
+        'runame' => '',
+        'refresh_token' => '',
+        'oauth_status' => 'not_connected',
+        'token_exchange_error' => 'not_wordpress_administrator',
+        'code_received' => true,
+        'state_received' => true,
+        'token_exchange_success' => false,
+    ];
+    $GLOBALS['wei_fr_test_current_user_can_calls'] = 0;
+    $GLOBALS['wei_fr_test_current_user_id'] = 0;
+    $GLOBALS['wei_fr_test_is_user_logged_in'] = false;
+    $GLOBALS['wei_fr_test_current_user_can_manage_options'] = false;
+    $_GET = ['page' => 'ebay-fr-auth-callback', 'code' => 'CODE_BOOTSTRAP', 'state' => 'STATE_BOOTSTRAP'];
+    $_REQUEST = $_GET;
+    $_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=ebay-fr-auth-callback&code=CODE_BOOTSTRAP&state=STATE_BOOTSTRAP';
+    $auth->handle_admin_bootstrap_oauth_callback();
+    $bootstrapDiagnostics = $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY];
+    $assert(($bootstrapDiagnostics['callback_detected_at_plugins_loaded'] ?? null) === true, 'plugins_loaded must only record neutral callback_detected_at_plugins_loaded diagnostics.');
+    $assert(($bootstrapDiagnostics['intercept_hook'] ?? '') === 'plugins_loaded', 'plugins_loaded diagnostics must record the detection hook.');
+    $assert(($bootstrapDiagnostics['token_exchange_error'] ?? '') === '', 'plugins_loaded must clear stale token_exchange_error and never write not_wordpress_administrator.');
+    $assert(($bootstrapDiagnostics['oauth_status'] ?? '') === 'not_connected', 'plugins_loaded must not finalize OAuth callback failure status.');
+    $assert(($bootstrapDiagnostics['code_received'] ?? null) === true, 'plugins_loaded must not rewrite code_received from its previous value.');
+    $assert(($bootstrapDiagnostics['state_received'] ?? null) === true, 'plugins_loaded must not rewrite state_received from its previous value.');
+    $assert(($GLOBALS['wei_fr_test_current_user_can_calls'] ?? 0) === 0, 'plugins_loaded callback detection must not call current_user_can.');
+    $assert(($GLOBALS['wei_fr_test_actions'][0]['hook_name'] ?? '') === 'admin_init', 'plugins_loaded callback detection must register admin_init processing.');
+
+    $GLOBALS['wei_fr_test_current_user_id'] = 7;
+    $GLOBALS['wei_fr_test_is_user_logged_in'] = true;
+    $GLOBALS['wei_fr_test_current_user_can_manage_options'] = true;
 
     $isCallbackRequest = $ref->getMethod('is_oauth_callback_request');
     $isCallbackRequest->setAccessible(true);

@@ -433,6 +433,7 @@ $oauthCallbackDebug = [
     'fr_plugin_commit' => $frPluginCommit,
     'oauth_callback_flow_version' => $oauthCallbackFlowVersion,
     'oauth_status' => (string) ($oauthDiagnostics['oauth_status'] ?? ''),
+    'callback_detected_at_plugins_loaded' => $oauthDiagnostics['callback_detected_at_plugins_loaded'] ?? null,
     'callback_intercepted_by_admin_init' => $oauthDiagnostics['callback_intercepted_by_admin_init'] ?? null,
     'intercept_hook' => (string) ($oauthDiagnostics['intercept_hook'] ?? ''),
     'callback_page_registered' => $oauthDiagnostics['callback_page_registered'] ?? null,
