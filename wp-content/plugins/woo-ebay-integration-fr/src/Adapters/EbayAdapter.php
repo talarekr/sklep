@@ -1960,6 +1960,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 if ($title === '' || $description === '') {
                     throw new \RuntimeException('Google Translation provider returned empty French title or description.');
                 }
+                $untranslatedFields = $translator->untranslated_fields($payload);
+                $untranslatedMainContent = array_values(array_filter($untranslatedFields, static fn(array $warning): bool => in_array((string) ($warning['key'] ?? ''), ['title', 'description'], true)));
+                if ($untranslatedMainContent !== []) {
+                    throw new \RuntimeException('Google Translation provider returned untranslated Polish title or description: ' . wp_json_encode($untranslatedMainContent));
+                }
                 $content = $this->log_french_content($product_id, $product_id, (string) ($payload['translation_source'] ?? ('generated_' . $provider->provider_key())), $title, $description, [
                     'provider' => $provider->provider_key(),
                     'generated' => true,
@@ -1977,7 +1982,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'description_source' => (string) ($source['description_source'] ?? 'post_content'),
                     'fields' => (array) ($payload['fields'] ?? []),
                     'translated_fields' => (array) ($payload['translated_fields'] ?? []),
-                    'untranslated_fields' => $translator->untranslated_fields($payload),
+                    'untranslated_fields' => $untranslatedFields,
                     'aspects' => (array) ($payload['aspects'] ?? []),
                     'google_api_called' => !empty($payload['google_api_called']),
                 ]);
@@ -2265,6 +2270,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $description = trim(wp_kses_post((string) ($payload['description'] ?? '')));
             if ($title === '' || $description === '') {
                 throw new \RuntimeException('Google Translation provider returned empty French title or description.');
+            }
+            $untranslatedFields = $translator->untranslated_fields($payload);
+            $untranslatedMainContent = array_values(array_filter($untranslatedFields, static fn(array $warning): bool => in_array((string) ($warning['key'] ?? ''), ['title', 'description'], true)));
+            if ($untranslatedMainContent !== []) {
+                throw new \RuntimeException('Google Translation provider returned untranslated Polish title or description: ' . wp_json_encode($untranslatedMainContent));
             }
 
             $extra = array_merge($baseLog, [
@@ -2674,24 +2684,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function ebay_fr_template_field_mapping(): array
     {
         return [
-            'Kod koloru' => ['french_label' => 'Farbcode', 'aliases' => ['Kod koloru'], 'required' => false],
-            'Kod silnika' => ['french_label' => 'Motorcode', 'aliases' => ['Kod silnika'], 'required' => false],
-            'Kolor' => ['french_label' => 'Farbe', 'aliases' => ['Kolor'], 'required' => false],
-            'Koła napędowe' => ['french_label' => 'Antrieb', 'aliases' => ['Koła napędowe', 'Kola napedowe'], 'required' => false],
-            'Moc silnika' => ['french_label' => 'Motorleistung', 'aliases' => ['Moc silnika'], 'required' => false],
-            'Model' => ['french_label' => 'Modell', 'aliases' => ['Model'], 'required' => false],
-            'Modyfikacja' => ['french_label' => 'Variante / Ausführung', 'aliases' => ['Modyfikacja'], 'required' => false],
-            'Numer części' => ['french_label' => 'Teilenummer', 'aliases' => ['Numer części', 'Numer czesci'], 'required' => true],
-            'Okres' => ['french_label' => 'Bauzeitraum', 'aliases' => ['Okres'], 'required' => false],
-            'Pojemność silnika' => ['french_label' => 'Hubraum', 'aliases' => ['Pojemność silnika', 'Pojemnosc silnika'], 'required' => false],
-            'Pozycja kierownicy' => ['french_label' => 'Lenkradposition', 'aliases' => ['Pozycja kierownicy'], 'required' => false],
-            'Producent' => ['french_label' => 'Hersteller', 'aliases' => ['Producent'], 'required' => true],
-            'Przebieg' => ['french_label' => 'Laufleistung', 'aliases' => ['Przebieg'], 'required' => false],
-            'Rodzaj paliwa' => ['french_label' => 'Kraftstoffart', 'aliases' => ['Rodzaj paliwa'], 'required' => false],
-            'Rok produkcji samochodu' => ['french_label' => 'Baujahr des Fahrzeugs', 'aliases' => ['Rok produkcji samochodu'], 'required' => false],
-            'Stan' => ['french_label' => 'Zustand', 'aliases' => ['Stan'], 'required' => false],
-            'Stan opakowania' => ['french_label' => 'Verpackungszustand', 'aliases' => ['Stan opakowania'], 'required' => false],
-            'Typ skrzyni biegów' => ['french_label' => 'Getriebeart', 'aliases' => ['Typ skrzyni biegów', 'Typ skrzyni biegow'], 'required' => false],
+            'Kod koloru' => ['french_label' => 'Code couleur', 'aliases' => ['Kod koloru'], 'required' => false],
+            'Kod silnika' => ['french_label' => 'Code moteur', 'aliases' => ['Kod silnika'], 'required' => false],
+            'Kolor' => ['french_label' => 'Couleur', 'aliases' => ['Kolor'], 'required' => false],
+            'Koła napędowe' => ['french_label' => 'Transmission', 'aliases' => ['Koła napędowe', 'Kola napedowe'], 'required' => false],
+            'Moc silnika' => ['french_label' => 'Puissance moteur', 'aliases' => ['Moc silnika'], 'required' => false],
+            'Model' => ['french_label' => 'Modèle', 'aliases' => ['Model'], 'required' => false],
+            'Modyfikacja' => ['french_label' => 'Variante / Version', 'aliases' => ['Modyfikacja'], 'required' => false],
+            'Numer części' => ['french_label' => 'Numéro de pièce', 'aliases' => ['Numer części', 'Numer czesci'], 'required' => true],
+            'Okres' => ['french_label' => 'Période de production', 'aliases' => ['Okres'], 'required' => false],
+            'Pojemność silnika' => ['french_label' => 'Cylindrée', 'aliases' => ['Pojemność silnika', 'Pojemnosc silnika'], 'required' => false],
+            'Pozycja kierownicy' => ['french_label' => 'Position du volant', 'aliases' => ['Pozycja kierownicy'], 'required' => false],
+            'Producent' => ['french_label' => 'Fabricant', 'aliases' => ['Producent'], 'required' => true],
+            'Przebieg' => ['french_label' => 'Kilométrage', 'aliases' => ['Przebieg'], 'required' => false],
+            'Rodzaj paliwa' => ['french_label' => 'Type de carburant', 'aliases' => ['Rodzaj paliwa'], 'required' => false],
+            'Rok produkcji samochodu' => ['french_label' => 'Année du véhicule', 'aliases' => ['Rok produkcji samochodu'], 'required' => false],
+            'Stan' => ['french_label' => 'État', 'aliases' => ['Stan'], 'required' => false],
+            'Stan opakowania' => ['french_label' => 'État de l’emballage', 'aliases' => ['Stan opakowania'], 'required' => false],
+            'Typ skrzyni biegów' => ['french_label' => 'Type de boîte de vitesses', 'aliases' => ['Typ skrzyni biegów', 'Typ skrzyni biegow'], 'required' => false],
         ];
     }
 
@@ -2988,7 +2998,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'stale_reasons' => (array) ($cached['stale_reasons'] ?? []),
             'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
             'source_description_used' => (string) ($source['description'] ?? ''),
-            'translated_spec_values_status' => $translatedValues > 0 ? 'translated_value_present' : 'missing_translated_value',
+            'translated_spec_values_status' => $translatedValues > 0 ? 'ok' : 'missing_translated_value',
             'translated_spec_values_count' => $translatedValues,
             'preview_uses_translated_value' => $previewUsesTranslatedValue ? 'yes' : 'no',
             'ready' => !empty($cached['ready']),
@@ -3410,7 +3420,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private static function french_translation_schema_version(): string
     {
-        return defined(EbayFrenchContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayFrenchContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-de-spec-overrides-2026-06-v4';
+        return defined(EbayFrenchContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') ? (string) constant(EbayFrenchContentTranslator::class . '::TRANSLATION_SCHEMA_VERSION') : 'pl-fr-spec-overrides-2026-06-v3';
     }
 
     private function ebay_french_content_source($product, int $productId, array $aspectsSource = []): array
