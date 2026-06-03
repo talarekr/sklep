@@ -4416,15 +4416,27 @@ class AdminPage
         }
 
         $fetchedAt = (int) ($cached['fetched_at'] ?? 0);
-        return array_merge([
+        $merged = array_merge([
             'ready' => false,
+            'currency_source' => 'nbp_table_a',
             'nbp_rate' => null,
             'nbp_effective_date' => '',
             'nbp_table_no' => '',
             'fetched_at' => 0,
-        ], $cached, [
-            'cache_age_seconds' => $fetchedAt > 0 ? max(0, time() - $fetchedAt) : null,
-            'cache_status' => !empty($cached['from_transient']) ? 'fresh' : (!empty($cached['from_last_saved']) ? 'last_saved' : (!empty($cached['ready']) ? 'cached' : 'missing')),
+        ], $cached);
+        $age = $fetchedAt > 0 ? max(0, time() - $fetchedAt) : null;
+        $cacheStatus = !empty($cached['from_transient']) ? 'fresh' : (!empty($cached['from_last_saved']) ? 'last_saved' : (!empty($cached['ready']) ? 'cached' : 'missing'));
+        $rateStatus = empty($merged['ready']) ? (!empty($merged['error']) ? 'fetch_error' : 'missing') : (!empty($merged['fetch_error']) ? 'stale' : 'available');
+
+        return array_merge($merged, [
+            'cache_age_seconds' => $age,
+            'cache_status' => $cacheStatus,
+            'nbp_eur_rate_status' => $rateStatus,
+            'nbp_eur_rate_value' => $merged['nbp_rate'],
+            'nbp_eur_rate_date' => (string) ($merged['nbp_effective_date'] ?? ''),
+            'nbp_eur_rate_source' => (string) ($merged['currency_source'] ?? 'nbp_table_a'),
+            'nbp_eur_rate_cached_at' => $fetchedAt > 0 ? gmdate('c', $fetchedAt) : '',
+            'nbp_eur_rate_fetch_error' => (string) ($merged['fetch_error'] ?? $merged['error'] ?? ''),
         ]);
     }
 

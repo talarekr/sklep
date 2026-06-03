@@ -3795,6 +3795,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $categoryId = '';
         }
         $missingAspects = $categoryId !== '' ? array_values(array_filter($requiredAspects, static fn($name) => empty($aspects[$name]))) : [];
+        $marqueDiagnostics = $this->marque_readiness_diagnostics($product, $product_id, $content, $aspects, $category, $settings, $requiredAspects);
         $partNumberDiagnostics = $this->part_number_readiness_diagnostics($product, $product_id, $skuResolution['sku'], $content, $aspects, $category, $settings, $requiredAspects);
         if (!empty($partNumberDiagnostics['required']) && empty($partNumberDiagnostics['present_in_final_item_specifics_payload'])) {
             $missingAspects[] = (string) ($partNumberDiagnostics['preferred_item_specific_name'] ?? 'Herstellernummer');
@@ -3866,7 +3867,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $message = 'Product not ready for eBay: missing required aspect Hersteller. Configure brand/manufacturer mapping.';
         }
 
-        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_fr_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_fr_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'stock_quantity' => $stockGuard['stock_quantity'], 'stock_status' => $stockGuard['stock_status'], 'manage_stock' => $stockGuard['manage_stock'], 'purchasable' => $stockGuard['purchasable'], 'ovoko_status' => $stockGuard['ovoko_status'], 'stock_block_reason' => $stockGuard['stock_block_reason'], 'stock_guard' => $stockGuard, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
+        return ['ready' => $ready, 'status' => $ready ? 'ready' : $status, 'message' => $message, 'product_id' => $product_id, 'sku_resolution' => $skuResolution, 'content' => $content, 'category' => $category, 'price_resolution' => $priceResolution, 'shipping_policy_resolution' => $shippingPolicyResolution, 'selected_shipping_group' => (string) ($shippingPolicyResolution['group'] ?? ''), 'selected_shipping_policy_id' => (string) ($shippingPolicyResolution['policy_id'] ?? ''), 'selected_shipping_policy_name' => (string) ($shippingPolicyResolution['policy_name'] ?? ''), 'missing_fr_shipping_policy_mapping' => !empty($shippingPolicyResolution['blocked']) || (string) ($shippingPolicyResolution['reason'] ?? '') === 'missing_fr_shipping_policy_mapping', 'selected_fulfillment_policy_id' => (string) ($businessPolicyResolution['selected_fulfillment_policy_id'] ?? ''), 'selected_fulfillment_policy_name' => (string) ($businessPolicyResolution['selected_fulfillment_policy_name'] ?? ''), 'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''), 'selected_payment_policy_name' => (string) ($businessPolicyResolution['selected_payment_policy_name'] ?? ''), 'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''), 'selected_return_policy_name' => (string) ($businessPolicyResolution['selected_return_policy_name'] ?? ''), 'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''), 'missing_fulfillment_policy' => !empty($businessPolicyResolution['missing_fulfillment_policy']), 'missing_payment_policy' => !empty($businessPolicyResolution['missing_payment_policy']), 'missing_return_policy' => !empty($businessPolicyResolution['missing_return_policy']), 'missing_merchant_location' => !empty($businessPolicyResolution['missing_merchant_location']), 'business_policy_problem_reason' => (string) ($businessPolicyResolution['business_policy_problem_reason'] ?? ''), 'nbp_eur_rate_status' => (string) ($priceResolution['nbp_eur_rate_status'] ?? ''), 'nbp_eur_rate_value' => $priceResolution['nbp_eur_rate_value'] ?? $priceResolution['nbp_rate'] ?? null, 'nbp_eur_rate_date' => (string) ($priceResolution['nbp_eur_rate_date'] ?? $priceResolution['nbp_effective_date'] ?? ''), 'nbp_eur_rate_source' => (string) ($priceResolution['nbp_eur_rate_source'] ?? $priceResolution['currency_source'] ?? 'nbp_table_a'), 'nbp_eur_rate_cached_at' => (string) ($priceResolution['nbp_eur_rate_cached_at'] ?? ''), 'nbp_eur_rate_fetch_error' => (string) ($priceResolution['nbp_eur_rate_fetch_error'] ?? ''), 'markup_percent' => $priceResolution['markup_percent'] ?? null, 'price_after_markup_pln' => $priceResolution['price_after_markup_pln'] ?? $priceResolution['marked_price_pln'] ?? null, 'ebay_price_eur' => $priceResolution['ebay_price_eur'] ?? null, 'policy_validation' => $policyValidation, 'required_aspects' => $requiredAspects, 'missing_aspects' => $missingAspects, 'aspects' => $aspects, 'marque_readiness' => $marqueDiagnostics, 'mpn_oe_readiness' => $partNumberDiagnostics, 'vehicle_compatibility_readiness_note' => 'KType/ePID compatibility audit is informational only; missing KType/ePID is compatibility_enhancement_missing and does not block publish.', 'stock_quantity' => $stockGuard['stock_quantity'], 'stock_status' => $stockGuard['stock_status'], 'manage_stock' => $stockGuard['manage_stock'], 'purchasable' => $stockGuard['purchasable'], 'ovoko_status' => $stockGuard['ovoko_status'], 'stock_block_reason' => $stockGuard['stock_block_reason'], 'stock_guard' => $stockGuard, 'errors' => $errors, 'category_validation' => $knownCategoryValidation ?? []];
     }
 
 
@@ -4120,7 +4121,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
         }
 
-        $manufacturer = $this->resolve_manufacturer_aspect_value($product, $product_id, $categoryId, $settings, $content);
+        $manufacturerDiagnostic = $this->resolve_manufacturer_aspect_diagnostic($product, $product_id, $categoryId, $settings, $content);
+        $manufacturer = (string) ($manufacturerDiagnostic['value'] ?? '');
         if ($manufacturer !== '') {
             $aspects['Hersteller'] = [$manufacturer];
         }
@@ -4658,8 +4660,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             }
             $normalized = $this->normalize_aspect_alias_name($aspect);
 
-            if (in_array($normalized, ['hersteller', 'marke'], true) && $manufacturer !== '') {
-                if ($normalized === 'hersteller' || $this->looks_like_ac_condenser_or_refrigerant_case($categoryText)) {
+            if (in_array($normalized, ['hersteller', 'marke', 'marque'], true) && $manufacturer !== '') {
+                if ($normalized === 'hersteller' || $normalized === 'marque' || $this->looks_like_ac_condenser_or_refrigerant_case($categoryText)) {
                     $aspects[$aspect] = [$manufacturer];
                 }
                 continue;
@@ -4926,6 +4928,22 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_manufacturer_aspect_value($product, int $product_id, string $categoryId, array $settings, array $content = []): string
     {
+        $diagnostic = $this->resolve_manufacturer_aspect_diagnostic($product, $product_id, $categoryId, $settings, $content);
+        return (string) ($diagnostic['value'] ?? '');
+    }
+
+    private function resolve_manufacturer_aspect_diagnostic($product, int $product_id, string $categoryId, array $settings, array $content = []): array
+    {
+        $contentValue = $this->manufacturer_from_french_content($content, ['Fabricant']);
+        if ($contentValue !== '') {
+            return ['value' => $contentValue, 'source' => 'french_content', 'source_key' => 'Fabricant'];
+        }
+
+        $contentValue = $this->manufacturer_from_french_content($content, ['Producent']);
+        if ($contentValue !== '') {
+            return ['value' => $contentValue, 'source' => 'source_content', 'source_key' => 'Producent'];
+        }
+
         foreach (['Producent', 'Marka', 'Manufacturer'] as $attributeName) {
             if (!method_exists($product, 'get_attribute')) {
                 continue;
@@ -4933,28 +4951,28 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
             $value = $this->normalize_manufacturer_value((string) $product->get_attribute($attributeName));
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'product_attribute', 'source_key' => $attributeName];
             }
         }
 
         foreach (['pa_producent', 'pa_marka'] as $taxonomy) {
             $value = $this->manufacturer_from_taxonomy($product_id, $taxonomy);
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'taxonomy', 'source_key' => $taxonomy];
             }
         }
 
         foreach (['product_brand', 'pwb-brand', 'yith_product_brand', 'berocket_brand'] as $taxonomy) {
             $value = $this->manufacturer_from_taxonomy($product_id, $taxonomy);
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'brand_taxonomy', 'source_key' => $taxonomy];
             }
         }
 
         foreach (['_manufacturer', '_brand'] as $metaKey) {
             $value = $this->normalize_manufacturer_value((string) get_post_meta($product_id, $metaKey, true));
             if ($value !== '') {
-                return $value;
+                return ['value' => $value, 'source' => 'product_meta', 'source_key' => $metaKey];
             }
         }
 
@@ -4964,7 +4982,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         $value = $this->detect_known_vehicle_brand($title);
         if ($value !== '') {
-            return $value;
+            return ['value' => $value, 'source' => 'title_vehicle_brand', 'source_key' => 'title'];
         }
 
         $description = trim((string) ($content['description'] ?? ''));
@@ -4973,15 +4991,67 @@ class EbayAdapter implements MarketplaceAdapterInterface
         }
         $value = $this->detect_manufacturer_from_labeled_description($description);
         if ($value !== '') {
-            return $value;
+            return ['value' => $value, 'source' => 'labeled_description', 'source_key' => 'description'];
         }
 
         $fallbacks = $this->parse_category_aspect_fallbacks((string) ($settings['category_aspect_fallbacks'] ?? ''));
         if ($categoryId !== '' && !empty($fallbacks[$categoryId]['Hersteller'][0])) {
-            return $this->normalize_manufacturer_value((string) $fallbacks[$categoryId]['Hersteller'][0]);
+            return ['value' => $this->normalize_manufacturer_value((string) $fallbacks[$categoryId]['Hersteller'][0]), 'source' => 'category_aspect_fallbacks', 'source_key' => $categoryId . ':Hersteller'];
         }
 
-        return $this->normalize_manufacturer_value((string) ($settings['default_hersteller_fallback'] ?? ''));
+        $default = $this->normalize_manufacturer_value((string) ($settings['default_hersteller_fallback'] ?? ''));
+        return ['value' => $default, 'source' => $default !== '' ? 'default_hersteller_fallback' : 'none', 'source_key' => $default !== '' ? 'default_hersteller_fallback' : ''];
+    }
+
+
+    private function manufacturer_from_french_content(array $content, array $labels): string
+    {
+        $wanted = array_map(fn(string $label): string => $this->normalize_aspect_alias_name($label), $labels);
+        foreach ((array) ($content['aspects'] ?? []) as $label => $values) {
+            if (in_array($this->normalize_aspect_alias_name((string) $label), $wanted, true)) {
+                $value = $this->normalize_manufacturer_value((string) (is_array($values) ? reset($values) : $values));
+                if ($value !== '') {
+                    return $value;
+                }
+            }
+        }
+        foreach ((array) ($content['fields'] ?? []) as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $fieldLabels = [(string) ($field['french_label'] ?? ''), (string) ($field['source_label'] ?? ''), (string) ($field['polish_label'] ?? '')];
+            foreach ($fieldLabels as $label) {
+                if ($label !== '' && in_array($this->normalize_aspect_alias_name($label), $wanted, true)) {
+                    foreach (['translated_value', 'value', 'source_value'] as $valueKey) {
+                        $value = $this->normalize_manufacturer_value((string) ($field[$valueKey] ?? ''));
+                        if ($value !== '') {
+                            return $value;
+                        }
+                    }
+                }
+            }
+        }
+        return '';
+    }
+
+    private function marque_readiness_diagnostics($product, int $productId, array $content, array $aspects, array $category, array $settings, array $requiredAspects): array
+    {
+        $required = false;
+        foreach ($requiredAspects as $requiredAspect) {
+            if ($this->normalize_aspect_alias_name((string) $requiredAspect) === 'marque') {
+                $required = true;
+                break;
+            }
+        }
+        $diagnostic = $this->resolve_manufacturer_aspect_diagnostic($product, $productId, (string) ($category['category_id'] ?? ''), $settings, $content);
+        return [
+            'required' => $required,
+            'value' => (string) ($aspects['Marque'][0] ?? $diagnostic['value'] ?? ''),
+            'source' => !empty($aspects['Marque'][0]) ? (string) ($diagnostic['source'] ?? 'resolved_required_aspect') : (string) ($diagnostic['source'] ?? 'none'),
+            'source_key' => (string) ($diagnostic['source_key'] ?? ''),
+            'present_in_final_item_specifics_payload' => !empty($aspects['Marque']),
+            'issue' => $required && empty($aspects['Marque']) ? 'missing_marque_item_specific' : '',
+        ];
     }
 
     private function manufacturer_from_taxonomy(int $product_id, string $taxonomy): string

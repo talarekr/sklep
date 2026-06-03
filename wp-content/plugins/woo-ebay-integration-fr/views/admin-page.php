@@ -160,6 +160,9 @@ $nbpEffectiveDate = (string) ($nbpRateStatus['nbp_effective_date'] ?? '');
 $nbpCacheAge = $nbpRateStatus['cache_age_seconds'] ?? null;
 $nbpCacheAgeLabel = is_numeric($nbpCacheAge) ? human_time_diff(time() - (int) $nbpCacheAge, time()) : '-';
 $nbpCacheStatus = (string) ($nbpRateStatus['cache_status'] ?? 'missing');
+$nbpDiagnosticStatus = (string) ($nbpRateStatus['nbp_eur_rate_status'] ?? ($nbpRateStatus['ready'] ?? false ? 'available' : 'missing'));
+$nbpCachedAt = (string) ($nbpRateStatus['nbp_eur_rate_cached_at'] ?? '');
+$nbpSource = (string) ($nbpRateStatus['nbp_eur_rate_source'] ?? 'nbp_table_a');
 
 $buildEbayCategoryUrl = static function (string $categoryId, array $categoryData = []): string {
     $preferredUrl = '';
@@ -1090,6 +1093,15 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
             <?php wp_nonce_field('wei_fr_save_ebay_settings'); ?>
             <input type="hidden" name="action" value="wei_fr_save_ebay_settings" />
             <h3>Price markup</h3>
+            <div class="wei-grid">
+                <div class="wei-card"><span>nbp_eur_rate_status</span><strong><?php echo esc_html($nbpDiagnosticStatus); ?></strong></div>
+                <div class="wei-card"><span>nbp_eur_rate_value</span><strong><?php echo esc_html($nbpRate !== null ? (string) $nbpRate : '-'); ?></strong></div>
+                <div class="wei-card"><span>nbp_eur_rate_date</span><strong><?php echo esc_html($nbpEffectiveDate !== '' ? $nbpEffectiveDate : '-'); ?></strong></div>
+                <div class="wei-card"><span>nbp_eur_rate_source</span><strong><?php echo esc_html($nbpSource); ?></strong></div>
+                <div class="wei-card"><span>nbp_eur_rate_cached_at</span><strong><?php echo esc_html($nbpCachedAt !== '' ? $nbpCachedAt : '-'); ?></strong></div>
+                <div class="wei-card"><span>cache_status</span><strong><?php echo esc_html($nbpCacheStatus); ?></strong></div>
+            </div>
+            <p class="description">FR prices use the NBP Table A EUR rate from the public NBP API. Readiness may refresh this FR-specific cache; it does not call eBay for exchange rates and does not write changed prices back to WooCommerce.</p>
             <table class="form-table" role="presentation">
                 <tr>
                     <th><label for="wei-ebay-default-markup-percent">Default markup %</label></th>
