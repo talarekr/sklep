@@ -77,6 +77,36 @@ namespace {
 
 
 
+    $mappingMethod = new \ReflectionMethod(EbayAdapter::class, 'ebay_fr_template_field_mapping');
+    $mappingMethod->setAccessible(true);
+    $mapping = $mappingMethod->invoke($adapter);
+    foreach ([
+        'Kod koloru' => 'Code couleur',
+        'Kod silnika' => 'Code moteur',
+        'Kolor' => 'Couleur',
+        'Koła napędowe' => 'Transmission',
+        'Moc silnika' => 'Puissance moteur',
+        'Model' => 'Modèle',
+        'Modyfikacja' => 'Variante / Version',
+        'Numer części' => 'Numéro de pièce',
+        'Okres' => 'Période de production',
+        'Pojemność silnika' => 'Cylindrée',
+        'Pozycja kierownicy' => 'Position du volant',
+        'Producent' => 'Fabricant',
+        'Rodzaj paliwa' => 'Type de carburant',
+        'Rok produkcji samochodu' => 'Année du véhicule',
+        'Typ skrzyni biegów' => 'Type de boîte de vitesses',
+    ] as $polishLabel => $expectedFrenchLabel) {
+        if (($mapping[$polishLabel]['french_label'] ?? '') !== $expectedFrenchLabel) {
+            $failures[] = 'Expected FR template label ' . $polishLabel . ' to render as ' . $expectedFrenchLabel . '. Got ' . json_encode($mapping[$polishLabel] ?? null);
+        }
+    }
+    foreach (['Farbcode', 'Motorcode', 'Farbe', 'Antrieb', 'Motorleistung', 'Modell', 'Teilenummer', 'Bauzeitraum', 'Hubraum', 'Lenkradposition', 'Hersteller', 'Kraftstoffart', 'Getriebeart'] as $germanLabel) {
+        if (str_contains(json_encode($mapping, JSON_UNESCAPED_UNICODE), $germanLabel)) {
+            $failures[] = 'Expected FR template field mapping not to contain German label: ' . $germanLabel;
+        }
+    }
+
     $translatedSpecFields = [
         ['polish_label' => 'Kolor', 'french_label' => 'Couleur', 'source_value' => 'Biały', 'value' => 'Biały', 'translated_value' => 'Blanc'],
         ['polish_label' => 'Koła napędowe', 'french_label' => 'Transmission', 'source_value' => 'Przód', 'value' => 'Przód', 'translated_value' => 'Traction avant'],

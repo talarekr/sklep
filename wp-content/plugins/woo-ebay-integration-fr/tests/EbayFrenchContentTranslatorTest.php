@@ -41,6 +41,8 @@ class WeiFakeGoogleProvider implements TranslationProviderInterface
         $map = [
             'RAMKA STELAŻ KOSZ RADIA 2 DIN PRZEŁĄCZNIKI' => 'CADRE SUPPORT PANIER RADIO 2 DIN INTERRUPTEURS',
             'Test title' => 'Titre de test',
+            'AUDI A6 C6 3.0 TDI AVANT ZBIORNIK PŁYNU WSPOMAGANIA 4F0422371E' => 'AUDI A6 C6 3.0 TDI AVANT RÉSERVOIR DE LIQUIDE DE DIRECTION ASSISTÉE 4F0422371E',
+            'Zbiornik płynu wspomagania układu kierowniczego' => 'Réservoir de liquide de direction assistée',
             'Kolor' => 'Couleur',
             'Rodzaj paliwa' => 'Type de carburant',
             'Szary' => 'Gris',
@@ -150,6 +152,50 @@ if (($mergedAspects['MPN'][0] ?? '') !== '8P0' || ($mergedAspects['Fabricant'][0
     $failures[] = 'Expected translated cached aspects to preserve required fallback aspects and translated values.';
 }
 
+$GLOBALS['wei_fr_test_meta'] = [];
+$currentHash = $translator->source_hash($source);
+update_post_meta(2081, EbayFrenchContentTranslator::META_HASH, $currentHash);
+update_post_meta(2081, EbayFrenchContentTranslator::META_PAYLOAD, [
+    'version' => 4,
+    'french_content_schema_version' => EbayFrenchContentTranslator::SCHEMA_VERSION,
+    'template_version' => EbayFrenchContentTranslator::TEMPLATE_VERSION,
+    'translation_schema_version' => EbayFrenchContentTranslator::TRANSLATION_SCHEMA_VERSION,
+    'title' => 'AUDI A6 C6',
+    'description' => 'Description française',
+    'fields' => [
+        ['polish_label' => 'Kolor', 'french_label' => 'Farbe', 'source_value' => 'Biały', 'value' => 'Biały'],
+        ['polish_label' => 'Koła napędowe', 'french_label' => 'Antrieb', 'source_value' => 'AWD', 'value' => 'AWD'],
+        ['polish_label' => 'Pozycja kierownicy', 'french_label' => 'Lenkradposition', 'source_value' => 'Lewa strona', 'value' => 'Lewa strona'],
+        ['polish_label' => 'Typ skrzyni biegów', 'french_label' => 'Getriebeart', 'source_value' => 'Manualny', 'value' => 'Manualny'],
+    ],
+    'aspects' => [],
+    'source_hash' => $currentHash,
+    'cached_translation_hash' => $currentHash,
+]);
+$normalizedCached2081 = $translator->cached(2081, $source);
+foreach ([
+    'Couleur' => 'Blanc',
+    'Transmission' => 'Transmission intégrale',
+    'Position du volant' => 'Volant à gauche',
+    'Type de boîte de vitesses' => 'Boîte manuelle',
+] as $expectedLabel => $expectedValue) {
+    $matchingField = array_values(array_filter((array) ($normalizedCached2081['fields'] ?? []), static fn($field): bool => is_array($field) && ($field['french_label'] ?? '') === $expectedLabel && ($field['translated_value'] ?? '') === $expectedValue));
+    if ($matchingField === []) {
+        $failures[] = 'Expected legacy 2081-style cached field to persist translated_value for ' . $expectedLabel . '=' . $expectedValue . '. Got ' . json_encode($normalizedCached2081['fields'] ?? []);
+    }
+    if (($normalizedCached2081['aspects'][$expectedLabel][0] ?? '') !== $expectedValue) {
+        $failures[] = 'Expected normalized cached aspects/item specifics to use translated_value for ' . $expectedLabel . '. Got ' . json_encode($normalizedCached2081['aspects'] ?? []);
+    }
+}
+$storedNormalized2081 = get_post_meta(2081, EbayFrenchContentTranslator::META_PAYLOAD, true);
+if (($storedNormalized2081['fields'][0]['translated_value'] ?? '') !== 'Blanc') {
+    $failures[] = 'Expected cached() normalization to persist translated_value back to payload meta. Got ' . json_encode($storedNormalized2081['fields'] ?? []);
+}
+$mergedLegacyAspects = $translator->translate_aspects_from_cache(2081, $source, ['Kolor' => ['Biały'], 'Getriebeart' => ['Manualny']]);
+if (($mergedLegacyAspects['Couleur'][0] ?? '') !== 'Blanc' || ($mergedLegacyAspects['Type de boîte de vitesses'][0] ?? '') !== 'Boîte manuelle') {
+    $failures[] = 'Expected item specifics/aspects builder cache translation to use persisted translated_value. Got ' . json_encode($mergedLegacyAspects);
+}
+
 // Additional override coverage.
 $GLOBALS['wei_fr_test_meta'] = [];
 $provider2 = new WeiFakeGoogleProvider();
@@ -180,6 +226,52 @@ foreach ($payload2['fields'] as $field) {
 }
 if ($translator->untranslated_fields(['fields' => [['french_label' => 'Type de carburant', 'value' => 'Diesel', 'source_value' => 'Diesel', 'translated_value' => 'Diesel']]]) !== []) {
     $failures[] = 'Expected Diesel to be accepted as valid French/language-neutral and not flagged stale.';
+}
+
+$GLOBALS['wei_fr_test_meta'] = [];
+$provider2081 = new WeiFakeGoogleProvider();
+$source2081 = [
+    'product_id' => 2081,
+    'title' => 'AUDI A6 C6 3.0 TDI AVANT ZBIORNIK PŁYNU WSPOMAGANIA 4F0422371E',
+    'description' => 'Zbiornik płynu wspomagania układu kierowniczego',
+    'description_source' => 'post_content',
+    'fields' => [],
+    'aspects_source' => [],
+];
+$payload2081 = $translator->refresh(2081, $source2081, $provider2081);
+if (($payload2081['title'] ?? '') !== 'AUDI A6 C6 3.0 TDI AVANT RÉSERVOIR DE LIQUIDE DE DIRECTION ASSISTÉE 4F0422371E') {
+    $failures[] = 'Expected product 2081 FR title to be translated and persisted. Got ' . json_encode($payload2081['title'] ?? '');
+}
+if (($payload2081['description'] ?? '') !== 'Réservoir de liquide de direction assistée') {
+    $failures[] = 'Expected product 2081 FR main description/post_content to be translated and persisted. Got ' . json_encode($payload2081['description'] ?? '');
+}
+if (get_post_meta(2081, EbayFrenchContentTranslator::META_TITLE, true) !== ($payload2081['title'] ?? '') || get_post_meta(2081, EbayFrenchContentTranslator::META_DESCRIPTION, true) !== ($payload2081['description'] ?? '')) {
+    $failures[] = 'Expected product 2081 translated title/description to be persisted in FR-specific meta.';
+}
+if ($translator->untranslated_fields($payload2081) !== []) {
+    $failures[] = 'Expected translated product 2081 title/description not to be reported as Polish. Got ' . json_encode($translator->untranslated_fields($payload2081));
+}
+
+$GLOBALS['wei_fr_test_meta'] = [];
+$source2081Hash = $translator->source_hash($source2081);
+update_post_meta(2081, EbayFrenchContentTranslator::META_HASH, $source2081Hash);
+update_post_meta(2081, EbayFrenchContentTranslator::META_PAYLOAD, [
+    'version' => 4,
+    'french_content_schema_version' => EbayFrenchContentTranslator::SCHEMA_VERSION,
+    'template_version' => EbayFrenchContentTranslator::TEMPLATE_VERSION,
+    'translation_schema_version' => EbayFrenchContentTranslator::TRANSLATION_SCHEMA_VERSION,
+    'title' => $source2081['title'],
+    'description' => $source2081['description'],
+    'fields' => [],
+    'aspects' => [],
+    'source_hash' => $source2081Hash,
+]);
+$polishMainContentCached = $translator->cached(2081, $source2081);
+if (!empty($polishMainContentCached['ready'])) {
+    $failures[] = 'Expected cached FR content not to be ready when title/description remain Polish.';
+}
+if (!in_array('untranslated_title_or_description', $polishMainContentCached['stale_reasons'] ?? [], true)) {
+    $failures[] = 'Expected Polish title/description cache to report untranslated_title_or_description. Got ' . json_encode($polishMainContentCached['stale_reasons'] ?? []);
 }
 
 // Stale detection for legacy French content caches generated under older source/template rules.

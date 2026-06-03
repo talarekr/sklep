@@ -14,7 +14,7 @@ class EbayFrenchContentTranslator
     public const META_GENERATED_AT = '_wei_fr_ebay_content_generated_at';
     public const SCHEMA_VERSION = '2026-06-new-ebay-fr-template-v1';
     public const TEMPLATE_VERSION = 'ebay-fr-product-card-template-v1';
-    public const TRANSLATION_SCHEMA_VERSION = 'pl-fr-spec-overrides-2026-06-v1';
+    public const TRANSLATION_SCHEMA_VERSION = 'pl-fr-spec-overrides-2026-06-v3';
 
     /** @var array<string,string> */
     private array $labelOverrides = [
@@ -42,6 +42,39 @@ class EbayFrenchContentTranslator
         'Stan opakowania' => 'État de l’emballage',
         'Typ skrzyni biegów' => 'Type de boîte de vitesses',
         'Typ skrzyni biegow' => 'Type de boîte de vitesses',
+        'Farbcode' => 'Code couleur',
+        'Motorcode' => 'Code moteur',
+        'Farbe' => 'Couleur',
+        'Antrieb' => 'Transmission',
+        'Motorleistung' => 'Puissance moteur',
+        'Modell' => 'Modèle',
+        'Variante / Ausführung' => 'Variante / Version',
+        'Teilenummer' => 'Numéro de pièce',
+        'Bauzeitraum' => 'Période de production',
+        'Hubraum' => 'Cylindrée',
+        'Lenkradposition' => 'Position du volant',
+        'Hersteller' => 'Fabricant',
+        'Kraftstoffart' => 'Type de carburant',
+        'Baujahr des Fahrzeuges' => 'Année du véhicule',
+        'Baujahr des Fahrzeugs' => 'Année du véhicule',
+        'Getriebeart' => 'Type de boîte de vitesses',
+        'Laufleistung' => 'Kilométrage',
+        'Zustand' => 'État',
+        'Verpackungszustand' => 'État de l’emballage',
+    ];
+
+    /** @var array<string,string> */
+    private array $titlePhraseOverrides = [
+        'ZBIORNIK PŁYNU WSPOMAGANIA' => 'RÉSERVOIR DE LIQUIDE DE DIRECTION ASSISTÉE',
+        'ZBIORNIK PLYNU WSPOMAGANIA' => 'RÉSERVOIR DE LIQUIDE DE DIRECTION ASSISTÉE',
+    ];
+
+    /** @var array<string,string> */
+    private array $descriptionPhraseOverrides = [
+        'Zbiornik płynu wspomagania układu kierowniczego' => 'Réservoir de liquide de direction assistée',
+        'Zbiornik plynu wspomagania ukladu kierowniczego' => 'Réservoir de liquide de direction assistée',
+        'zbiornik płynu wspomagania' => 'réservoir de liquide de direction assistée',
+        'zbiornik plynu wspomagania' => 'réservoir de liquide de direction assistée',
     ];
 
     /** @var array<string,string> */
@@ -119,15 +152,17 @@ class EbayFrenchContentTranslator
             ];
         }
 
-        $ready = trim((string) ($payload['title'] ?? '')) !== '' && trim((string) ($payload['description'] ?? '')) !== '';
+        $hasRequiredContent = trim((string) ($payload['title'] ?? '')) !== '' && trim((string) ($payload['description'] ?? '')) !== '';
         $staleReasons = $this->stale_reasons($payload, $source, $currentHash, $storedHash);
-        $stale = $ready && $staleReasons !== [];
+        $hasUntranslatedMainContent = in_array('untranslated_title_or_description', $staleReasons, true);
+        $ready = $hasRequiredContent && !$hasUntranslatedMainContent;
+        $stale = $hasRequiredContent && $staleReasons !== [];
 
         return array_merge($payload, [
             'ready' => $ready,
             'stale' => $stale,
-            'stale_reasons' => $ready ? $staleReasons : [],
-            'stale_reason' => $ready ? ($staleReasons[0] ?? 'current') : 'missing',
+            'stale_reasons' => $hasRequiredContent ? $staleReasons : [],
+            'stale_reason' => $hasRequiredContent ? ($staleReasons[0] ?? 'current') : 'missing',
             'current_schema_version' => self::SCHEMA_VERSION,
             'stored_schema_version' => (string) ($payload['french_content_schema_version'] ?? ''),
             'template_version' => (string) ($payload['template_version'] ?? ''),
@@ -210,7 +245,7 @@ class EbayFrenchContentTranslator
             ]);
         }
 
-        $aspects = [];
+        $aspects = $this->aspects_from_translated_fields($fields);
         foreach ((array) ($source['aspects_source'] ?? []) as $name => $values) {
             $sourceName = (string) $name;
             $translatedName = $this->override_label($sourceName) ?: ($this->looks_french_aspect_name($sourceName) ? $sourceName : (string) ($translatedByKey['aspect_label.' . $sourceName] ?? $sourceName));
@@ -225,9 +260,12 @@ class EbayFrenchContentTranslator
             }
             $translatedName = $this->sanitize_text($translatedName);
             if ($translatedName !== '' && $translatedValues !== []) {
-                $aspects[$translatedName] = array_values(array_unique($translatedValues));
+                $aspects[$translatedName] = array_values(array_unique(array_merge((array) ($aspects[$translatedName] ?? []), $translatedValues)));
             }
         }
+
+        $translatedTitle = $this->translate_title_with_overrides((string) ($source['title'] ?? ''), (string) ($translatedByKey['title'] ?? ''));
+        $translatedDescription = $this->translate_description_with_overrides((string) ($source['description'] ?? ''), (string) ($translatedByKey['description'] ?? ''));
 
         $payload = [
             'version' => 4,
@@ -238,15 +276,15 @@ class EbayFrenchContentTranslator
             'translated_raw_html' => false,
             'html_css_protected' => true,
             'product_id' => $productId,
-            'title' => $this->sanitize_text((string) ($translatedByKey['title'] ?? $source['title'] ?? '')),
-            'description' => trim(wp_kses_post((string) ($translatedByKey['description'] ?? $source['description'] ?? ''))),
+            'title' => $translatedTitle,
+            'description' => $translatedDescription,
             'fields' => $fields,
             'aspects' => $aspects,
             'source_title' => (string) ($source['title'] ?? ''),
             'source_description' => (string) ($source['description'] ?? ''),
             'source_description_field' => (string) ($source['description_source'] ?? 'post_content'),
             'source_hash' => $hash,
-            'content_hash' => $this->content_hash((string) ($translatedByKey['title'] ?? $source['title'] ?? ''), (string) ($translatedByKey['description'] ?? $source['description'] ?? ''), $fields, $aspects),
+            'content_hash' => $this->content_hash($translatedTitle, $translatedDescription, $fields, $aspects),
             'cached_translation_hash' => $hash,
             'stale' => false,
             'ready' => true,
@@ -280,31 +318,40 @@ class EbayFrenchContentTranslator
     {
         $cached = $this->cached($productId, $source);
         $fallback = $this->translate_with_overrides_only($fallbackAspects);
-        if (empty($cached['ready']) || !empty($cached['stale']) || !is_array($cached['aspects'] ?? null) || $cached['aspects'] === []) {
+        $cachedAspects = is_array($cached['aspects'] ?? null) ? (array) $cached['aspects'] : [];
+        if (is_array($cached['fields'] ?? null)) {
+            $cachedAspects = array_replace($this->aspects_from_translated_fields((array) $cached['fields']), $cachedAspects);
+        }
+        if (empty($cached['ready']) || !empty($cached['stale']) || $cachedAspects === []) {
             return $fallback;
         }
-        return array_replace($fallback, (array) $cached['aspects']);
+        return array_replace($fallback, $cachedAspects);
     }
 
     /** @param array<string,mixed> $payload */
     public function untranslated_fields(array $payload): array
     {
         $warnings = [];
-        $pattern = '/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu';
+        foreach (['title' => 'title', 'description' => 'description'] as $payloadKey => $warningKey) {
+            $value = trim(wp_strip_all_tags((string) ($payload[$payloadKey] ?? '')));
+            if ($value !== '' && $this->detects_untranslated_text($value)) {
+                $warnings[] = ['field' => $warningKey, 'key' => $payloadKey, 'value' => $value, 'message' => 'Main French content appears to remain in Polish.'];
+            }
+        }
         foreach ((array) ($payload['fields'] ?? []) as $field) {
             foreach (['french_label', 'value'] as $key) {
                 $value = trim((string) ($field[$key] ?? ''));
-                if ($value !== '' && preg_match($pattern, $value)) {
+                if ($value !== '' && $this->detects_untranslated_text($value)) {
                     $warnings[] = ['field' => (string) ($field['french_label'] ?? $field['polish_label'] ?? ''), 'key' => $key, 'value' => $value, 'message' => 'Looks untranslated or still Polish.'];
                 }
             }
         }
         foreach ((array) ($payload['aspects'] ?? []) as $name => $values) {
-            if (preg_match($pattern, (string) $name)) {
+            if ($this->detects_untranslated_text((string) $name)) {
                 $warnings[] = ['field' => (string) $name, 'key' => 'aspect_label', 'value' => (string) $name, 'message' => 'Looks untranslated or still Polish.'];
             }
             foreach ((array) $values as $value) {
-                if (preg_match($pattern, (string) $value)) {
+                if ($this->detects_untranslated_text((string) $value)) {
                     $warnings[] = ['field' => (string) $name, 'key' => 'aspect_value', 'value' => (string) $value, 'message' => 'Looks untranslated or still Polish.'];
                 }
             }
@@ -337,7 +384,14 @@ class EbayFrenchContentTranslator
         if (stripos($description, 'TEIL IN FUNKTIONSFÄHIGEM ZUSTAND') !== false) {
             $reasons[] = 'old_allegro_description_marker';
         }
-        if ($this->untranslated_fields($payload) !== [] || $this->has_missing_known_spec_value_translations($payload)) {
+        $untranslatedFields = $this->untranslated_fields($payload);
+        foreach ($untranslatedFields as $warning) {
+            if (in_array((string) ($warning['key'] ?? ''), ['title', 'description'], true)) {
+                $reasons[] = 'untranslated_title_or_description';
+                break;
+            }
+        }
+        if ($untranslatedFields !== [] || $this->has_missing_known_spec_value_translations($payload)) {
             $reasons[] = 'untranslated_spec_values';
         }
         return array_values(array_unique($reasons));
@@ -357,17 +411,91 @@ class EbayFrenchContentTranslator
         ]));
     }
 
+    private function translate_title_with_overrides(string $sourceTitle, string $translatedTitle): string
+    {
+        $candidate = $this->sanitize_text($translatedTitle !== '' ? $translatedTitle : $sourceTitle);
+        return $this->sanitize_text($this->apply_phrase_overrides($candidate, $this->titlePhraseOverrides));
+    }
+
+    private function translate_description_with_overrides(string $sourceDescription, string $translatedDescription): string
+    {
+        $candidate = trim(wp_kses_post((string) ($translatedDescription !== '' ? $translatedDescription : $sourceDescription)));
+        return trim(wp_kses_post($this->apply_phrase_overrides($candidate, $this->descriptionPhraseOverrides)));
+    }
+
+    /** @param array<string,string> $overrides */
+    private function apply_phrase_overrides(string $text, array $overrides): string
+    {
+        $result = $text;
+        foreach ($overrides as $sourcePhrase => $translatedPhrase) {
+            $result = preg_replace('/' . preg_quote($sourcePhrase, '/') . '/iu', $translatedPhrase, $result) ?? $result;
+        }
+        return $result;
+    }
+
     private function read_payload(int $productId): array
     {
         $payload = get_post_meta($productId, self::META_PAYLOAD, true);
-        if (is_array($payload)) {
-            return $payload;
-        }
         if (is_string($payload) && trim($payload) !== '') {
             $decoded = json_decode($payload, true);
-            return is_array($decoded) ? $decoded : [];
+            $payload = is_array($decoded) ? $decoded : [];
         }
-        return [];
+        if (!is_array($payload)) {
+            return [];
+        }
+        $normalized = $this->normalize_payload_spec_translations($payload);
+        if ($normalized !== $payload) {
+            update_post_meta($productId, self::META_PAYLOAD, $normalized);
+        }
+        return $normalized;
+    }
+
+    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    private function normalize_payload_spec_translations(array $payload): array
+    {
+        $fields = [];
+        foreach ((array) ($payload['fields'] ?? []) as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $sourceLabel = trim((string) ($field['polish_label'] ?? $field['source_label'] ?? $field['label'] ?? ''));
+            $sourceValue = trim((string) ($field['source_value'] ?? $field['value'] ?? ''));
+            $label = $this->override_label((string) ($field['french_label'] ?? '')) ?: $this->override_label($sourceLabel) ?: (string) ($field['french_label'] ?? $sourceLabel);
+            $translatedValue = trim((string) ($field['translated_value'] ?? ''));
+            if ($translatedValue === '') {
+                $knownTranslation = $this->translate_known_spec_value($sourceLabel, $sourceValue);
+                $translatedValue = $knownTranslation !== '' ? $knownTranslation : trim((string) ($field['value'] ?? ''));
+            }
+            $fields[] = array_merge($field, [
+                'source_label' => $sourceLabel,
+                'source_value' => $sourceValue,
+                'french_label' => $this->sanitize_text($label),
+                'translated_value' => $this->sanitize_text($translatedValue),
+            ]);
+        }
+        if ($fields !== []) {
+            $payload['fields'] = $fields;
+            $payload['aspects'] = array_replace(is_array($payload['aspects'] ?? null) ? (array) $payload['aspects'] : [], $this->aspects_from_translated_fields($fields));
+        }
+        return $payload;
+    }
+
+    /** @param array<int,mixed> $fields @return array<string,array<int,string>> */
+    private function aspects_from_translated_fields(array $fields): array
+    {
+        $aspects = [];
+        foreach ($fields as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $label = $this->sanitize_text($this->override_label((string) ($field['french_label'] ?? '')) ?: (string) ($field['french_label'] ?? $field['source_label'] ?? $field['polish_label'] ?? ''));
+            $value = $this->sanitize_text((string) ($field['translated_value'] ?? $field['value'] ?? ''));
+            if ($label === '' || $value === '') {
+                continue;
+            }
+            $aspects[$label] = array_values(array_unique(array_merge((array) ($aspects[$label] ?? []), [$value])));
+        }
+        return $aspects;
     }
 
     /** @param array<int,string> $texts @param array<int,string> $formats */
@@ -392,11 +520,16 @@ class EbayFrenchContentTranslator
 
     public function detects_untranslated_spec_value(string $value): bool
     {
+        return $this->detects_untranslated_text($value);
+    }
+
+    private function detects_untranslated_text(string $value): bool
+    {
         $value = trim($value);
         if ($value === '') {
             return false;
         }
-        return preg_match('/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty)\b/iu', $value) === 1;
+        return preg_match('/[ąćęłńóśźż]|\b(lewy|lewa|prawy|prawa|przód|przod|tył|tyl|manualna|manualny|mechaniczna|mechaniczny|automatyczna|automatyczny|benzyna|używany|uzywany|czarny|biały|bialy|srebrny|szary|niebieski|czerwony|zielony|żółty|zolty|zbiornik|plynu|płynu|wspomagania|ukladu|układu|kierowniczego)\b/iu', $value) === 1;
     }
 
     /** @param array<string,mixed> $payload */
