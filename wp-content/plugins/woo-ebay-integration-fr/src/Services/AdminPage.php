@@ -25,6 +25,7 @@ class AdminPage
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_post_wei_fr_save_settings', [$this, 'save_settings']);
         add_action('admin_post_wei_fr_save_ebay_settings', [$this, 'save_ebay_settings']);
+        add_action('admin_post_wei_fr_save_translation_provider_settings', [$this, 'save_translation_provider_settings_action']);
         add_action('admin_post_wei_fr_start_oauth_connect', [$this, 'start_oauth_connect']);
         add_action('admin_post_wei_fr_clear_oauth_diagnostics', [$this, 'clear_oauth_diagnostics']);
         add_action('admin_post_wei_fr_disconnect', [$this, 'disconnect']);
@@ -533,15 +534,8 @@ class AdminPage
         $s['auto_publish_enabled'] = !empty($_POST['auto_publish_enabled']) ? 1 : 0;
         $s['ebay_stock_sync_mode'] = in_array(($_POST['ebay_stock_sync_mode'] ?? 'max_one'), ['set_zero_only', 'max_one', 'exact_stock'], true) ? $_POST['ebay_stock_sync_mode'] : 'max_one';
         $s['ebay_order_stock_update_mode'] = in_array(($_POST['ebay_order_stock_update_mode'] ?? 'set_zero'), ['set_zero', 'reduce'], true) ? $_POST['ebay_order_stock_update_mode'] : 'set_zero';
-        $provider = strtolower(sanitize_text_field((string) ($_POST['translation_provider'] ?? 'disabled')));
-        if ($provider === 'google') {
-            $provider = 'google_cloud_translate';
-        }
-        $postedTranslationApiKey = sanitize_text_field((string) ($_POST['translation_api_key'] ?? ''));
-        if ($postedTranslationApiKey !== '') {
-            $s['translation_api_key'] = $postedTranslationApiKey;
-        }
-        $s['translation_provider'] = in_array($provider, ['disabled', 'google_cloud_translate'], true) ? $provider : 'disabled';
+        $translationSettings = $this->save_translation_provider_settings($_POST, $s);
+        $s = array_merge($s, $translationSettings);
         $s['auto_generate_french_content_preflight'] = !empty($_POST['auto_generate_french_content_preflight']) ? 1 : 0;
         $s['enable_ebay_fr_description_template'] = !empty($_POST['enable_ebay_fr_description_template']) ? 1 : 0;
         $s['ebay_fr_delivery_map_url'] = esc_url_raw((string) ($_POST['ebay_fr_delivery_map_url'] ?? ''));
@@ -691,6 +685,17 @@ class AdminPage
         update_option('wei_fr_ebay_stock_sync_last_diagnostics', $diag, false);
         $this->set_status('Stock sync diagnostics: ' . wp_json_encode($diag));
         $this->go();
+    }
+
+
+    public function save_translation_provider_settings_action(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_save_translation_provider_settings');
+        $s = $this->settings();
+        $this->save_translation_provider_settings($_POST, $s);
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay-fr&saved=1&wei_fr_section=french-content#wei-fr-translation-provider'));
+        exit;
     }
 
     public function save_ebay_settings(): void
@@ -4413,10 +4418,64 @@ class AdminPage
         return $rows;
     }
 
+    /** @param array<string,mixed> $current */
+    private function translation_provider_settings(array $current = []): array
+    {
+        $stored = get_option(Plugin::TRANSLATION_OPTION_KEY, []);
+        $stored = is_array($stored) ? $stored : [];
+        $provider = strtolower(trim((string) ($stored['translation_provider'] ?? $current['translation_provider'] ?? 'disabled')));
+        if ($provider === 'google') {
+            $provider = 'google_cloud_translate';
+        }
+        if (!in_array($provider, ['disabled', 'google_cloud_translate'], true)) {
+            $provider = 'disabled';
+        }
+
+        $apiKey = trim((string) ($stored['translation_api_key'] ?? $current['translation_api_key'] ?? ''));
+        $sourceLanguage = strtolower(trim((string) ($stored['translation_source_language'] ?? $current['translation_source_language'] ?? 'pl')));
+        if (!preg_match('/^[a-z]{2}(?:-[a-z]{2})?$/', $sourceLanguage)) {
+            $sourceLanguage = 'pl';
+        }
+
+        return [
+            'translation_provider' => $provider,
+            'translation_api_key' => $apiKey,
+            'translation_source_language' => $sourceLanguage,
+            'translation_target_language' => 'fr',
+            'google_credentials_source' => $apiKey !== '' ? 'fr_admin_setting' : 'missing',
+            'google_provider_configured' => $provider === 'google_cloud_translate' && $apiKey !== '' ? 'yes' : 'no',
+        ];
+    }
+
+    /** @param array<string,mixed> $post @param array<string,mixed> $current */
+    private function save_translation_provider_settings(array $post, array $current): array
+    {
+        $existing = $this->translation_provider_settings($current);
+        $enabled = !empty($post['enable_google_cloud_translate']) || (string) ($post['translation_provider'] ?? '') === 'google_cloud_translate' || (string) ($post['translation_provider'] ?? '') === 'google';
+        $provider = $enabled ? 'google_cloud_translate' : 'disabled';
+        $postedApiKey = trim(sanitize_text_field((string) ($post['translation_api_key'] ?? '')));
+        $apiKey = $postedApiKey !== '' ? $postedApiKey : (string) ($existing['translation_api_key'] ?? '');
+        $sourceLanguage = strtolower(trim(sanitize_text_field((string) ($post['translation_source_language'] ?? $post['source_language'] ?? ($existing['translation_source_language'] ?? 'pl')))));
+        if (!preg_match('/^[a-z]{2}(?:-[a-z]{2})?$/', $sourceLanguage)) {
+            $sourceLanguage = 'pl';
+        }
+
+        $settings = [
+            'translation_provider' => $provider,
+            'translation_api_key' => $apiKey,
+            'translation_source_language' => $sourceLanguage,
+            'translation_target_language' => 'fr',
+        ];
+        update_option(Plugin::TRANSLATION_OPTION_KEY, $settings, false);
+
+        return $this->translation_provider_settings($settings);
+    }
+
     private function settings(): array
     {
         $s = get_option(Plugin::OPTION_KEY, []);
         $s = is_array($s) ? $s : [];
+        $s = array_merge($s, $this->translation_provider_settings($s));
         if (empty($s['marketplace_id'])) {
             $s['marketplace_id'] = 'EBAY_FR';
         }
@@ -4454,6 +4513,10 @@ class AdminPage
         if (!isset($s['translation_api_key'])) {
             $s['translation_api_key'] = '';
         }
+        if (!isset($s['translation_source_language'])) {
+            $s['translation_source_language'] = 'pl';
+        }
+        $s['translation_target_language'] = 'fr';
         if (!isset($s['auto_generate_french_content_preflight'])) {
             $s['auto_generate_french_content_preflight'] = 1;
         }

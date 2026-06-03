@@ -23,6 +23,7 @@ use WEI_FR\Services\EbayFrCategoryComparisonTool;
 class Plugin
 {
     public const OPTION_KEY = 'wei_fr_ebay_settings';
+    public const TRANSLATION_OPTION_KEY = 'wei_fr_ebay_translation_provider_settings';
     public const DEFAULT_EBAY_SELLER_USERNAME = 'gpswiss';
 
     public function boot(): void

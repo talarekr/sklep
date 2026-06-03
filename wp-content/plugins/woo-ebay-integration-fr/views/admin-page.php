@@ -142,7 +142,17 @@ $accountSetupConfigured = $locationKey !== '' && $fulfillmentId30 !== '' && $ful
 
 $provider = (string) ($s['translation_provider'] ?? 'disabled');
 $translationConfigured = $provider === 'google_cloud_translate' && (string) ($s['translation_api_key'] ?? '') !== '';
-$translationLabel = $translationConfigured ? 'Google Cloud Translate configured' : ($provider === 'disabled' ? 'disabled' : 'provider selected, API key missing');
+$translationLabel = $translationConfigured ? 'Google Cloud Translate configured' : ($provider === 'disabled' ? 'disabled' : 'missing API key');
+$translationSourceLanguage = (string) ($s['translation_source_language'] ?? 'pl');
+$translationTargetLanguage = 'fr';
+$translationDiagnostics = [
+    'provider_enabled' => $provider === 'google_cloud_translate' ? 'yes' : 'no',
+    'key_configured' => (string) ($s['translation_api_key'] ?? '') !== '' ? 'yes' : 'no',
+    'google_provider_configured' => $translationConfigured ? 'yes' : 'no',
+    'google_credentials_source' => (string) ($s['translation_api_key'] ?? '') !== '' ? 'fr_admin_setting' : 'missing',
+    'source_language' => $translationSourceLanguage,
+    'target_language' => $translationTargetLanguage,
+];
 
 $nbpRateStatus = is_array($nbp_rate_status ?? null) ? $nbp_rate_status : [];
 $nbpRate = $nbpRateStatus['nbp_rate'] ?? null;
@@ -797,11 +807,37 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
         <?php endif; ?>
         <div class="wei-grid">
             <div class="wei-card"><span>Translation provider</span><strong><?php echo esc_html($translationLabel); ?></strong></div>
+            <div class="wei-card"><span>google_provider_configured</span><strong><?php echo esc_html($translationDiagnostics['google_provider_configured']); ?></strong></div>
+            <div class="wei-card"><span>google_credentials_source</span><strong><?php echo esc_html($translationDiagnostics['google_credentials_source']); ?></strong></div>
+            <div class="wei-card"><span>source → target</span><strong><?php echo esc_html($translationSourceLanguage . ' → ' . $translationTargetLanguage); ?></strong></div>
             <div class="wei-card"><span>Last processed</span><strong><?php echo esc_html((string) ($french_content_audit_summary['processed'] ?? '-')); ?></strong></div>
             <div class="wei-card"><span>Generated</span><strong><?php echo esc_html((string) ($french_content_audit_summary['generated'] ?? '-')); ?></strong></div>
             <div class="wei-card"><span>Already fresh</span><strong><?php echo esc_html((string) ($french_content_audit_summary['already_ready'] ?? ($french_content_audit_summary['already_fresh'] ?? '-'))); ?></strong></div>
             <div class="wei-card"><span>Errors</span><strong><?php echo esc_html((string) ($french_content_audit_summary['failed'] ?? ($french_content_audit_summary['errors'] ?? '-'))); ?></strong></div>
             <div class="wei-card"><span>eBay API calls</span><strong>false</strong></div>
+        </div>
+        <div id="wei-fr-translation-provider" class="wei-card" style="margin-top:12px;">
+            <h3>Translation provider</h3>
+            <p class="description">FR-specific Google Cloud Translate settings for local French content generation only. The saved API key is never rendered in full after save.</p>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_fr_save_translation_provider_settings'); ?>
+                <input type="hidden" name="action" value="wei_fr_save_translation_provider_settings" />
+                <table class="form-table" role="presentation">
+                    <tr><th><label for="wei-fr-enable-google-translate">Enable Google Cloud Translate</label></th><td><label><input id="wei-fr-enable-google-translate" type="checkbox" name="enable_google_cloud_translate" value="1" <?php checked($provider, 'google_cloud_translate'); ?> /> enabled</label></td></tr>
+                    <tr><th><label for="wei-fr-google-translate-key">Google Cloud Translate API key</label></th><td><input id="wei-fr-google-translate-key" type="password" class="regular-text" name="translation_api_key" value="" autocomplete="new-password" placeholder="<?php echo esc_attr($translationConfigured ? 'configured — enter a new key to replace' : 'paste Google Cloud Translate API key'); ?>" /> <span class="description">Current: <strong><?php echo esc_html($translationConfigured ? 'configured (' . $maskSecret((string) ($s['translation_api_key'] ?? '')) . ')' : 'not configured'); ?></strong></span></td></tr>
+                    <tr><th><label for="wei-fr-translation-source-language">Source language</label></th><td><input id="wei-fr-translation-source-language" class="small-text" name="translation_source_language" value="<?php echo esc_attr($translationSourceLanguage); ?>" /> <span class="description">Default: <code>pl</code>.</span></td></tr>
+                    <tr><th>Target language</th><td><code>fr</code><input type="hidden" name="translation_target_language" value="fr" /> <span class="description">Enforced by the FR plugin; German (<code>de</code>) is not allowed here.</span></td></tr>
+                </table>
+                <p><button class="button button-primary">Save translation provider settings</button></p>
+            </form>
+            <h4>Status</h4>
+            <ul>
+                <li>Translation provider: <strong><?php echo esc_html($translationLabel); ?></strong></li>
+                <li>google_provider_configured: <strong><?php echo esc_html($translationDiagnostics['google_provider_configured']); ?></strong></li>
+                <li>google_credentials_source: <strong><?php echo esc_html($translationDiagnostics['google_credentials_source']); ?></strong></li>
+                <li>source_language: <strong><?php echo esc_html($translationSourceLanguage); ?></strong></li>
+                <li>target_language: <strong><?php echo esc_html($translationTargetLanguage); ?></strong></li>
+            </ul>
         </div>
         <div class="wei-actions" data-wei-primary-actions="french-content">
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
