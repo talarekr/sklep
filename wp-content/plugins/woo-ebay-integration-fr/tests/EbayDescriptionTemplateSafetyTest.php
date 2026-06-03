@@ -22,6 +22,7 @@ namespace {
     function wp_kses_post($text) { return (string) $text; }
     function wpautop($text) { return '<p>' . (string) $text . '</p>'; }
     function wc_attribute_label($name, $product = null) { return (string) $name; }
+    function wp_get_attachment_url($attachment_id) { return $attachment_id ? 'https://example.test/image-' . (int) $attachment_id . '.jpg' : ''; }
     function esc_url_raw($url) { return (string) $url; }
     function esc_url($url) { return 'ESC_URL:' . htmlspecialchars((string) $url, ENT_QUOTES, 'UTF-8'); }
     function esc_html($text) { return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8'); }
@@ -46,6 +47,8 @@ namespace {
         public function get_description(): string { return $this->description; }
         public function get_short_description(): string { return ''; }
         public function get_attributes(): array { return []; }
+        public function get_image_id(): int { return 0; }
+        public function get_gallery_image_ids(): array { return []; }
     }
 
     $failures = [];
@@ -234,6 +237,34 @@ namespace {
     }
     if (!str_contains($previewHtml, '</table></div><div style="margin:18px 0 24px;text-align:center;"><a href="ESC_URL:https://www.ebay.fr/sch/i.html?_ssn=gpswiss&amp;_nkw=456"')) {
         $failures[] = 'Expected same-vehicle CTA to render immediately after the specifications table block without an intervening compatibility placeholder.';
+    }
+
+    $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = [
+        'marketplace_id' => 'EBAY_FR',
+        'enable_ebay_fr_description_template' => 1,
+        'ebay_seller_username' => '',
+    ];
+    $dryRun = $previewAdapter->dry_run_ebay_fr_publish_description_payload('10907');
+    if (($dryRun['result'] ?? '') !== 'success') {
+        $failures[] = 'Expected FR publish payload dry-run to succeed. Got ' . json_encode($dryRun);
+    }
+    $sentDescription = (string) ($dryRun['payload_excerpt']['inventory_item']['product']['description'] ?? '');
+    if (empty($dryRun['product_description_matches_preview_html'])) {
+        $failures[] = 'Expected FR preview rendered HTML to be the same source used for inventory product.description export/publish payload.';
+    }
+    foreach (['Expédition internationale rapide', 'Retour sous 30 jours', 'Emballage sécurisé', 'Pièce d’origine 100%', 'Description', 'Spécifications', 'Voir plus de pièces de ce véhicule', 'Livraison dans toute l’Europe', 'DHL', 'DPD', 'Achetez en toute confiance'] as $templateMarker) {
+        if (empty($dryRun['template_markers_present'][$templateMarker])) {
+            $failures[] = 'Expected FR publish payload to contain marker: ' . $templateMarker;
+        }
+    }
+    if (($dryRun['sent_description_is_html_template'] ?? '') !== 'yes' || ($dryRun['contains_template_markers'] ?? '') !== 'yes') {
+        $failures[] = 'Expected FR publish diagnostics to confirm the sent description is the full HTML template. Got ' . json_encode($dryRun);
+    }
+    if (($dryRun['description_source_used'] ?? '') !== 'approved_ebay_fr_template_for_inventory_item') {
+        $failures[] = 'Expected FR inventory payload description source to be approved_ebay_fr_template_for_inventory_item. Got ' . ($dryRun['description_source_used'] ?? '');
+    }
+    if (trim(strip_tags($sentDescription)) === 'Source description' || $sentDescription === 'Source description') {
+        $failures[] = 'Expected FR publish payload not to be only the plain translated/source description.';
     }
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'settings-seller'];

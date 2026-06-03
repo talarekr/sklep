@@ -308,6 +308,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'aspects' => $aspects,
             ],
         ];
+        $descriptionPayloadDiagnostics = $this->ebay_fr_description_payload_diagnostics($descriptionResolution, $listingDescriptionResolution, (string) ($itemPayload['product']['description'] ?? ''));
 
         $this->logger->info('eBay product.aspects before createOrReplaceInventoryItem', [
             'stage' => 'createOrReplaceInventoryItem',
@@ -320,6 +321,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'condition' => $conditionResolution['condition'],
                 'source' => $conditionResolution['source'],
             ],
+            'description_payload_diagnostics' => $descriptionPayloadDiagnostics,
         ]);
 
         $item = $this->client->create_or_replace_inventory_item($sku, $itemPayload, [
@@ -392,6 +394,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'category_id' => $categoryId,
                 'offer_payload' => $offerPayload,
                 'price_resolution' => $priceResolution,
+                'description_payload_diagnostics' => $descriptionPayloadDiagnostics,
             ]);
 
             $offer = $this->client->create_offer($offerPayload, [
@@ -480,6 +483,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'category_id' => $categoryId,
             'offer_payload' => $offerPayload,
             'price_resolution' => $priceResolution,
+            'description_payload_diagnostics' => $descriptionPayloadDiagnostics,
         ]);
 
         $updated = $this->client->update_offer($offer_id, $offerPayload, [
@@ -2891,17 +2895,22 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function resolve_inventory_item_description($product, int $productId, array $content, array $aspects, array $category, array $settings, string $marketplaceId): array
     {
         if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
+            $renderedTemplate = $this->build_ebay_fr_description_template($product, $productId, $content, $aspects, $category);
             return [
-                'description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
-                'source' => 'short_resolved_french_content_for_inventory_item',
+                'description' => $renderedTemplate,
+                'short_description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
+                'source' => 'approved_ebay_fr_template_for_inventory_item',
                 'template_enabled' => true,
+                'rendered_template_length' => mb_strlen($renderedTemplate),
             ];
         }
 
         return [
             'description' => (string) ($content['description'] ?? ''),
+            'short_description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
             'source' => 'resolved_french_content',
             'template_enabled' => !empty($settings['enable_ebay_fr_description_template']),
+            'rendered_template_length' => 0,
         ];
     }
 
@@ -2938,6 +2947,53 @@ class EbayAdapter implements MarketplaceAdapterInterface
     private function should_use_ebay_fr_description_template(array $settings, string $marketplaceId): bool
     {
         return $marketplaceId === 'EBAY_FR' && !empty($settings['enable_ebay_fr_description_template']);
+    }
+
+    private function ebay_fr_description_template_markers(): array
+    {
+        return [
+            'Expédition internationale rapide',
+            'Retour sous 30 jours',
+            'Emballage sécurisé',
+            'Pièce d’origine 100%',
+            'Description',
+            'Spécifications',
+            'Voir plus de pièces de ce véhicule',
+            'Livraison dans toute l’Europe',
+            'DHL',
+            'DPD',
+            'Achetez en toute confiance',
+        ];
+    }
+
+    private function ebay_fr_description_payload_diagnostics(array $descriptionResolution, array $listingDescriptionResolution, string $sentDescription): array
+    {
+        $renderedTemplate = (string) ($listingDescriptionResolution['description'] ?? '');
+        if ($renderedTemplate === '' && (string) ($descriptionResolution['source'] ?? '') === 'approved_ebay_fr_template_for_inventory_item') {
+            $renderedTemplate = (string) ($descriptionResolution['description'] ?? '');
+        }
+
+        $containsAllMarkers = true;
+        foreach ($this->ebay_fr_description_template_markers() as $marker) {
+            if (!str_contains($sentDescription, $marker)) {
+                $containsAllMarkers = false;
+                break;
+            }
+        }
+
+        $isHtmlTemplate = $sentDescription !== ''
+            && str_contains($sentDescription, '<')
+            && str_contains($sentDescription, 'style=')
+            && $containsAllMarkers;
+
+        return [
+            'description_source_used' => (string) ($descriptionResolution['source'] ?? ''),
+            'listing_description_source_used' => (string) ($listingDescriptionResolution['source'] ?? ''),
+            'description_length' => mb_strlen($sentDescription),
+            'rendered_template_length' => mb_strlen($renderedTemplate),
+            'sent_description_is_html_template' => $isHtmlTemplate ? 'yes' : 'no',
+            'contains_template_markers' => $containsAllMarkers ? 'yes' : 'no',
+        ];
     }
 
 
@@ -3160,14 +3216,21 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $presentTemplateImageUrls = [];
             $missingTemplateImageUrls = [];
             foreach ($templateImageUrls as $url) {
-                if (str_contains($listingDescription, $url)) {
+                if (str_contains($productDescription, $url) || str_contains($listingDescription, $url)) {
                     $presentTemplateImageUrls[] = $url;
                 } else {
                     $missingTemplateImageUrls[] = $url;
                 }
             }
             $listingContainsTemplate = str_contains($listingDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/') && str_contains($listingDescription, 'Expédition internationale rapide');
-            $productContainsTemplate = str_contains($productDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/') || str_contains($productDescription, 'Expédition internationale rapide');
+            $productContainsTemplate = str_contains($productDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/') && str_contains($productDescription, 'Expédition internationale rapide');
+            $descriptionDiagnostics = $this->ebay_fr_description_payload_diagnostics($productDescriptionResolution, $listingDescriptionResolution, $productDescription);
+            $templateMarkersPresent = [];
+            foreach ($this->ebay_fr_description_template_markers() as $marker) {
+                $templateMarkersPresent[$marker] = str_contains($productDescription, $marker);
+            }
+            $preview = $this->build_ebay_fr_description_preview_data($product, $productId, $content);
+            $previewHtml = (string) ($preview['html'] ?? '');
 
             return [
                 'result' => 'success',
@@ -3180,6 +3243,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'product_description_length' => mb_strlen($productDescription),
                 'product_description_within_4000' => mb_strlen($productDescription) > 0 && mb_strlen($productDescription) < 4000,
                 'product_description_contains_new_template' => $productContainsTemplate,
+                'product_description_matches_preview_html' => $productDescription === $previewHtml,
+                'description_source_used' => $descriptionDiagnostics['description_source_used'],
+                'description_length' => $descriptionDiagnostics['description_length'],
+                'rendered_template_length' => $descriptionDiagnostics['rendered_template_length'],
+                'sent_description_is_html_template' => $descriptionDiagnostics['sent_description_is_html_template'],
+                'contains_template_markers' => $descriptionDiagnostics['contains_template_markers'],
+                'template_markers_present' => $templateMarkersPresent,
                 'listing_description_length' => mb_strlen($listingDescription),
                 'listing_description_contains_new_template' => $listingContainsTemplate,
                 'listing_description_contains_template_image_urls' => $presentTemplateImageUrls !== [] && $missingTemplateImageUrls === [],
@@ -3187,8 +3257,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'product_image_urls_found_in_listing_description' => $productImagesInListingDescription,
                 'template_image_urls_present' => $presentTemplateImageUrls,
                 'template_image_urls_missing' => $missingTemplateImageUrls,
-                'template_attached_to' => 'offer.listingDescription',
-                'where_template_is_attached' => 'offer.listingDescription',
+                'template_attached_to' => 'inventory.product.description and offer.listingDescription',
+                'where_template_is_attached' => 'inventory.product.description and offer.listingDescription',
                 'safety_flags' => [
                     'no_ebay_api' => true,
                     'no_listing_created' => true,
@@ -3227,7 +3297,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $identifier = trim($productOrSku);
         if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
-        $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_PREVIEW_START', ['input' => $identifier, 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
+        $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_PREVIEW_START', ['input' => $identifier, 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
         try {
             $resolved = $this->resolve_product_by_id_or_sku($identifier);
             $productId = (int) ($resolved['product_id'] ?? 0);
@@ -3259,7 +3329,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     ],
                 ];
             }
-            $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html), 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
+            $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_PREVIEW_DONE', ['product_id' => $productId, 'sku' => (string) $product->get_sku(), 'html_length' => mb_strlen($html), 'safety' => 'local_preview_no_ebay_api_no_write_to_woo_or_ovoko']);
             return [
                 'result' => 'success',
                 'product_id' => $productId,
@@ -3312,7 +3382,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'html' => $html,
             ];
         } catch (\Throwable $e) {
-            $this->logger->error('EBAY_FRSCRIPTION_TEMPLATE_PREVIEW_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
+            $this->logger->error('EBAY_FR_DESCRIPTION_TEMPLATE_PREVIEW_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
             return ['result' => 'error', 'error' => $e->getMessage()];
         }
     }
@@ -4525,7 +4595,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $identifier = trim($productOrSku);
         if ($identifier === '') return ['result' => 'error', 'error' => 'missing_input'];
-        $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_SINGLE_START', ['input' => $identifier]);
+        $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_SINGLE_START', ['input' => $identifier]);
         try {
             $resolved = $this->resolve_product_by_id_or_sku($identifier);
             $productId = (int) ($resolved['product_id'] ?? 0);
@@ -4544,30 +4614,44 @@ class EbayAdapter implements MarketplaceAdapterInterface
             if (empty($htmlValidation['valid'])) {
                 return ['result' => 'error', 'error' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])];
             }
-            $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
+            $templateDiagnostics = $this->ebay_fr_description_payload_diagnostics(
+                ['source' => 'approved_ebay_fr_template_for_inventory_item', 'description' => $html],
+                ['source' => 'approved_ebay_fr_template', 'description' => $html],
+                $html
+            );
+            $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $templateDiagnostics);
             $inventory = $this->client->get_inventory_item($sku, ['stage' => 'description_template_single', 'product_id' => $productId, 'sku' => $sku]);
             if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
             $before = (string) ($inventory['product']['description'] ?? '');
             $inventory['product']['description'] = $html;
-            $changed = $before !== $html;
-            if ($changed) {
+            $inventoryChanged = $before !== $html;
+            $offer = $this->client->get_offer($offerId, ['stage' => 'description_template_single_offer_refresh_get_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+            if (is_wp_error($offer)) return ['result' => 'error', 'error' => $offer->get_error_message()];
+            $offer = (array) $offer;
+            $offerBefore = (string) ($offer['listingDescription'] ?? '');
+            $offer['listingDescription'] = $html;
+            $offerChanged = $offerBefore !== $html;
+            $changed = $inventoryChanged || $offerChanged;
+            $security = ['called_create_offer' => false, 'called_publish_offer' => false, 'preserved_title' => true, 'preserved_price' => true, 'preserved_stock' => true, 'preserved_shipping' => true, 'preserved_category' => true, 'preserved_aspects' => true, 'changed_only' => 'description_template'];
+            if ($inventoryChanged) {
                 $update = $this->client->create_or_replace_inventory_item($sku, $inventory, ['stage' => 'description_template_single_update', 'product_id' => $productId, 'sku' => $sku]);
                 if (is_wp_error($update)) return ['result' => 'error', 'error' => $update->get_error_message()];
-                $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
-                $offer = $this->client->get_offer($offerId, ['stage' => 'description_template_single_offer_refresh_get_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
-                if (is_wp_error($offer)) return ['result' => 'error', 'error' => $offer->get_error_message()];
-                $security = ['called_create_offer' => false, 'called_publish_offer' => false, 'preserved_title' => true, 'preserved_price' => true, 'preserved_stock' => true, 'preserved_shipping' => true, 'preserved_category' => true, 'preserved_aspects' => true, 'changed_only' => 'description_template'];
-                $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_OFFER_REFRESH_START', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $security);
-                $refresh = $this->client->update_offer($offerId, (array) $offer, ['stage' => 'description_template_single_offer_refresh_update_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
-                if (is_wp_error($refresh)) return ['result' => 'error', 'error' => $refresh->get_error_message()];
-                $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_OFFER_REFRESH_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $security);
-            } else {
-                $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId]);
             }
-            $this->logger->info('EBAY_FRSCRIPTION_TEMPLATE_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed]);
-            return ['result' => 'success', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed, 'html' => $html];
+            if ($offerChanged) {
+                $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_OFFER_REFRESH_START', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged] + $security + $templateDiagnostics);
+                $refresh = $this->client->update_offer($offerId, $offer, ['stage' => 'description_template_single_offer_refresh_update_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
+                if (is_wp_error($refresh)) return ['result' => 'error', 'error' => $refresh->get_error_message()];
+                $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_OFFER_REFRESH_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged] + $security + $templateDiagnostics);
+            }
+            if ($changed) {
+                $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_CHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged] + $templateDiagnostics);
+            } else {
+                $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_UNCHANGED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged] + $templateDiagnostics);
+            }
+            $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_SINGLE_DONE', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged] + $templateDiagnostics);
+            return ['result' => 'success', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId, 'changed' => $changed, 'inventory_changed' => $inventoryChanged, 'offer_changed' => $offerChanged, 'html' => $html] + $templateDiagnostics;
         } catch (\Throwable $e) {
-            $this->logger->error('EBAY_FRSCRIPTION_TEMPLATE_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
+            $this->logger->error('EBAY_FR_DESCRIPTION_TEMPLATE_FAILED', ['input' => $identifier, 'error' => $e->getMessage()]);
             return ['result' => 'error', 'error' => $e->getMessage()];
         }
     }
