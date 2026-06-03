@@ -365,17 +365,18 @@ class StockSyncService
                 continue;
             }
 
-            $res = $this->client->bulk_update_price_quantity([[
-                'offerId' => (string) ($map['remote_offer_id'] ?? ''),
-                'shipToLocationAvailability' => ['quantity' => 0],
-            ]]);
-            $this->logger->info('WEI_FR_STOCK_SYNC_EBAY_API_CALL', ['api' => 'bulk_update_price_quantity', 'offer_id' => (string) ($map['remote_offer_id'] ?? ''), 'quantity' => 0, 'auth' => '[REDACTED]']);
+            $res = $this->make_ebay_listing_unavailable($map, $productId, $action);
             if (is_wp_error($res)) {
                 $row['result'] = 'error';
                 $row['error_message'] = $res->get_error_message();
+                if ($this->is_retryable_identifier_error($res)) {
+                    $row['error_message'] .= ' [retryable_after_id_based_stock_sync_fix]';
+                }
                 $summary['errors']++;
                 $this->append_error($row);
             } else {
+                $row['action'] = (string) ($res['action'] ?? $row['action']);
+                $row['ebay_state_after'] = (string) ($res['ebay_state_after'] ?? $row['ebay_state_after']);
                 $row['result'] = 'success';
                 $summary['woo_to_ebay_actions']++;
                 $actionsProcessed++;
@@ -390,6 +391,90 @@ class StockSyncService
 
         $this->persist_event_state($queue, $processedIds, $dryRun);
         return $summary;
+    }
+
+    private function make_ebay_listing_unavailable(array $map, int $productId, string $requestedAction): array|\WP_Error
+    {
+        $offerId = trim((string) ($map['remote_offer_id'] ?? ''));
+        $listingId = trim((string) ($map['remote_listing_id'] ?? ''));
+        $sku = trim((string) ($map['sku'] ?? ''));
+        $context = [
+            'stage' => 'stock_sync_woo_to_ebay_make_unavailable',
+            'product_id' => $productId,
+            'sku' => $sku,
+            'offer_id' => $offerId,
+            'listing_id' => $listingId,
+        ];
+
+        if ($requestedAction !== 'set_quantity_zero' && $listingId !== '') {
+            $this->logger->info('WEI_FR_STOCK_SYNC_EBAY_API_CALL', ['api' => 'end_fixed_price_item_by_listing_id', 'listing_id' => $listingId, 'offer_id' => $offerId, 'quantity' => 0, 'auth' => '[REDACTED]']);
+            $res = $this->client->end_fixed_price_item_by_listing_id($listingId, 'NotAvailable', array_merge($context, ['stage' => 'stock_sync_end_listing_by_listing_id']));
+            if (!is_wp_error($res)) {
+                return ['action' => 'end_ebay_listing_by_listing_id', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $res];
+            }
+
+            if ($offerId === '' || !$this->should_fallback_after_end_listing_error($res)) {
+                return $res;
+            }
+            $this->logger->warning('WEI_FR_STOCK_SYNC_EBAY_ID_FALLBACK', ['from_api' => 'end_fixed_price_item_by_listing_id', 'to_api' => 'bulk_update_price_quantity', 'listing_id' => $listingId, 'offer_id' => $offerId, 'error' => $res->get_error_message(), 'auth' => '[REDACTED]']);
+        }
+
+        if ($offerId !== '') {
+            $this->logger->info('WEI_FR_STOCK_SYNC_EBAY_API_CALL', ['api' => 'bulk_update_price_quantity', 'offer_id' => $offerId, 'listing_id' => $listingId, 'quantity' => 0, 'auth' => '[REDACTED]']);
+            $res = $this->client->bulk_update_price_quantity([[
+                'offerId' => $offerId,
+                'shipToLocationAvailability' => ['quantity' => 0],
+            ]], array_merge($context, ['stage' => 'stock_sync_zero_quantity_by_offer_id']));
+            if (!is_wp_error($res)) {
+                return ['action' => 'set_ebay_offer_quantity_zero_by_offer_id', 'ebay_state_after' => 'quantity_0', 'response' => $res];
+            }
+
+            if ($listingId !== '' && $this->is_retryable_identifier_error($res)) {
+                $this->logger->warning('WEI_FR_STOCK_SYNC_EBAY_ID_FALLBACK', ['from_api' => 'bulk_update_price_quantity', 'to_api' => 'end_fixed_price_item_by_listing_id', 'listing_id' => $listingId, 'offer_id' => $offerId, 'error' => $res->get_error_message(), 'auth' => '[REDACTED]']);
+                $fallback = $this->client->end_fixed_price_item_by_listing_id($listingId, 'NotAvailable', array_merge($context, ['stage' => 'stock_sync_invalid_sku_fallback_end_by_listing_id']));
+                if (!is_wp_error($fallback)) {
+                    return ['action' => 'end_ebay_listing_by_listing_id_after_invalid_sku', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $fallback];
+                }
+            }
+
+            if ($this->is_retryable_identifier_error($res)) {
+                $this->logger->warning('WEI_FR_STOCK_SYNC_EBAY_ID_FALLBACK', ['from_api' => 'bulk_update_price_quantity', 'to_api' => 'delete_offer', 'listing_id' => $listingId, 'offer_id' => $offerId, 'error' => $res->get_error_message(), 'auth' => '[REDACTED]']);
+                $fallback = $this->client->delete_offer($offerId, array_merge($context, ['stage' => 'stock_sync_invalid_sku_fallback_delete_offer']));
+                if (!is_wp_error($fallback)) {
+                    return ['action' => 'make_ebay_offer_unavailable_by_offer_id_after_invalid_sku', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $fallback];
+                }
+            }
+
+            return $res;
+        }
+
+        if ($listingId !== '') {
+            $this->logger->info('WEI_FR_STOCK_SYNC_EBAY_API_CALL', ['api' => 'end_fixed_price_item_by_listing_id', 'listing_id' => $listingId, 'offer_id' => $offerId, 'quantity' => 0, 'auth' => '[REDACTED]']);
+            $res = $this->client->end_fixed_price_item_by_listing_id($listingId, 'NotAvailable', array_merge($context, ['stage' => 'stock_sync_end_listing_by_listing_id_without_offer_id']));
+            if (!is_wp_error($res)) {
+                return ['action' => 'end_ebay_listing_by_listing_id', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $res];
+            }
+            return $res;
+        }
+
+        return new \WP_Error('wei_fr_ebay_stock_sync_missing_remote_id', 'Cannot make eBay listing unavailable without offer_id or listing_id');
+    }
+
+    private function should_fallback_after_end_listing_error(\WP_Error $error): bool
+    {
+        $message = strtolower($error->get_error_message());
+        return str_contains($message, 'not found')
+            || str_contains($message, 'already ended')
+            || str_contains($message, 'cannot be ended')
+            || str_contains($message, 'invalid');
+    }
+
+    private function is_retryable_identifier_error(\WP_Error $error): bool
+    {
+        $message = strtolower($error->get_error_message());
+        return str_contains($message, 'invalid value for a sku')
+            || (str_contains($message, 'sku') && str_contains($message, 'alphanumeric'))
+            || (str_contains($message, 'sku') && str_contains($message, 'must not exceed 50'));
     }
 
     private function sync_ebay_to_woo(array $settings, bool $dryRun, array $summary): array
