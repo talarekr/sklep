@@ -206,6 +206,28 @@ namespace {
         $failures[] = 'Expected same-vehicle CTA to render immediately after the specifications table block without an intervening compatibility placeholder.';
     }
 
+    $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = [
+        'marketplace_id' => 'EBAY_DE',
+        'enable_ebay_de_description_template' => 1,
+        'ebay_seller_username' => '',
+    ];
+    $resolveInventoryDescription = new \ReflectionMethod(EbayAdapter::class, 'resolve_inventory_item_description');
+    $resolveInventoryDescription->setAccessible(true);
+    $resolveOfferDescription = new \ReflectionMethod(EbayAdapter::class, 'resolve_offer_listing_description');
+    $resolveOfferDescription->setAccessible(true);
+    $deContent = ['title' => 'DE title', 'description' => '<p>Kurze Beschreibung</p>', 'source' => 'test'];
+    $deInventoryDescription = $resolveInventoryDescription->invoke($previewAdapter, $GLOBALS['wei_test_products'][10907], 10907, $deContent, [], [], $GLOBALS['wei_test_options'][Plugin::OPTION_KEY], 'EBAY_DE');
+    $deOfferDescription = $resolveOfferDescription->invoke($previewAdapter, $GLOBALS['wei_test_products'][10907], 10907, $deContent, [], [], $GLOBALS['wei_test_options'][Plugin::OPTION_KEY], 'EBAY_DE');
+    if (($deInventoryDescription['source'] ?? '') !== 'short_resolved_german_content_for_inventory_item') {
+        $failures[] = 'Expected DE inventory product.description behavior to stay short German content. Got ' . json_encode($deInventoryDescription);
+    }
+    if (str_contains((string) ($deInventoryDescription['description'] ?? ''), 'Schneller weltweiter Versand')) {
+        $failures[] = 'Expected DE inventory product.description not to contain the full HTML template.';
+    }
+    if (($deOfferDescription['source'] ?? '') !== 'approved_ebay_de_template' || !str_contains((string) ($deOfferDescription['description'] ?? ''), 'Schneller weltweiter Versand')) {
+        $failures[] = 'Expected DE offer.listingDescription behavior to remain the approved German template.';
+    }
+
     $GLOBALS['wei_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'settings-seller'];
     $GLOBALS['wei_test_post_meta'][105] = ['_ovoko_car_id' => 'SETTINGS:321'];
     $settingsSeller = $resolveSameVehicle->invoke($adapter, 105);

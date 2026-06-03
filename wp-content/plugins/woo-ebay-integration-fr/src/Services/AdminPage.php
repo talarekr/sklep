@@ -4260,14 +4260,12 @@ class AdminPage
     {
         $this->require_manage_options();
         check_admin_referer('wei_fr_description_template_single');
-        $res = [
-            'result' => 'disabled',
-            'reason' => 'description_template_updates_disabled_preview_stage',
-            'called_ebay_api' => false,
-            'updated_ebay_listing' => false,
-            'created_ebay_listing' => false,
-        ];
-        $this->set_status('eBay.fr single description template update disabled: ' . wp_json_encode($res));
+        $input = sanitize_text_field((string) ($_POST['product_or_sku'] ?? ''));
+        $res = $this->adapter->update_description_template_single($input);
+        $res['controlled_single_listing_action'] = true;
+        $res['called_publish_offer'] = false;
+        $res['created_ebay_listing'] = false;
+        $this->set_status('Controlled eBay.fr single listing description revise: ' . wp_json_encode($res, JSON_UNESCAPED_UNICODE));
         $this->go();
     }
 
