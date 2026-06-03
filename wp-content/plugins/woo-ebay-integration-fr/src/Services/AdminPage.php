@@ -115,6 +115,7 @@ class AdminPage
         add_action('admin_post_wei_fr_run_stock_sync_dry_run', [$this, 'run_stock_sync_dry_run']);
         add_action('admin_post_wei_fr_run_stock_sync_now', [$this, 'run_stock_sync_now']);
         add_action('admin_post_wei_fr_stock_sync_diagnostics', [$this, 'stock_sync_diagnostics']);
+        add_action('admin_post_wei_fr_publish_listing_diagnostics', [$this, 'publish_listing_diagnostics']);
     }
 
     public function register_menu(): void
@@ -354,6 +355,11 @@ class AdminPage
         $stock_sync_diagnostics = is_array($stock_sync_diagnostics) ? $stock_sync_diagnostics : [];
         $initial_publish_candidate_summary = $this->initial_publish_candidate_summary();
         $initial_publish_status = $this->initial_publish_status();
+        $fr_publish_report_status = $this->fr_publish_report_status();
+        $fr_publish_last_run = is_array($fr_publish_report_status['last_run'] ?? null) ? $fr_publish_report_status['last_run'] : [];
+        $fr_publish_last_actions = is_array($fr_publish_last_run['actions'] ?? null) ? $fr_publish_last_run['actions'] : [];
+        $fr_publish_listing_diagnostics = get_option('wei_fr_ebay_publish_listing_diagnostics', []);
+        $fr_publish_listing_diagnostics = is_array($fr_publish_listing_diagnostics) ? $fr_publish_listing_diagnostics : [];
         $ebay_listing_state_summary = $this->ebay_listing_state_summary();
         $full_category_audit_summary = get_option('wei_fr_ebay_full_category_audit_summary', []);
         $full_category_audit_summary = is_array($full_category_audit_summary) ? $full_category_audit_summary : [];
@@ -1811,6 +1817,10 @@ class AdminPage
             update_post_meta($id, '_wei_fr_ebay_aspects_json', $aspects_json);
         }
         $res = $this->adapter->export_product($id);
+        $report = $this->record_fr_publish_action($this->new_fr_publish_run_id(), $id, 'export', $res, [], gmdate('Y-m-d H:i:s'));
+        if (!empty($report['report_write_error'])) {
+            $res['report_write_error'] = $report['report_write_error'];
+        }
         $this->set_status('Export: ' . wp_json_encode($res));
         $this->go();
     }
@@ -2757,7 +2767,9 @@ class AdminPage
         $failedTotal = (int) get_option('wei_fr_ebay_initial_publish_failed', 0);
         $skippedTotal = (int) get_option('wei_fr_ebay_initial_publish_skipped', 0);
         $startedAt = gmdate('Y-m-d H:i:s');
-        $logs = ['INITIAL_PUBLISH_BATCH_START batch_size=' . $batchSize . ' cursor=' . $cursor];
+        $runId = $this->new_fr_publish_run_id();
+        $actionRows = [];
+        $logs = ['INITIAL_PUBLISH_BATCH_START run_id=' . $runId . ' batch_size=' . $batchSize . ' cursor=' . $cursor];
         $processed = 0;
         $success = 0;
         $failed = 0;
@@ -2792,10 +2804,12 @@ class AdminPage
             $processed++;
             $processedTotal++;
             $logs[] = 'INITIAL_PUBLISH_PRODUCT_START product_id=' . $productId;
+            $preflight = [];
 
             if ($this->is_initial_publish_already_published($productId)) {
                 $diagnostics = $this->initial_publish_already_published_diagnostics($productId);
                 $skippedTotal++;
+                $actionRows[] = $this->build_fr_publish_action_row($runId, 'skip', $productId, ['result' => 'skipped', 'status' => 'already_published_active_listing', 'offer_id' => (string) ($diagnostics['offer_id'] ?? ''), 'listing_id' => (string) ($diagnostics['listing_id'] ?? ''), 'listing_url' => $this->fr_listing_url((string) ($diagnostics['listing_id'] ?? ''))], [], $startedAt);
                 $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId
                     . ' sku="' . $this->compact_log_value((string) ($diagnostics['sku'] ?? '')) . '"'
                     . ' offer_id="' . $this->compact_log_value((string) ($diagnostics['offer_id'] ?? '')) . '"'
@@ -2811,6 +2825,7 @@ class AdminPage
                     $reason = (string) ($preflight['status'] ?? 'not_ready');
                     $skippedTotal++;
                     $this->accumulate_publish_not_ready_reason($skipSummary, $preflight);
+                    $actionRows[] = $this->build_fr_publish_action_row($runId, 'skip', $productId, ['result' => 'skipped', 'status' => $reason, 'message' => (string) ($preflight['message'] ?? $reason)], $preflight, $startedAt);
                     update_post_meta($productId, '_wei_fr_ebay_last_sync_status', 'not_ready');
                     update_post_meta($productId, '_wei_fr_ebay_last_sync_error', $reason);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId . ' reason="' . $this->compact_log_value($reason) . '"';
@@ -2821,6 +2836,7 @@ class AdminPage
                 if (($res['result'] ?? '') === 'skipped' && ($res['status'] ?? '') === 'already_published_active_listing') {
                     $skippedTotal++;
                     $diagnostics = is_array($res['diagnostics'] ?? null) ? $res['diagnostics'] : [];
+                    $actionRows[] = $this->build_fr_publish_action_row($runId, 'skip', $productId, $res, $preflight, $startedAt);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_SKIPPED product_id=' . $productId
                         . ' sku="' . $this->compact_log_value((string) ($diagnostics['sku'] ?? '')) . '"'
                         . ' offer_id="' . $this->compact_log_value((string) ($diagnostics['offer_id'] ?? '')) . '"'
@@ -2835,11 +2851,13 @@ class AdminPage
                     $successTotal++;
                     $lastPublishedProductId = $productId;
                     $lastListingId = (string) ($publishedDetails['listing_id'] ?? '');
+                    $actionRows[] = $this->build_fr_publish_action_row($runId, 'publish', $productId, $res, $preflight, $startedAt);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_PUBLISHED product_id=' . $productId . ' listing_id=' . $this->compact_log_value($lastListingId);
                 } else {
                     $failed++;
                     $failedTotal++;
                     $lastError = (string) ($res['message'] ?? $res['error'] ?? 'publish_failed_without_published_listing_meta');
+                    $actionRows[] = $this->build_fr_publish_action_row($runId, 'error', $productId, array_merge($res, ['result' => 'error', 'message' => $lastError]), $preflight, $startedAt);
                     update_post_meta($productId, '_wei_fr_ebay_last_sync_status', 'error');
                     update_post_meta($productId, '_wei_fr_ebay_last_sync_error', $lastError);
                     $logs[] = 'INITIAL_PUBLISH_PRODUCT_FAILED product_id=' . $productId . ' error="' . $this->compact_log_value($lastError) . '"';
@@ -2848,10 +2866,28 @@ class AdminPage
                 $failed++;
                 $failedTotal++;
                 $lastError = $throwable->getMessage();
+                $actionRows[] = $this->build_fr_publish_action_row($runId, 'error', $productId, ['result' => 'error', 'error' => 'exception', 'message' => $lastError], $preflight, $startedAt);
                 update_post_meta($productId, '_wei_fr_ebay_last_sync_status', 'error');
                 update_post_meta($productId, '_wei_fr_ebay_last_sync_error', $lastError);
                 $logs[] = 'INITIAL_PUBLISH_PRODUCT_FAILED product_id=' . $productId . ' error="' . $this->compact_log_value($lastError) . '"';
             }
+        }
+
+        $finishedAt = gmdate('Y-m-d H:i:s');
+        $reportWrite = $this->write_fr_publish_reports([
+            'run_id' => $runId,
+            'started_at' => $startedAt,
+            'finished_at' => $finishedAt,
+            'exported' => $success,
+            'published' => $success,
+            'skipped' => max(0, $processed - $success - $failed),
+            'skipped_this_run' => max(0, $processed - $success - $failed),
+            'errors' => $failed,
+            'result' => $failed > 0 ? 'completed_with_errors' : 'success',
+            'actions' => $actionRows,
+        ], $actionRows);
+        if (!empty($reportWrite['report_write_error'])) {
+            $lastError = trim($lastError . ' report_write_error=' . (string) ($reportWrite['report_write_error']['reason'] ?? 'unknown'));
         }
 
         $remaining = $this->initial_publish_candidate_count_after_cursor($newCursor);
@@ -2891,7 +2927,216 @@ class AdminPage
             'queue_empty' => $globalRemainingReady === 0,
             'cursor' => $newCursor,
             'last_error' => $lastError,
+            'run_id' => $runId,
+            'reports' => $reportWrite['reports'] ?? [],
+            'report_write_error' => $reportWrite['report_write_error'] ?? [],
         ] + $skipSummary;
+    }
+
+    private function new_fr_publish_run_id(): string
+    {
+        return 'frpub_' . gmdate('Ymd_His') . '_' . substr(wp_generate_uuid4(), 0, 8);
+    }
+
+    private function fr_publish_report_paths(): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration-fr';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration-fr';
+        $files = [
+            'last_run' => 'fr-publish-last-run.json',
+            'actions' => 'fr-publish-actions.csv',
+            'errors' => 'fr-publish-errors.csv',
+        ];
+        $reports = [];
+        foreach ($files as $key => $file) {
+            $reports[$key] = [
+                'path' => trailingslashit($baseDir) . $file,
+                'url' => trailingslashit($baseUrl) . $file,
+            ];
+        }
+        return $reports;
+    }
+
+    private function fr_publish_report_status(): array
+    {
+        $reports = $this->fr_publish_report_paths();
+        $lastRun = [];
+        $lastRunPath = (string) ($reports['last_run']['path'] ?? '');
+        if ($lastRunPath !== '' && is_readable($lastRunPath)) {
+            $decoded = json_decode((string) file_get_contents($lastRunPath), true);
+            $lastRun = is_array($decoded) ? $decoded : [];
+        }
+        if ($lastRun === []) {
+            $lastRun = get_option('wei_fr_ebay_fr_publish_last_run', []);
+            $lastRun = is_array($lastRun) ? $lastRun : [];
+        }
+
+        return [
+            'reports' => $reports,
+            'last_run' => $lastRun,
+            'report_write_error' => is_array($lastRun['report_write_error'] ?? null) ? $lastRun['report_write_error'] : [],
+        ];
+    }
+
+    private function write_fr_publish_reports(array $summary, array $rows): array
+    {
+        $reports = $this->fr_publish_report_paths();
+        $errors = array_values(array_filter($rows, static function (array $row): bool {
+            return (string) ($row['result'] ?? '') === 'error';
+        }));
+        $summary['reports'] = $reports;
+        $summary['last_published_listings'] = array_values(array_filter($rows, static function (array $row): bool {
+            return (string) ($row['listing_id'] ?? '') !== '' || (string) ($row['offer_id'] ?? '') !== '';
+        }));
+        $summary['actions'] = array_slice($rows, -50);
+        $result = ['reports' => $reports, 'report_write_error' => []];
+        $baseDir = dirname((string) ($reports['last_run']['path'] ?? ''));
+
+        try {
+            if (!wp_mkdir_p($baseDir) || !is_dir($baseDir) || !is_writable($baseDir)) {
+                throw new \RuntimeException('FR publish report directory is not writable.');
+            }
+
+            $headers = $this->fr_publish_report_headers();
+            $this->append_fr_publish_csv((string) $reports['actions']['path'], $headers, $rows);
+            $this->append_fr_publish_csv((string) $reports['errors']['path'], $headers, $errors);
+            $json = wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($json === false || file_put_contents((string) $reports['last_run']['path'], $json) === false) {
+                throw new \RuntimeException('Unable to write fr-publish-last-run.json.');
+            }
+            update_option('wei_fr_ebay_fr_publish_last_run', $summary, false);
+        } catch (\Throwable $throwable) {
+            $result['report_write_error'] = [
+                'report_write_error' => 'yes',
+                'target_path' => $baseDir,
+                'reason' => $throwable->getMessage(),
+            ];
+            $summary['report_write_error'] = $result['report_write_error'];
+            update_option('wei_fr_ebay_fr_publish_last_run', $summary, false);
+            $this->logger->error('FR_PUBLISH_REPORT_WRITE_FAILED', $result['report_write_error']);
+        }
+
+        return $result;
+    }
+
+    private function record_fr_publish_action(string $runId, int $productId, string $action, array $res, array $preflight = [], string $startedAt = ''): array
+    {
+        $startedAt = $startedAt !== '' ? $startedAt : gmdate('Y-m-d H:i:s');
+        $row = $this->build_fr_publish_action_row($runId, $action, $productId, $res, $preflight, $startedAt);
+        return $this->write_fr_publish_reports([
+            'run_id' => $runId,
+            'started_at' => $startedAt,
+            'finished_at' => gmdate('Y-m-d H:i:s'),
+            'exported' => $action === 'export' && (string) ($row['result'] ?? '') === 'success' ? 1 : 0,
+            'published' => $action === 'publish' && (string) ($row['result'] ?? '') === 'success' ? 1 : 0,
+            'skipped' => (string) ($row['result'] ?? '') === 'skipped' ? 1 : 0,
+            'errors' => (string) ($row['result'] ?? '') === 'error' ? 1 : 0,
+            'result' => (string) ($row['result'] ?? ''),
+            'actions' => [$row],
+        ], [$row]);
+    }
+
+    private function append_fr_publish_csv(string $path, array $headers, array $rows): void
+    {
+        if ($rows === []) {
+            if (!file_exists($path)) {
+                $handle = fopen($path, 'wb');
+                if ($handle === false) {
+                    throw new \RuntimeException('Unable to create CSV report: ' . $path);
+                }
+                fputcsv($handle, $headers);
+                fclose($handle);
+            }
+            return;
+        }
+
+        $exists = file_exists($path) && filesize($path) > 0;
+        $handle = fopen($path, 'ab');
+        if ($handle === false) {
+            throw new \RuntimeException('Unable to open CSV report: ' . $path);
+        }
+        if (!$exists) {
+            fputcsv($handle, $headers);
+        }
+        foreach ($rows as $row) {
+            fputcsv($handle, array_map(static fn(string $key): string => (string) ($row[$key] ?? ''), $headers));
+        }
+        fclose($handle);
+    }
+
+    private function fr_publish_report_headers(): array
+    {
+        return ['timestamp','run_id','action','product_id','title','sku','ebay_sku','marketplace','category_id','price','currency','quantity','inventory_item_id','offer_id','listing_id','listing_url','result','error_message','readiness_status','selected_fulfillment_policy_id','selected_payment_policy_id','selected_return_policy_id','merchant_location_key','description_source_used','sent_description_is_html_template','contains_template_markers'];
+    }
+
+    private function build_fr_publish_action_row(string $runId, string $action, int $productId, array $res, array $preflight = [], string $timestamp = ''): array
+    {
+        $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
+        $listingId = trim((string) ($res['listing_id'] ?? get_post_meta($productId, '_wei_fr_ebay_listing_id', true) ?: get_post_meta($productId, '_wei_fr_ebay_item_id', true)));
+        $listingUrl = trim((string) ($res['listing_url'] ?? $res['public_url'] ?? get_post_meta($productId, '_wei_fr_ebay_listing_url', true) ?: get_post_meta($productId, '_wei_fr_ebay_public_url', true)));
+        if ($listingUrl === '' && $listingId !== '') {
+            $listingUrl = $this->fr_listing_url($listingId);
+        }
+        $skuResolution = is_array($preflight['sku_resolution'] ?? null) ? $preflight['sku_resolution'] : (is_array($res['sku_resolution'] ?? null) ? $res['sku_resolution'] : []);
+        $priceResolution = is_array($preflight['price_resolution'] ?? null) ? $preflight['price_resolution'] : (is_array($res['price_resolution'] ?? null) ? $res['price_resolution'] : []);
+        $result = (string) ($res['result'] ?? '');
+        if ($result === 'skipped') {
+            $resultLabel = 'skipped';
+        } elseif ($result === 'success') {
+            $resultLabel = 'success';
+        } else {
+            $resultLabel = 'error';
+        }
+
+        return [
+            'timestamp' => $timestamp !== '' ? $timestamp : gmdate('Y-m-d H:i:s'),
+            'run_id' => $runId,
+            'action' => $action,
+            'product_id' => (string) $productId,
+            'title' => $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId),
+            'sku' => $product && method_exists($product, 'get_sku') ? (string) $product->get_sku() : (string) get_post_meta($productId, '_sku', true),
+            'ebay_sku' => (string) ($res['inventory_item_id'] ?? $res['inventory_id'] ?? $skuResolution['wei_fr_ebay_sku'] ?? get_post_meta($productId, '_wei_fr_ebay_sku', true) ?: get_post_meta($productId, '_wei_fr_ebay_inventory_item_id', true)),
+            'marketplace' => 'EBAY_FR',
+            'category_id' => (string) ($res['category_id'] ?? $preflight['category']['category_id'] ?? get_post_meta($productId, '_wei_fr_ebay_category_id', true)),
+            'price' => (string) ($res['price'] ?? $priceResolution['ebay_price_eur'] ?? ($product && method_exists($product, 'get_price') ? $product->get_price() : '')),
+            'currency' => (string) ($res['currency'] ?? 'EUR'),
+            'quantity' => (string) ($res['quantity'] ?? $preflight['stock_quantity'] ?? ($product && method_exists($product, 'get_stock_quantity') ? (int) $product->get_stock_quantity() : '')),
+            'inventory_item_id' => (string) ($res['inventory_item_id'] ?? $res['inventory_id'] ?? get_post_meta($productId, '_wei_fr_ebay_inventory_item_id', true) ?: get_post_meta($productId, '_wei_fr_ebay_inventory_id', true)),
+            'offer_id' => (string) ($res['offer_id'] ?? get_post_meta($productId, '_wei_fr_ebay_offer_id', true)),
+            'listing_id' => $listingId,
+            'listing_url' => $listingUrl,
+            'result' => $resultLabel,
+            'error_message' => $resultLabel === 'error' || $resultLabel === 'skipped' ? (string) ($res['message'] ?? $res['error'] ?? $res['status'] ?? '') : '',
+            'readiness_status' => (string) ($preflight['status'] ?? get_post_meta($productId, '_wei_fr_ebay_export_status', true)),
+            'selected_fulfillment_policy_id' => (string) ($res['selected_fulfillment_policy_id'] ?? $preflight['selected_fulfillment_policy_id'] ?? get_post_meta($productId, '_wei_fr_ebay_last_fulfillment_policy_id', true)),
+            'selected_payment_policy_id' => (string) ($res['selected_payment_policy_id'] ?? $preflight['selected_payment_policy_id'] ?? $this->settings()['ebay_payment_policy_id'] ?? ''),
+            'selected_return_policy_id' => (string) ($res['selected_return_policy_id'] ?? $preflight['selected_return_policy_id'] ?? $this->settings()['ebay_return_policy_id'] ?? ''),
+            'merchant_location_key' => (string) ($res['merchant_location_key'] ?? $preflight['merchant_location_key'] ?? $this->settings()['inventory_location_key'] ?? ''),
+            'description_source_used' => (string) ($res['description_source_used'] ?? get_post_meta($productId, '_wei_fr_ebay_description_source_used', true)),
+            'sent_description_is_html_template' => (string) ($res['sent_description_is_html_template'] ?? ''),
+            'contains_template_markers' => (string) ($res['contains_template_markers'] ?? ''),
+        ];
+    }
+
+    private function fr_listing_url(string $listingId): string
+    {
+        $listingId = trim($listingId);
+        return $listingId !== '' ? 'https://www.ebay.fr/itm/' . rawurlencode($listingId) : '';
+    }
+
+    private function fr_publish_product_listing_diagnostics(int $productId): array
+    {
+        return [
+            'result' => 'success',
+            'product_id' => $productId,
+            '_wei_fr_ebay_listing_id' => (string) get_post_meta($productId, '_wei_fr_ebay_listing_id', true),
+            '_wei_fr_ebay_offer_id' => (string) get_post_meta($productId, '_wei_fr_ebay_offer_id', true),
+            '_wei_fr_ebay_inventory_item_id' => (string) get_post_meta($productId, '_wei_fr_ebay_inventory_item_id', true),
+            '_wei_fr_ebay_listing_url' => (string) get_post_meta($productId, '_wei_fr_ebay_listing_url', true),
+            '_wei_fr_ebay_published_at' => (string) get_post_meta($productId, '_wei_fr_ebay_published_at', true),
+            '_wei_fr_ebay_marketplace' => (string) get_post_meta($productId, '_wei_fr_ebay_marketplace', true) ?: 'EBAY_FR',
+        ];
     }
 
     private function accumulate_publish_not_ready_reason(array &$summary, array $preflight): void
@@ -3166,6 +3411,17 @@ class AdminPage
         $this->go();
     }
 
+    public function publish_listing_diagnostics(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_publish_listing_diagnostics');
+        $productId = absint($_POST['product_id'] ?? 0);
+        $diagnostics = $productId > 0 ? $this->fr_publish_product_listing_diagnostics($productId) : ['result' => 'error', 'error' => 'missing_product_id'];
+        update_option('wei_fr_ebay_publish_listing_diagnostics', $diagnostics, false);
+        $this->set_status('FR publish listing diagnostics: ' . wp_json_encode($diagnostics, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $this->go();
+    }
+
     public function publish_product_offer_only(): void
     {
         $this->require_manage_options();
@@ -3183,6 +3439,10 @@ class AdminPage
             'wrote_woo_price' => false,
             'wrote_allegro' => false,
         ];
+        $report = $this->record_fr_publish_action($this->new_fr_publish_run_id(), $id, 'publish', $res, [], gmdate('Y-m-d H:i:s'));
+        if (!empty($report['report_write_error'])) {
+            $res['report_write_error'] = $report['report_write_error'];
+        }
         $this->set_status('Manual publish offer only: ' . wp_json_encode($res));
         $this->go();
     }
