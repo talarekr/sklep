@@ -170,7 +170,8 @@ namespace {
     $bootstrapSource = file_get_contents(__DIR__ . '/../woo-ebay-integration-fr.php');
     $adminSource = file_get_contents(__DIR__ . '/../src/Services/AdminPage.php');
     $viewSource = file_get_contents(__DIR__ . '/../views/admin-page.php');
-    $assert(str_contains($adminSource, "'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [\$this, 'render_oauth_callback'], 'oauth callback menu'"), 'Hidden FR callback page must be registered with the FR callback slug and manage_options capability.');
+    $assert(!str_contains($adminSource, "'manage_options', EbayAuth::CALLBACK_PAGE_SLUG, [\$this, 'render_oauth_callback'], 'oauth callback menu'"), 'FR must not register the shared ebay-auth-callback submenu slug; DE owns the shared callback page.');
+    $assert(str_contains($adminSource, 'FR intentionally avoids registering the same hidden submenu slug'), 'FR admin menu source must document why it avoids the duplicate shared callback slug.');
     $assert(str_contains($pluginSource, "add_action('admin_init', [\$auth, 'handle_oauth_callback'], 0)"), 'Plugin must register the OAuth callback interceptor on global admin_init priority 0.');
     $assert(str_contains($pluginSource, "add_action('current_screen', [\$auth, 'handle_current_screen_oauth_callback'], 0)"), 'Plugin must register current_screen OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('load-admin_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_load_oauth_callback'], 0)"), 'Plugin must register load-admin_page OAuth callback fallback.');
