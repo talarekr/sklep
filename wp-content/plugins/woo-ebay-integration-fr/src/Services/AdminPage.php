@@ -15,7 +15,7 @@ class AdminPage
     private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_fr_ebay_french_content_schema_migration_state';
     private const SHARED_EBAY_RUNAME = 'GP_SWISS-GPSWISS-GPSwiss-jigmn';
 
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync, private EbayFrCategoryComparisonTool $categoryComparisonTool)
     {
     }
 
@@ -90,6 +90,7 @@ class AdminPage
         add_action('admin_post_wei_fr_full_publish_readiness_audit', [$this, 'full_publish_readiness_audit']);
         add_action('admin_post_wei_fr_full_category_audit', [$this, 'full_category_audit']);
         add_action('admin_post_wei_fr_run_category_readiness_audit', [$this, 'run_category_readiness_audit']);
+        add_action('admin_post_wei_fr_generate_de_fr_category_comparison', [$this, 'generate_de_fr_category_comparison']);
         add_action('admin_post_wei_fr_auto_sync_orders_now', [$this, 'auto_sync_orders_now']);
         add_action('admin_post_wei_fr_auto_sync_stock_now', [$this, 'auto_sync_stock_now']);
         add_action('admin_post_wei_fr_auto_sync_export_now', [$this, 'auto_sync_export_now']);
@@ -376,6 +377,7 @@ class AdminPage
         $category_mapping_worklist_import_summary = is_array($category_mapping_worklist_import_summary) ? $category_mapping_worklist_import_summary : [];
         $ovoko_category_suggestions_summary = get_option('wei_fr_ebay_ovoko_category_suggestions_summary', []);
         $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
+        $category_comparison_last_run = $this->category_comparison_last_run();
         $vehicle_compatibility_audit_summary = get_option('wei_fr_ebay_vehicle_compatibility_audit_summary', []);
         $vehicle_compatibility_audit_summary = is_array($vehicle_compatibility_audit_summary) ? $vehicle_compatibility_audit_summary : [];
         $vehicle_compatibility_diagnostics = get_option('wei_fr_ebay_last_vehicle_compatibility_diagnostics', []);
@@ -1434,6 +1436,13 @@ class AdminPage
             BlockedCategoryFixReportService::CATEGORY_MAPPING_WORKLIST_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::CATEGORY_MAPPING_WORKLIST_FILENAME,
             BlockedCategoryFixReportService::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME => trailingslashit($this->blocked_category_report_upload_dir()) . BlockedCategoryFixReportService::ALL_CATEGORY_MAPPING_WORKLIST_FILENAME,
         ];
+        $categoryComparison = $this->category_comparison_last_run();
+        foreach (array_merge((array) ($categoryComparison['reports'] ?? []), (array) ($categoryComparison['raw_reports'] ?? [])) as $report) {
+            $candidate = is_array($report) ? (string) ($report['path'] ?? '') : '';
+            if ($candidate !== '') {
+                $allowed[basename($candidate)] = $candidate;
+            }
+        }
         foreach (['full_report_csv_path', 'problems_only_csv_path'] as $pathKey) {
             $candidate = (string) ($audit[$pathKey] ?? '');
             if ($candidate !== '') {
@@ -1478,6 +1487,111 @@ class AdminPage
         header('Content-Length: ' . (string) filesize($path));
         readfile($path);
         exit;
+    }
+
+
+    public function generate_de_fr_category_comparison(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_generate_de_fr_category_comparison');
+
+        $uploaded = is_array($_FILES['de_mapping_csv'] ?? null) ? $_FILES['de_mapping_csv'] : [];
+        $validationError = $this->validate_de_mapping_upload($uploaded);
+        if ($validationError !== '') {
+            $this->set_status('DE → FR category comparison rejected: ' . $validationError);
+            $this->go_category_mapping_screen();
+        }
+
+        $inputDir = $this->category_comparison_upload_dir() . '/input';
+        if (!is_dir($inputDir)) {
+            wp_mkdir_p($inputDir);
+        }
+        $target = $inputDir . '/finalny-de-mapping.csv';
+        $tmpName = (string) ($uploaded['tmp_name'] ?? '');
+        $stored = is_uploaded_file($tmpName) ? move_uploaded_file($tmpName, $target) : copy($tmpName, $target);
+        if (!$stored || !is_file($target)) {
+            $this->set_status('DE → FR category comparison rejected: uploaded CSV could not be stored.');
+            $this->go_category_mapping_screen();
+        }
+
+        $forceRefresh = !empty($_POST['force_refresh_taxonomy_cache']);
+        try {
+            $summary = $this->categoryComparisonTool->generate($target, $forceRefresh);
+        } catch (\Throwable $e) {
+            $summary = [
+                'result' => 'error',
+                'started_at' => gmdate('c'),
+                'finished_at' => gmdate('c'),
+                'input_file_path' => $target,
+                'output_dir' => $this->category_comparison_upload_dir(),
+                'reports' => [],
+                'summary_counts' => [],
+                'taxonomy_api_errors' => [],
+                'errors' => [$this->safe_admin_error_message($e)],
+            ];
+            $this->write_category_comparison_last_run($summary);
+        }
+
+        $this->set_status('DE → FR category comparison: ' . wp_json_encode($this->limit_nested_array($summary, 30), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $this->go_category_mapping_screen();
+    }
+
+    private function validate_de_mapping_upload(array $uploaded): string
+    {
+        if ($uploaded === [] || (int) ($uploaded['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            return 'upload existing DE mapping CSV finalny(2).csv.';
+        }
+        if ((int) ($uploaded['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+            return 'upload failed with code ' . (int) ($uploaded['error'] ?? 0) . '.';
+        }
+        $originalName = function_exists('wp_basename') ? wp_basename((string) ($uploaded['name'] ?? '')) : basename((string) ($uploaded['name'] ?? ''));
+        if ($originalName !== 'finalny(2).csv') {
+            return 'invalid file name; upload finalny(2).csv.';
+        }
+        $name = sanitize_file_name($originalName);
+        if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) !== 'csv') {
+            return 'invalid file extension; CSV required.';
+        }
+        $allowedMimeTypes = ['text/csv', 'text/plain', 'application/csv', 'application/vnd.ms-excel', 'application/octet-stream'];
+        $type = strtolower((string) ($uploaded['type'] ?? ''));
+        if ($type !== '' && !in_array($type, $allowedMimeTypes, true)) {
+            return 'invalid file type; CSV upload required.';
+        }
+        $tmpName = (string) ($uploaded['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_readable($tmpName) || !is_file($tmpName)) {
+            return 'uploaded CSV is not readable.';
+        }
+        return '';
+    }
+
+    private function category_comparison_last_run(): array
+    {
+        $path = $this->category_comparison_upload_dir() . '/category-comparison-last-run.json';
+        if (!is_readable($path)) {
+            return [];
+        }
+        $decoded = json_decode((string) file_get_contents($path), true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function write_category_comparison_last_run(array $summary): void
+    {
+        $dir = $this->category_comparison_upload_dir();
+        if (!is_dir($dir)) {
+            wp_mkdir_p($dir);
+        }
+        file_put_contents($dir . '/category-comparison-last-run.json', wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function category_comparison_upload_dir(): string
+    {
+        $upload = wp_upload_dir();
+        return trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration-fr/category-comparison';
+    }
+
+    private function safe_admin_error_message(\Throwable $e): string
+    {
+        return preg_replace('/(access_token|refresh_token|client_secret|authorization|api_key)[^\s,;]*/i', '$1=[redacted]', $e->getMessage()) ?: 'category comparison failed';
     }
 
     public function repair_blocked_category_mappings(): void

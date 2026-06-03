@@ -10,8 +10,9 @@ class EbayFrCategoryComparisonTool
 
     public function generate(string $deMappingCsv = '', bool $forceRefresh = false): array
     {
+        $startedAt = gmdate('c');
         $base = $this->report_dir();
-        $reportsDir = $base['dir'] . '/reports';
+        $reportsDir = $base['dir'];
         if (!is_dir($reportsDir)) {
             wp_mkdir_p($reportsDir);
         }
@@ -37,12 +38,17 @@ class EbayFrCategoryComparisonTool
         $this->write_csv($paths['comparison_csv'], $this->comparison_headers(), $comparisonRows);
         $candidateRows = $this->mapping_candidate_rows($deMappingCsv, $frRows);
         $this->write_csv($paths['mapping_candidates_csv'], $this->candidate_headers(), $candidateRows);
+        $finishedAt = gmdate('c');
         $categorySummary = $this->category_summary($deRows, $frRows);
         $manualMappingSummary = $this->manual_mapping_summary($candidateRows);
         $taxonomyApiErrors = $this->taxonomy_api_errors([$de, $fr, $de6030, $fr6030]);
 
-        return [
+        $summary = [
             'result' => 'success',
+            'started_at' => $startedAt,
+            'finished_at' => $finishedAt,
+            'errors' => [],
+            'input_file_path' => $deMappingCsv,
             'output_dir' => $base['dir'],
             'output_url' => $base['url'],
             'de_count' => count($deRows),
@@ -53,14 +59,16 @@ class EbayFrCategoryComparisonTool
             'category_summary' => $categorySummary,
             'manual_mapping_summary' => $manualMappingSummary,
             'taxonomy_api_errors' => $taxonomyApiErrors,
-            'reports' => array_map(fn(string $path): array => ['path' => $path, 'url' => $base['url'] . '/' . basename($path)], $paths),
-            'raw_reports' => [
+            'reports' => $this->report_metadata($paths, $base['url']),
+            'raw_reports' => $this->report_metadata([
                 'de_131090' => $reportsDir . '/ebay-de-category-subtree-131090.json',
                 'fr_131090' => $reportsDir . '/ebay-fr-category-subtree-131090.json',
                 'de_6030' => $reportsDir . '/ebay-de-category-subtree-6030.json',
                 'fr_6030' => $reportsDir . '/ebay-fr-category-subtree-6030.json',
-            ],
+            ], $base['url']),
         ];
+        $this->write_last_run($summary);
+        return $summary;
     }
 
     private function load_marketplace_subtree(string $marketplace, string $categoryId, string $reportsDir, bool $forceRefresh, bool $optional = false): array
@@ -350,10 +358,37 @@ class EbayFrCategoryComparisonTool
     private function report_dir(): array
     {
         $upload = wp_upload_dir();
-        $dir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration-fr';
-        $url = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration-fr';
+        $dir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration-fr/category-comparison';
+        $url = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration-fr/category-comparison';
         if (!is_dir($dir)) wp_mkdir_p($dir);
         return ['dir' => $dir, 'url' => $url];
+    }
+
+
+    private function report_metadata(array $paths, string $baseUrl): array
+    {
+        $reports = [];
+        foreach ($paths as $key => $path) {
+            $path = (string) $path;
+            $exists = is_file($path);
+            $reports[$key] = [
+                'label' => basename($path),
+                'path' => $path,
+                'url' => rtrim($baseUrl, '/') . '/' . rawurlencode(basename($path)),
+                'exists' => $exists,
+                'size_bytes' => $exists ? (int) filesize($path) : 0,
+            ];
+        }
+        return $reports;
+    }
+
+    private function write_last_run(array $summary): void
+    {
+        $base = $this->report_dir();
+        file_put_contents(
+            $base['dir'] . '/category-comparison-last-run.json',
+            wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
     }
 
     private function write_csv(string $path, array $headers, array $rows): void

@@ -1266,6 +1266,56 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_fr_generate_ebay_fr_category_suggestions'); ?><input type="hidden" name="action" value="wei_fr_generate_ebay_fr_category_suggestions" /><input type="hidden" name="restart" value="1" /><label>Debug batch <input type="number" min="1" max="500" name="limit" value="50" /></label><label>Mode <select name="mode"><option value="leaf_with_products">leaf categories with products</option><option value="with_products">all categories with products</option><option value="all_categories">all categories</option></select></label><label><input type="checkbox" name="force_refresh" value="1" /> force refresh cache</label><button class="button">Debug batch 50</button></form>
                 <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_fr_generate_ebay_fr_category_suggestions'); ?><input type="hidden" name="action" value="wei_fr_generate_ebay_fr_category_suggestions" /><input type="number" min="1" max="500" name="limit" value="50" /><button class="button">Debug continue batch</button></form>
             </div>
+            <h3>DE → FR category comparison</h3>
+            <p class="description">Browser tool for generating eBay.de ↔ eBay.fr automotive category comparison CSV/JSON reports only. It does not publish listings and does not import or write DE/FR category mappings.</p>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" enctype="multipart/form-data">
+                <?php wp_nonce_field('wei_fr_generate_de_fr_category_comparison'); ?>
+                <input type="hidden" name="action" value="wei_fr_generate_de_fr_category_comparison" />
+                <p><label><strong>Upload existing DE mapping CSV</strong><br /><input type="file" name="de_mapping_csv" accept=".csv,text/csv" required /></label> <span class="description">Accepted source: <code>finalny(2).csv</code>. Stored as <code>uploads/wei-ebay-integration-fr/category-comparison/input/finalny-de-mapping.csv</code>.</span></p>
+                <p><label><input type="checkbox" name="force_refresh_taxonomy_cache" value="1" /> Force refresh eBay taxonomy cache</label></p>
+                <p><button class="button button-primary">Generate DE → FR category comparison reports</button></p>
+            </form>
+            <?php
+            $categoryComparisonLastRun = is_array($category_comparison_last_run ?? null) ? $category_comparison_last_run : [];
+            $categoryComparisonCounts = is_array($categoryComparisonLastRun['summary_counts'] ?? null) ? $categoryComparisonLastRun['summary_counts'] : [];
+            $categoryComparisonReports = is_array($categoryComparisonLastRun['reports'] ?? null) ? $categoryComparisonLastRun['reports'] : [];
+            $categoryComparisonRawReports = is_array($categoryComparisonLastRun['raw_reports'] ?? null) ? $categoryComparisonLastRun['raw_reports'] : [];
+            ?>
+            <h4>Last generated reports</h4>
+            <?php if ($categoryComparisonLastRun === []): ?>
+                <p>No DE → FR category comparison report has been generated yet.</p>
+            <?php else: ?>
+                <div class="wei-scroll-table"><table class="widefat striped"><tbody>
+                    <tr><th>started_at</th><td><?php echo esc_html((string) ($categoryComparisonLastRun['started_at'] ?? '')); ?></td></tr>
+                    <tr><th>finished_at</th><td><?php echo esc_html((string) ($categoryComparisonLastRun['finished_at'] ?? '')); ?></td></tr>
+                    <tr><th>result</th><td><?php echo esc_html((string) ($categoryComparisonLastRun['result'] ?? '')); ?></td></tr>
+                    <tr><th>errors</th><td><pre><?php echo esc_html(wp_json_encode((array) ($categoryComparisonLastRun['errors'] ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></td></tr>
+                    <tr><th>DE categories found</th><td><?php echo esc_html((string) ($categoryComparisonCounts['de_categories_found'] ?? 0)); ?></td></tr>
+                    <tr><th>FR categories found</th><td><?php echo esc_html((string) ($categoryComparisonCounts['fr_categories_found'] ?? 0)); ?></td></tr>
+                    <tr><th>same category IDs</th><td><?php echo esc_html((string) ($categoryComparisonCounts['same_category_ids'] ?? 0)); ?></td></tr>
+                    <tr><th>DE-only category IDs</th><td><?php echo esc_html((string) ($categoryComparisonCounts['de_only_category_ids'] ?? 0)); ?></td></tr>
+                    <tr><th>FR-only category IDs</th><td><?php echo esc_html((string) ($categoryComparisonCounts['fr_only_category_ids'] ?? 0)); ?></td></tr>
+                    <tr><th>manual mapping rows processed</th><td><?php echo esc_html((string) ($categoryComparisonCounts['finalny_rows_processed'] ?? 0)); ?></td></tr>
+                    <tr><th>OK_SAME_ID_ON_FR count</th><td><?php echo esc_html((string) ($categoryComparisonCounts['ok_same_id_on_fr_count'] ?? 0)); ?></td></tr>
+                    <tr><th>SAME_ID_ON_FR_BUT_NON_LEAF count</th><td><?php echo esc_html((string) ($categoryComparisonCounts['same_id_on_fr_but_non_leaf_count'] ?? 0)); ?></td></tr>
+                    <tr><th>DE_ID_NOT_FOUND_ON_FR count</th><td><?php echo esc_html((string) ($categoryComparisonCounts['de_id_not_found_on_fr_count'] ?? 0)); ?></td></tr>
+                    <tr><th>NEEDS_REVIEW count</th><td><?php echo esc_html((string) ($categoryComparisonCounts['needs_review_count'] ?? 0)); ?></td></tr>
+                    <tr><th>POSSIBLE_FR_EQUIVALENT count</th><td><?php echo esc_html((string) ($categoryComparisonCounts['possible_fr_equivalent_count'] ?? 0)); ?></td></tr>
+                </tbody></table></div>
+                <h4>Download links after success</h4>
+                <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Report</th><th>Path</th><th>Public URL</th><th>Exists</th><th>Size</th></tr></thead><tbody>
+                <?php foreach ($categoryComparisonReports as $report): if (!is_array($report)) { continue; } ?>
+                    <tr><td><?php echo !empty($report['url']) ? '<a href="' . esc_url((string) $report['url']) . '">' . esc_html((string) ($report['label'] ?? basename((string) ($report['path'] ?? '')))) . '</a>' : esc_html((string) ($report['label'] ?? '')); ?></td><td><code><?php echo esc_html((string) ($report['path'] ?? '')); ?></code></td><td><?php echo !empty($report['url']) ? '<a href="' . esc_url((string) $report['url']) . '">' . esc_html((string) $report['url']) . '</a>' : ''; ?></td><td><?php echo !empty($report['exists']) ? 'yes' : 'no'; ?></td><td><?php echo esc_html((string) ($report['size_bytes'] ?? 0)); ?></td></tr>
+                <?php endforeach; ?>
+                </tbody></table></div>
+                <h4>Raw JSON reports if generated</h4>
+                <div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>Report</th><th>Path</th><th>Public URL</th><th>Exists</th><th>Size</th></tr></thead><tbody>
+                <?php foreach ($categoryComparisonRawReports as $report): if (!is_array($report)) { continue; } ?>
+                    <tr><td><?php echo !empty($report['url']) ? '<a href="' . esc_url((string) $report['url']) . '">' . esc_html((string) ($report['label'] ?? basename((string) ($report['path'] ?? '')))) . '</a>' : esc_html((string) ($report['label'] ?? '')); ?></td><td><code><?php echo esc_html((string) ($report['path'] ?? '')); ?></code></td><td><?php echo !empty($report['url']) ? '<a href="' . esc_url((string) $report['url']) . '">' . esc_html((string) $report['url']) . '</a>' : ''; ?></td><td><?php echo !empty($report['exists']) ? 'yes' : 'no'; ?></td><td><?php echo esc_html((string) ($report['size_bytes'] ?? 0)); ?></td></tr>
+                <?php endforeach; ?>
+                </tbody></table></div>
+                <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['category_comparison_last_run' => $categoryComparisonLastRun], 6000)); ?></pre>
+            <?php endif; ?>
             <p class="description">Główna akcja synchronicznie przechodzi przez wszystkie kategorie w wybranym trybie, zapisuje progress po każdej kategorii i tworzy finalne CSV bez automatycznego importu.</p>
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview(['progress' => $ebayCategorySuggestionsProgress, 'last_summary' => $ebayCategorySuggestionsSummary], 6000)); ?></pre>
             <p><?php foreach ($readinessFilterLabels as $filter => $label): ?><a href="<?php echo esc_url(add_query_arg(['page' => 'woo-ebay-fr', 'readiness_filter' => $filter], $adminPageUrl)); ?>"><?php echo $readinessFilter === $filter ? '<strong>' . esc_html($label) . '</strong>' : esc_html($label); ?></a><?php echo $filter === array_key_last($readinessFilterLabels) ? '' : ' / '; ?><?php endforeach; ?></p>
