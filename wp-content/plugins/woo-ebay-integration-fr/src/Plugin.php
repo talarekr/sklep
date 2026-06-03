@@ -42,7 +42,7 @@ class Plugin
         $scheduler = new AutoSyncScheduler($adapter, $orders, $logger);
         $stockSync = new StockSyncService($client, $repo, $logger);
         $categoryComparisonTool = new EbayFrCategoryComparisonTool($client, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler, $stockSync);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler, $stockSync, $categoryComparisonTool);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();
