@@ -14,6 +14,7 @@ use WEI\Services\EbayPriceResolver;
 use WEI\Services\Logger;
 use WEI\Services\OrderImporter;
 use WEI\Services\SyncService;
+use WEI\Services\StockSyncService;
 use WEI\Services\AdminPage;
 use WEI\Services\AutoCategoryMappingService;
 use WEI\Services\AutoSyncScheduler;
@@ -38,11 +39,13 @@ class Plugin
         $sync = new SyncService($adapter, $repo, $logger);
         $orders = new OrderImporter($adapter, $repo, $logger);
         $scheduler = new AutoSyncScheduler($adapter, $orders, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler);
+        $stockSync = new StockSyncService($client, $repo, $logger);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler, $stockSync);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();
         $scheduler->hooks();
+        $stockSync->hooks();
 
         add_action('admin_init', [$auth, 'handle_oauth_callback'], 0);
         add_action('current_screen', [$auth, 'handle_current_screen_oauth_callback'], 0);

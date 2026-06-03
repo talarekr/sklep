@@ -413,6 +413,11 @@ $displayValue = static function ($value, string $fallback = '—') use ($toScala
 $adminPostUrl = $toScalarString(admin_url('admin-post.php'));
 $adminPageUrl = $toScalarString(admin_url('admin.php'));
 $connectUrl = $toScalarString($connect_url ?? '');
+$stockSyncStatus = is_array($stock_sync_status ?? null) ? $stock_sync_status : [];
+$stockSyncLastRun = is_array($stockSyncStatus['last_run'] ?? null) ? $stockSyncStatus['last_run'] : [];
+$stockSyncReports = is_array($stockSyncStatus['reports'] ?? null) ? $stockSyncStatus['reports'] : [];
+$stockSyncDiagnostics = is_array($stock_sync_diagnostics ?? null) ? $stock_sync_diagnostics : [];
+$stockSyncNextRun = !empty($stockSyncStatus['next_scheduled_run']) ? gmdate('Y-m-d H:i:s', (int) $stockSyncStatus['next_scheduled_run']) : '-';
 
 $oauthDiagnostics = is_array($oauth_diagnostics ?? null) ? $oauth_diagnostics : [];
 $oauthCallbackDebug = [
@@ -518,7 +523,7 @@ $movedModules = [
     'Manual export/publish/preflight forms' => 'Main actions, renamed as daily single-product workflow',
     'Readiness/category audit report tables' => 'Advanced diagnostics, with only operational counts surfaced in Dashboard / Category mapping',
 ];
-$sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie eBay', 'Ustawienia eBay', 'Advanced / Debug', 'Recent logs'];
+$sectionLayout = ['Stock synchronization', 'Publish', 'German Content', 'Kategorie eBay', 'Ustawienia eBay', 'Advanced / Debug', 'Recent logs'];
 ?>
 <div class="wrap wei-admin">
     <h1>eBay Integration</h1>
@@ -560,32 +565,65 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
     <?php if (!empty($_GET['saved'])): ?><div class="notice notice-success"><p>eBay settings saved.</p></div><?php endif; ?>
     <?php if (!empty($shippingMappingWarnings['conflicts'])): ?><div class="notice notice-warning"><p><strong>eBay shipping category mapping conflict:</strong> Woo category IDs appear in multiple groups. Runtime priority is Wysyłka 130 &gt; Wysyłka 50 &gt; Wysyłka 30.</p><pre><?php echo esc_html(wp_json_encode($shippingMappingWarnings['conflicts'], JSON_PRETTY_PRINT)); ?></pre></div><?php endif; ?>
 
-    <div class="wei-box">
-        <h2>Dashboard / Status</h2>
-        <p class="description">Krótki operacyjny stan integracji. Ten widok nie wykonuje pełnych skanów produktów ani nie uruchamia workerów.</p>
+    <div class="wei-box" data-wei-module="stock-synchronization">
+        <h2>1. Stock synchronization</h2>
+        <p class="wei-danger"><strong>Safety warning:</strong> This can end eBay listings or set Woo products out of stock. Dry run is enabled by default; no destructive writes occur until dry run is disabled or the explicit live-run button is used.</p>
         <div class="wei-grid">
-            <div class="wei-card"><span>eBay account/API status</span><strong><span class="wei-badge <?php echo esc_attr($accountSetupMissingCount > 0 ? 'warn' : 'ok'); ?>"><?php echo esc_html($accountSetupMissingCount > 0 ? (string) $accountSetupMissingCount . ' missing' : 'configured'); ?></span></strong></div>
-            <div class="wei-card"><span>Marketplace</span><strong><?php echo esc_html((string) $setting('marketplace_id', 'EBAY_DE')); ?></strong></div>
-            <div class="wei-card"><span>Last successful sync</span><strong><?php echo esc_html((string) ($autoSync['checkpoint']['last_success_at'] ?? '-')); ?></strong></div>
-            <div class="wei-card"><span>Last error</span><strong><?php echo esc_html((string) (($autoSync['checkpoint']['last_error'] ?? $initialPublish['last_error'] ?? '') ?: '-')); ?></strong></div>
-            <div class="wei-card"><span>Ready to publish (latest readiness scan)</span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
-            <div class="wei-card"><span>Blocked by category (latest readiness scan)</span><strong><?php echo esc_html((string) $readinessBlockedByCategoryCount); ?></strong></div>
-            <div class="wei-card"><span>Excluded from eBay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
-            <div class="wei-card"><span>Missing aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
-            <div class="wei-card"><span>Published listings</span><strong><?php echo esc_html((string) $publishedListingsCount); ?></strong></div>
-            <div class="wei-card"><span>Queued / failed jobs</span><strong><?php echo esc_html((string) $queuedJobsCount); ?> / <?php echo esc_html((string) $failedJobsCount); ?></strong></div>
-            <div class="wei-card"><span>Cron</span><strong><span class="wei-badge <?php echo esc_attr($cronActive ? 'ok' : 'warn'); ?>"><?php echo esc_html($cronActive ? 'active' : 'inactive/paused'); ?></span></strong></div>
+            <div class="wei-card"><span>Sync</span><strong><?php echo !empty($stockSyncStatus['sync_enabled']) ? 'enabled' : 'disabled'; ?></strong></div>
+            <div class="wei-card"><span>Woo → eBay</span><strong><?php echo !empty($stockSyncStatus['woo_to_ebay_enabled']) ? 'enabled' : 'disabled'; ?></strong></div>
+            <div class="wei-card"><span>eBay → Woo</span><strong><?php echo !empty($stockSyncStatus['ebay_to_woo_enabled']) ? 'enabled' : 'disabled'; ?></strong></div>
+            <div class="wei-card"><span>Dry run</span><strong><?php echo !empty($stockSyncStatus['dry_run']) ? 'enabled' : 'disabled'; ?></strong></div>
+            <div class="wei-card"><span>Last run time</span><strong><?php echo esc_html((string) ($stockSyncStatus['last_run_time'] ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Last run result</span><strong><?php echo esc_html((string) ($stockSyncStatus['last_run_result'] ?? 'never')); ?></strong></div>
+            <div class="wei-card"><span>Woo → eBay actions last run</span><strong><?php echo esc_html((string) ($stockSyncStatus['woo_to_ebay_actions_last_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>eBay → Woo actions last run</span><strong><?php echo esc_html((string) ($stockSyncStatus['ebay_to_woo_actions_last_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Errors last run</span><strong><?php echo esc_html((string) ($stockSyncStatus['errors_last_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>Next scheduled run</span><strong><?php echo esc_html($stockSyncNextRun); ?></strong></div>
+            <div class="wei-card"><span>Lock status</span><strong><?php echo esc_html((string) ($stockSyncStatus['lock_status'] ?? 'unlocked')); ?></strong></div>
         </div>
-        <details><summary>New panel layout and moved modules</summary>
-            <h3>Nowy układ sekcji</h3>
-            <ol><?php foreach ($sectionLayout as $section): ?><li><?php echo esc_html($section); ?></li><?php endforeach; ?></ol>
-            <h3>Przeniesione moduły</h3>
-            <table class="widefat striped"><thead><tr><th>Stary moduł / techniczna nazwa</th><th>Nowa lokalizacja</th></tr></thead><tbody><?php foreach ($movedModules as $old => $newPlace): ?><tr><td><?php echo esc_html($old); ?></td><td><?php echo esc_html($newPlace); ?></td></tr><?php endforeach; ?></tbody></table>
-        </details>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_run_stock_sync_dry_run'); ?>
+                <input type="hidden" name="action" value="wei_run_stock_sync_dry_run" />
+                <button class="button">Run stock sync dry run now</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" onsubmit="return confirm('This can end eBay listings or set Woo products out of stock. Continue with a live stock sync run?');">
+                <?php wp_nonce_field('wei_run_stock_sync_now'); ?>
+                <input type="hidden" name="action" value="wei_run_stock_sync_now" />
+                <button class="button button-primary">Run stock sync now</button>
+            </form>
+        </div>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+            <?php wp_nonce_field('wei_save_stock_sync_settings'); ?>
+            <input type="hidden" name="action" value="wei_save_stock_sync_settings" />
+            <table class="form-table" role="presentation">
+                <tr><th>Enable Woo → eBay stock sync</th><td><label><input type="checkbox" name="stock_sync_woo_to_ebay_enabled" value="1" <?php checked(!empty($s['stock_sync_woo_to_ebay_enabled'])); ?> /> End or make unavailable active eBay listings when Woo stock is 0/sold.</label></td></tr>
+                <tr><th>Enable eBay → Woo stock sync</th><td><label><input type="checkbox" name="stock_sync_ebay_to_woo_enabled" value="1" <?php checked(!empty($s['stock_sync_ebay_to_woo_enabled'])); ?> /> Set Woo stock to 0/outofstock when confirmed eBay sale data is found.</label></td></tr>
+                <tr><th>Cron interval</th><td><select name="stock_sync_cron_interval"><option value="every_5_minutes" <?php selected((string) ($s['stock_sync_cron_interval'] ?? ''), 'every_5_minutes'); ?>>every 5 minutes</option><option value="every_15_minutes" <?php selected((string) ($s['stock_sync_cron_interval'] ?? 'every_15_minutes'), 'every_15_minutes'); ?>>every 15 minutes</option><option value="hourly" <?php selected((string) ($s['stock_sync_cron_interval'] ?? ''), 'hourly'); ?>>hourly</option></select></td></tr>
+                <tr><th>Dry run mode</th><td><label><input type="checkbox" name="stock_sync_dry_run" value="1" <?php checked(!empty($s['stock_sync_dry_run'])); ?> /> Detect and log intended actions, but do not update Woo or eBay.</label></td></tr>
+                <tr><th>Safety limit per run</th><td><input type="number" name="stock_sync_safety_limit" min="1" max="500" value="<?php echo esc_attr((string) ($s['stock_sync_safety_limit'] ?? 50)); ?>" /></td></tr>
+                <tr><th>Action when Woo stock is 0</th><td><select name="stock_sync_woo_zero_action"><option value="end_listing" <?php selected((string) ($s['stock_sync_woo_zero_action'] ?? 'end_listing'), 'end_listing'); ?>>end eBay listing</option><option value="set_quantity_zero" <?php selected((string) ($s['stock_sync_woo_zero_action'] ?? ''), 'set_quantity_zero'); ?>>set eBay offer quantity to 0 if supported</option></select></td></tr>
+                <tr><th>Action when eBay item sold</th><td>Set Woo stock quantity to 0, set Woo stock status <code>outofstock</code>, and mark local eBay listing/status as sold/ended.</td></tr>
+            </table>
+            <button class="button button-primary">Save stock synchronization settings</button>
+        </form>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <strong>Product-level diagnostic</strong>
+                <?php wp_nonce_field('wei_stock_sync_diagnostics'); ?>
+                <input type="hidden" name="action" value="wei_stock_sync_diagnostics" />
+                <label>product_id / SKU <input type="text" name="product_or_sku" placeholder="2081 or GPSW-2081" /></label>
+                <button class="button">Show stock sync diagnostic</button>
+            </form>
+        </div>
+        <?php if ($stockSyncDiagnostics !== []): ?>
+            <details open><summary>Last product-level stock sync diagnostic</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($stockSyncDiagnostics, 4000)); ?></pre></details>
+        <?php endif; ?>
+        <details><summary>Stock synchronization reports and last-run JSON</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview(['last_run' => $stockSyncLastRun, 'reports' => $stockSyncReports], 4000)); ?></pre></details>
     </div>
 
     <div class="wei-box" data-wei-module="publish">
-        <h2>1. Publish</h2>
+        <h2>2. Publish</h2>
         <p class="description">Publish ready products only. Run the full publish readiness audit first; it only reads local Woo/product meta data and writes CSV diagnostics. Publish/export buttons remain separate actions.</p>
         <p class="wei-danger"><strong>Warning:</strong> Publish run counters, readiness audit counters, and eBay listing state refresh counters are intentionally separate. These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.</p>
         <h3>Latest readiness scan</h3>
@@ -710,7 +748,7 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
 
 
     <div class="wei-box" data-wei-module="german-content">
-        <h2>2. German Content</h2>
+        <h2>3. German Content</h2>
         <p class="description">Generate German title, description, listing template data, Spezifikationen and Artikelmerkmale for eBay.de. These actions write only local German-content meta and do not call eBay APIs.</p>
         <p class="notice notice-warning" style="padding:8px 12px;"><strong>This updates local German content only. It does not update active eBay listings.</strong></p>
         <?php $germanMigration = is_array($german_content_audit_summary ?? null) ? $german_content_audit_summary : []; ?>
@@ -827,7 +865,7 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
     </div>
 
     <div class="wei-box" data-wei-module="ebay-categories">
-        <h2>3. Kategorie eBay</h2>
+        <h2>4. Kategorie eBay</h2>
         <p class="description">Step-by-step EBAY_DE category workflow. This module only reads/writes category mappings and local CSV diagnostics; worklist import never publishes, revises listings, or calls the eBay API.</p>
         <?php
         $categoryAuditSummary = is_array($category_readiness_audit_summary ?? null) ? $category_readiness_audit_summary : [];
@@ -954,7 +992,7 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
     </div>
 
     <div class="wei-box" data-wei-module="ebay-settings" id="wei-ebay-settings">
-        <h2>4. Ustawienia eBay</h2>
+        <h2>5. Ustawienia eBay</h2>
         <p class="description">Visible local eBay price and Woo <code>product_cat</code> → fulfillment policy settings. Saving and previewing this module does not create eBay policies, call the eBay API, publish listings, or modify Woo products.</p>
         <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
             <?php wp_nonce_field('wei_save_ebay_settings'); ?>
@@ -1060,6 +1098,30 @@ $sectionLayout = ['Dashboard / Status', 'Publish', 'German Content', 'Kategorie 
         <?php if ($lastAction === 'Shipping mapping diagnostics' && !empty($lastStatusPayload)): ?>
             <pre class="wei-scroll"><?php echo esc_html($technicalPreview($lastStatusPayload, 6000)); ?></pre>
         <?php endif; ?>
+    </div>
+
+    <div class="wei-box">
+        <h2>Dashboard / Status</h2>
+        <p class="description">Krótki operacyjny stan integracji. Ten widok nie wykonuje pełnych skanów produktów ani nie uruchamia workerów.</p>
+        <div class="wei-grid">
+            <div class="wei-card"><span>eBay account/API status</span><strong><span class="wei-badge <?php echo esc_attr($accountSetupMissingCount > 0 ? 'warn' : 'ok'); ?>"><?php echo esc_html($accountSetupMissingCount > 0 ? (string) $accountSetupMissingCount . ' missing' : 'configured'); ?></span></strong></div>
+            <div class="wei-card"><span>Marketplace</span><strong><?php echo esc_html((string) $setting('marketplace_id', 'EBAY_DE')); ?></strong></div>
+            <div class="wei-card"><span>Last successful sync</span><strong><?php echo esc_html((string) ($autoSync['checkpoint']['last_success_at'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>Last error</span><strong><?php echo esc_html((string) (($autoSync['checkpoint']['last_error'] ?? $initialPublish['last_error'] ?? '') ?: '-')); ?></strong></div>
+            <div class="wei-card"><span>Ready to publish (latest readiness scan)</span><strong><?php echo esc_html((string) $readinessReadyCount); ?></strong></div>
+            <div class="wei-card"><span>Blocked by category (latest readiness scan)</span><strong><?php echo esc_html((string) $readinessBlockedByCategoryCount); ?></strong></div>
+            <div class="wei-card"><span>Excluded from eBay</span><strong><?php echo esc_html((string) $excludedFromEbayCount); ?></strong></div>
+            <div class="wei-card"><span>Missing aspects</span><strong><?php echo esc_html((string) $missingAspectsCount); ?></strong></div>
+            <div class="wei-card"><span>Published listings</span><strong><?php echo esc_html((string) $publishedListingsCount); ?></strong></div>
+            <div class="wei-card"><span>Queued / failed jobs</span><strong><?php echo esc_html((string) $queuedJobsCount); ?> / <?php echo esc_html((string) $failedJobsCount); ?></strong></div>
+            <div class="wei-card"><span>Cron</span><strong><span class="wei-badge <?php echo esc_attr($cronActive ? 'ok' : 'warn'); ?>"><?php echo esc_html($cronActive ? 'active' : 'inactive/paused'); ?></span></strong></div>
+        </div>
+        <details><summary>New panel layout and moved modules</summary>
+            <h3>Nowy układ sekcji</h3>
+            <ol><?php foreach ($sectionLayout as $section): ?><li><?php echo esc_html($section); ?></li><?php endforeach; ?></ol>
+            <h3>Przeniesione moduły</h3>
+            <table class="widefat striped"><thead><tr><th>Stary moduł / techniczna nazwa</th><th>Nowa lokalizacja</th></tr></thead><tbody><?php foreach ($movedModules as $old => $newPlace): ?><tr><td><?php echo esc_html($old); ?></td><td><?php echo esc_html($newPlace); ?></td></tr><?php endforeach; ?></tbody></table>
+        </details>
     </div>
 
     <details class="wei-box">
