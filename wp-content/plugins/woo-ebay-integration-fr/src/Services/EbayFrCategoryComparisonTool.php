@@ -18,8 +18,8 @@ class EbayFrCategoryComparisonTool
 
         $de = $this->load_marketplace_subtree('EBAY_DE', '131090', $reportsDir, $forceRefresh);
         $fr = $this->load_marketplace_subtree('EBAY_FR', '131090', $reportsDir, $forceRefresh);
-        $this->load_marketplace_subtree('EBAY_DE', '6030', $reportsDir, $forceRefresh, true);
-        $this->load_marketplace_subtree('EBAY_FR', '6030', $reportsDir, $forceRefresh, true);
+        $de6030 = $this->load_marketplace_subtree('EBAY_DE', '6030', $reportsDir, $forceRefresh, true);
+        $fr6030 = $this->load_marketplace_subtree('EBAY_FR', '6030', $reportsDir, $forceRefresh, true);
 
         $deRows = $this->flatten_subtree('EBAY_DE', (string) ($de['tree_id'] ?? ''), '131090', (array) ($de['response']['rootCategoryNode'] ?? []));
         $frRows = $this->flatten_subtree('EBAY_FR', (string) ($fr['tree_id'] ?? ''), '131090', (array) ($fr['response']['rootCategoryNode'] ?? []));
@@ -37,6 +37,9 @@ class EbayFrCategoryComparisonTool
         $this->write_csv($paths['comparison_csv'], $this->comparison_headers(), $comparisonRows);
         $candidateRows = $this->mapping_candidate_rows($deMappingCsv, $frRows);
         $this->write_csv($paths['mapping_candidates_csv'], $this->candidate_headers(), $candidateRows);
+        $categorySummary = $this->category_summary($deRows, $frRows);
+        $manualMappingSummary = $this->manual_mapping_summary($candidateRows);
+        $taxonomyApiErrors = $this->taxonomy_api_errors([$de, $fr, $de6030, $fr6030]);
 
         return [
             'result' => 'success',
@@ -46,6 +49,10 @@ class EbayFrCategoryComparisonTool
             'fr_count' => count($frRows),
             'comparison_count' => count($comparisonRows),
             'mapping_candidate_count' => count($candidateRows),
+            'summary_counts' => array_merge($categorySummary, $manualMappingSummary),
+            'category_summary' => $categorySummary,
+            'manual_mapping_summary' => $manualMappingSummary,
+            'taxonomy_api_errors' => $taxonomyApiErrors,
             'reports' => array_map(fn(string $path): array => ['path' => $path, 'url' => $base['url'] . '/' . basename($path)], $paths),
             'raw_reports' => [
                 'de_131090' => $reportsDir . '/ebay-de-category-subtree-131090.json',
@@ -175,6 +182,7 @@ class EbayFrCategoryComparisonTool
             return [];
         }
         $fr = $this->index_by_id($frRows);
+        $frByName = $this->index_leaf_rows_by_normalized_name($frRows);
         $rows = [];
         $fh = fopen($deMappingCsv, 'rb');
         if (!$fh) return [];
@@ -183,9 +191,23 @@ class EbayFrCategoryComparisonTool
             $row = [];
             foreach ($headers as $i => $header) $row[(string) $header] = (string) ($values[$i] ?? '');
             $deId = trim((string) ($row['final_ebay_category_id'] ?? ''));
-            $candidate = $fr[$deId] ?? [];
-            $isLeaf = (string) ($candidate['is_leaf'] ?? '0') === '1';
-            $status = $candidate === [] ? 'DE_ID_NOT_FOUND_ON_FR' : ($isLeaf ? 'OK_SAME_ID_ON_FR' : 'SAME_ID_ON_FR_BUT_NON_LEAF');
+            $candidate = $deId !== '' ? ($fr[$deId] ?? []) : [];
+            $possibleEquivalent = [];
+            if ($candidate === [] && $deId !== '') {
+                $possibleEquivalent = $this->find_possible_fr_equivalent($row, $frByName);
+            }
+            $activeCandidate = $candidate !== [] ? $candidate : $possibleEquivalent;
+            $isLeaf = (string) ($activeCandidate['is_leaf'] ?? '0') === '1';
+            $status = 'NEEDS_REVIEW';
+            if ($deId !== '') {
+                if ($candidate !== []) {
+                    $status = $isLeaf ? 'OK_SAME_ID_ON_FR' : 'SAME_ID_ON_FR_BUT_NON_LEAF';
+                } elseif ($possibleEquivalent !== []) {
+                    $status = 'POSSIBLE_FR_EQUIVALENT';
+                } else {
+                    $status = 'DE_ID_NOT_FOUND_ON_FR';
+                }
+            }
             $rows[] = [
                 'woo_category_id' => (string) ($row['woo_category_id'] ?? ''),
                 'woo_category_name' => (string) ($row['woo_category_name'] ?? ''),
@@ -193,18 +215,126 @@ class EbayFrCategoryComparisonTool
                 'de_final_ebay_category_id' => $deId,
                 'de_category_name' => (string) ($row['current_ebay_category_name'] ?? ''),
                 'de_category_path' => (string) ($row['current_ebay_category_path'] ?? ''),
-                'fr_candidate_category_id' => $candidate !== [] ? $deId : '',
-                'fr_candidate_category_name' => (string) ($candidate['category_name'] ?? ''),
-                'fr_candidate_category_path' => (string) ($candidate['category_path'] ?? ''),
+                'fr_candidate_category_id' => $candidate !== [] ? $deId : (string) ($possibleEquivalent['category_id'] ?? ''),
+                'fr_candidate_category_name' => (string) ($activeCandidate['category_name'] ?? ''),
+                'fr_candidate_category_path' => (string) ($activeCandidate['category_path'] ?? ''),
                 'fr_candidate_is_leaf' => $isLeaf ? '1' : '0',
                 'mapping_status' => $status,
-                'review_note' => $status === 'OK_SAME_ID_ON_FR' ? 'Same id exists as EBAY_FR leaf; review before final import.' : 'No safe automatic final mapping; needs human review.',
+                'review_note' => $this->candidate_review_note($status),
                 'sample_product_id' => (string) ($row['sample_product_id'] ?? ''),
                 'sample_product_title' => (string) ($row['sample_product_title'] ?? ''),
             ];
         }
         fclose($fh);
         return $rows;
+    }
+
+
+    private function category_summary(array $deRows, array $frRows): array
+    {
+        $de = $this->index_by_id($deRows);
+        $fr = $this->index_by_id($frRows);
+        $same = array_intersect(array_keys($de), array_keys($fr));
+        $deOnly = array_diff(array_keys($de), array_keys($fr));
+        $frOnly = array_diff(array_keys($fr), array_keys($de));
+
+        return [
+            'de_categories_found' => count($deRows),
+            'fr_categories_found' => count($frRows),
+            'same_category_ids' => count($same),
+            'de_only_category_ids' => count($deOnly),
+            'fr_only_category_ids' => count($frOnly),
+        ];
+    }
+
+    private function manual_mapping_summary(array $candidateRows): array
+    {
+        $statuses = [
+            'OK_SAME_ID_ON_FR' => 0,
+            'SAME_ID_ON_FR_BUT_NON_LEAF' => 0,
+            'DE_ID_NOT_FOUND_ON_FR' => 0,
+            'NEEDS_REVIEW' => 0,
+            'POSSIBLE_FR_EQUIVALENT' => 0,
+        ];
+        foreach ($candidateRows as $row) {
+            $status = (string) ($row['mapping_status'] ?? 'NEEDS_REVIEW');
+            if (!array_key_exists($status, $statuses)) {
+                $status = 'NEEDS_REVIEW';
+            }
+            $statuses[$status]++;
+        }
+
+        return [
+            'finalny_rows_processed' => count($candidateRows),
+            'ok_same_id_on_fr_count' => $statuses['OK_SAME_ID_ON_FR'],
+            'same_id_on_fr_but_non_leaf_count' => $statuses['SAME_ID_ON_FR_BUT_NON_LEAF'],
+            'de_id_not_found_on_fr_count' => $statuses['DE_ID_NOT_FOUND_ON_FR'],
+            'needs_review_count' => $statuses['NEEDS_REVIEW'],
+            'possible_fr_equivalent_count' => $statuses['POSSIBLE_FR_EQUIVALENT'],
+            'mapping_status_counts' => $statuses,
+        ];
+    }
+
+    private function taxonomy_api_errors(array $payloads): array
+    {
+        $errors = [];
+        foreach ($payloads as $payload) {
+            if (!is_array($payload) || empty($payload['error'])) {
+                continue;
+            }
+            $errors[] = [
+                'marketplace' => (string) ($payload['marketplace'] ?? ''),
+                'category_id' => (string) ($payload['category_id'] ?? ''),
+                'message' => (string) $payload['error'],
+            ];
+        }
+        return $errors;
+    }
+
+    private function index_leaf_rows_by_normalized_name(array $rows): array
+    {
+        $out = [];
+        foreach ($rows as $row) {
+            if ((string) ($row['is_leaf'] ?? '0') !== '1') {
+                continue;
+            }
+            foreach ([$row['category_name'] ?? '', basename(str_replace(' > ', '/', (string) ($row['category_path'] ?? '')))] as $name) {
+                $normalized = $this->normalize_category_text((string) $name);
+                if ($normalized !== '' && empty($out[$normalized])) {
+                    $out[$normalized] = $row;
+                }
+            }
+        }
+        return $out;
+    }
+
+    private function find_possible_fr_equivalent(array $row, array $frByName): array
+    {
+        foreach (['current_ebay_category_name', 'woo_category_name'] as $field) {
+            $normalized = $this->normalize_category_text((string) ($row[$field] ?? ''));
+            if ($normalized !== '' && !empty($frByName[$normalized])) {
+                return $frByName[$normalized];
+            }
+        }
+        return [];
+    }
+
+    private function normalize_category_text(string $value): string
+    {
+        $value = trim(mb_strtolower($value));
+        $value = preg_replace('/\s+/', ' ', $value) ?: '';
+        return trim($value);
+    }
+
+    private function candidate_review_note(string $status): string
+    {
+        return match ($status) {
+            'OK_SAME_ID_ON_FR' => 'Same id exists as EBAY_FR leaf; review before final import.',
+            'SAME_ID_ON_FR_BUT_NON_LEAF' => 'Same id exists on EBAY_FR but is not a leaf category; choose a leaf before import.',
+            'POSSIBLE_FR_EQUIVALENT' => 'DE id was not found on EBAY_FR, but a same-name FR leaf was found; verify manually.',
+            'DE_ID_NOT_FOUND_ON_FR' => 'DE id was not found on EBAY_FR; no safe automatic final mapping.',
+            default => 'No safe automatic final mapping; needs human review.',
+        };
     }
 
     private function index_by_id(array $rows): array
