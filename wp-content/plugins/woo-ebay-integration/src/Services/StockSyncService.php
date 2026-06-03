@@ -28,8 +28,8 @@ class StockSyncService
         'new_woo_stock',
         'old_woo_status',
         'new_woo_status',
-        'eBay_state_before',
-        'eBay_state_after',
+        'ebay_state_before',
+        'ebay_state_after',
         'action',
         'dry_run',
         'result',
@@ -342,8 +342,8 @@ class StockSyncService
             $row = array_merge($this->base_action_row('woo_to_ebay', $map, $productId, $stock, $stockStatus, $dryRun, $eventId, $reason), [
                 'new_woo_stock' => $stock,
                 'new_woo_status' => $stockStatus,
-                'eBay_state_before' => 'active',
-                'eBay_state_after' => $action === 'set_quantity_zero' ? 'quantity_0' : 'ended_or_unavailable',
+                'ebay_state_before' => 'active',
+                'ebay_state_after' => $action === 'set_quantity_zero' ? 'quantity_0' : 'ended_or_unavailable',
                 'action' => $action === 'set_quantity_zero' ? 'set_ebay_offer_quantity_zero' : 'end_ebay_listing_or_safe_equivalent',
             ]);
             if ($dryRun) {
@@ -440,8 +440,8 @@ class StockSyncService
             $row = array_merge($this->base_action_row('ebay_to_woo', $map, $productId, $oldStock, $oldStatus, $dryRun, $eventId, 'ebay_order_sold'), [
                 'new_woo_stock' => 0,
                 'new_woo_status' => 'outofstock',
-                'eBay_state_before' => 'sold',
-                'eBay_state_after' => 'sold',
+                'ebay_state_before' => 'sold',
+                'ebay_state_after' => 'sold',
                 'action' => 'set_woo_stock_zero_outofstock_mark_sold_enqueue_marketplace_cleanup',
             ]);
             if ($dryRun) {
@@ -715,8 +715,8 @@ class StockSyncService
             'new_woo_stock' => '',
             'old_woo_status' => $oldStatus,
             'new_woo_status' => '',
-            'eBay_state_before' => '',
-            'eBay_state_after' => '',
+            'ebay_state_before' => '',
+            'ebay_state_after' => '',
             'action' => '',
             'dry_run' => $dryRun ? 'yes' : 'no',
             'result' => '',
@@ -768,16 +768,43 @@ class StockSyncService
         if ($path === '') {
             return;
         }
-        $exists = file_exists($path) && filesize($path) > 0;
-        $fh = fopen($path, 'ab');
+        $row = $this->normalize_csv_row($row);
+        $mode = $this->csv_has_current_header($path) ? 'ab' : 'wb';
+        $fh = fopen($path, $mode);
         if (!$fh) {
             return;
         }
-        if (!$exists) {
+        if ($mode === 'wb') {
             fputcsv($fh, self::ACTION_HEADERS);
         }
         fputcsv($fh, array_map(static fn(string $key): string => (string) ($row[$key] ?? ''), self::ACTION_HEADERS));
         fclose($fh);
+    }
+
+    private function normalize_csv_row(array $row): array
+    {
+        foreach (['before', 'after'] as $state) {
+            $currentKey = 'ebay_state_' . $state;
+            $legacyKey = 'eBay_state_' . $state;
+            if (!array_key_exists($currentKey, $row) && array_key_exists($legacyKey, $row)) {
+                $row[$currentKey] = $row[$legacyKey];
+            }
+        }
+        return $row;
+    }
+
+    private function csv_has_current_header(string $path): bool
+    {
+        if (!file_exists($path) || filesize($path) <= 0) {
+            return false;
+        }
+        $fh = fopen($path, 'rb');
+        if (!$fh) {
+            return false;
+        }
+        $header = fgetcsv($fh);
+        fclose($fh);
+        return $header === self::ACTION_HEADERS;
     }
 
     private function report_paths(): array

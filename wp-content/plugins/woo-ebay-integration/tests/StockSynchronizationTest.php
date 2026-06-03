@@ -32,7 +32,7 @@ foreach ([
     'stock-sync-errors.csv',
     'direction',
     'old_woo_stock',
-    'eBay_state_after',
+    'ebay_state_after',
     'dry_run',
     'set_woo_stock_zero_outofstock_mark_sold',
     "'_wei_ebay_sold_at'",
@@ -75,6 +75,35 @@ foreach ([
 foreach (['publish_offer(', 'create_offer(', 'create_or_replace_inventory_item('] as $forbidden) {
     $assertNotContains($service, $forbidden, 'Stock sync service never publishes/re-lists');
 }
+
+$expectedStockSyncCsvHeaders = [
+    'event_id',
+    'event_reason',
+    'direction',
+    'product_id',
+    'sku',
+    'listing_id',
+    'offer_id',
+    'old_woo_stock',
+    'new_woo_stock',
+    'old_woo_status',
+    'new_woo_status',
+    'ebay_state_before',
+    'ebay_state_after',
+    'action',
+    'dry_run',
+    'result',
+    'error_message',
+    'timestamp',
+];
+$expectedStockSyncCsvHeaderSource = implode('', array_map(static fn(string $header): string => "        '" . $header . "',
+", $expectedStockSyncCsvHeaders));
+$assertContains($service, $expectedStockSyncCsvHeaderSource, 'Stock sync CSV current header');
+$assertContains($service, "\$mode = \$this->csv_has_current_header(\$path) ? 'ab' : 'wb';", 'Stock sync CSV header mismatch handling');
+$assertContains($service, '$header === self::ACTION_HEADERS', 'Stock sync CSV header comparison');
+$assertContains($service, "\$legacyKey = 'eBay_state_' . \$state;", 'Stock sync CSV legacy state key normalization');
+$assertNotContains($service, "'eBay_state_before' =>", 'Stock sync CSV row schema');
+$assertNotContains($service, "'eBay_state_after' =>", 'Stock sync CSV row schema');
 
 foreach ([
     'add_filter(\'cron_schedules\'',
