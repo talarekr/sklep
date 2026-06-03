@@ -18,11 +18,12 @@ class EbayAuth
     {
     }
 
-    public function get_authorize_url(): string
+    public function get_authorize_url(bool $startNewAttempt = false): string
     {
         $s = $this->settings();
         $state = wp_generate_password(20, false, false);
-        set_transient(self::STATE_TRANSIENT_PREFIX . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
+        $attemptId = $this->new_oauth_attempt_id();
+        set_transient(self::STATE_TRANSIENT_PREFIX . $state, ['user_id' => get_current_user_id(), 'attempt_id' => $attemptId], 10 * MINUTE_IN_SECONDS);
 
         $oauthRedirectParam = $this->oauth_redirect_param($s);
 
@@ -34,11 +35,9 @@ class EbayAuth
             'state' => $state,
         ];
 
-        $this->store_oauth_diagnostics([
-            'oauth_status' => ((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected',
-            'oauth_redirect_param_used' => $oauthRedirectParam,
-            'token_exchange_attempted' => false,
-        ], false);
+        if ($startNewAttempt) {
+            $this->start_oauth_attempt_diagnostics($attemptId, $oauthRedirectParam);
+        }
 
         return self::AUTH_URL . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
@@ -88,8 +87,9 @@ class EbayAuth
 
     public function handle_admin_post_oauth_callback(): void
     {
-        $this->store_intercept_diagnostics('admin_post_' . self::ADMIN_POST_CALLBACK_ACTION, false);
-        $this->process_oauth_callback(false, 'admin_post_' . self::ADMIN_POST_CALLBACK_ACTION);
+        $this->store_intercept_diagnostics('admin_post_' . self::ADMIN_POST_CALLBACK_ACTION, false, 'admin_post_deferred_to_admin_init');
+        wp_safe_redirect(add_query_arg($this->safe_callback_query_args(), $this->callback_url()));
+        exit;
     }
 
     public function maybe_intercept_oauth_callback(string $hook): void
@@ -130,6 +130,7 @@ class EbayAuth
 
     private function process_oauth_callback(bool $interceptedByAdminInit = false, string $callbackHookStage = 'process_oauth_callback'): void
     {
+        $callbackAttemptId = $this->callback_attempt_id_from_state();
         $capabilityDiagnostics = $this->callback_capability_diagnostics($callbackHookStage, 'manage_options');
         if (!$capabilityDiagnostics['is_user_logged_in'] || !$capabilityDiagnostics['current_user_can_manage_options']) {
             $this->store_oauth_diagnostics($capabilityDiagnostics + [
@@ -142,6 +143,7 @@ class EbayAuth
                 'token_exchange_attempted' => false,
                 'token_exchange_success' => false,
                 'token_exchange_error' => 'not_wordpress_administrator',
+                'oauth_last_attempt_id' => $callbackAttemptId,
             ]);
             wp_die(esc_html__('Please log in as WordPress administrator and retry eBay Connect.', 'woo-ebay-integration-fr'), esc_html__('eBay OAuth callback', 'woo-ebay-integration-fr'), ['response' => 403]);
         }
@@ -149,6 +151,7 @@ class EbayAuth
         $state = $this->request_value('state');
         $statePayload = $state !== '' ? get_transient(self::STATE_TRANSIENT_PREFIX . $state) : false;
         $stateValid = is_array($statePayload);
+        $callbackAttemptId = $stateValid ? (string) ($statePayload['attempt_id'] ?? $callbackAttemptId) : $callbackAttemptId;
         $error = $this->request_value('error');
         $errorDescription = $this->request_value('error_description');
         $expiresIn = $this->request_value('expires_in');
@@ -171,6 +174,7 @@ class EbayAuth
             'token_exchange_attempted' => false,
             'token_exchange_success' => false,
             'token_exchange_error' => '',
+            'oauth_last_attempt_id' => $callbackAttemptId,
             'refresh_token_saved' => false,
             'oauth_error' => $error,
             'error_description' => $errorDescription,
@@ -282,6 +286,7 @@ class EbayAuth
             'token_exchange_attempted' => $s['token_exchange_attempted'] ?? null,
             'token_exchange_success' => $s['token_exchange_success'] ?? null,
             'token_exchange_error' => (string) ($s['token_exchange_error'] ?? ''),
+            'oauth_last_attempt_id' => (string) ($s['oauth_last_attempt_id'] ?? ''),
             'refresh_token_saved' => $s['refresh_token_saved'] ?? null,
             'refresh_token_present' => $hasRefreshToken,
             'access_token_present' => (string) ($s['access_token'] ?? '') !== '',
@@ -421,14 +426,6 @@ class EbayAuth
         if ($hook === 'plugins_loaded') {
             $this->store_oauth_diagnostics([
                 'callback_detected_at_plugins_loaded' => true,
-                'callback_intercepted_by_admin_init' => false,
-                'intercept_hook' => $hook,
-                'request_uri' => $requestUri,
-                'page_param' => $this->request_value('page'),
-                'raw_get_keys' => array_keys($_GET),
-                'token_exchange_error' => '',
-                'oauth_error' => '',
-                'error_description' => '',
             ], false);
             return;
         }
@@ -446,6 +443,105 @@ class EbayAuth
         ], false);
     }
 
+    public function clear_oauth_diagnostics(): void
+    {
+        $s = $this->settings();
+        foreach ($this->oauth_diagnostic_keys() as $key) {
+            unset($s[$key]);
+        }
+        update_option(Plugin::OPTION_KEY, $s, false);
+    }
+
+    private function start_oauth_attempt_diagnostics(string $attemptId, string $oauthRedirectParam): void
+    {
+        $s = $this->settings();
+        foreach ($this->stale_oauth_attempt_keys() as $key) {
+            unset($s[$key]);
+        }
+        $s['fr_plugin_version'] = $this->fr_plugin_version();
+        $s['fr_plugin_commit'] = $this->fr_plugin_commit();
+        $s['oauth_callback_flow_version'] = $this->oauth_callback_flow_version();
+        $s['oauth_last_attempt_id'] = $attemptId;
+        $s['oauth_status'] = ((string) ($s['refresh_token'] ?? '') !== '') ? 'connected' : 'not_connected';
+        $s['oauth_redirect_param_used'] = $oauthRedirectParam;
+        $s['last_oauth_attempt_started_at'] = current_time('mysql');
+        update_option(Plugin::OPTION_KEY, $s, false);
+    }
+
+    private function new_oauth_attempt_id(): string
+    {
+        $random = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : bin2hex(random_bytes(16));
+        return gmdate('YmdHis') . '-' . $random;
+    }
+
+    private function callback_attempt_id_from_state(): string
+    {
+        $state = $this->request_value('state');
+        $statePayload = $state !== '' ? get_transient(self::STATE_TRANSIENT_PREFIX . $state) : false;
+        if (is_array($statePayload) && (string) ($statePayload['attempt_id'] ?? '') !== '') {
+            return (string) $statePayload['attempt_id'];
+        }
+
+        return (string) ($this->settings()['oauth_last_attempt_id'] ?? '');
+    }
+
+    private function safe_callback_query_args(): array
+    {
+        $args = ['page' => self::CALLBACK_PAGE_SLUG];
+        foreach (['code', 'state', 'expires_in', 'error', 'error_description'] as $key) {
+            $value = $this->request_value($key);
+            if ($value !== '') {
+                $args[$key] = $value;
+            }
+        }
+        return $args;
+    }
+
+    private function stale_oauth_attempt_keys(): array
+    {
+        return [
+            'token_exchange_error',
+            'code_received',
+            'state_received',
+            'state_valid',
+            'token_exchange_attempted',
+            'token_exchange_success',
+            'callback_hook_stage',
+            'current_user_id',
+            'is_user_logged_in',
+            'current_user_can_manage_options',
+            'callback_detected_at_plugins_loaded',
+            'callback_intercepted_by_admin_init',
+            'intercept_hook',
+            'request_uri',
+            'raw_get_keys',
+            'code_exists_in_get_before_capability_rejection',
+            'state_exists_in_get_before_capability_rejection',
+            'oauth_error',
+            'error_description',
+            'refresh_token_saved',
+        ];
+    }
+
+    private function oauth_diagnostic_keys(): array
+    {
+        return array_values(array_unique(array_merge($this->stale_oauth_attempt_keys(), [
+            'fr_plugin_version',
+            'fr_plugin_commit',
+            'oauth_callback_flow_version',
+            'oauth_status',
+            'required_capability',
+            'callback_page_registered',
+            'page_param',
+            'expires_in_received',
+            'redirect_uri_used',
+            'oauth_redirect_param_used',
+            'oauth_last_attempt_id',
+            'last_oauth_attempt_started_at',
+            'last_oauth_callback_at',
+        ])));
+    }
+
     private function fr_plugin_version(): string
     {
         return defined('WEI_FR_PLUGIN_VERSION') ? (string) WEI_FR_PLUGIN_VERSION : '0.1.0';
@@ -458,7 +554,7 @@ class EbayAuth
 
     private function oauth_callback_flow_version(): string
     {
-        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-fr-capability-diagnostics-v2';
+        return defined('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_FR_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-fr-admin-init-only-v3';
     }
 
     private function callback_capability_diagnostics(string $callbackHookStage, string $requiredCapability): array
@@ -582,7 +678,7 @@ class EbayAuth
     private function store_oauth_diagnostics(array $diagnostics, bool $touchCallbackTime = true): void
     {
         $s = $this->settings();
-        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
+        $keys = ['fr_plugin_version', 'fr_plugin_commit', 'oauth_callback_flow_version', 'oauth_status', 'callback_detected_at_plugins_loaded', 'callback_intercepted_by_admin_init', 'intercept_hook', 'request_uri', 'raw_get_keys', 'current_user_id', 'is_user_logged_in', 'current_user_can_manage_options', 'required_capability', 'callback_hook_stage', 'code_exists_in_get_before_capability_rejection', 'state_exists_in_get_before_capability_rejection', 'callback_page_registered', 'page_param', 'code_received', 'state_received', 'expires_in_received', 'state_valid', 'token_exchange_attempted', 'token_exchange_success', 'token_exchange_error', 'oauth_last_attempt_id', 'refresh_token_saved', 'oauth_error', 'error_description', 'redirect_uri_used', 'oauth_redirect_param_used'];
         foreach ($keys as $key) {
             if (array_key_exists($key, $diagnostics)) {
                 $s[$key] = $diagnostics[$key];
