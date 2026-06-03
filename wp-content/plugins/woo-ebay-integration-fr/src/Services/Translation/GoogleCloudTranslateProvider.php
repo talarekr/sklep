@@ -25,7 +25,7 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
     {
         $sourceTitle = (string) ($context['source_title'] ?? $product->get_name());
         $sourceDescription = (string) ($context['source_description'] ?? $product->get_description());
-        $translations = $this->translate_texts([$sourceTitle, $this->sanitize_title($sourceDescription)], 'pl', 'de', 'text');
+        $translations = $this->translate_texts([$sourceTitle, $this->sanitize_title($sourceDescription)], $this->source_language(), $this->target_language(), 'text');
 
         if (count($translations) < 2) {
             throw new \RuntimeException('Google Translation API response was missing translated title or description.');
@@ -38,14 +38,14 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
             throw new \RuntimeException('Google Translation API returned empty French title or description.');
         }
 
-        return ['title_de' => $title, 'description_de' => $description];
+        return ['title_fr' => $title, 'description_fr' => $description];
     }
 
     /**
      * @param array<int,string> $texts
      * @return array<int,string>
      */
-    public function translate_texts(array $texts, string $source = 'pl', string $target = 'de', string $format = 'text'): array
+    public function translate_texts(array $texts, string $source = 'pl', string $target = 'fr', string $format = 'text'): array
     {
         if (!$this->is_configured()) {
             throw new \RuntimeException('Google Translation provider is not configured.');
@@ -58,9 +58,9 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
 
         $payload = [
             'q' => $texts,
-            'source' => $source,
-            'target' => 'de',
-            'format' => 'text',
+            'source' => $this->sanitize_language_code($source !== '' ? $source : $this->source_language(), 'pl'),
+            'target' => 'fr',
+            'format' => in_array($format, ['text', 'html'], true) ? $format : 'text',
         ];
 
         $response = wp_remote_post(
@@ -75,7 +75,7 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
         );
 
         if (is_wp_error($response)) {
-            throw new \RuntimeException($response->get_error_message());
+            throw new \RuntimeException($this->redact_secret($response->get_error_message()));
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
@@ -83,11 +83,12 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
         $decoded = json_decode($body, true);
 
         if ($code < 200 || $code >= 300) {
-            $errorMessage = (string) ($decoded['error']['message'] ?? ('HTTP ' . $code));
+            $errorMessage = $this->redact_secret((string) ($decoded['error']['message'] ?? ('HTTP ' . $code)));
+            $safeBody = $this->redact_secret(mb_substr($body, 0, 500));
             $this->logger->warning('Google Cloud Translation request failed', [
                 'status' => $code,
                 'error_message' => $errorMessage,
-                'body' => mb_substr($body, 0, 500),
+                'body' => $safeBody,
             ]);
             throw new \RuntimeException('Google Translation API error: ' . $errorMessage);
         }
@@ -107,6 +108,35 @@ class GoogleCloudTranslateProvider implements TranslationProviderInterface
         }
 
         return $values;
+    }
+
+
+
+    private function redact_secret(string $message): string
+    {
+        $apiKey = trim((string) ($this->settings['translation_api_key'] ?? ''));
+        if ($apiKey !== '') {
+            $message = str_replace($apiKey, '[redacted]', $message);
+        }
+
+        return (string) preg_replace('/([?&]key=)[^&\s]+/i', '$1[redacted]', $message);
+    }
+
+    private function source_language(): string
+    {
+        return $this->sanitize_language_code((string) ($this->settings['translation_source_language'] ?? 'pl'), 'pl');
+    }
+
+    private function target_language(): string
+    {
+        // This is the FR plugin: never allow the German target language here.
+        return 'fr';
+    }
+
+    private function sanitize_language_code(string $language, string $fallback): string
+    {
+        $language = strtolower(trim($language));
+        return preg_match('/^[a-z]{2}(?:-[a-z]{2})?$/', $language) ? $language : $fallback;
     }
 
     private function sanitize_title(string $title): string

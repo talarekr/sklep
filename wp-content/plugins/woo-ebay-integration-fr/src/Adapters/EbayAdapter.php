@@ -1936,6 +1936,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
                     'stale_before' => $staleBefore,
                     'stale_after' => $staleBefore,
                     'translation_source' => $this->configured_translation_provider_key($settings),
+                    'google_provider_configured' => 'no',
+                    'google_credentials_source' => trim((string) ($settings['translation_api_key'] ?? '')) !== '' ? 'fr_admin_setting' : 'missing',
+                    'source_language' => (string) ($settings['translation_source_language'] ?? 'pl'),
+                    'target_language' => 'fr',
                     'google_api_called' => false,
                     'translated_title' => '',
                     'translated_description_preview' => '',
@@ -2037,6 +2041,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'stale_after' => !empty($cachedAfter['stale']),
             'translation_source' => (string) ($content['source'] ?? $cachedAfter['translation_source'] ?? ''),
             'google_api_called' => !empty($content['google_api_called']),
+            'google_provider_configured' => ($this->configured_translation_provider_key($settings) === 'google_cloud_translate' && trim((string) ($settings['translation_api_key'] ?? '')) !== '') ? 'yes' : 'no',
+            'google_credentials_source' => trim((string) ($settings['translation_api_key'] ?? '')) !== '' ? 'fr_admin_setting' : 'missing',
+            'source_language' => (string) ($settings['translation_source_language'] ?? 'pl'),
+            'target_language' => 'fr',
             'translated_title' => $title,
             'translated_description_preview' => mb_substr(wp_strip_all_tags($description), 0, 240),
             'translated_fields_count' => count((array) ($content['fields'] ?? $cachedAfter['fields'] ?? [])),
@@ -3274,7 +3282,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'cached_translation_hash' => (string) ($preview['cached_translation_hash'] ?? ''),
                 'stale' => !empty($preview['stale']),
                 'translation_source' => (array) ($preview['translation_source'] ?? []),
-                'target_language' => (string) ($preview['target_language'] ?? 'de'),
+                'target_language' => 'fr',
                 'translated_raw_html' => false,
                 'html_css_protected' => true,
                 'translated_text_nodes' => (array) ($preview['translated_text_nodes'] ?? []),
@@ -5627,6 +5635,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
     {
         $settings = get_option(Plugin::OPTION_KEY, []);
         $settings = is_array($settings) ? $settings : [];
+        $translationOptionKey = defined(Plugin::class . '::TRANSLATION_OPTION_KEY') ? (string) constant(Plugin::class . '::TRANSLATION_OPTION_KEY') : 'wei_fr_ebay_translation_provider_settings';
+        $translationSettings = get_option($translationOptionKey, []);
+        if (is_array($translationSettings)) {
+            $settings = array_merge($settings, $translationSettings);
+        }
         $settings['marketplace_id'] = 'EBAY_FR';
         $settings['wei_fr_cached_policies'] = $this->normalize_fr_cached_policies($settings['wei_fr_cached_policies'] ?? []);
         if (!isset($settings['inventory_location_key'])) {
@@ -5690,6 +5703,10 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if (!isset($settings['translation_api_key'])) {
             $settings['translation_api_key'] = '';
         }
+        if (!isset($settings['translation_source_language'])) {
+            $settings['translation_source_language'] = 'pl';
+        }
+        $settings['translation_target_language'] = 'fr';
         if (!isset($settings['auto_generate_french_content_preflight'])) {
             $settings['auto_generate_french_content_preflight'] = 1;
         }
