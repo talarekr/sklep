@@ -291,6 +291,8 @@ class EbayAuth
             'client_id_configured' => (string) ($s['client_id'] ?? '') !== '',
             'runame_configured' => $ebayRuname !== '',
             'oauth_status' => (string) ($s['oauth_status'] ?? ($hasRefreshToken ? 'connected' : 'not_connected')),
+            'de_plugin_commit' => $this->plugin_commit(),
+            'oauth_callback_flow_version' => $this->oauth_callback_flow_version(),
             'has_refresh_token' => $hasRefreshToken,
             'callback_intercepted_by_admin_init' => $s['callback_intercepted_by_admin_init'] ?? null,
             'intercept_hook' => (string) ($s['intercept_hook'] ?? ''),
@@ -336,6 +338,17 @@ class EbayAuth
             'scope' => self::APP_SCOPE,
             'scope_requested' => self::APP_SCOPE,
         ];
+    }
+
+
+    private function plugin_commit(): string
+    {
+        return defined('WEI_BUILD_COMMIT') ? (string) WEI_BUILD_COMMIT : 'unknown';
+    }
+
+    private function oauth_callback_flow_version(): string
+    {
+        return defined('WEI_OAUTH_CALLBACK_FLOW_VERSION') ? (string) WEI_OAUTH_CALLBACK_FLOW_VERSION : '2026-06-03-shared-oauth-state-router-v4';
     }
 
     private function exchange_code(string $code, ?string $redirectUri = null): void

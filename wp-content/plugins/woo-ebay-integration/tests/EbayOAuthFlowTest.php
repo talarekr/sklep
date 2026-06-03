@@ -55,6 +55,12 @@ namespace {
     if (!defined('MINUTE_IN_SECONDS')) {
         define('MINUTE_IN_SECONDS', 60);
     }
+    if (!defined('WEI_BUILD_COMMIT')) {
+        define('WEI_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router');
+    }
+    if (!defined('WEI_OAUTH_CALLBACK_FLOW_VERSION')) {
+        define('WEI_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-shared-oauth-state-router-v4');
+    }
 
     require_once __DIR__ . '/../src/Services/Logger.php';
     require_once __DIR__ . '/../src/Services/EbayAuth.php';
@@ -89,6 +95,8 @@ namespace {
     $assert(($diagnostics['ebay_runame'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics ebay_runame must be separated from callback URL.');
     $assert(($diagnostics['oauth_redirect_param_used'] ?? '') === 'GP_SWISS-GPSWISS-GPSwiss-jigmn', 'Diagnostics oauth_redirect_param_used must be the RuName.');
     $assert(($diagnostics['token_exchange_attempted'] ?? true) === false, 'Connect URL generation must not attempt token exchange or refresh-token API calls.');
+    $assert(($diagnostics['de_plugin_commit'] ?? '') === '65aedd3-shared-oauth-callback-router', 'DE diagnostics must expose the shared-router build marker, not the old diagnostics marker.');
+    $assert(($diagnostics['oauth_callback_flow_version'] ?? '') === '2026-06-03-shared-oauth-state-router-v4', 'DE diagnostics must expose the shared callback flow version.');
 
     $ref = new ReflectionClass(EbayAuth::class);
     $source = file_get_contents($ref->getFileName());
@@ -111,6 +119,8 @@ namespace {
     $assert(str_contains($pluginSource, "add_action('load-woocommerce_page_' . EbayAuth::CALLBACK_PAGE_SLUG, [\$auth, 'handle_woocommerce_load_oauth_callback'], 0)"), 'Plugin must register WooCommerce submenu load OAuth callback fallback.');
     $assert(str_contains($pluginSource, "add_action('admin_post_nopriv_' . EbayAuth::ADMIN_POST_CALLBACK_ACTION"), 'Plugin must register nopriv admin-post OAuth callback fallback.');
     $assert(str_contains($bootstrapSource, 'handle_admin_bootstrap_oauth_callback'), 'Main plugin file must register a bootstrap-level callback interceptor before WooCommerce-dependent boot.');
+    $assert(str_contains($bootstrapSource, "WEI_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router"), 'DE bootstrap must define the shared-router commit marker for production debug.log confirmation.');
+    $assert(str_contains($bootstrapSource, 'WEI_OAUTH_CALLBACK_FLOW_VERSION'), 'DE bootstrap must define a visible OAuth callback flow version marker.');
 
     $isCallbackRequest = $ref->getMethod('is_oauth_callback_request');
     $isCallbackRequest->setAccessible(true);
