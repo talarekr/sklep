@@ -10,6 +10,7 @@ class EbayAuth
     private const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
     public const CALLBACK_PAGE_SLUG = 'ebay-fr-auth-callback';
     public const ADMIN_POST_CALLBACK_ACTION = 'wei_fr_ebay_auth_callback';
+    private const STATE_TRANSIENT_PREFIX = 'wei_fr_oauth_state_';
     public const APP_SCOPE = 'https://api.ebay.com/oauth/api_scope';
     private const SCOPES = 'https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
 
@@ -21,7 +22,7 @@ class EbayAuth
     {
         $s = $this->settings();
         $state = wp_generate_password(20, false, false);
-        set_transient('wei_fr_oauth_state_' . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
+        set_transient(self::STATE_TRANSIENT_PREFIX . $state, ['user_id' => get_current_user_id()], 10 * MINUTE_IN_SECONDS);
 
         $oauthRedirectParam = $this->oauth_redirect_param($s);
 
@@ -133,7 +134,7 @@ class EbayAuth
         }
 
         $state = $this->request_value('state');
-        $statePayload = $state !== '' ? get_transient('wei_fr_oauth_state_' . $state) : false;
+        $statePayload = $state !== '' ? get_transient(self::STATE_TRANSIENT_PREFIX . $state) : false;
         $stateValid = is_array($statePayload);
         $error = $this->request_value('error');
         $errorDescription = $this->request_value('error_description');
@@ -168,7 +169,7 @@ class EbayAuth
             ]);
         }
 
-        delete_transient('wei_fr_oauth_state_' . $state);
+        delete_transient(self::STATE_TRANSIENT_PREFIX . $state);
 
         if ($error !== '') {
             $this->redirect_with_error($error, [
@@ -478,7 +479,19 @@ class EbayAuth
         }
 
         $legacyRedirectUri = trim((string) ($settings['redirect_uri'] ?? ''));
-        return $legacyRedirectUri !== '' ? $legacyRedirectUri : $this->callback_url();
+        if ($legacyRedirectUri !== '' && !$this->is_wordpress_callback_url($legacyRedirectUri)) {
+            return $legacyRedirectUri;
+        }
+
+        return $this->callback_url();
+    }
+
+
+    private function is_wordpress_callback_url(string $url): bool
+    {
+        return filter_var($url, FILTER_VALIDATE_URL)
+            && strpos($url, '/wp-admin/admin.php') !== false
+            && strpos($url, 'page=') !== false;
     }
 
     private function ebay_runame(array $settings): string
