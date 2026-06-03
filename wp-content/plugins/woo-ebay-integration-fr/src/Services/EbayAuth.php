@@ -126,6 +126,25 @@ class EbayAuth
         exit;
     }
 
+    /**
+     * Entry point used by the DE shared OAuth router for FR-prefixed callback states.
+     *
+     * The shared router must not validate FR state or exchange FR tokens itself; it
+     * delegates the live request here and this FR service performs the normal FR
+     * callback processing, redirecting and exiting on success or failure.
+     *
+     * @param array<string, mixed> $request
+     */
+    public function handle_shared_callback(array $request = []): void
+    {
+        if ($request !== []) {
+            $_GET = array_merge($_GET, $request);
+            $_REQUEST = array_merge($_REQUEST, $request);
+        }
+
+        $this->maybe_intercept_oauth_callback('admin_init');
+    }
+
     public function maybe_intercept_oauth_callback(string $hook): void
     {
         if (!$this->is_oauth_callback_request()) {

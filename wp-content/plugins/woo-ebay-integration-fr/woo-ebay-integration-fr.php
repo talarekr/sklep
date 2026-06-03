@@ -34,6 +34,21 @@ spl_autoload_register(function (string $class): void {
 
 register_activation_hook(WEI_FR_PLUGIN_FILE, ['WEI_FR\\Database\\Migrations', 'activate']);
 
+if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
+    /**
+     * Global FR OAuth handoff used by the DE shared callback router.
+     *
+     * @param array<string, mixed> $request
+     */
+    function wei_fr_handle_shared_oauth_callback(array $request = []): void
+    {
+        $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
+        $auth->handle_shared_callback($request);
+    }
+}
+
+add_action('wei_fr_handle_shared_oauth_callback', 'wei_fr_handle_shared_oauth_callback', 10, 1);
+
 add_action('plugins_loaded', static function (): void {
     $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
     $auth->handle_admin_bootstrap_oauth_callback();
