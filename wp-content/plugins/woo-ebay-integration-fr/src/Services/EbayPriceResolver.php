@@ -21,7 +21,7 @@ class EbayPriceResolver
     {
         $basePricePln = $this->product_price_pln($product);
         $markup = $this->resolve_markup($product, $product_id, $settings);
-        $rate = $suppressLog ? $this->get_cached_eur_rate() : $this->get_eur_rate($settings);
+        $rate = $this->get_eur_rate($settings);
 
         $result = [
             'base_price_pln' => $basePricePln,
@@ -35,6 +35,12 @@ class EbayPriceResolver
             'exchange_rate' => $rate['nbp_rate'],
             'nbp_effective_date' => $rate['nbp_effective_date'],
             'nbp_table_no' => $rate['nbp_table_no'],
+            'nbp_eur_rate_status' => $this->diagnostic_rate_status($rate, $settings),
+            'nbp_eur_rate_value' => $rate['nbp_rate'],
+            'nbp_eur_rate_date' => $rate['nbp_effective_date'],
+            'nbp_eur_rate_source' => (string) ($rate['currency_source'] ?? 'nbp_table_a'),
+            'nbp_eur_rate_cached_at' => $this->format_cached_at($rate),
+            'nbp_eur_rate_fetch_error' => (string) ($rate['fetch_error'] ?? $rate['error'] ?? ''),
             'ebay_price_eur' => null,
             'ready' => false,
             'error' => '',
@@ -83,6 +89,12 @@ class EbayPriceResolver
         return array_merge($rate, [
             'cache_age_seconds' => $fetchedAt > 0 ? max(0, time() - $fetchedAt) : null,
             'cache_status' => !empty($rate['from_transient']) ? 'fresh' : (!empty($rate['from_last_saved']) ? 'last_saved' : (!empty($rate['ready']) ? 'refreshed' : 'missing')),
+            'nbp_eur_rate_status' => $this->diagnostic_rate_status($rate, $settings),
+            'nbp_eur_rate_value' => $rate['nbp_rate'] ?? null,
+            'nbp_eur_rate_date' => (string) ($rate['nbp_effective_date'] ?? ''),
+            'nbp_eur_rate_source' => (string) ($rate['currency_source'] ?? 'nbp_table_a'),
+            'nbp_eur_rate_cached_at' => $this->format_cached_at($rate),
+            'nbp_eur_rate_fetch_error' => (string) ($rate['fetch_error'] ?? $rate['error'] ?? ''),
         ]);
     }
 
@@ -291,6 +303,31 @@ class EbayPriceResolver
         }
 
         return $ttl;
+    }
+
+
+    private function diagnostic_rate_status(array $rate, array $settings): string
+    {
+        if (empty($rate['ready']) || (float) ($rate['nbp_rate'] ?? 0) <= 0) {
+            return !empty($rate['error']) ? 'fetch_error' : 'missing';
+        }
+
+        if (!empty($rate['fetch_error'])) {
+            return 'stale';
+        }
+
+        $fetchedAt = (int) ($rate['fetched_at'] ?? 0);
+        if (!empty($rate['from_last_saved']) && $fetchedAt > 0 && time() - $fetchedAt > $this->cache_ttl_seconds($settings)) {
+            return 'stale';
+        }
+
+        return 'available';
+    }
+
+    private function format_cached_at(array $rate): string
+    {
+        $fetchedAt = (int) ($rate['fetched_at'] ?? 0);
+        return $fetchedAt > 0 ? gmdate('c', $fetchedAt) : '';
     }
 
     private function log_resolution(int $product_id, array $resolution): void
