@@ -778,6 +778,14 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
             <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>needs_reexport_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['needs_reexport_count'] ?? 0)); ?></strong></div>
         </div>
+        <h3>Preview publish payload for one ready product</h3>
+        <p class="description">Dry-run only: builds the EBAY_FR Sell Inventory payload preview with inventory.product.description and offer.listingDescription. No eBay API call is made and nothing is published.</p>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
+            <?php wp_nonce_field('wei_fr_description_template_publish_dry_run'); ?>
+            <input type="hidden" name="action" value="wei_fr_description_template_publish_dry_run" />
+            <label>Product ID or SKU <input type="text" name="product_or_sku" placeholder="2083" required /></label>
+            <button class="button">Preview publish payload for one ready product</button>
+        </form>
         <div class="wei-actions" data-wei-primary-actions="publish">
             <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
                 <?php wp_nonce_field('wei_fr_full_publish_readiness_audit'); ?>
