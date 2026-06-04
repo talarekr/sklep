@@ -249,25 +249,34 @@ namespace {
         $failures[] = 'Expected FR publish payload dry-run to succeed. Got ' . json_encode($dryRun);
     }
     $sentDescription = (string) ($dryRun['payload_excerpt']['inventory_item']['product']['description'] ?? '');
-    if (empty($dryRun['product_description_matches_preview_html'])) {
-        $failures[] = 'Expected FR preview rendered HTML to be the same source used for inventory product.description export/publish payload.';
+    if (!empty($dryRun['product_description_matches_preview_html'])) {
+        $failures[] = 'Expected FR inventory product.description to remain the short translated description, not the full rendered preview HTML.';
     }
     foreach (['Expédition internationale rapide', 'Retour sous 30 jours', 'Emballage sécurisé', 'Pièce d’origine 100%', 'Description', 'Spécifications', 'Voir plus de pièces de ce véhicule', 'Livraison dans toute l’Europe', 'DHL', 'DPD', 'Achetez en toute confiance'] as $templateMarker) {
         if (empty($dryRun['template_markers_present'][$templateMarker])) {
             $failures[] = 'Expected FR publish payload to contain marker: ' . $templateMarker;
         }
     }
-    if (($dryRun['sent_description_is_html_template'] ?? '') !== 'yes' || ($dryRun['contains_template_markers'] ?? '') !== 'yes') {
-        $failures[] = 'Expected FR publish diagnostics to confirm the sent description is the full HTML template. Got ' . json_encode($dryRun);
+    if (($dryRun['sent_inventory_product_description_is_html_template'] ?? '') !== 'no' || ($dryRun['contains_template_markers'] ?? '') !== 'no') {
+        $failures[] = 'Expected FR inventory diagnostics to confirm inventory.product.description is the short non-template description. Got ' . json_encode($dryRun);
     }
-    if (($dryRun['description_source_used'] ?? '') !== 'rendered_fr_html_template') {
-        $failures[] = 'Expected FR inventory payload description source to be rendered_fr_html_template. Got ' . ($dryRun['description_source_used'] ?? '');
+    if (($dryRun['sent_offer_listing_description_is_html_template'] ?? '') !== 'yes' || ($dryRun['offer_listingDescription_contains_template_markers'] ?? '') !== 'yes') {
+        $failures[] = 'Expected FR offer diagnostics to confirm offer.listingDescription is the full HTML template. Got ' . json_encode($dryRun);
+    }
+    if (($dryRun['description_source_used'] ?? '') !== 'short_translated_french_content_for_inventory_item') {
+        $failures[] = 'Expected FR inventory payload description source to be short_translated_french_content_for_inventory_item. Got ' . ($dryRun['description_source_used'] ?? '');
     }
     if (($dryRun['template_setting_option_key'] ?? '') !== 'wei_fr_ebay_settings' || empty($dryRun['template_setting_enabled'])) {
         $failures[] = 'Expected FR dry-run diagnostics to expose the FR-specific enabled template setting. Got ' . json_encode($dryRun);
     }
-    if (trim(strip_tags($sentDescription)) === 'Source description' || $sentDescription === 'Source description') {
-        $failures[] = 'Expected FR publish payload not to be only the plain translated/source description.';
+    if (trim(strip_tags($sentDescription)) === '' || str_contains($sentDescription, '<') || str_contains($sentDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/')) {
+        $failures[] = 'Expected FR inventory.product.description to stay as a short safe/plain description. Got ' . $sentDescription;
+    }
+    if (mb_strlen($sentDescription) >= 4000 || str_contains($sentDescription, 'Expédition internationale rapide')) {
+        $failures[] = 'Expected FR inventory.product.description to be short, under 4000 chars, and not contain full template markers.';
+    }
+    if (empty($dryRun['inventory_product_description_template_too_long_warning'])) {
+        $failures[] = 'Expected FR dry-run to warn that the rendered template exceeds the Inventory API product.description limit.';
     }
     if (($dryRun['visual_preview']['source'] ?? '') !== 'offer.listingDescription') {
         $failures[] = 'Expected FR dry-run visual preview source to be offer.listingDescription. Got ' . json_encode($dryRun['visual_preview'] ?? null);
