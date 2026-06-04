@@ -3466,6 +3466,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'template_image_urls_missing' => $missingTemplateImageUrls,
                 'template_attached_to' => 'inventory.product.description and offer.listingDescription',
                 'where_template_is_attached' => 'inventory.product.description and offer.listingDescription',
+                'visual_preview' => [
+                    'source' => 'offer.listingDescription',
+                    'message' => 'This is the HTML that will be sent to eBay.fr as offer.listingDescription.',
+                    'local_rendering_warning' => 'This is local rendering; eBay may sanitize some HTML/CSS.',
+                    'offer_listingDescription_length' => $descriptionDiagnostics['offer_listing_description_length'],
+                    'contains_template_markers' => $descriptionDiagnostics['contains_template_markers'],
+                    'sent_offer_listing_description_is_html_template' => $descriptionDiagnostics['sent_offer_listing_description_is_html_template'],
+                    'html' => $listingDescription,
+                    'raw_offer_listingDescription' => $listingDescription,
+                    'raw_inventory_product_description' => $productDescription,
+                ],
                 'safety_flags' => [
                     'no_ebay_api' => true,
                     'no_listing_created' => true,

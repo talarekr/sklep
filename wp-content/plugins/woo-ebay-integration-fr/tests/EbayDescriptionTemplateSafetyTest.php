@@ -269,6 +269,18 @@ namespace {
     if (trim(strip_tags($sentDescription)) === 'Source description' || $sentDescription === 'Source description') {
         $failures[] = 'Expected FR publish payload not to be only the plain translated/source description.';
     }
+    if (($dryRun['visual_preview']['source'] ?? '') !== 'offer.listingDescription') {
+        $failures[] = 'Expected FR dry-run visual preview source to be offer.listingDescription. Got ' . json_encode($dryRun['visual_preview'] ?? null);
+    }
+    $visualPreviewHtml = (string) ($dryRun['visual_preview']['html'] ?? '');
+    if ($visualPreviewHtml === '' || $visualPreviewHtml !== (string) ($dryRun['visual_preview']['raw_offer_listingDescription'] ?? null)) {
+        $failures[] = 'Expected FR dry-run visual preview HTML to use the exact raw offer.listingDescription source.';
+    }
+    foreach (['Expédition internationale rapide', 'Spécifications', 'Livraison dans toute l’Europe', 'Achetez en toute confiance'] as $previewMarker) {
+        if (!str_contains($visualPreviewHtml, $previewMarker)) {
+            $failures[] = 'Expected FR visual preview to contain marker: ' . $previewMarker;
+        }
+    }
 
     $GLOBALS['wei_fr_test_options'][Plugin::OPTION_KEY] = ['ebay_seller_username' => 'settings-seller'];
     $GLOBALS['wei_fr_test_post_meta'][105] = ['_ovoko_car_id' => 'SETTINGS:321'];
