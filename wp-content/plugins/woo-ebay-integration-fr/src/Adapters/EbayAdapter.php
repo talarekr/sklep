@@ -302,7 +302,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $renderedFrTemplate = (string) ($descriptionResolution['description'] ?? '');
             if ($renderedFrTemplate !== '') {
                 $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                $listingDescriptionResolution['source'] = 'approved_ebay_fr_template_synced_to_offer_listingDescription';
+                $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
             }
         }
         $itemPayload = [
@@ -396,7 +396,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             if ($renderedFrTemplate !== '') {
                 $itemPayload['product']['description'] = $renderedFrTemplate;
                 $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                $listingDescriptionResolution['source'] = 'approved_ebay_fr_template_synced_to_offer_listingDescription';
+                $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
                 $offerPayload['listingDescription'] = $renderedFrTemplate;
                 $descriptionPayloadDiagnostics = $this->ebay_fr_description_payload_diagnostics($descriptionResolution, $listingDescriptionResolution, (string) ($itemPayload['product']['description'] ?? ''));
             }
@@ -651,6 +651,11 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'selected_payment_policy_id' => (string) ($businessPolicyResolution['selected_payment_policy_id'] ?? ''),
             'selected_return_policy_id' => (string) ($businessPolicyResolution['selected_return_policy_id'] ?? ''),
             'merchant_location_key' => (string) ($businessPolicyResolution['merchant_location_key'] ?? ''),
+            'template_setting_option_key' => (string) ($descriptionPayloadDiagnostics['template_setting_option_key'] ?? ''),
+            'template_setting_raw_value' => (string) ($descriptionPayloadDiagnostics['template_setting_raw_value'] ?? ''),
+            'template_setting_effective_value' => (string) ($descriptionPayloadDiagnostics['template_setting_effective_value'] ?? ''),
+            'template_setting_default_used' => (string) ($descriptionPayloadDiagnostics['template_setting_default_used'] ?? ''),
+            'template_setting_enabled' => !empty($descriptionPayloadDiagnostics['template_setting_enabled']),
             'description_source_used' => (string) ($descriptionPayloadDiagnostics['description_source_used'] ?? ''),
             'inventory_product_description_length' => (int) ($descriptionPayloadDiagnostics['inventory_product_description_length'] ?? 0),
             'offer_listing_description_length' => (int) ($descriptionPayloadDiagnostics['offer_listing_description_length'] ?? 0),
@@ -2953,15 +2958,17 @@ class EbayAdapter implements MarketplaceAdapterInterface
             return [
                 'description' => $renderedTemplate,
                 'short_description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
-                'source' => 'approved_ebay_fr_template_for_inventory_item',
+                'source' => 'rendered_fr_html_template',
                 'template_enabled' => true,
                 'rendered_template_length' => mb_strlen($renderedTemplate),
             ];
         }
 
+        $shortDescription = $this->build_short_inventory_product_description((string) ($content['description'] ?? ''));
+
         return [
-            'description' => (string) ($content['description'] ?? ''),
-            'short_description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
+            'description' => $shortDescription,
+            'short_description' => $shortDescription,
             'source' => 'resolved_french_content',
             'template_enabled' => !empty($settings['enable_ebay_fr_description_template']),
             'rendered_template_length' => 0,
@@ -2973,7 +2980,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
             return [
                 'description' => $this->build_ebay_fr_description_template($product, $productId, $content, $aspects, $category),
-                'source' => 'approved_ebay_fr_template',
+                'source' => 'rendered_fr_html_template',
                 'template_enabled' => true,
             ];
         }
@@ -3000,7 +3007,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function should_use_ebay_fr_description_template(array $settings, string $marketplaceId): bool
     {
-        return $marketplaceId === 'EBAY_FR' && !empty($settings['enable_ebay_fr_description_template']);
+        return $marketplaceId === 'EBAY_FR' && (!array_key_exists('enable_ebay_fr_description_template', $settings) || !empty($settings['enable_ebay_fr_description_template']));
     }
 
     private function ebay_fr_description_template_markers(): array
@@ -3020,6 +3027,26 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ];
     }
 
+
+    private function ebay_fr_description_template_setting_diagnostics(): array
+    {
+        $optionKey = Plugin::OPTION_KEY;
+        $settingKey = 'enable_ebay_fr_description_template';
+        $stored = get_option($optionKey, []);
+        $stored = is_array($stored) ? $stored : [];
+        $hasRawValue = array_key_exists($settingKey, $stored);
+        $rawValue = $hasRawValue ? $stored[$settingKey] : null;
+        $enabled = $hasRawValue ? !empty($rawValue) : true;
+
+        return [
+            'template_setting_option_key' => $optionKey,
+            'template_setting_raw_value' => $hasRawValue ? (string) $rawValue : '',
+            'template_setting_effective_value' => $enabled ? '1' : '0',
+            'template_setting_default_used' => $hasRawValue ? 'no' : 'yes',
+            'template_setting_enabled' => $enabled,
+        ];
+    }
+
     private function ebay_fr_description_payload_diagnostics(array $descriptionResolution, array $listingDescriptionResolution, string $sentDescription): array
     {
         $inventoryDescription = (string) ($descriptionResolution['description'] ?? $sentDescription);
@@ -3035,7 +3062,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $inventoryIsHtmlTemplate = $this->ebay_fr_description_is_html_template($inventoryDescription, $inventoryContainsAllMarkers);
         $offerIsHtmlTemplate = $this->ebay_fr_description_is_html_template($offerListingDescription, $offerContainsAllMarkers);
 
-        return [
+        return $this->ebay_fr_description_template_setting_diagnostics() + [
             'description_source_used' => (string) ($descriptionResolution['source'] ?? ''),
             'listing_description_source_used' => (string) ($listingDescriptionResolution['source'] ?? ''),
             'inventory_product_description_source_used' => (string) ($descriptionResolution['source'] ?? ''),
@@ -3330,7 +3357,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 $renderedFrTemplate = (string) ($productDescriptionResolution['description'] ?? '');
                 if ($renderedFrTemplate !== '') {
                     $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                    $listingDescriptionResolution['source'] = 'approved_ebay_fr_template_synced_to_offer_listingDescription';
+                    $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
                 }
             }
             $productDescription = (string) ($productDescriptionResolution['description'] ?? '');
@@ -3364,6 +3391,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $listingContainsTemplate = str_contains($listingDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/') && str_contains($listingDescription, 'Expédition internationale rapide');
             $productContainsTemplate = str_contains($productDescription, 'gpswiss.pl/wp-content/uploads/ebay-template/') && str_contains($productDescription, 'Expédition internationale rapide');
             $descriptionDiagnostics = $this->ebay_fr_description_payload_diagnostics($productDescriptionResolution, $listingDescriptionResolution, $productDescription);
+            $templateDisabledWarning = empty($descriptionDiagnostics['template_setting_enabled']) ? 'FR HTML template is disabled; live listings will show only the short translated description.' : '';
             $templateMarkersPresent = [];
             foreach ($this->ebay_fr_description_template_markers() as $marker) {
                 $templateMarkersPresent[$marker] = str_contains($productDescription, $marker);
@@ -3390,7 +3418,13 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 ],
                 'item_specifics' => $aspects,
                 'aspects' => $aspects,
-                'template_setting_enabled' => !empty($settings['enable_ebay_fr_description_template']),
+                'template_setting_option_key' => (string) ($descriptionDiagnostics['template_setting_option_key'] ?? ''),
+                'template_setting_raw_value' => (string) ($descriptionDiagnostics['template_setting_raw_value'] ?? ''),
+                'template_setting_effective_value' => (string) ($descriptionDiagnostics['template_setting_effective_value'] ?? ''),
+                'template_setting_default_used' => (string) ($descriptionDiagnostics['template_setting_default_used'] ?? ''),
+                'template_setting_enabled' => !empty($descriptionDiagnostics['template_setting_enabled']),
+                'template_disabled_warning' => $templateDisabledWarning,
+                'warning' => $templateDisabledWarning,
                 'inventory_item_product_description_source' => (string) ($productDescriptionResolution['source'] ?? ''),
                 'offer_listing_description_source' => (string) ($listingDescriptionResolution['source'] ?? ''),
                 'product_description_length' => mb_strlen($productDescription),
@@ -4799,8 +4833,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 return ['result' => 'error', 'error' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])];
             }
             $templateDiagnostics = $this->ebay_fr_description_payload_diagnostics(
-                ['source' => 'approved_ebay_fr_template_for_inventory_item', 'description' => $html],
-                ['source' => 'approved_ebay_fr_template', 'description' => $html],
+                ['source' => 'rendered_fr_html_template', 'description' => $html],
+                ['source' => 'rendered_fr_html_template', 'description' => $html],
                 $html
             );
             $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $templateDiagnostics);
@@ -6101,6 +6135,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $settings['translation_target_language'] = 'fr';
         if (!isset($settings['auto_generate_french_content_preflight'])) {
             $settings['auto_generate_french_content_preflight'] = 1;
+        }
+        if (!isset($settings['enable_ebay_fr_description_template'])) {
+            $settings['enable_ebay_fr_description_template'] = 1;
         }
         if (isset($settings['ebay_seller_username'])) {
             $settings['ebay_seller_username'] = trim((string) $settings['ebay_seller_username']);

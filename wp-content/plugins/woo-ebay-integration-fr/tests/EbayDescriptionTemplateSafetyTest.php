@@ -260,8 +260,11 @@ namespace {
     if (($dryRun['sent_description_is_html_template'] ?? '') !== 'yes' || ($dryRun['contains_template_markers'] ?? '') !== 'yes') {
         $failures[] = 'Expected FR publish diagnostics to confirm the sent description is the full HTML template. Got ' . json_encode($dryRun);
     }
-    if (($dryRun['description_source_used'] ?? '') !== 'approved_ebay_fr_template_for_inventory_item') {
-        $failures[] = 'Expected FR inventory payload description source to be approved_ebay_fr_template_for_inventory_item. Got ' . ($dryRun['description_source_used'] ?? '');
+    if (($dryRun['description_source_used'] ?? '') !== 'rendered_fr_html_template') {
+        $failures[] = 'Expected FR inventory payload description source to be rendered_fr_html_template. Got ' . ($dryRun['description_source_used'] ?? '');
+    }
+    if (($dryRun['template_setting_option_key'] ?? '') !== 'wei_fr_ebay_settings' || empty($dryRun['template_setting_enabled'])) {
+        $failures[] = 'Expected FR dry-run diagnostics to expose the FR-specific enabled template setting. Got ' . json_encode($dryRun);
     }
     if (trim(strip_tags($sentDescription)) === 'Source description' || $sentDescription === 'Source description') {
         $failures[] = 'Expected FR publish payload not to be only the plain translated/source description.';
