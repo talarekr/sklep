@@ -24,6 +24,7 @@ class AdminPage
         add_action('admin_init', [$this, 'log_build_loaded']);
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_post_wei_fr_save_settings', [$this, 'save_settings']);
+        add_action('admin_post_wei_fr_save_publish_template_setting', [$this, 'save_publish_template_setting']);
         add_action('admin_post_wei_fr_save_ebay_settings', [$this, 'save_ebay_settings']);
         add_action('admin_post_wei_fr_save_translation_provider_settings', [$this, 'save_translation_provider_settings_action']);
         add_action('admin_post_wei_fr_start_oauth_connect', [$this, 'start_oauth_connect']);
@@ -583,6 +584,19 @@ class AdminPage
         $this->sync_product_category_overrides($s['product_category_overrides']);
         update_option(Plugin::OPTION_KEY, $s, false);
         wp_safe_redirect(admin_url('admin.php?page=woo-ebay-fr&saved=1' . (!empty($conflicts) ? '&shipping_mapping_conflicts=1' : '')));
+        exit;
+    }
+
+
+    public function save_publish_template_setting(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_save_publish_template_setting');
+        $s = get_option(Plugin::OPTION_KEY, []);
+        $s = is_array($s) ? $s : [];
+        $s['enable_ebay_fr_description_template'] = !empty($_POST['enable_ebay_fr_description_template']) ? 1 : 0;
+        update_option(Plugin::OPTION_KEY, $s, false);
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay-fr&saved=1&wei_fr_section=publish'));
         exit;
     }
 
@@ -3067,7 +3081,7 @@ class AdminPage
 
     private function fr_publish_report_headers(): array
     {
-        return ['timestamp','run_id','action','product_id','title','sku','ebay_sku','marketplace','category_id','price','currency','quantity','inventory_item_id','offer_id','listing_id','listing_url','result','error_message','readiness_status','selected_fulfillment_policy_id','selected_payment_policy_id','selected_return_policy_id','merchant_location_key','description_source_used','inventory_product_description_length','offer_listing_description_length','inventory_product_description_contains_template_markers','offer_listing_description_contains_template_markers','sent_inventory_product_description_is_html_template','sent_offer_listing_description_is_html_template','sent_description_is_html_template','contains_template_markers','has_expédition_internationale_rapide','has_spécifications','has_livraison_dans_toute_l_europe','has_achetez_en_toute_confiance'];
+        return ['timestamp','run_id','action','product_id','title','sku','ebay_sku','marketplace','category_id','price','currency','quantity','inventory_item_id','offer_id','listing_id','listing_url','result','error_message','readiness_status','selected_fulfillment_policy_id','selected_payment_policy_id','selected_return_policy_id','merchant_location_key','template_setting_option_key','template_setting_raw_value','template_setting_effective_value','template_setting_default_used','template_setting_enabled','description_source_used','inventory_product_description_length','offer_listing_description_length','inventory_product_description_contains_template_markers','offer_listing_description_contains_template_markers','sent_inventory_product_description_is_html_template','sent_offer_listing_description_is_html_template','sent_description_is_html_template','contains_template_markers','has_expédition_internationale_rapide','has_spécifications','has_livraison_dans_toute_l_europe','has_achetez_en_toute_confiance'];
     }
 
     private function build_fr_publish_action_row(string $runId, string $action, int $productId, array $res, array $preflight = [], string $timestamp = ''): array
@@ -3113,6 +3127,11 @@ class AdminPage
             'selected_payment_policy_id' => (string) ($res['selected_payment_policy_id'] ?? $preflight['selected_payment_policy_id'] ?? $this->settings()['ebay_payment_policy_id'] ?? ''),
             'selected_return_policy_id' => (string) ($res['selected_return_policy_id'] ?? $preflight['selected_return_policy_id'] ?? $this->settings()['ebay_return_policy_id'] ?? ''),
             'merchant_location_key' => (string) ($res['merchant_location_key'] ?? $preflight['merchant_location_key'] ?? $this->settings()['inventory_location_key'] ?? ''),
+            'template_setting_option_key' => (string) ($res['template_setting_option_key'] ?? ''),
+            'template_setting_raw_value' => (string) ($res['template_setting_raw_value'] ?? ''),
+            'template_setting_effective_value' => (string) ($res['template_setting_effective_value'] ?? ''),
+            'template_setting_default_used' => (string) ($res['template_setting_default_used'] ?? ''),
+            'template_setting_enabled' => !empty($res['template_setting_enabled']) ? 'true' : 'false',
             'description_source_used' => (string) ($res['description_source_used'] ?? get_post_meta($productId, '_wei_fr_ebay_description_source_used', true)),
             'inventory_product_description_length' => (string) ($res['inventory_product_description_length'] ?? ''),
             'offer_listing_description_length' => (string) ($res['offer_listing_description_length'] ?? ''),
@@ -4937,7 +4956,7 @@ class AdminPage
             $s['auto_generate_french_content_preflight'] = 1;
         }
         if (!isset($s['enable_ebay_fr_description_template'])) {
-            $s['enable_ebay_fr_description_template'] = 0;
+            $s['enable_ebay_fr_description_template'] = 1;
         }
         if (!isset($s['ebay_fr_delivery_map_url'])) {
             $s['ebay_fr_delivery_map_url'] = '';

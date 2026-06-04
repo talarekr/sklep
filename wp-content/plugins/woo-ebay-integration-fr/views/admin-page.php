@@ -48,6 +48,11 @@ if (strlen($lastShortMessage) > 220) {
     $lastShortMessage = substr($lastShortMessage, 0, 217) . '...';
 }
 
+$frTemplateRawSettingExists = is_array($s) && array_key_exists('enable_ebay_fr_description_template', $s);
+$frTemplateEnabled = $frTemplateRawSettingExists ? !empty($s['enable_ebay_fr_description_template']) : true;
+$frTemplateStatusLabel = $frTemplateEnabled ? 'enabled' : 'disabled';
+$frTemplateOptionKey = \WEI_FR\Plugin::OPTION_KEY . '.enable_ebay_fr_description_template';
+
 $cached = is_array($s['wei_fr_cached_policies'] ?? null) ? $s['wei_fr_cached_policies'] : [];
 $fulfillmentPolicies = is_array($cached['fulfillmentPolicies'] ?? null) ? $cached['fulfillmentPolicies'] : [];
 $paymentPolicies = is_array($cached['paymentPolicies'] ?? null) ? $cached['paymentPolicies'] : [];
@@ -778,6 +783,22 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
             <div class="wei-card"><span>current_active_listing_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['current_active_listing_count'] ?? 0)); ?></strong></div>
             <div class="wei-card"><span>needs_reexport_count</span><strong><?php echo esc_html((string) ($ebayListingStateSummary['needs_reexport_count'] ?? 0)); ?></strong></div>
         </div>
+
+        <h3>eBay.fr HTML description template</h3>
+        <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions wei-fr-template-setting">
+            <?php wp_nonce_field('wei_fr_save_publish_template_setting'); ?>
+            <input type="hidden" name="action" value="wei_fr_save_publish_template_setting" />
+            <label>
+                <input type="checkbox" name="enable_ebay_fr_description_template" value="1" <?php checked($frTemplateEnabled); ?> />
+                Enable eBay.fr HTML description template for published listings
+            </label>
+            <span class="description">When enabled, eBay.fr listings use the full rendered French HTML template as the listing description. When disabled, only the short translated description is sent.</span>
+            <p class="description">Current status: <strong><?php echo esc_html($frTemplateStatusLabel); ?></strong>. Stored in FR option: <code><?php echo esc_html($frTemplateOptionKey); ?></code>.</p>
+            <?php if (!$frTemplateEnabled): ?>
+                <div class="notice notice-warning inline"><p>FR HTML template is disabled; live listings will show only the short translated description.</p></div>
+            <?php endif; ?>
+            <button class="button button-primary">Save eBay.fr template setting</button>
+        </form>
         <h3>Preview publish payload for one ready product</h3>
         <p class="description">Dry-run only: builds the EBAY_FR Sell Inventory payload preview with inventory.product.description and offer.listingDescription. No eBay API call is made and nothing is published.</p>
         <form method="post" action="<?php echo esc_url($adminPostUrl); ?>" class="wei-actions">
