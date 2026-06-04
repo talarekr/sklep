@@ -23,6 +23,8 @@ use WEI_FR\Interfaces\TranslationProviderInterface;
 
 class EbayAdapter implements MarketplaceAdapterInterface
 {
+    private const INVENTORY_PRODUCT_DESCRIPTION_LIMIT = 4000;
+
     private const EBAY_SKU_MAX_LENGTH = 50;
     private bool $suppressVerboseLogs = false;
 
@@ -298,19 +300,12 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
         $descriptionResolution = $this->resolve_inventory_item_description($product, $product_id, $content, $aspects, $category, $settings, $marketplaceId);
         $listingDescriptionResolution = $this->resolve_offer_listing_description($product, $product_id, $content, $aspects, $category, $settings, $marketplaceId);
-        if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
-            $renderedFrTemplate = (string) ($descriptionResolution['description'] ?? '');
-            if ($renderedFrTemplate !== '') {
-                $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
-            }
-        }
         $itemPayload = [
             'availability' => ['shipToLocationAvailability' => ['quantity' => max(0, (int) $stockGuard['stock_quantity'])]],
             'condition' => $conditionResolution['condition'],
             'product' => [
                 'title' => $content['title'],
-                'description' => (string) ($descriptionResolution['description'] ?? ''),
+                'description' => $this->inventory_api_safe_product_description($descriptionResolution, (string) ($content['description'] ?? '')),
                 'imageUrls' => array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids())))),
                 'aspects' => $aspects,
             ],
@@ -388,18 +383,6 @@ class EbayAdapter implements MarketplaceAdapterInterface
         ];
         if ((string) ($listingDescriptionResolution['description'] ?? '') !== '') {
             $offerPayload['listingDescription'] = (string) $listingDescriptionResolution['description'];
-        }
-        if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
-            // eBay.fr can render the public listing from offer.listingDescription rather than inventory.product.description.
-            // Keep both Sell Inventory API description fields identical to the approved rendered FR HTML template.
-            $renderedFrTemplate = (string) ($descriptionResolution['description'] ?? '');
-            if ($renderedFrTemplate !== '') {
-                $itemPayload['product']['description'] = $renderedFrTemplate;
-                $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
-                $offerPayload['listingDescription'] = $renderedFrTemplate;
-                $descriptionPayloadDiagnostics = $this->ebay_fr_description_payload_diagnostics($descriptionResolution, $listingDescriptionResolution, (string) ($itemPayload['product']['description'] ?? ''));
-            }
         }
         $mapping = $this->repo->find_by_product($product_id, $variation_id);
         $offer_id = trim((string) ($mapping['remote_offer_id'] ?? ''));
@@ -658,6 +641,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'template_setting_enabled' => !empty($descriptionPayloadDiagnostics['template_setting_enabled']),
             'description_source_used' => (string) ($descriptionPayloadDiagnostics['description_source_used'] ?? ''),
             'inventory_product_description_length' => (int) ($descriptionPayloadDiagnostics['inventory_product_description_length'] ?? 0),
+            'inventory_product_description_within_4000' => !empty($descriptionPayloadDiagnostics['inventory_product_description_within_4000']),
+            'inventory_product_description_template_too_long_warning' => (string) ($descriptionPayloadDiagnostics['inventory_product_description_template_too_long_warning'] ?? ''),
             'offer_listing_description_length' => (int) ($descriptionPayloadDiagnostics['offer_listing_description_length'] ?? 0),
             'inventory_product_description_contains_template_markers' => (string) ($descriptionPayloadDiagnostics['inventory_product_description_contains_template_markers'] ?? ''),
             'offer_listing_description_contains_template_markers' => (string) ($descriptionPayloadDiagnostics['offer_listing_description_contains_template_markers'] ?? ''),
@@ -2953,18 +2938,20 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
     private function resolve_inventory_item_description($product, int $productId, array $content, array $aspects, array $category, array $settings, string $marketplaceId): array
     {
+        $shortDescription = $this->build_short_inventory_product_description((string) ($content['description'] ?? ''));
+
         if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
             $renderedTemplate = $this->build_ebay_fr_description_template($product, $productId, $content, $aspects, $category);
             return [
-                'description' => $renderedTemplate,
-                'short_description' => $this->build_short_inventory_product_description((string) ($content['description'] ?? '')),
-                'source' => 'rendered_fr_html_template',
+                'description' => $shortDescription,
+                'short_description' => $shortDescription,
+                'source' => 'short_translated_french_content_for_inventory_item',
                 'template_enabled' => true,
                 'rendered_template_length' => mb_strlen($renderedTemplate),
+                'rendered_template_exceeds_inventory_limit' => mb_strlen($renderedTemplate) > self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
+                'inventory_product_description_limit' => self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
             ];
         }
-
-        $shortDescription = $this->build_short_inventory_product_description((string) ($content['description'] ?? ''));
 
         return [
             'description' => $shortDescription,
@@ -2972,7 +2959,28 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'source' => 'resolved_french_content',
             'template_enabled' => !empty($settings['enable_ebay_fr_description_template']),
             'rendered_template_length' => 0,
+            'rendered_template_exceeds_inventory_limit' => false,
+            'inventory_product_description_limit' => self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
         ];
+    }
+
+    private function inventory_api_safe_product_description(array $descriptionResolution, string $fallbackDescription): string
+    {
+        $description = (string) ($descriptionResolution['description'] ?? '');
+        if ($description !== '' && mb_strlen($description) <= self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT) {
+            return $description;
+        }
+
+        $shortDescription = (string) ($descriptionResolution['short_description'] ?? '');
+        if ($shortDescription === '') {
+            $shortDescription = $this->build_short_inventory_product_description($fallbackDescription);
+        }
+
+        if (mb_strlen($shortDescription) > self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT) {
+            $shortDescription = rtrim(mb_substr($shortDescription, 0, self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT - 3)) . '...';
+        }
+
+        return $shortDescription;
     }
 
     private function resolve_offer_listing_description($product, int $productId, array $content, array $aspects, array $category, array $settings, string $marketplaceId): array
@@ -3062,15 +3070,24 @@ class EbayAdapter implements MarketplaceAdapterInterface
         $inventoryIsHtmlTemplate = $this->ebay_fr_description_is_html_template($inventoryDescription, $inventoryContainsAllMarkers);
         $offerIsHtmlTemplate = $this->ebay_fr_description_is_html_template($offerListingDescription, $offerContainsAllMarkers);
 
+        $inventoryDescriptionLength = mb_strlen($inventoryDescription);
+        $offerListingDescriptionLength = mb_strlen($offerListingDescription);
+        $renderedTemplateLength = mb_strlen($renderedTemplate);
+        $renderedTemplateExceedsInventoryLimit = $renderedTemplateLength > self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT;
+
         return $this->ebay_fr_description_template_setting_diagnostics() + [
             'description_source_used' => (string) ($descriptionResolution['source'] ?? ''),
             'listing_description_source_used' => (string) ($listingDescriptionResolution['source'] ?? ''),
             'inventory_product_description_source_used' => (string) ($descriptionResolution['source'] ?? ''),
             'offer_listing_description_source_used' => (string) ($listingDescriptionResolution['source'] ?? ''),
             'description_length' => mb_strlen($sentDescription),
-            'rendered_template_length' => mb_strlen($renderedTemplate),
-            'inventory_product_description_length' => mb_strlen($inventoryDescription),
-            'offer_listing_description_length' => mb_strlen($offerListingDescription),
+            'rendered_template_length' => $renderedTemplateLength,
+            'inventory_product_description_limit' => self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
+            'inventory_product_description_length' => $inventoryDescriptionLength,
+            'inventory_product_description_within_4000' => $inventoryDescriptionLength > 0 && $inventoryDescriptionLength <= self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
+            'inventory_product_description_template_too_long_warning' => $renderedTemplateExceedsInventoryLimit ? 'Full FR HTML template exceeds the Inventory API product.description limit and is kept on offer.listingDescription only.' : '',
+            'rendered_template_exceeds_inventory_limit' => $renderedTemplateExceedsInventoryLimit ? 'yes' : 'no',
+            'offer_listing_description_length' => $offerListingDescriptionLength,
             'inventory_product_description_contains_template_markers' => $inventoryContainsAllMarkers ? 'yes' : 'no',
             'offer_listing_description_contains_template_markers' => $offerContainsAllMarkers ? 'yes' : 'no',
             'sent_inventory_product_description_is_html_template' => $inventoryIsHtmlTemplate ? 'yes' : 'no',
@@ -3353,14 +3370,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             ];
             $productDescriptionResolution = $this->resolve_inventory_item_description($product, $productId, $content, $aspects, $category, $settings, $marketplaceId);
             $listingDescriptionResolution = $this->resolve_offer_listing_description($product, $productId, $content, $aspects, $category, $settings, $marketplaceId);
-            if ($this->should_use_ebay_fr_description_template($settings, $marketplaceId)) {
-                $renderedFrTemplate = (string) ($productDescriptionResolution['description'] ?? '');
-                if ($renderedFrTemplate !== '') {
-                    $listingDescriptionResolution['description'] = $renderedFrTemplate;
-                    $listingDescriptionResolution['source'] = 'rendered_fr_html_template';
-                }
-            }
-            $productDescription = (string) ($productDescriptionResolution['description'] ?? '');
+            $productDescription = $this->inventory_api_safe_product_description($productDescriptionResolution, (string) ($content['description'] ?? ''));
             $listingDescription = (string) ($listingDescriptionResolution['description'] ?? '');
             $productImageUrls = array_values(array_filter(array_map('wp_get_attachment_url', array_merge([$product->get_image_id()], $product->get_gallery_image_ids()))));
             $productImagesInListingDescription = [];
@@ -3394,7 +3404,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
             $templateDisabledWarning = empty($descriptionDiagnostics['template_setting_enabled']) ? 'FR HTML template is disabled; live listings will show only the short translated description.' : '';
             $templateMarkersPresent = [];
             foreach ($this->ebay_fr_description_template_markers() as $marker) {
-                $templateMarkersPresent[$marker] = str_contains($productDescription, $marker);
+                $templateMarkersPresent[$marker] = str_contains($listingDescription, $marker);
             }
             $preview = $this->build_ebay_fr_description_preview_data($product, $productId, $content);
             $previewHtml = (string) ($preview['html'] ?? '');
@@ -3428,7 +3438,9 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'inventory_item_product_description_source' => (string) ($productDescriptionResolution['source'] ?? ''),
                 'offer_listing_description_source' => (string) ($listingDescriptionResolution['source'] ?? ''),
                 'product_description_length' => mb_strlen($productDescription),
-                'product_description_within_4000' => mb_strlen($productDescription) > 0 && mb_strlen($productDescription) < 4000,
+                'product_description_within_4000' => mb_strlen($productDescription) > 0 && mb_strlen($productDescription) <= self::INVENTORY_PRODUCT_DESCRIPTION_LIMIT,
+                'inventory_product_description_within_4000' => $descriptionDiagnostics['inventory_product_description_within_4000'],
+                'inventory_product_description_template_too_long_warning' => $descriptionDiagnostics['inventory_product_description_template_too_long_warning'],
                 'product_description_contains_new_template' => $productContainsTemplate,
                 'product_description_matches_preview_html' => $productDescription === $previewHtml,
                 'description_source_used' => $descriptionDiagnostics['description_source_used'],
@@ -3445,6 +3457,7 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 ],
                 'offer_listingDescription_preview' => mb_substr($listingDescription, 0, 1200),
                 'offer_listingDescription_length' => $descriptionDiagnostics['offer_listing_description_length'],
+                'offer_listingDescription_contains_template_markers' => $descriptionDiagnostics['offer_listing_description_contains_template_markers'],
                 'offer_listingDescription_marker_status' => [
                     'contains_template_markers' => $descriptionDiagnostics['offer_listing_description_contains_template_markers'],
                     'has_expédition_internationale_rapide' => $descriptionDiagnostics['offer_listing_description_has_expédition_internationale_rapide'],
@@ -3464,8 +3477,8 @@ class EbayAdapter implements MarketplaceAdapterInterface
                 'product_image_urls_found_in_listing_description' => $productImagesInListingDescription,
                 'template_image_urls_present' => $presentTemplateImageUrls,
                 'template_image_urls_missing' => $missingTemplateImageUrls,
-                'template_attached_to' => 'inventory.product.description and offer.listingDescription',
-                'where_template_is_attached' => 'inventory.product.description and offer.listingDescription',
+                'template_attached_to' => 'offer.listingDescription',
+                'where_template_is_attached' => 'offer.listingDescription',
                 'visual_preview' => [
                     'source' => 'offer.listingDescription',
                     'message' => 'This is the HTML that will be sent to eBay.fr as offer.listingDescription.',
@@ -4843,17 +4856,18 @@ class EbayAdapter implements MarketplaceAdapterInterface
             if (empty($htmlValidation['valid'])) {
                 return ['result' => 'error', 'error' => (string) ($htmlValidation['error'] ?? 'invalid_translated_html_css'), 'matches' => (array) ($htmlValidation['matches'] ?? [])];
             }
+            $shortDescription = $this->build_short_inventory_product_description((string) ($content['description'] ?? ''));
             $templateDiagnostics = $this->ebay_fr_description_payload_diagnostics(
+                ['source' => 'short_translated_french_content_for_inventory_item', 'description' => $shortDescription, 'short_description' => $shortDescription],
                 ['source' => 'rendered_fr_html_template', 'description' => $html],
-                ['source' => 'rendered_fr_html_template', 'description' => $html],
-                $html
+                $shortDescription
             );
             $this->logger->info('EBAY_FR_DESCRIPTION_TEMPLATE_RENDERED', ['product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId, 'listing_id' => $listingId] + $templateDiagnostics);
             $inventory = $this->client->get_inventory_item($sku, ['stage' => 'description_template_single', 'product_id' => $productId, 'sku' => $sku]);
             if (is_wp_error($inventory)) return ['result' => 'error', 'error' => $inventory->get_error_message()];
             $before = (string) ($inventory['product']['description'] ?? '');
-            $inventory['product']['description'] = $html;
-            $inventoryChanged = $before !== $html;
+            $inventory['product']['description'] = $shortDescription;
+            $inventoryChanged = $before !== $shortDescription;
             $offer = $this->client->get_offer($offerId, ['stage' => 'description_template_single_offer_refresh_get_offer', 'product_id' => $productId, 'sku' => $sku, 'offer_id' => $offerId]);
             if (is_wp_error($offer)) return ['result' => 'error', 'error' => $offer->get_error_message()];
             $offer = (array) $offer;
@@ -5741,6 +5755,15 @@ class EbayAdapter implements MarketplaceAdapterInterface
             'ebay_error_id' => $errorId,
             'ebay_error_message' => (string) ($primaryEbayError['message'] ?? ''),
             'ebay_errors' => $ebayErrors,
+            'errors' => $ebayErrors,
+            'http_status' => $details['http_status'] ?? $details['status'] ?? null,
+            'response_body' => $responseBody,
+            'errorId' => $primaryEbayError['errorId'] ?? null,
+            'message' => $primaryEbayError['message'] ?? null,
+            'domain' => $primaryEbayError['domain'] ?? null,
+            'category' => $primaryEbayError['category'] ?? null,
+            'inputRefIds' => $primaryEbayError['inputRefIds'] ?? [],
+            'parameters' => $primaryEbayError['parameters'] ?? [],
             'missing_aspects' => $missingAspects,
             'error_details' => $details,
         ];

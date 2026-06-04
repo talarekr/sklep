@@ -5,6 +5,7 @@ declare(strict_types=1);
 $root = dirname(__DIR__);
 $admin = file_get_contents($root . '/src/Services/AdminPage.php') ?: '';
 $adapter = file_get_contents($root . '/src/Adapters/EbayAdapter.php') ?: '';
+$client = file_get_contents($root . '/src/Services/EbayClient.php') ?: '';
 $view = file_get_contents($root . '/views/admin-page.php') ?: '';
 $failures = [];
 
@@ -66,11 +67,13 @@ foreach ([
     'template_setting_enabled',
     'description_source_used',
     'inventory_product_description_length',
+    'inventory_product_description_within_4000',
     'offer_listing_description_length',
     'inventory_product_description_contains_template_markers',
     'offer_listing_description_contains_template_markers',
     'sent_inventory_product_description_is_html_template',
     'sent_offer_listing_description_is_html_template',
+    'inventory_product_description_template_too_long_warning',
     'sent_description_is_html_template',
     'contains_template_markers',
     'has_expédition_internationale_rapide',
@@ -116,6 +119,8 @@ foreach ([
     "'template_setting_enabled' => !empty(\$descriptionPayloadDiagnostics['template_setting_enabled'])",
     "'description_source_used' => (string) (\$descriptionPayloadDiagnostics['description_source_used'] ?? '')",
     "'inventory_product_description_length' => (int) (\$descriptionPayloadDiagnostics['inventory_product_description_length'] ?? 0)",
+    "'inventory_product_description_within_4000' => !empty(\$descriptionPayloadDiagnostics['inventory_product_description_within_4000'])",
+    "'inventory_product_description_template_too_long_warning' => (string) (\$descriptionPayloadDiagnostics['inventory_product_description_template_too_long_warning'] ?? '')",
     "'offer_listing_description_length' => (int) (\$descriptionPayloadDiagnostics['offer_listing_description_length'] ?? 0)",
     "'sent_inventory_product_description_is_html_template' => (string) (\$descriptionPayloadDiagnostics['sent_inventory_product_description_is_html_template'] ?? '')",
     "'sent_offer_listing_description_is_html_template' => (string) (\$descriptionPayloadDiagnostics['sent_offer_listing_description_is_html_template'] ?? '')",
@@ -148,10 +153,35 @@ foreach ([
 
 foreach ([
     "\$offer['listingDescription'] = \$html",
-    "\$inventory['product']['description'] = \$html",
+    "\$inventory['product']['description'] = \$shortDescription",
     "resolve_product_id_by_fr_listing_or_offer_id",
 ] as $needle) {
-    $assertContains($adapter, $needle, 'Controlled single FR listing description revise must update both description fields and resolve listing IDs');
+    $assertContains($adapter, $needle, 'Controlled single FR listing description revise must keep inventory short, update offer HTML, and resolve listing IDs');
+}
+
+foreach ([
+    'INVENTORY_PRODUCT_DESCRIPTION_LIMIT = 4000',
+    'inventory_api_safe_product_description',
+    "'source' => 'short_translated_french_content_for_inventory_item'",
+    "'template_attached_to' => 'offer.listingDescription'",
+    '$offerListingDescriptionLength',
+] as $needle) {
+    $assertContains($adapter, $needle, 'FR template publish guard must keep full HTML on offer.listingDescription and inventory.product.description short');
+}
+
+
+foreach ([
+    "'errors' => \$ebay_errors",
+    "'errorId' => \$ebay_error_id",
+    "'message' => \$first_ebay_message",
+    "'domain' => \$ebay_error_domain",
+    "'category' => \$ebay_error_category",
+    "'inputRefIds' => \$ebay_error_input_ref_ids",
+    "'parameters' => \$ebay_error_parameters",
+    "'response_body' => \$response_body",
+    "'http_status' => \$status",
+] as $needle) {
+    $assertContains($client, $needle, 'eBay createOrReplaceInventoryItem API error logging must expose full response diagnostics');
 }
 
 if ($failures !== []) {
