@@ -60,8 +60,18 @@ foreach ([
     'selected_return_policy_id',
     'merchant_location_key',
     'description_source_used',
+    'inventory_product_description_length',
+    'offer_listing_description_length',
+    'inventory_product_description_contains_template_markers',
+    'offer_listing_description_contains_template_markers',
+    'sent_inventory_product_description_is_html_template',
+    'sent_offer_listing_description_is_html_template',
     'sent_description_is_html_template',
     'contains_template_markers',
+    'has_expédition_internationale_rapide',
+    'has_spécifications',
+    'has_livraison_dans_toute_l_europe',
+    'has_achetez_en_toute_confiance',
 ] as $needle) {
     $assertContains($admin, $needle, 'FR publish CSV/log schema');
 }
@@ -90,6 +100,10 @@ foreach ([
     "'listing_url' => \$this->listing_public_url(\$listing_id, \$marketplaceId)",
     "'selected_fulfillment_policy_id' => (string) (\$businessPolicyResolution['selected_fulfillment_policy_id'] ?? '')",
     "'description_source_used' => (string) (\$descriptionPayloadDiagnostics['description_source_used'] ?? '')",
+    "'inventory_product_description_length' => (int) (\$descriptionPayloadDiagnostics['inventory_product_description_length'] ?? 0)",
+    "'offer_listing_description_length' => (int) (\$descriptionPayloadDiagnostics['offer_listing_description_length'] ?? 0)",
+    "'sent_inventory_product_description_is_html_template' => (string) (\$descriptionPayloadDiagnostics['sent_inventory_product_description_is_html_template'] ?? '')",
+    "'sent_offer_listing_description_is_html_template' => (string) (\$descriptionPayloadDiagnostics['sent_offer_listing_description_is_html_template'] ?? '')",
     "'sent_description_is_html_template' => (string) (\$descriptionPayloadDiagnostics['sent_description_is_html_template'] ?? '')",
     "'contains_template_markers' => (string) (\$descriptionPayloadDiagnostics['contains_template_markers'] ?? '')",
 ] as $needle) {
@@ -100,6 +114,25 @@ $assertContains($admin, '$errors = array_values(array_filter($rows', 'Error CSV 
 $assertContains($view, 'href="<?php echo esc_url($listingUrl); ?>"', 'Admin listing URL must be clickable.');
 $assertNotContains($admin, "'wei-ebay-integration/'", 'FR publish reports must not use the DE upload directory.');
 $assertNotContains($view, 'wei-ebay-integration/fr-publish', 'FR publish UI must not link to DE reports.');
+
+
+foreach ([
+    'Preview publish payload for one ready product',
+    'inventory.product.description',
+    'offer.listingDescription',
+    'item_specifics',
+    'No eBay API call',
+] as $needle) {
+    $assertContains($adapter . $view . $admin, $needle, 'FR publish payload dry-run preview');
+}
+
+foreach ([
+    "\$offer['listingDescription'] = \$html",
+    "\$inventory['product']['description'] = \$html",
+    "resolve_product_id_by_fr_listing_or_offer_id",
+] as $needle) {
+    $assertContains($adapter, $needle, 'Controlled single FR listing description revise must update both description fields and resolve listing IDs');
+}
 
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
