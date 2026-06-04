@@ -3909,11 +3909,32 @@ class AdminPage
         }
         $backUrl = esc_url(admin_url('admin.php?page=woo-ebay-fr'));
         $payloadExcerpt = (array) ($res['payload_excerpt'] ?? []);
-        unset($res['payload_excerpt']);
+        $visualPreview = (array) ($res['visual_preview'] ?? []);
+        unset($res['payload_excerpt'], $res['visual_preview']);
+
+        $offerListingDescription = (string) ($visualPreview['raw_offer_listingDescription'] ?? $visualPreview['html'] ?? '');
+        $inventoryProductDescription = (string) ($visualPreview['raw_inventory_product_description'] ?? '');
+        $previewDiagnostics = [
+            'offer_listingDescription_length' => (int) ($visualPreview['offer_listingDescription_length'] ?? $res['offer_listingDescription_length'] ?? mb_strlen($offerListingDescription)),
+            'contains_template_markers' => (string) ($visualPreview['contains_template_markers'] ?? $res['contains_template_markers'] ?? ''),
+            'sent_offer_listing_description_is_html_template' => (string) ($visualPreview['sent_offer_listing_description_is_html_template'] ?? $res['sent_offer_listing_description_is_html_template'] ?? ''),
+        ];
+
         echo '<div class="wrap" style="font-family:Arial,Helvetica,sans-serif;margin:20px;">';
         echo '<h1>Safe eBay.fr publish description dry-run</h1>';
         echo '<p><a href="' . $backUrl . '">&larr; Back to Woo eBay Integration FR</a></p>';
         echo '<p><strong>Safety:</strong> local payload description dry-run only; no eBay API call, no listing creation, no listing update, no Woo product changes, no Ovoko API call.</p>';
+        if ($offerListingDescription !== '') {
+            echo '<h2>Visual eBay.fr description preview</h2>';
+            echo '<p><strong>This is the HTML that will be sent to eBay.fr as offer.listingDescription.</strong></p>';
+            echo '<p style="margin:8px 0;padding:10px;background:#fff8e5;border-left:4px solid #dba617;"><strong>Warning:</strong> This is local rendering; eBay may sanitize some HTML/CSS.</p>';
+            echo '<h3>Preview diagnostics</h3><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($previewDiagnostics, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+            echo '<iframe title="Visual eBay.fr description preview" sandbox="" referrerpolicy="no-referrer" style="width:100%;min-height:720px;background:#fff;border:1px solid #dcdcde;border-radius:4px;" srcdoc="' . esc_attr($offerListingDescription) . '"></iframe>';
+            echo '<details style="margin-top:14px;"><summary>Raw offer.listingDescription</summary><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;max-height:520px;overflow:auto;">' . esc_html($offerListingDescription) . '</pre></details>';
+            echo '<details style="margin-top:8px;"><summary>Raw inventory.product.description</summary><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;max-height:520px;overflow:auto;">' . esc_html($inventoryProductDescription) . '</pre></details>';
+        } else {
+            echo '<div class="notice notice-warning inline"><p><strong>Visual eBay.fr description preview unavailable:</strong> dry-run did not produce an offer.listingDescription value.</p></div>';
+        }
         echo '<h2>Dry-run checks</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
         echo '<h2>Payload description excerpt</h2><pre style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;padding:12px;">' . esc_html(wp_json_encode($payloadExcerpt, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
         echo '</div>';
