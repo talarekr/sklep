@@ -78,6 +78,7 @@ class AdminPage
         add_action('admin_post_wei_fr_generate_blocked_category_fix_report', [$this, 'generate_blocked_category_fix_report']);
         add_action('admin_post_wei_fr_generate_category_mapping_worklist', [$this, 'generate_category_mapping_worklist']);
         add_action('admin_post_wei_fr_generate_all_category_mapping_worklist', [$this, 'generate_all_category_mapping_worklist']);
+        add_action('admin_post_wei_fr_export_woo_categories_csv', [$this, 'export_woo_categories_csv']);
         add_action('admin_post_wei_fr_import_category_mapping_worklist', [$this, 'import_category_mapping_worklist']);
         add_action('admin_post_download_wei_fr_report', [$this, 'download_wei_fr_report']);
         add_action('admin_post_wei_fr_repair_audit_category_groups', [$this, 'repair_audit_category_groups']);
@@ -384,6 +385,8 @@ class AdminPage
         $all_category_mapping_worklist_summary = is_array($all_category_mapping_worklist_summary) ? $all_category_mapping_worklist_summary : [];
         $category_mapping_worklist_import_summary = get_option('wei_fr_ebay_category_mapping_worklist_import_summary', []);
         $category_mapping_worklist_import_summary = is_array($category_mapping_worklist_import_summary) ? $category_mapping_worklist_import_summary : [];
+        $woo_product_categories_export_summary = get_option('wei_fr_woo_product_categories_export_summary', []);
+        $woo_product_categories_export_summary = is_array($woo_product_categories_export_summary) ? $woo_product_categories_export_summary : [];
         $ovoko_category_suggestions_summary = get_option('wei_fr_ebay_ovoko_category_suggestions_summary', []);
         $ovoko_category_suggestions_summary = is_array($ovoko_category_suggestions_summary) ? $ovoko_category_suggestions_summary : [];
         $category_comparison_last_run = $this->category_comparison_last_run();
@@ -1414,6 +1417,271 @@ class AdminPage
         $this->go();
     }
 
+    public function export_woo_categories_csv(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_fr_export_woo_categories_csv');
+
+        try {
+            $summary = $this->generate_woo_categories_csv_export();
+            update_option('wei_fr_woo_product_categories_export_summary', $summary, false);
+            $this->set_status('Woo product categories CSV exported: ' . (int) ($summary['total_categories_exported'] ?? 0) . ' categories to ' . (string) ($summary['path'] ?? ''));
+        } catch (\Throwable $e) {
+            $summary = [
+                'result' => 'error',
+                'generated_at' => gmdate('c'),
+                'path' => '',
+                'url' => '',
+                'total_categories_exported' => 0,
+                'error' => $this->safe_admin_error_message($e),
+                'called_ebay_api' => false,
+                'modified_products' => false,
+                'modified_categories' => false,
+                'published_to_ebay' => false,
+            ];
+            update_option('wei_fr_woo_product_categories_export_summary', $summary, false);
+            $this->set_status('Woo product categories CSV export failed: ' . (string) $summary['error']);
+        }
+
+        $this->go_category_mapping_screen();
+    }
+
+    private function generate_woo_categories_csv_export(): array
+    {
+        $paths = $this->woo_categories_csv_export_paths();
+        $dir = dirname((string) $paths['path']);
+        if (!is_dir($dir)) {
+            wp_mkdir_p($dir);
+        }
+        if (!is_dir($dir) || !is_writable($dir)) {
+            throw new \RuntimeException('Export directory is not writable: ' . $dir);
+        }
+
+        $terms = $this->woo_product_category_terms_for_export();
+        $directProductIds = $this->woo_product_category_direct_product_ids();
+        $directCounts = [];
+        foreach ($directProductIds as $termId => $productIds) {
+            $directCounts[(int) $termId] = count((array) $productIds);
+        }
+        $childrenByParent = [];
+        $termsById = [];
+        foreach ($terms as $term) {
+            $termId = (int) ($term['term_id'] ?? 0);
+            $parentId = (int) ($term['parent_id'] ?? 0);
+            $termsById[$termId] = $term;
+            $childrenByParent[$parentId][] = $termId;
+        }
+
+        $subtreeProductIds = [];
+        $calculateProductCount = function (int $termId) use (&$calculateProductCount, &$subtreeProductIds, $childrenByParent, $directProductIds): int {
+            if (isset($subtreeProductIds[$termId])) {
+                return count($subtreeProductIds[$termId]);
+            }
+            $productIds = [];
+            foreach ((array) ($directProductIds[$termId] ?? []) as $productId => $_present) {
+                $productIds[(int) $productId] = true;
+            }
+            foreach ((array) ($childrenByParent[$termId] ?? []) as $childId) {
+                $calculateProductCount((int) $childId);
+                foreach ((array) ($subtreeProductIds[(int) $childId] ?? []) as $productId => $_present) {
+                    $productIds[(int) $productId] = true;
+                }
+            }
+            $subtreeProductIds[$termId] = $productIds;
+            return count($productIds);
+        };
+
+        $mappingIds = [
+            'EBAY_DE' => $this->woo_category_mapping_ids('EBAY_DE'),
+            'EBAY_FR' => $this->woo_category_mapping_ids('EBAY_FR'),
+        ];
+
+        $headers = [
+            'term_id',
+            'parent_id',
+            'name',
+            'slug',
+            'full_path',
+            'level',
+            'product_count',
+            'direct_count',
+            'children_count',
+            'taxonomy',
+            'excluded_from_ebay',
+            'mapped_ebay_de_category_id',
+            'mapped_ebay_fr_category_id',
+        ];
+
+        $handle = fopen((string) $paths['path'], 'wb');
+        if (!is_resource($handle)) {
+            throw new \RuntimeException('Could not open CSV for writing: ' . (string) $paths['path']);
+        }
+
+        fputcsv($handle, $headers);
+        foreach ($terms as $term) {
+            $termId = (int) ($term['term_id'] ?? 0);
+            $parentId = (int) ($term['parent_id'] ?? 0);
+            $fullPath = $this->woo_category_full_path_from_rows($termId, $termsById);
+            $level = $fullPath === '' ? 0 : max(0, substr_count($fullPath, ' > '));
+            fputcsv($handle, [
+                $termId,
+                $parentId,
+                (string) ($term['name'] ?? ''),
+                (string) ($term['slug'] ?? ''),
+                $fullPath,
+                $level,
+                $calculateProductCount($termId),
+                (int) ($directCounts[$termId] ?? 0),
+                count((array) ($childrenByParent[$termId] ?? [])),
+                'product_cat',
+                $this->woo_category_excluded_from_ebay_value($term),
+                (string) ($mappingIds['EBAY_DE'][$termId] ?? ''),
+                (string) ($mappingIds['EBAY_FR'][$termId] ?? ''),
+            ]);
+        }
+        fclose($handle);
+
+        return [
+            'result' => 'success',
+            'path' => (string) $paths['path'],
+            'url' => (string) $paths['url'],
+            'total_categories_exported' => count($terms),
+            'generated_at' => gmdate('c'),
+            'filename' => 'woo-product-categories.csv',
+            'taxonomy' => 'product_cat',
+            'included_empty_categories' => true,
+            'called_ebay_api' => false,
+            'modified_products' => false,
+            'modified_categories' => false,
+            'published_to_ebay' => false,
+        ];
+    }
+
+    private function woo_categories_csv_export_paths(): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration-fr';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration-fr';
+        return [
+            'path' => trailingslashit($baseDir) . 'woo-product-categories.csv',
+            'url' => trailingslashit($baseUrl) . 'woo-product-categories.csv',
+        ];
+    }
+
+    private function woo_product_category_terms_for_export(): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results(
+            "SELECT t.term_id, tt.parent AS parent_id, t.name, t.slug
+             FROM {$wpdb->terms} t
+             INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
+             WHERE tt.taxonomy = 'product_cat'
+             ORDER BY tt.parent ASC, t.name ASC, t.term_id ASC",
+            ARRAY_A
+        );
+        return is_array($rows) ? $rows : [];
+    }
+
+    private function woo_product_category_direct_product_ids(): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results(
+            "SELECT DISTINCT tt.term_id, p.ID AS product_id
+             FROM {$wpdb->term_taxonomy} tt
+             INNER JOIN {$wpdb->term_relationships} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             INNER JOIN {$wpdb->posts} p ON p.ID = tr.object_id AND p.post_type = 'product' AND p.post_status IN ('publish','draft','private')
+             WHERE tt.taxonomy = 'product_cat'",
+            ARRAY_A
+        );
+        $productIdsByTerm = [];
+        foreach ((array) $rows as $row) {
+            $termId = (int) ($row['term_id'] ?? 0);
+            $productId = (int) ($row['product_id'] ?? 0);
+            if ($termId > 0 && $productId > 0) {
+                $productIdsByTerm[$termId][$productId] = true;
+            }
+        }
+        return $productIdsByTerm;
+    }
+
+    private function woo_category_mapping_ids(string $marketplaceId): array
+    {
+        global $wpdb;
+        $tables = array_values(array_unique([
+            $wpdb->prefix . 'wei_fr_ebay_category_mappings',
+            $wpdb->prefix . 'wei_ebay_category_mappings',
+        ]));
+        $mappings = [];
+        foreach ($tables as $table) {
+            $exists = (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+            if ($exists !== $table) {
+                continue;
+            }
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT woo_term_id, ebay_category_id,
+                        CASE
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') THEN 10
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source='manual_worklist' THEN 20
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('ovoko_import','supplier_import') THEN 30
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('import','csv_import','normal_import') THEN 40
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('rule','auto_taxonomy') THEN 50
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' AND source IN ('legacy','legacy_import') THEN 60
+                            WHEN COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' THEN 70
+                            ELSE 90
+                        END AS resolver_priority,
+                        COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), created_at) AS resolver_date,
+                        id
+                 FROM {$table}
+                 WHERE marketplace_id=%s AND TRIM(COALESCE(ebay_category_id,''))<>''
+                 ORDER BY woo_term_id ASC, resolver_priority ASC, resolver_date DESC, id DESC",
+                $marketplaceId
+            ), ARRAY_A);
+            foreach ((array) $rows as $row) {
+                $termId = (int) ($row['woo_term_id'] ?? 0);
+                if ($termId <= 0 || isset($mappings[$termId]) || (int) ($row['resolver_priority'] ?? 90) >= 90) {
+                    continue;
+                }
+                $mappings[$termId] = (string) ($row['ebay_category_id'] ?? '');
+            }
+        }
+        return $mappings;
+    }
+
+    private function woo_category_full_path_from_rows(int $termId, array $termsById): string
+    {
+        $names = [];
+        $seen = [];
+        while ($termId > 0 && isset($termsById[$termId]) && !isset($seen[$termId])) {
+            $seen[$termId] = true;
+            array_unshift($names, (string) ($termsById[$termId]['name'] ?? ''));
+            $termId = (int) ($termsById[$termId]['parent_id'] ?? 0);
+        }
+        return implode(' > ', array_values(array_filter($names, static fn($name): bool => trim((string) $name) !== '')));
+    }
+
+    private function woo_category_excluded_from_ebay_value(array $term): string
+    {
+        $termId = (int) ($term['term_id'] ?? 0);
+        if ($termId > 0 && function_exists('get_term_meta')) {
+            foreach (['_wei_fr_ebay_export_status', '_wei_ebay_export_status', 'excluded_from_ebay', '_excluded_from_ebay', 'wei_fr_excluded_from_ebay', 'wei_excluded_from_ebay'] as $key) {
+                $value = get_term_meta($termId, $key, true);
+                if (is_scalar($value) && trim((string) $value) !== '') {
+                    return (string) $value;
+                }
+            }
+        }
+
+        $name = function_exists('remove_accents') ? strtolower(remove_accents((string) ($term['name'] ?? ''))) : strtolower((string) ($term['name'] ?? ''));
+        $slug = function_exists('remove_accents') ? strtolower(remove_accents((string) ($term['slug'] ?? ''))) : strtolower((string) ($term['slug'] ?? ''));
+        $normalizedName = trim((string) preg_replace('/[^a-z0-9]+/', ' ', $name));
+        $normalizedSlug = trim((string) preg_replace('/[^a-z0-9]+/', ' ', str_replace('-', ' ', $slug)));
+        if (in_array($normalizedName, ['bez kategorii', 'uncategorized'], true) || in_array($normalizedSlug, ['bez kategorii', 'uncategorized'], true)) {
+            return 'excluded_from_ebay';
+        }
+
+        return '';
+    }
+
     public function import_category_mapping_worklist(): void
     {
         $this->require_manage_options();
@@ -1498,6 +1766,12 @@ class AdminPage
             if ($candidate !== '') {
                 $allowed[basename($candidate)] = $candidate;
             }
+        }
+        $wooCategoryExport = get_option('wei_fr_woo_product_categories_export_summary', []);
+        $wooCategoryExport = is_array($wooCategoryExport) ? $wooCategoryExport : [];
+        $wooCategoryExportPath = (string) ($wooCategoryExport['path'] ?? '');
+        if ($wooCategoryExportPath !== '') {
+            $allowed[basename($wooCategoryExportPath)] = $wooCategoryExportPath;
         }
         if (!isset($allowed[$file])) {
             wp_die('Invalid report file');
