@@ -147,6 +147,82 @@ foreach (['wei_fr_ebay_settings', '_wei_fr_ebay_offer_id', 'wei-ebay-integration
     $assert(!str_contains($adminSource, $forbidden), 'DE admin revise code must not touch FR token: ' . $forbidden);
 }
 
+
+
+$runnerBlockStart = strpos($viewSource, 'id="wei-shipping-policy-revise-runner"');
+$runnerBlockEnd = strpos($viewSource, '<h4>Latest shipping-policy revise report</h4>', $runnerBlockStart);
+$runnerBlock = $runnerBlockStart === false ? '' : substr($viewSource, $runnerBlockStart, $runnerBlockEnd - $runnerBlockStart);
+foreach ([
+    'wei-auto-runner' => 'DE revise runner must reuse the proven auto-runner visual pattern.',
+    'data-admin-post-url' => 'DE revise runner must post to admin-post like publish/French content runners.',
+    'Delay between batches' => 'DE revise runner must expose a delay control.',
+    'id="wei-shipping-policy-revise-delay" type="number" min="0" max="3600" step="1" value="5"' => 'DE revise delay must default to 5 seconds.',
+    '<option value="dry_run">dry-run</option>' => 'DE revise mode must include dry-run.',
+    '<option value="live">live revise changed offers only</option>' => 'DE revise mode must include fulfillment-policy-only live revise.',
+    'data-revise-counter="batches_completed"' => 'DE revise runner must show batches_completed.',
+    'data-revise-counter="total_checked"' => 'DE revise runner must show total_checked.',
+    'data-revise-counter="total_changed"' => 'DE revise runner must show total_changed.',
+    'data-revise-counter="total_unchanged"' => 'DE revise runner must show total_unchanged.',
+    'data-revise-counter="total_skipped"' => 'DE revise runner must show total_skipped.',
+    'data-revise-counter="total_errors"' => 'DE revise runner must show total_errors.',
+    'data-revise-counter="remaining_candidates"' => 'DE revise runner must show remaining_candidates.',
+    'data-revise-counter="state"' => 'DE revise runner must show state.',
+    'data-revise-counter="stopped_reason"' => 'DE revise runner must show stopped_reason.',
+    'data-revise-counter="last_batch_result"' => 'DE revise runner must show last batch JSON.',
+] as $needle => $message) {
+    $assert(str_contains($runnerBlock, $needle), $message);
+}
+
+foreach ([
+    'if (reviseState.inFlight)' => 'DE JS must guard against concurrent revise requests.',
+    "throw new Error('double_submit_prevented')" => 'DE JS must fail fast on double submit attempts.',
+    'await runReviseBatch(batchIndex)' => 'DE JS must wait for each revise request to finish.',
+    'await waitRevise(reviseNumberFromInput(reviseDelay, 5, 0, 3600) * 1000)' => 'DE JS must wait the configured delay between batches.',
+    "reviseStop.addEventListener('click'" => 'DE JS must implement Stop behavior.',
+    "stopReviseRunner('manual_stop')" => 'DE Stop must set a manual stop reason.',
+    'summary.queue_empty === true || summary.completed === true' => 'DE loop must continue until queue_empty/completed.',
+    'summary.fatal_error || summary.stopped_reason' => 'DE loop must stop on fatal error / stopped reason.',
+    "window.addEventListener('beforeunload'" => 'DE runner must abort/stop on page unload.',
+    "formData.append('action', reviseRunner.dataset.action || 'wei_shipping_policy_revise_run')" => 'DE JS must use the DE action only.',
+    "formData.append('_wpnonce', reviseRunner.dataset.nonce || '')" => 'DE JS must send the DE nonce.',
+    "formData.append('auto_runner_batch_index', String(batchIndex))" => 'DE JS must send batch index for paged browser batches.',
+] as $needle => $message) {
+    $assert(str_contains($viewSource, $needle), $message);
+}
+
+foreach ([
+    "'auto_runner_batch_index' => $" . "autoRunnerBatchIndex" => 'DE endpoint summary must include auto_runner_batch_index.',
+    "'queue_empty' => false" => 'DE endpoint summary must include queue_empty.',
+    "'completed' => false" => 'DE endpoint summary must include completed.',
+    "'remaining_candidates' => 0" => 'DE endpoint summary must include remaining_candidates.',
+    "'remaining_listings' => 0" => 'DE endpoint summary must include remaining_listings.',
+    "'fatal_error' => false" => 'DE endpoint summary must include fatal_error.',
+    "'stopped_reason' => ''" => 'DE endpoint summary must include stopped_reason.',
+    "'report_urls' => $" . "paths['urls']" => 'DE endpoint summary must include report URLs.',
+    '$lastRun = $summary + [' => 'DE endpoint JSON must expose counters at the top level as well as under summary.',
+    'shipping_policy_revise_candidate_page($batchSize, max(0, ($autoRunnerBatchIndex - 1) * $batchSize))' => 'DE endpoint must page candidates for automatic browser batches.',
+] as $needle => $message) {
+    $assert(str_contains($adminSource, $needle), $message);
+}
+
+$reviseRunBlockStart = strpos($adminSource, 'private function run_shipping_policy_revise_batch');
+$reviseRunBlockEnd = strpos($adminSource, 'private function shipping_policy_revise_candidate_page', $reviseRunBlockStart);
+$reviseRunBlock = $reviseRunBlockStart === false ? '' : substr($adminSource, $reviseRunBlockStart, $reviseRunBlockEnd - $reviseRunBlockStart);
+$dryRunWriteStart = strpos($reviseRunBlock, "if (!$" . "dryRun)");
+$beforeLiveWriteBlock = $dryRunWriteStart === false ? $reviseRunBlock : substr($reviseRunBlock, 0, $dryRunWriteStart);
+foreach (['revise_existing_offer_fulfillment_policy_only(', 'update_offer(', 'create_offer(', 'publish_offer(', 'bulk_update_price_quantity(', 'create_or_replace_inventory_item('] as $forbidden) {
+    $assert(!str_contains($beforeLiveWriteBlock, $forbidden), 'DE dry-run mode must not write via ' . $forbidden);
+}
+
+foreach (['create_offer(', 'publish_offer(', 'bulk_update_price_quantity(', 'create_or_replace_inventory_item(', 'title', 'description', 'category'] as $forbidden) {
+    $assert(!str_contains($reviseBlock, $forbidden), 'DE live revise method must not change publish/stock/price/title/description/category via token ' . $forbidden);
+}
+$assert(str_contains($reviseBlock, "\$payload['listingPolicies']['fulfillmentPolicyId']"), 'DE live revise method must only target listingPolicies.fulfillmentPolicyId.');
+$assert(str_contains($adminSource, "'EBAY_DE'"), 'DE admin revise code must use EBAY_DE.');
+$assert(str_contains($viewSource, 'data-action="wei_shipping_policy_revise_run"'), 'DE runner must keep the DE action separated.');
+$assert(str_contains($viewSource, "wp_create_nonce('wei_shipping_policy_revise_run')"), 'DE runner must keep the DE nonce separated.');
+$assert(str_contains($adminSource, 'wei-ebay-integration'), 'DE reports must stay in the DE report directory.');
+
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
     exit(1);

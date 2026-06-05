@@ -129,6 +129,82 @@ foreach (['wei_ebay_settings', '_wei_ebay_offer_id', 'wei-ebay-integration/', 'E
     $assert(!str_contains(substr($adminSource, strpos($adminSource, 'public function shipping_policy_revise_run'), strpos($adminSource, 'public function update_shipping_policy_one') - strpos($adminSource, 'public function shipping_policy_revise_run')), $forbidden), 'FR admin revise code must not touch DE token: ' . $forbidden);
 }
 
+
+
+$runnerBlockStart = strpos($viewSource, 'id="wei-fr-shipping-policy-revise-runner"');
+$runnerBlockEnd = strpos($viewSource, '<h4>Latest shipping-policy revise report</h4>', $runnerBlockStart);
+$runnerBlock = $runnerBlockStart === false ? '' : substr($viewSource, $runnerBlockStart, $runnerBlockEnd - $runnerBlockStart);
+foreach ([
+    'wei-auto-runner' => 'FR revise runner must reuse the proven auto-runner visual pattern.',
+    'data-admin-post-url' => 'FR revise runner must post to admin-post like publish/French content runners.',
+    'Delay between batches' => 'FR revise runner must expose a delay control.',
+    'id="wei-fr-shipping-policy-revise-delay" type="number" min="0" max="3600" step="1" value="5"' => 'FR revise delay must default to 5 seconds.',
+    '<option value="dry_run">dry-run</option>' => 'FR revise mode must include dry-run.',
+    '<option value="live">live revise changed offers only</option>' => 'FR revise mode must include fulfillment-policy-only live revise.',
+    'data-revise-counter="batches_completed"' => 'FR revise runner must show batches_completed.',
+    'data-revise-counter="total_checked"' => 'FR revise runner must show total_checked.',
+    'data-revise-counter="total_changed"' => 'FR revise runner must show total_changed.',
+    'data-revise-counter="total_unchanged"' => 'FR revise runner must show total_unchanged.',
+    'data-revise-counter="total_skipped"' => 'FR revise runner must show total_skipped.',
+    'data-revise-counter="total_errors"' => 'FR revise runner must show total_errors.',
+    'data-revise-counter="remaining_candidates"' => 'FR revise runner must show remaining_candidates.',
+    'data-revise-counter="state"' => 'FR revise runner must show state.',
+    'data-revise-counter="stopped_reason"' => 'FR revise runner must show stopped_reason.',
+    'data-revise-counter="last_batch_result"' => 'FR revise runner must show last batch JSON.',
+] as $needle => $message) {
+    $assert(str_contains($runnerBlock, $needle), $message);
+}
+
+foreach ([
+    'if (reviseState.inFlight)' => 'FR JS must guard against concurrent revise requests.',
+    "throw new Error('double_submit_prevented')" => 'FR JS must fail fast on double submit attempts.',
+    'await runReviseBatch(batchIndex)' => 'FR JS must wait for each revise request to finish.',
+    'await waitRevise(reviseNumberFromInput(reviseDelay, 5, 0, 3600) * 1000)' => 'FR JS must wait the configured delay between batches.',
+    "reviseStop.addEventListener('click'" => 'FR JS must implement Stop behavior.',
+    "stopReviseRunner('manual_stop')" => 'FR Stop must set a manual stop reason.',
+    'summary.queue_empty === true || summary.completed === true' => 'FR loop must continue until queue_empty/completed.',
+    'summary.fatal_error || summary.stopped_reason' => 'FR loop must stop on fatal error / stopped reason.',
+    "window.addEventListener('beforeunload'" => 'FR runner must abort/stop on page unload.',
+    "formData.append('action', reviseRunner.dataset.action || 'wei_fr_shipping_policy_revise_run')" => 'FR JS must use the FR action only.',
+    "formData.append('_wpnonce', reviseRunner.dataset.nonce || '')" => 'FR JS must send the FR nonce.',
+    "formData.append('auto_runner_batch_index', String(batchIndex))" => 'FR JS must send batch index for paged browser batches.',
+] as $needle => $message) {
+    $assert(str_contains($viewSource, $needle), $message);
+}
+
+foreach ([
+    "'auto_runner_batch_index' => $" . "autoRunnerBatchIndex" => 'FR endpoint summary must include auto_runner_batch_index.',
+    "'queue_empty' => false" => 'FR endpoint summary must include queue_empty.',
+    "'completed' => false" => 'FR endpoint summary must include completed.',
+    "'remaining_candidates' => 0" => 'FR endpoint summary must include remaining_candidates.',
+    "'remaining_listings' => 0" => 'FR endpoint summary must include remaining_listings.',
+    "'fatal_error' => false" => 'FR endpoint summary must include fatal_error.',
+    "'stopped_reason' => ''" => 'FR endpoint summary must include stopped_reason.',
+    "'report_urls' => $" . "paths['urls']" => 'FR endpoint summary must include report URLs.',
+    '$lastRun = $summary + [' => 'FR endpoint JSON must expose counters at the top level as well as under summary.',
+    'shipping_policy_revise_candidate_page($batchSize, max(0, ($autoRunnerBatchIndex - 1) * $batchSize))' => 'FR endpoint must page candidates for automatic browser batches.',
+] as $needle => $message) {
+    $assert(str_contains($adminSource, $needle), $message);
+}
+
+$reviseRunBlockStart = strpos($adminSource, 'private function run_shipping_policy_revise_batch');
+$reviseRunBlockEnd = strpos($adminSource, 'private function shipping_policy_revise_candidate_page', $reviseRunBlockStart);
+$reviseRunBlock = $reviseRunBlockStart === false ? '' : substr($adminSource, $reviseRunBlockStart, $reviseRunBlockEnd - $reviseRunBlockStart);
+$dryRunWriteStart = strpos($reviseRunBlock, "if (!$" . "dryRun)");
+$beforeLiveWriteBlock = $dryRunWriteStart === false ? $reviseRunBlock : substr($reviseRunBlock, 0, $dryRunWriteStart);
+foreach (['revise_existing_offer_fulfillment_policy_only(', 'update_offer(', 'create_offer(', 'publish_offer(', 'bulk_update_price_quantity(', 'create_or_replace_inventory_item('] as $forbidden) {
+    $assert(!str_contains($beforeLiveWriteBlock, $forbidden), 'FR dry-run mode must not write via ' . $forbidden);
+}
+
+foreach (['create_offer(', 'publish_offer(', 'bulk_update_price_quantity(', 'create_or_replace_inventory_item(', 'title', 'description', 'category'] as $forbidden) {
+    $assert(!str_contains($reviseBlock, $forbidden), 'FR live revise method must not change publish/stock/price/title/description/category via token ' . $forbidden);
+}
+$assert(str_contains($reviseBlock, "\$payload['listingPolicies']['fulfillmentPolicyId']"), 'FR live revise method must only target listingPolicies.fulfillmentPolicyId.');
+$assert(str_contains($adminSource, "'EBAY_FR'"), 'FR admin revise code must use EBAY_FR.');
+$assert(str_contains($viewSource, 'data-action="wei_fr_shipping_policy_revise_run"'), 'FR runner must keep the FR action separated.');
+$assert(str_contains($viewSource, "wp_create_nonce('wei_fr_shipping_policy_revise_run')"), 'FR runner must keep the FR nonce separated.');
+$assert(str_contains($adminSource, 'wei-ebay-integration-fr'), 'FR reports must stay in the FR report directory.');
+
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
     exit(1);
