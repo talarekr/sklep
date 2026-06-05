@@ -681,7 +681,51 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
         <h2>2. Publish</h2>
         <p class="description">Publish ready products only. Run the full publish readiness audit first; it only reads local Woo/product meta data and writes CSV diagnostics. Publish/export buttons remain separate actions.</p>
         <p class="wei-danger"><strong>Warning:</strong> Publish run counters, readiness audit counters, and eBay listing state refresh counters are intentionally separate. These counters are from the last publish run. Reset progress before starting a new full publish run if listings were ended manually on eBay.</p>
-        <h3>Latest readiness scan</h3>
+        <h3>Revise existing listings shipping policy</h3>
+        <p class="description"><strong>Safe scope:</strong> recalculates the Woo category shipping group and revises existing active eBay.fr offers only when <code>listingPolicies.fulfillmentPolicyId</code> changed. It does not publish, create offers, change stock, price, title, description/template, category, or inventory availability.</p>
+        <?php $shippingPolicyReviseSummary = is_array($shipping_policy_revise_report['summary'] ?? null) ? $shipping_policy_revise_report['summary'] : []; $shippingPolicyReviseUrls = is_array($shippingPolicyReviseSummary['report_urls'] ?? null) ? $shippingPolicyReviseSummary['report_urls'] : []; $shippingPolicyReviseRows = array_slice(is_array($shipping_policy_revise_report['rows'] ?? null) ? $shipping_policy_revise_report['rows'] : [], 0, 20); ?>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_fr_shipping_policy_revise_run'); ?>
+                <input type="hidden" name="action" value="wei_fr_shipping_policy_revise_run" />
+                <input type="hidden" name="mode" value="dry_run" />
+                <label>batch size <input type="number" name="batch_size" min="1" max="100" value="20" /></label>
+                <button class="button">Run dry-run</button>
+            </form>
+            <form method="post" action="<?php echo esc_url($adminPostUrl); ?>">
+                <?php wp_nonce_field('wei_fr_shipping_policy_revise_run'); ?>
+                <input type="hidden" name="action" value="wei_fr_shipping_policy_revise_run" />
+                <input type="hidden" name="mode" value="live" />
+                <label>batch size <input type="number" name="batch_size" min="1" max="100" value="20" /></label>
+                <button class="button button-primary">Run live revise changed offers only</button>
+                <p class="description">Warning: live mode calls eBay only for changed rows and updates only <code>listingPolicies.fulfillmentPolicyId</code> on existing active EBAY_FR offers.</p>
+            </form>
+        </div>
+        <div id="wei-fr-shipping-policy-revise-runner" class="wei-actions" data-action="wei_fr_shipping_policy_revise_run" data-nonce="<?php echo esc_attr(wp_create_nonce('wei_fr_shipping_policy_revise_run')); ?>">
+            <strong>Optional Auto runner</strong>
+            <label>mode <select id="wei-fr-shipping-policy-revise-mode"><option value="dry_run">dry-run</option><option value="live">live revise</option></select></label>
+            <label>batch size <input id="wei-fr-shipping-policy-revise-batch-size" type="number" min="1" max="100" value="20" /></label>
+            <button type="button" class="button" id="wei-fr-shipping-policy-revise-start">Start</button>
+            <button type="button" class="button" id="wei-fr-shipping-policy-revise-stop">Stop</button>
+            <span>state: <code data-revise-counter="state">idle</code></span>
+            <span>checked: <code data-revise-counter="checked">0</code></span>
+            <span>changed: <code data-revise-counter="changed">0</code></span>
+            <span>skipped: <code data-revise-counter="skipped">0</code></span>
+            <span>errors: <code data-revise-counter="errors">0</code></span>
+        </div>
+        <h4>Latest shipping-policy revise report</h4>
+        <p>
+            <?php if (!empty($shippingPolicyReviseUrls['last_run_json'])): ?><a href="<?php echo esc_url((string) $shippingPolicyReviseUrls['last_run_json']); ?>" target="_blank" rel="noopener noreferrer">last-run JSON</a><?php endif; ?>
+            <?php if (!empty($shippingPolicyReviseUrls['actions_csv'])): ?> | <a href="<?php echo esc_url((string) $shippingPolicyReviseUrls['actions_csv']); ?>" target="_blank" rel="noopener noreferrer">actions CSV</a><?php endif; ?>
+            <?php if (!empty($shippingPolicyReviseUrls['errors_csv'])): ?> | <a href="<?php echo esc_url((string) $shippingPolicyReviseUrls['errors_csv']); ?>" target="_blank" rel="noopener noreferrer">errors CSV</a><?php endif; ?>
+        </p>
+        <div class="wei-grid">
+            <?php foreach (['checked','changed','unchanged','skipped','errors','dry_run','started_at','finished_at'] as $key): ?><div class="wei-card"><span><?php echo esc_html($key); ?></span><strong><?php echo esc_html((string) ($shippingPolicyReviseSummary[$key] ?? '-')); ?></strong></div><?php endforeach; ?>
+        </div>
+        <?php if (!empty($shipping_policy_revise_report['report_write_error'])): ?><div class="notice notice-error inline"><p><strong>report_write_error:</strong> <code><?php echo esc_html(wp_json_encode($shipping_policy_revise_report['report_write_error'])); ?></code></p></div><?php endif; ?>
+        <?php if ($shippingPolicyReviseRows !== []): ?><div class="wei-scroll-table"><table class="widefat striped"><thead><tr><th>product_id</th><th>title</th><th>sku</th><th>ebay_sku</th><th>marketplace</th><th>listing_id</th><th>offer_id</th><th>listing_url</th><th>old group</th><th>new group</th><th>old policy</th><th>new policy</th><th>changed</th><th>skipped</th><th>reason</th></tr></thead><tbody><?php foreach ($shippingPolicyReviseRows as $row): ?><tr><td><?php echo esc_html((string) ($row['product_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['title'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['sku'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['ebay_sku'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['marketplace'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['listing_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['offer_id'] ?? '')); ?></td><td><?php $reviseListingUrl = (string) ($row['listing_url'] ?? ''); if ($reviseListingUrl !== ''): ?><a href="<?php echo esc_url($reviseListingUrl); ?>" target="_blank" rel="noopener noreferrer">open</a><?php endif; ?></td><td><?php echo esc_html((string) ($row['old_shipping_group'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['new_shipping_group'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['old_fulfillment_policy_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['new_fulfillment_policy_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['changed'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['skipped'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['reason'] ?? '')); ?></td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
+
+                <h3>Latest readiness scan</h3>
         <?php if (!$publishAuditComplete): ?><div class="notice notice-warning inline"><p><strong>PARTIAL / IN PROGRESS:</strong> These are checkpointed partial counts only. The dashboard shows final publish readiness KPI only after <code>complete=true</code>.</p></div><?php endif; ?>
         <div class="wei-grid">
             <div class="wei-card"><span>audit status</span><strong><?php echo esc_html($publishAuditStatusLabel); ?></strong></div>
@@ -1540,6 +1584,41 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
     </details>
     <script>
     (function () {
+        const reviseRunner = document.getElementById('wei-fr-shipping-policy-revise-runner');
+        if (reviseRunner) {
+            const reviseStart = document.getElementById('wei-fr-shipping-policy-revise-start');
+            const reviseStop = document.getElementById('wei-fr-shipping-policy-revise-stop');
+            const reviseBatchSize = document.getElementById('wei-fr-shipping-policy-revise-batch-size');
+            const reviseMode = document.getElementById('wei-fr-shipping-policy-revise-mode');
+            const reviseCounters = {};
+            reviseRunner.querySelectorAll('[data-revise-counter]').forEach(function (node) { reviseCounters[node.getAttribute('data-revise-counter')] = node; });
+            const reviseState = { running: false, inFlight: false, stopped: false };
+            const setRevise = function (key, value) { if (reviseCounters[key]) { reviseCounters[key].textContent = String(value); } };
+            const reviseNumber = function (input, fallback) { const n = parseInt(input && input.value ? input.value : String(fallback), 10); return Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : fallback; };
+            async function runReviseBatch() {
+                if (!reviseState.running || reviseState.inFlight || reviseState.stopped) { return; }
+                reviseState.inFlight = true;
+                const formData = new FormData();
+                formData.append('action', reviseRunner.dataset.action || 'wei_fr_shipping_policy_revise_run');
+                formData.append('_wpnonce', reviseRunner.dataset.nonce || '');
+                formData.append('wei_auto_runner', '1');
+                formData.append('mode', reviseMode ? reviseMode.value : 'dry_run');
+                formData.append('batch_size', String(reviseNumber(reviseBatchSize, 20)));
+                try {
+                    const response = await fetch(ajaxurl.replace('admin-ajax.php', 'admin-post.php'), { method: 'POST', credentials: 'same-origin', body: formData });
+                    const payload = await response.json();
+                    const summary = payload && payload.summary ? payload.summary : {};
+                    setRevise('checked', summary.checked || 0); setRevise('changed', summary.changed || 0); setRevise('skipped', summary.skipped || 0); setRevise('errors', summary.errors || 0);
+                    if (!reviseState.stopped && (summary.checked || 0) > 0) { reviseState.inFlight = false; window.setTimeout(runReviseBatch, 1000); return; }
+                    reviseState.running = false; setRevise('state', 'completed');
+                } catch (e) {
+                    reviseState.running = false; setRevise('state', 'error');
+                } finally { reviseState.inFlight = false; }
+            }
+            reviseStart.addEventListener('click', function () { if (reviseState.running || reviseState.inFlight) { return; } reviseState.running = true; reviseState.stopped = false; setRevise('state', 'running'); runReviseBatch(); });
+            reviseStop.addEventListener('click', function () { reviseState.stopped = true; reviseState.running = false; setRevise('state', 'stopped'); });
+        }
+
         const runner = document.getElementById('wei-publish-auto-runner');
         if (!runner) {
             return;

@@ -1143,6 +1143,53 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
 
 
+    public function revise_existing_offer_fulfillment_policy_only(int $product_id, string $offer_id, string $fulfillment_policy_id): array
+    {
+        $offer_id = trim($offer_id);
+        $fulfillment_policy_id = trim($fulfillment_policy_id);
+        $marketplaceId = $this->marketplace_id();
+        $context = [
+            'product_id' => $product_id,
+            'offer_id' => $offer_id,
+            'marketplace_id' => $marketplaceId,
+            'safe_update_scope' => 'listingPolicies.fulfillmentPolicyId_only',
+            'called_create_offer' => false,
+            'called_publish_offer' => false,
+            'called_inventory_availability_update' => false,
+            'called_price_update' => false,
+        ];
+        if ($offer_id === '' || $fulfillment_policy_id === '') {
+            return $context + ['result' => 'error', 'error' => 'offer_id_or_fulfillment_policy_id_missing'];
+        }
+        $offer = $this->client->get_offer($offer_id, $context + ['stage' => 'safeShippingPolicyReviseGetOffer']);
+        if (is_wp_error($offer)) {
+            return $context + ['result' => 'error', 'error' => $offer->get_error_message(), 'error_details' => $offer->get_error_data()];
+        }
+        if (!is_array($offer)) {
+            return $context + ['result' => 'error', 'error' => 'invalid_get_offer_response'];
+        }
+        $currentPolicies = is_array($offer['listingPolicies'] ?? null) ? $offer['listingPolicies'] : [];
+        $currentPolicyId = (string) ($currentPolicies['fulfillmentPolicyId'] ?? '');
+        if ($currentPolicyId === $fulfillment_policy_id) {
+            return $context + ['result' => 'success', 'changed' => false, 'status' => 'unchanged_after_api_read', 'current_fulfillment_policy_id' => $currentPolicyId, 'desired_fulfillment_policy_id' => $fulfillment_policy_id];
+        }
+        $sku = (string) ($offer['sku'] ?? get_post_meta($product_id, '_wei_fr_ebay_sku', true));
+        $payload = $this->build_policy_only_offer_payload($offer, $sku, $marketplaceId);
+        $payload['listingPolicies'] = $currentPolicies;
+        $payload['listingPolicies']['fulfillmentPolicyId'] = $fulfillment_policy_id;
+        if (empty($payload['marketplaceId'])) {
+            $payload['marketplaceId'] = $marketplaceId;
+        }
+        if (empty($payload['merchantLocationKey'])) {
+            $payload['merchantLocationKey'] = $this->merchant_location_key();
+        }
+        $updated = $this->client->update_offer($offer_id, $payload, $context + ['stage' => 'safeShippingPolicyReviseUpdateOffer', 'desired_fulfillment_policy_id' => $fulfillment_policy_id]);
+        if (is_wp_error($updated)) {
+            return $context + ['result' => 'error', 'error' => $updated->get_error_message(), 'error_details' => $updated->get_error_data(), 'current_fulfillment_policy_id' => $currentPolicyId, 'desired_fulfillment_policy_id' => $fulfillment_policy_id];
+        }
+        return $context + ['result' => 'success', 'changed' => true, 'status' => 'updated', 'current_fulfillment_policy_id' => $currentPolicyId, 'desired_fulfillment_policy_id' => $fulfillment_policy_id, 'ebay_response' => is_array($updated) ? $updated : []];
+    }
+
     public function update_fulfillment_policy_only(int $product_id, ?int $variation_id = null): array
     {
         $product = wc_get_product($variation_id ?: $product_id);

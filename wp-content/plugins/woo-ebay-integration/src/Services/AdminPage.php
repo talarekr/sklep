@@ -51,6 +51,7 @@ class AdminPage
         add_action('admin_post_wei_shipping_policy_bulk_resume', [$this, 'shipping_policy_bulk_resume']);
         add_action('admin_post_wei_shipping_policy_bulk_stop', [$this, 'shipping_policy_bulk_stop']);
         add_action('admin_post_wei_shipping_policy_bulk_process', [$this, 'shipping_policy_bulk_process']);
+        add_action('admin_post_wei_shipping_policy_revise_run', [$this, 'shipping_policy_revise_run']);
         add_action('admin_post_wei_basic_specifics_bulk_start', [$this, 'basic_specifics_bulk_start']);
         add_action('admin_post_wei_basic_specifics_bulk_pause', [$this, 'basic_specifics_bulk_pause']);
         add_action('admin_post_wei_basic_specifics_bulk_resume', [$this, 'basic_specifics_bulk_resume']);
@@ -406,6 +407,7 @@ class AdminPage
         $listing_quality_audit = get_option('wei_ebay_listing_quality_audit', []);
         $listing_quality_audit = is_array($listing_quality_audit) ? $listing_quality_audit : [];
         $shipping_policy_bulk_status = $this->shipping_policy_bulk_status();
+        $shipping_policy_revise_report = $this->shipping_policy_revise_latest_report();
         $basic_specifics_bulk_status = $this->basic_specifics_bulk_status();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
@@ -927,6 +929,230 @@ class AdminPage
         $this->go();
     }
 
+
+
+
+    public function shipping_policy_revise_run(): void
+    {
+        $this->require_manage_options();
+        check_admin_referer('wei_shipping_policy_revise_run');
+        $dryRun = (string) ($_POST['mode'] ?? 'dry_run') !== 'live';
+        $batchSize = absint($_POST['batch_size'] ?? 20);
+        $batchSize = max(1, min(100, $batchSize));
+        $result = $this->run_shipping_policy_revise_batch($batchSize, $dryRun);
+        if (!empty($_POST['wei_auto_runner'])) {
+            wp_send_json($result);
+        }
+        $this->set_status('Shipping policy revise ' . ($dryRun ? 'dry-run' : 'live') . ': ' . wp_json_encode($this->limit_nested_array($result, 20)));
+        $this->go();
+    }
+
+    private function run_shipping_policy_revise_batch(int $batchSize, bool $dryRun): array
+    {
+        $startedAt = gmdate('Y-m-d H:i:s');
+        $runId = 'wei-shipping-policy-revise-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false);
+        $settings = $this->settings();
+        $marketplace = 'EBAY_DE';
+        $paths = $this->shipping_policy_revise_report_paths();
+        $rows = [];
+        $summary = [
+            'checked' => 0,
+            'changed' => 0,
+            'unchanged' => 0,
+            'skipped' => 0,
+            'errors' => 0,
+            'dry_run' => $dryRun,
+            'started_at' => $startedAt,
+            'finished_at' => '',
+            'run_id' => $runId,
+            'marketplace' => $marketplace,
+            'report_paths' => $paths['paths'],
+            'report_urls' => $paths['urls'],
+        ];
+        $writeErrors = [];
+
+        foreach ($this->shipping_policy_revise_candidate_ids($batchSize) as $productId) {
+            $row = $this->shipping_policy_revise_evaluate_product($productId, $settings, $marketplace);
+            $row['timestamp'] = gmdate('Y-m-d H:i:s');
+            $row['run_id'] = $runId;
+            $row['dry_run'] = $dryRun ? '1' : '0';
+            $row['action'] = $dryRun ? 'dry_run_no_api' : 'none';
+            $row['result'] = $row['skipped'] === 'yes' ? 'skipped' : 'checked';
+            $row['error_message'] = '';
+            $summary['checked']++;
+
+            if ($row['skipped'] === 'yes') {
+                $summary['skipped']++;
+            } elseif ($row['changed'] === 'yes') {
+                $summary['changed']++;
+                if (!$dryRun) {
+                    $row['action'] = 'update_offer_listingPolicies.fulfillmentPolicyId_only';
+                    $live = $this->adapter->revise_existing_offer_fulfillment_policy_only((int) $productId, (string) $row['offer_id'], (string) $row['new_fulfillment_policy_id']);
+                    if (($live['result'] ?? '') === 'success') {
+                        $row['result'] = !empty($live['changed']) ? 'updated' : 'unchanged_after_api_read';
+                        update_post_meta($productId, '_wei_ebay_last_shipping_group', (string) $row['new_shipping_group']);
+                        update_post_meta($productId, '_wei_ebay_last_fulfillment_policy_id', (string) $row['new_fulfillment_policy_id']);
+                    } else {
+                        $summary['errors']++;
+                        $row['result'] = 'error';
+                        $row['error_message'] = (string) ($live['error'] ?? 'unknown_error');
+                    }
+                }
+            } else {
+                $summary['unchanged']++;
+            }
+            $rows[] = $row;
+            $this->logger->info('EBAY_SHIPPING_POLICY_REVISE_ROW', $row);
+        }
+
+        $summary['finished_at'] = gmdate('Y-m-d H:i:s');
+        $lastRun = ['summary' => $summary, 'rows' => $rows, 'report_write_error' => null];
+        $write = $this->write_shipping_policy_revise_reports($paths['paths'], $lastRun, $rows);
+        if (!empty($write['errors'])) {
+            $writeErrors = $write['errors'];
+            $lastRun['report_write_error'] = $writeErrors;
+            update_option('wei_ebay_shipping_policy_revise_last_run', $lastRun, false);
+        } else {
+            update_option('wei_ebay_shipping_policy_revise_last_run', $lastRun, false);
+        }
+        $this->logger->info('EBAY_SHIPPING_POLICY_REVISE_DONE', $summary + ['report_write_error' => $writeErrors]);
+        return $lastRun;
+    }
+
+    private function shipping_policy_revise_candidate_ids(int $batchSize): array
+    {
+        $query = new \WP_Query([
+            'post_type' => ['product', 'product_variation'],
+            'post_status' => ['publish', 'private'],
+            'fields' => 'ids',
+            'posts_per_page' => $batchSize,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'meta_query' => [
+                'relation' => 'AND',
+                ['key' => '_wei_ebay_listing_id', 'compare' => 'EXISTS'],
+                ['key' => '_wei_ebay_offer_id', 'compare' => 'EXISTS'],
+                ['key' => '_wei_ebay_marketplace', 'value' => 'EBAY_DE', 'compare' => '='],
+            ],
+        ]);
+        return array_map('intval', (array) $query->posts);
+    }
+
+    private function shipping_policy_revise_evaluate_product(int $productId, array $settings, string $marketplace): array
+    {
+        $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
+        $title = $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId);
+        $sku = $product && method_exists($product, 'get_sku') ? (string) $product->get_sku() : '';
+        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
+        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
+        $listingUrl = trim((string) get_post_meta($productId, '_wei_ebay_listing_url', true));
+        $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
+        if ($ebaySku === '') {
+            $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_inventory_item_id', true));
+        }
+        $storedMarketplace = trim((string) get_post_meta($productId, '_wei_ebay_marketplace', true));
+        $listingStatus = strtolower(trim((string) get_post_meta($productId, '_wei_ebay_listing_status', true)));
+        $oldGroup = trim((string) get_post_meta($productId, '_wei_ebay_last_shipping_group', true));
+        if ($oldGroup === '') {
+            $oldGroup = trim((string) get_post_meta($productId, '_wei_ebay_shipping_group', true));
+        }
+        $oldPolicy = trim((string) get_post_meta($productId, '_wei_ebay_last_fulfillment_policy_id', true));
+        $resolution = EbayShippingPolicyResolver::resolve_for_product($productId, $settings);
+        $newGroup = (string) ($resolution['group'] ?? '');
+        $newPolicy = (string) ($resolution['policy_id'] ?? '');
+        $skipReason = '';
+        if ($storedMarketplace === '') {
+            $skipReason = 'missing_marketplace';
+        } elseif ($storedMarketplace !== $marketplace) {
+            $skipReason = 'wrong_marketplace';
+        } elseif ($listingId === '') {
+            $skipReason = 'missing_listing_id';
+        } elseif ($offerId === '') {
+            $skipReason = 'missing_offer_id';
+        } elseif (in_array($listingStatus, ['ended', 'sold', 'completed', 'closed', 'deleted'], true)) {
+            $skipReason = 'listing_not_active_' . $listingStatus;
+        } elseif ($listingStatus !== '' && !in_array($listingStatus, ['active', 'published'], true)) {
+            $skipReason = 'listing_not_active_' . $listingStatus;
+        } elseif (!empty($resolution['blocked']) || $newGroup === '' || $newPolicy === '') {
+            $skipReason = 'no_shipping_group_resolved';
+        } elseif ($oldPolicy === '') {
+            $skipReason = 'old_fulfillment_policy_id_unknown';
+        }
+        $changed = $skipReason === '' && $oldPolicy !== $newPolicy;
+        return [
+            'product_id' => (string) $productId,
+            'title' => $title,
+            'sku' => $sku,
+            'ebay_sku' => $ebaySku,
+            'marketplace' => $storedMarketplace !== '' ? $storedMarketplace : $marketplace,
+            'listing_id' => $listingId,
+            'offer_id' => $offerId,
+            'listing_url' => $listingUrl,
+            'old_shipping_group' => $oldGroup,
+            'new_shipping_group' => $newGroup,
+            'old_fulfillment_policy_id' => $oldPolicy,
+            'new_fulfillment_policy_id' => $newPolicy,
+            'changed' => $changed ? 'yes' : 'no',
+            'skipped' => $skipReason !== '' ? 'yes' : 'no',
+            'reason' => $skipReason !== '' ? $skipReason : ($changed ? 'fulfillment_policy_changed' : 'fulfillment_policy_unchanged'),
+        ];
+    }
+
+    private function shipping_policy_revise_report_paths(): array
+    {
+        $upload = wp_upload_dir();
+        $baseDir = trailingslashit((string) ($upload['basedir'] ?? WP_CONTENT_DIR . '/uploads')) . 'wei-ebay-integration';
+        $baseUrl = trailingslashit((string) ($upload['baseurl'] ?? content_url('uploads'))) . 'wei-ebay-integration';
+        return [
+            'paths' => [
+                'last_run_json' => trailingslashit($baseDir) . 'shipping-policy-revise-last-run.json',
+                'actions_csv' => trailingslashit($baseDir) . 'shipping-policy-revise-actions.csv',
+                'errors_csv' => trailingslashit($baseDir) . 'shipping-policy-revise-errors.csv',
+            ],
+            'urls' => [
+                'last_run_json' => trailingslashit($baseUrl) . 'shipping-policy-revise-last-run.json',
+                'actions_csv' => trailingslashit($baseUrl) . 'shipping-policy-revise-actions.csv',
+                'errors_csv' => trailingslashit($baseUrl) . 'shipping-policy-revise-errors.csv',
+            ],
+        ];
+    }
+
+    private function write_shipping_policy_revise_reports(array $paths, array $lastRun, array $rows): array
+    {
+        $errors = [];
+        $dir = dirname((string) ($paths['last_run_json'] ?? ''));
+        if (!wp_mkdir_p($dir)) {
+            return ['errors' => [['target_path' => $dir, 'reason' => 'could_not_create_directory']]];
+        }
+        if (file_put_contents((string) $paths['last_run_json'], wp_json_encode($lastRun, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
+            $errors[] = ['target_path' => (string) $paths['last_run_json'], 'reason' => 'write_failed'];
+        }
+        $columns = ['timestamp','run_id','marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url','old_shipping_group','new_shipping_group','old_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'];
+        foreach (['actions_csv' => $rows, 'errors_csv' => array_values(array_filter($rows, static fn ($row): bool => (string) ($row['result'] ?? '') === 'error'))] as $key => $csvRows) {
+            $fh = fopen((string) $paths[$key], 'w');
+            if (!$fh) {
+                $errors[] = ['target_path' => (string) $paths[$key], 'reason' => 'open_failed'];
+                continue;
+            }
+            fputcsv($fh, $columns);
+            foreach ($csvRows as $row) {
+                fputcsv($fh, array_map(static fn ($column) => (string) ($row[$column] ?? ''), $columns));
+            }
+            fclose($fh);
+        }
+        return ['errors' => $errors];
+    }
+
+    private function shipping_policy_revise_latest_report(): array
+    {
+        $latest = get_option('wei_ebay_shipping_policy_revise_last_run', []);
+        $latest = is_array($latest) ? $latest : [];
+        if (empty($latest['summary'])) {
+            $paths = $this->shipping_policy_revise_report_paths();
+            $latest['summary'] = ['report_paths' => $paths['paths'], 'report_urls' => $paths['urls']];
+        }
+        return $latest;
+    }
 
     public function update_shipping_policy_one(): void
     {
