@@ -994,6 +994,10 @@ class AdminPage
             'marketplace' => $marketplace,
             'report_paths' => $paths['paths'],
             'report_urls' => $paths['urls'],
+            'offer_read_attempted' => 0,
+            'offer_read_success' => 0,
+            'offer_read_errors' => 0,
+            'skipped_unknown_policy_after_read' => 0,
         ];
         $writeErrors = [];
 
@@ -1002,10 +1006,23 @@ class AdminPage
             $row['timestamp'] = gmdate('Y-m-d H:i:s');
             $row['run_id'] = $runId;
             $row['dry_run'] = $dryRun ? '1' : '0';
-            $row['action'] = $dryRun ? 'dry_run_no_api' : 'none';
+            $row['action'] = $dryRun && ($row['ebay_offer_read_attempted'] ?? '') === 'yes' ? 'dry_run_get_offer_only' : ($dryRun ? 'dry_run_no_api' : 'none');
             $row['result'] = $row['skipped'] === 'yes' ? 'skipped' : 'checked';
             $row['error_message'] = '';
             $summary['checked']++;
+
+            if ($row['ebay_offer_read_attempted'] === 'yes') {
+                $summary['offer_read_attempted']++;
+            }
+            if ($row['ebay_offer_read_success'] === 'yes') {
+                $summary['offer_read_success']++;
+            }
+            if ($row['ebay_offer_read_attempted'] === 'yes' && $row['ebay_offer_read_success'] !== 'yes') {
+                $summary['offer_read_errors']++;
+            }
+            if ($row['reason'] === 'old_fulfillment_policy_id_unknown') {
+                $summary['skipped_unknown_policy_after_read']++;
+            }
 
             if ($row['skipped'] === 'yes') {
                 $summary['skipped']++;
@@ -1083,6 +1100,27 @@ class AdminPage
             $oldGroup = trim((string) get_post_meta($productId, '_wei_fr_ebay_shipping_group', true));
         }
         $oldPolicy = trim((string) get_post_meta($productId, '_wei_fr_ebay_last_fulfillment_policy_id', true));
+        $oldPolicySource = $oldPolicy !== '' ? 'local_meta' : 'unavailable';
+        $offerReadAttempted = 'no';
+        $offerReadSuccess = 'no';
+        $offerReadError = '';
+        $currentOfferFulfillmentPolicyId = $oldPolicy;
+        if ($oldPolicy === '' && $offerId !== '') {
+            $offerReadAttempted = 'yes';
+            $read = $this->adapter->read_existing_offer_fulfillment_policy_id($productId, $offerId);
+            if (($read['result'] ?? '') === 'success') {
+                $currentOfferFulfillmentPolicyId = trim((string) ($read['current_fulfillment_policy_id'] ?? ''));
+                if ($currentOfferFulfillmentPolicyId !== '') {
+                    $oldPolicy = $currentOfferFulfillmentPolicyId;
+                    $oldPolicySource = 'ebay_offer_read';
+                    $offerReadSuccess = 'yes';
+                } else {
+                    $offerReadError = 'fulfillment_policy_id_missing_in_offer';
+                }
+            } else {
+                $offerReadError = (string) ($read['error'] ?? 'unknown_offer_read_error');
+            }
+        }
         $resolution = EbayShippingPolicyResolver::resolve_for_product($productId, $settings);
         $newGroup = (string) ($resolution['group'] ?? '');
         $newPolicy = (string) ($resolution['policy_id'] ?? '');
@@ -1117,6 +1155,11 @@ class AdminPage
             'old_shipping_group' => $oldGroup,
             'new_shipping_group' => $newGroup,
             'old_fulfillment_policy_id' => $oldPolicy,
+            'old_fulfillment_policy_source' => $oldPolicySource,
+            'ebay_offer_read_attempted' => $offerReadAttempted,
+            'ebay_offer_read_success' => $offerReadSuccess,
+            'ebay_offer_read_error' => $offerReadError,
+            'current_offer_fulfillment_policy_id' => $currentOfferFulfillmentPolicyId,
             'new_fulfillment_policy_id' => $newPolicy,
             'changed' => $changed ? 'yes' : 'no',
             'skipped' => $skipReason !== '' ? 'yes' : 'no',
@@ -1153,7 +1196,7 @@ class AdminPage
         if (file_put_contents((string) $paths['last_run_json'], wp_json_encode($lastRun, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
             $errors[] = ['target_path' => (string) $paths['last_run_json'], 'reason' => 'write_failed'];
         }
-        $columns = ['timestamp','run_id','marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url','old_shipping_group','new_shipping_group','old_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'];
+        $columns = ['timestamp','run_id','marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url','old_shipping_group','new_shipping_group','old_fulfillment_policy_id','old_fulfillment_policy_source','ebay_offer_read_attempted','ebay_offer_read_success','ebay_offer_read_error','current_offer_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'];
         foreach (['actions_csv' => $rows, 'errors_csv' => array_values(array_filter($rows, static fn ($row): bool => (string) ($row['result'] ?? '') === 'error'))] as $key => $csvRows) {
             $fh = fopen((string) $paths[$key], 'w');
             if (!$fh) {

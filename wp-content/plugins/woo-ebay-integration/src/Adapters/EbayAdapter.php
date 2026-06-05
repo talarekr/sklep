@@ -1092,6 +1092,45 @@ class EbayAdapter implements MarketplaceAdapterInterface
 
 
 
+    public function read_existing_offer_fulfillment_policy_id(int $product_id, string $offer_id): array
+    {
+        $offer_id = trim($offer_id);
+        $marketplaceId = $this->marketplace_id();
+        $context = [
+            'product_id' => $product_id,
+            'offer_id' => $offer_id,
+            'marketplace_id' => $marketplaceId,
+            'safe_read_scope' => 'listingPolicies.fulfillmentPolicyId_only',
+            'called_create_offer' => false,
+            'called_publish_offer' => false,
+            'called_inventory_availability_update' => false,
+            'called_price_update' => false,
+            'called_update_offer' => false,
+        ];
+        if ($offer_id === '') {
+            return $context + ['result' => 'error', 'error' => 'offer_id_missing'];
+        }
+        $offer = $this->client->get_offer($offer_id, $context + ['stage' => 'shippingPolicyReviseReadCurrentOfferPolicy']);
+        if (is_wp_error($offer)) {
+            return $context + ['result' => 'error', 'error' => $offer->get_error_message(), 'error_details' => $offer->get_error_data()];
+        }
+        if (!is_array($offer)) {
+            return $context + ['result' => 'error', 'error' => 'invalid_get_offer_response'];
+        }
+        $currentPolicies = is_array($offer['listingPolicies'] ?? null) ? $offer['listingPolicies'] : [];
+        $currentPolicyId = trim((string) ($currentPolicies['fulfillmentPolicyId'] ?? ''));
+        if ($currentPolicyId === '') {
+            return $context + ['result' => 'error', 'error' => 'fulfillment_policy_id_missing_in_offer'];
+        }
+        return $context + [
+            'result' => 'success',
+            'current_fulfillment_policy_id' => $currentPolicyId,
+            'listingPolicies' => $currentPolicies,
+            'sku' => (string) ($offer['sku'] ?? get_post_meta($product_id, '_wei_ebay_sku', true)),
+        ];
+    }
+
+
     public function revise_existing_offer_fulfillment_policy_only(int $product_id, string $offer_id, string $fulfillment_policy_id): array
     {
         $offer_id = trim($offer_id);

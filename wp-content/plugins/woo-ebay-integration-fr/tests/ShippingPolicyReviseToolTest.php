@@ -41,7 +41,7 @@ foreach ([
 foreach ([
     'fulfillment_policy_changed' => 'Dry-run/live evaluation must detect changed policies.',
     'fulfillment_policy_unchanged' => 'Dry-run/live evaluation must detect unchanged policies.',
-    'old_fulfillment_policy_id_unknown' => 'Rows with unknown old policy must be skipped safely.',
+    'old_fulfillment_policy_id_unknown' => 'Rows with unknown old policy after offer read must be skipped safely.',
     'missing_offer_id' => 'Rows missing offer meta must be skipped.',
     'missing_listing_id' => 'Rows missing listing meta must be skipped.',
     "['ended', 'sold', 'completed', 'closed', 'deleted']" => 'Ended/sold listings must be skipped.',
@@ -59,7 +59,7 @@ foreach ([
     'fr-shipping-policy-revise-errors.csv' => 'FR errors CSV filename missing.',
     "'timestamp','run_id'" => 'CSV columns must include timestamp and run_id.',
     "'marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url'" => 'CSV columns must include product/listing identity fields.',
-    "'old_shipping_group','new_shipping_group','old_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'" => 'CSV columns must include policy/action/result fields.',
+    "'old_shipping_group','new_shipping_group','old_fulfillment_policy_id','old_fulfillment_policy_source','ebay_offer_read_attempted','ebay_offer_read_success','ebay_offer_read_error','current_offer_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'" => 'CSV columns must include policy/action/result fields.',
     "'checked' => 0" => 'Summary must include checked count.',
     "'changed' => 0" => 'Summary must include changed count.',
     "'unchanged' => 0" => 'Summary must include unchanged count.',
@@ -68,11 +68,41 @@ foreach ([
     '\'dry_run\' => $dryRun' => 'Summary must include dry_run flag.',
     '\'started_at\' => $startedAt' => 'Summary must include started_at.',
     "'finished_at'" => 'Summary must include finished_at.',
+    'old_fulfillment_policy_source' => 'Rows/CSV must include old policy source.',
+    'ebay_offer_read_attempted' => 'Rows/CSV must include offer read attempted.',
+    'ebay_offer_read_success' => 'Rows/CSV must include offer read success.',
+    'ebay_offer_read_error' => 'Rows/CSV must include offer read errors.',
+    'current_offer_fulfillment_policy_id' => 'Rows/CSV must include current offer policy.',
+    'offer_read_attempted' => 'Summary must count offer read attempts.',
+    'offer_read_success' => 'Summary must count offer read success.',
+    'offer_read_errors' => 'Summary must count offer read errors.',
+    'skipped_unknown_policy_after_read' => 'Summary must count unknown policies after read.',
+    'dry_run_get_offer_only' => 'Dry-run offer reads must be labeled read-only.',
     'report_write_error' => 'Report write failures must be surfaced.',
     'target_path' => 'Report write failures must include target path.',
     'reason' => 'Report write failures must include reason.',
 ] as $needle => $message) {
     $assert(str_contains($adminSource . $viewSource, $needle), $message);
+}
+
+$readBlockStart = strpos($adapterSource, 'public function read_existing_offer_fulfillment_policy_id');
+$readBlockEnd = strpos($adapterSource, 'public function revise_existing_offer_fulfillment_policy_only', $readBlockStart);
+$readBlock = $readBlockStart === false ? '' : substr($adapterSource, $readBlockStart, $readBlockEnd - $readBlockStart);
+foreach ([
+    'safe_read_scope' => 'FR read fallback must log read-only scope.',
+    'listingPolicies' => 'FR read fallback must inspect listing policies.',
+    'fulfillmentPolicyId' => 'FR read fallback must extract fulfillmentPolicyId.',
+    'get_offer' => 'FR read fallback must read an existing offer.',
+    'called_update_offer' => 'FR read fallback must explicitly avoid offer updates.',
+    'called_create_offer' => 'FR read fallback must explicitly avoid offer creation.',
+    'called_publish_offer' => 'FR read fallback must explicitly avoid publishing.',
+    'called_inventory_availability_update' => 'FR read fallback must explicitly avoid availability changes.',
+    'called_price_update' => 'FR read fallback must explicitly avoid price changes.',
+] as $needle => $message) {
+    $assert(str_contains($readBlock, $needle), $message);
+}
+foreach (['update_offer(', 'create_offer(', 'publish_offer(', 'bulk_update_price_quantity(', 'create_or_replace_inventory_item('] as $forbidden) {
+    $assert(!str_contains($readBlock, $forbidden), 'FR read fallback must not call ' . $forbidden);
 }
 
 $reviseBlockStart = strpos($adapterSource, 'public function revise_existing_offer_fulfillment_policy_only');
