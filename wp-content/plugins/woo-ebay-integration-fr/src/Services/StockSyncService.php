@@ -34,6 +34,10 @@ class StockSyncService
         'dry_run',
         'result',
         'error_message',
+        'ebay_already_closed_detected',
+        'event_marked_processed',
+        'local_listing_state_after',
+        'retryable',
         'timestamp',
     ];
 
@@ -366,6 +370,13 @@ class StockSyncService
             }
 
             $res = $this->make_ebay_listing_unavailable($map, $productId, $action);
+            if (is_array($res)) {
+                foreach (['ebay_already_closed_detected', 'event_marked_processed', 'local_listing_state_after', 'retryable'] as $diagnosticKey) {
+                    if (array_key_exists($diagnosticKey, $res)) {
+                        $row[$diagnosticKey] = $res[$diagnosticKey];
+                    }
+                }
+            }
             if (is_wp_error($res)) {
                 $row['result'] = 'error';
                 $row['error_message'] = $res->get_error_message();
@@ -377,14 +388,21 @@ class StockSyncService
             } else {
                 $row['action'] = (string) ($res['action'] ?? $row['action']);
                 $row['ebay_state_after'] = (string) ($res['ebay_state_after'] ?? $row['ebay_state_after']);
-                $row['result'] = 'success';
+                $row['result'] = (string) ($res['result'] ?? 'success');
+                if (!empty($res['ebay_already_closed_detected'])) {
+                    $row['ebay_already_closed_detected'] = 'true';
+                    $row['event_marked_processed'] = 'true';
+                    $row['local_listing_state_after'] = 'ended_or_unavailable';
+                    $row['retryable'] = 'false';
+                }
                 $summary['woo_to_ebay_actions']++;
                 $actionsProcessed++;
                 update_post_meta($productId, '_wei_fr_ebay_last_stock_sync_action', (string) $row['action']);
                 update_post_meta($productId, '_wei_fr_ebay_stock_sync_source', 'woo');
                 update_post_meta($productId, '_wei_fr_ebay_listing_status', 'ended');
+                update_post_meta($productId, '_wei_fr_ebay_availability', 'ended_or_unavailable');
                 $this->repo->upsert(array_merge($map, ['status' => 'ended', 'last_sync_at' => gmdate('Y-m-d H:i:s')]));
-                $this->mark_event_processed($eventId, $processedIds, $queue, $dryRun, 'success');
+                $this->mark_event_processed($eventId, $processedIds, $queue, $dryRun, (string) $row['result']);
             }
             $this->append_action($row);
         }
@@ -412,6 +430,9 @@ class StockSyncService
             if (!is_wp_error($res)) {
                 return ['action' => 'end_ebay_listing_by_listing_id', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $res];
             }
+            if ($this->is_ebay_already_closed_error($res)) {
+                return $this->already_closed_success_response($res, 'end_ebay_listing_already_closed_by_listing_id');
+            }
 
             if ($offerId === '' || !$this->should_fallback_after_end_listing_error($res)) {
                 return $res;
@@ -428,12 +449,18 @@ class StockSyncService
             if (!is_wp_error($res)) {
                 return ['action' => 'set_ebay_offer_quantity_zero_by_offer_id', 'ebay_state_after' => 'quantity_0', 'response' => $res];
             }
+            if ($this->is_ebay_already_closed_error($res)) {
+                return $this->already_closed_success_response($res, 'set_ebay_offer_quantity_zero_already_closed_by_offer_id');
+            }
 
             if ($listingId !== '' && $this->is_retryable_identifier_error($res)) {
                 $this->logger->warning('WEI_FR_STOCK_SYNC_EBAY_ID_FALLBACK', ['from_api' => 'bulk_update_price_quantity', 'to_api' => 'end_fixed_price_item_by_listing_id', 'listing_id' => $listingId, 'offer_id' => $offerId, 'error' => $res->get_error_message(), 'auth' => '[REDACTED]']);
                 $fallback = $this->client->end_fixed_price_item_by_listing_id($listingId, 'NotAvailable', array_merge($context, ['stage' => 'stock_sync_invalid_sku_fallback_end_by_listing_id']));
                 if (!is_wp_error($fallback)) {
                     return ['action' => 'end_ebay_listing_by_listing_id_after_invalid_sku', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $fallback];
+                }
+                if ($this->is_ebay_already_closed_error($fallback)) {
+                    return $this->already_closed_success_response($fallback, 'end_ebay_listing_already_closed_after_invalid_sku');
                 }
             }
 
@@ -442,6 +469,9 @@ class StockSyncService
                 $fallback = $this->client->delete_offer($offerId, array_merge($context, ['stage' => 'stock_sync_invalid_sku_fallback_delete_offer']));
                 if (!is_wp_error($fallback)) {
                     return ['action' => 'make_ebay_offer_unavailable_by_offer_id_after_invalid_sku', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $fallback];
+                }
+                if ($this->is_ebay_already_closed_error($fallback)) {
+                    return $this->already_closed_success_response($fallback, 'make_ebay_offer_already_closed_after_invalid_sku');
                 }
             }
 
@@ -454,10 +484,45 @@ class StockSyncService
             if (!is_wp_error($res)) {
                 return ['action' => 'end_ebay_listing_by_listing_id', 'ebay_state_after' => 'ended_or_unavailable', 'response' => $res];
             }
+            if ($this->is_ebay_already_closed_error($res)) {
+                return $this->already_closed_success_response($res, 'end_ebay_listing_already_closed_by_listing_id');
+            }
             return $res;
         }
 
         return new \WP_Error('wei_fr_ebay_stock_sync_missing_remote_id', 'Cannot make eBay listing unavailable without offer_id or listing_id');
+    }
+
+    private function already_closed_success_response(\WP_Error $error, string $action): array
+    {
+        return [
+            'action' => $action,
+            'ebay_state_after' => 'ended_or_unavailable',
+            'result' => 'already_closed_success',
+            'response' => $error,
+            'ebay_already_closed_detected' => 'true',
+            'event_marked_processed' => 'true',
+            'local_listing_state_after' => 'ended_or_unavailable',
+            'retryable' => 'false',
+        ];
+    }
+
+    private function is_ebay_already_closed_error(\WP_Error $error): bool
+    {
+        $message = strtolower($error->get_error_message());
+        foreach ([
+            'the auction has already been closed',
+            'auction already closed',
+            'listing already ended',
+            'item has ended',
+            'listing ended',
+            'already closed',
+        ] as $needle) {
+            if (str_contains($message, $needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function should_fallback_after_end_listing_error(\WP_Error $error): bool
