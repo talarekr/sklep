@@ -14,6 +14,13 @@ class AdminPage
 
     private const GERMAN_CONTENT_MIGRATION_STATE_OPTION = 'wei_ebay_german_content_schema_migration_state';
 
+    private const SHIPPING_POLICY_REVISE_LISTING_ID_META_KEYS = ['_wei_ebay_listing_id', '_wei_ebay_item_id'];
+    private const SHIPPING_POLICY_REVISE_OFFER_ID_META_KEYS = ['_wei_ebay_offer_id'];
+    private const SHIPPING_POLICY_REVISE_INVENTORY_ID_META_KEYS = ['_wei_ebay_inventory_item_id', '_wei_ebay_inventory_id', '_wei_ebay_sku'];
+    private const SHIPPING_POLICY_REVISE_LISTING_URL_META_KEYS = ['_wei_ebay_listing_url', '_wei_ebay_public_url'];
+    private const SHIPPING_POLICY_REVISE_STATUS_META_KEYS = ['_wei_ebay_listing_status', 'listing_status'];
+    private const SHIPPING_POLICY_REVISE_MARKETPLACE_META_KEYS = ['_wei_ebay_marketplace'];
+
     public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync)
     {
     }
@@ -968,18 +975,84 @@ class AdminPage
             'marketplace' => $marketplace,
             'report_paths' => $paths['paths'],
             'report_urls' => $paths['urls'],
+            'candidate_products_scanned' => 0,
+            'products_with_listing_id' => 0,
+            'products_with_offer_id' => 0,
+            'products_with_listing_and_offer' => 0,
+            'skipped_missing_listing_id' => 0,
+            'skipped_missing_offer_id' => 0,
+            'skipped_marketplace_mismatch' => 0,
+            'legacy_meta_detected' => 0,
+            'offer_read_attempted' => 0,
+            'offer_read_success' => 0,
+            'offer_read_errors' => 0,
+            'skipped_unknown_policy_after_read' => 0,
+            'checked_meta_keys' => $this->shipping_policy_revise_checked_meta_keys(),
+            'warning' => '',
         ];
         $writeErrors = [];
+        $candidateIds = $this->shipping_policy_revise_candidate_ids($batchSize);
+        $summary['candidate_products_scanned'] = count($candidateIds);
+        $debugSamples = [];
 
-        foreach ($this->shipping_policy_revise_candidate_ids($batchSize) as $productId) {
+        foreach ($candidateIds as $productId) {
             $row = $this->shipping_policy_revise_evaluate_product($productId, $settings, $marketplace);
             $row['timestamp'] = gmdate('Y-m-d H:i:s');
             $row['run_id'] = $runId;
             $row['dry_run'] = $dryRun ? '1' : '0';
-            $row['action'] = $dryRun ? 'dry_run_no_api' : 'none';
+            $row['action'] = $dryRun && ($row['ebay_offer_read_attempted'] ?? '') === 'yes' ? 'dry_run_get_offer_only' : ($dryRun ? 'dry_run_no_api' : 'none');
             $row['result'] = $row['skipped'] === 'yes' ? 'skipped' : 'checked';
             $row['error_message'] = '';
             $summary['checked']++;
+
+            if (count($debugSamples) < 10) {
+                $debugSamples[] = [
+                    'product_id' => $row['product_id'],
+                    'title' => $row['title'],
+                    'sku' => $row['sku'],
+                    'meta_keys_found' => $row['meta_keys_found'],
+                    'listing_id_source' => $row['listing_id_source'],
+                    'offer_id_source' => $row['offer_id_source'],
+                    'marketplace_source' => $row['marketplace_source'],
+                    'marketplace' => $row['marketplace'],
+                    'reason' => $row['reason'],
+                    'old_fulfillment_policy_source' => $row['old_fulfillment_policy_source'],
+                    'ebay_offer_read_success' => $row['ebay_offer_read_success'],
+                ];
+            }
+            if ($row['listing_id'] !== '') {
+                $summary['products_with_listing_id']++;
+            }
+            if ($row['offer_id'] !== '') {
+                $summary['products_with_offer_id']++;
+            }
+            if ($row['listing_id'] !== '' && $row['offer_id'] !== '') {
+                $summary['products_with_listing_and_offer']++;
+            }
+            if ($row['reason'] === 'missing_listing_id') {
+                $summary['skipped_missing_listing_id']++;
+            }
+            if ($row['reason'] === 'missing_offer_id') {
+                $summary['skipped_missing_offer_id']++;
+            }
+            if ($row['reason'] === 'wrong_marketplace') {
+                $summary['skipped_marketplace_mismatch']++;
+            }
+            if ($row['legacy_meta_detected'] === 'yes') {
+                $summary['legacy_meta_detected']++;
+            }
+            if ($row['ebay_offer_read_attempted'] === 'yes') {
+                $summary['offer_read_attempted']++;
+            }
+            if ($row['ebay_offer_read_success'] === 'yes') {
+                $summary['offer_read_success']++;
+            }
+            if ($row['ebay_offer_read_attempted'] === 'yes' && $row['ebay_offer_read_success'] !== 'yes') {
+                $summary['offer_read_errors']++;
+            }
+            if ($row['reason'] === 'old_fulfillment_policy_id_unknown') {
+                $summary['skipped_unknown_policy_after_read']++;
+            }
 
             if ($row['skipped'] === 'yes') {
                 $summary['skipped']++;
@@ -1006,7 +1079,10 @@ class AdminPage
         }
 
         $summary['finished_at'] = gmdate('Y-m-d H:i:s');
-        $lastRun = ['summary' => $summary, 'rows' => $rows, 'report_write_error' => null];
+        if ($rows === []) {
+            $summary['warning'] = 'No DE listings found. Checked meta keys: ' . implode(', ', $this->shipping_policy_revise_checked_meta_keys());
+        }
+        $lastRun = ['summary' => $summary, 'rows' => $rows, 'debug' => ['sample_candidate_products' => $debugSamples], 'report_write_error' => null];
         $write = $this->write_shipping_policy_revise_reports($paths['paths'], $lastRun, $rows);
         if (!empty($write['errors'])) {
             $writeErrors = $write['errors'];
@@ -1021,21 +1097,59 @@ class AdminPage
 
     private function shipping_policy_revise_candidate_ids(int $batchSize): array
     {
-        $query = new \WP_Query([
-            'post_type' => ['product', 'product_variation'],
-            'post_status' => ['publish', 'private'],
-            'fields' => 'ids',
-            'posts_per_page' => $batchSize,
-            'orderby' => 'ID',
-            'order' => 'ASC',
-            'meta_query' => [
-                'relation' => 'AND',
-                ['key' => '_wei_ebay_listing_id', 'compare' => 'EXISTS'],
-                ['key' => '_wei_ebay_offer_id', 'compare' => 'EXISTS'],
-                ['key' => '_wei_ebay_marketplace', 'value' => 'EBAY_DE', 'compare' => '='],
-            ],
-        ]);
-        return array_map('intval', (array) $query->posts);
+        global $wpdb;
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return [];
+        }
+
+        $batchSize = max(1, min(100, $batchSize));
+        $postTypes = "'product','product_variation'";
+        $postStatuses = "'publish','draft','private'";
+        $metaKeys = array_values(array_unique(array_merge(
+            self::SHIPPING_POLICY_REVISE_LISTING_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_OFFER_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_INVENTORY_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_LISTING_URL_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_STATUS_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_MARKETPLACE_META_KEYS
+        )));
+        $metaKeyPlaceholders = implode(',', array_fill(0, count($metaKeys), '%s'));
+        $mappingTable = $wpdb->prefix . 'marketplace_mappings';
+        $mappingExists = (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $mappingTable)) === $mappingTable;
+        $mappingSelect = '';
+        if ($mappingExists) {
+            $mappingSelect = $wpdb->prepare(
+                " UNION
+                  SELECT p.ID
+                  FROM {$wpdb->posts} p
+                  INNER JOIN {$mappingTable} m ON m.woo_product_id = p.ID
+                  WHERE p.post_type IN ({$postTypes})
+                    AND p.post_status IN ({$postStatuses})
+                    AND m.marketplace = %s
+                    AND m.status = %s
+                    AND (COALESCE(m.remote_listing_id, '') <> '' OR COALESCE(m.remote_offer_id, '') <> '')",
+                'ebay',
+                'active'
+            );
+        }
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT candidate_id FROM (
+                SELECT p.ID AS candidate_id
+                FROM {$wpdb->posts} p
+                INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+                WHERE p.post_type IN ({$postTypes})
+                  AND p.post_status IN ({$postStatuses})
+                  AND pm.meta_key IN ({$metaKeyPlaceholders})
+                  AND COALESCE(pm.meta_value, '') <> ''
+                {$mappingSelect}
+             ) candidates
+             ORDER BY candidate_id ASC
+             LIMIT %d",
+            ...array_merge($metaKeys, [$batchSize])
+        );
+        $ids = $wpdb->get_col($sql);
+        return array_map('intval', is_array($ids) ? $ids : []);
     }
 
     private function shipping_policy_revise_evaluate_product(int $productId, array $settings, string $marketplace): array
@@ -1043,59 +1157,173 @@ class AdminPage
         $product = function_exists('wc_get_product') ? wc_get_product($productId) : null;
         $title = $product && method_exists($product, 'get_name') ? (string) $product->get_name() : (string) get_the_title($productId);
         $sku = $product && method_exists($product, 'get_sku') ? (string) $product->get_sku() : '';
-        $listingId = trim((string) get_post_meta($productId, '_wei_ebay_listing_id', true));
-        $offerId = trim((string) get_post_meta($productId, '_wei_ebay_offer_id', true));
-        $listingUrl = trim((string) get_post_meta($productId, '_wei_ebay_listing_url', true));
-        $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_sku', true));
-        if ($ebaySku === '') {
-            $ebaySku = trim((string) get_post_meta($productId, '_wei_ebay_inventory_item_id', true));
+        $meta = $this->shipping_policy_revise_product_meta_snapshot($productId);
+        $mapping = $this->shipping_policy_revise_mapping_snapshot($productId);
+
+        $listing = $this->shipping_policy_revise_first_meta_value($meta, self::SHIPPING_POLICY_REVISE_LISTING_ID_META_KEYS);
+        if ($listing['value'] === '' && (string) ($mapping['remote_listing_id'] ?? '') !== '') {
+            $listing = ['value' => (string) $mapping['remote_listing_id'], 'key' => 'marketplace_mappings.remote_listing_id'];
         }
-        $storedMarketplace = trim((string) get_post_meta($productId, '_wei_ebay_marketplace', true));
-        $listingStatus = strtolower(trim((string) get_post_meta($productId, '_wei_ebay_listing_status', true)));
+        $offer = $this->shipping_policy_revise_first_meta_value($meta, self::SHIPPING_POLICY_REVISE_OFFER_ID_META_KEYS);
+        if ($offer['value'] === '' && (string) ($mapping['remote_offer_id'] ?? '') !== '') {
+            $offer = ['value' => (string) $mapping['remote_offer_id'], 'key' => 'marketplace_mappings.remote_offer_id'];
+        }
+        $listingUrl = $this->shipping_policy_revise_first_meta_value($meta, self::SHIPPING_POLICY_REVISE_LISTING_URL_META_KEYS);
+        $ebaySku = $this->shipping_policy_revise_first_meta_value($meta, array_merge(['_wei_ebay_sku'], self::SHIPPING_POLICY_REVISE_INVENTORY_ID_META_KEYS));
+        if ($ebaySku['value'] === '' && (string) ($mapping['remote_inventory_id'] ?? '') !== '') {
+            $ebaySku = ['value' => (string) $mapping['remote_inventory_id'], 'key' => 'marketplace_mappings.remote_inventory_id'];
+        }
+        $storedMarketplace = $this->shipping_policy_revise_first_meta_value($meta, self::SHIPPING_POLICY_REVISE_MARKETPLACE_META_KEYS);
+        if ($storedMarketplace['value'] === '' && (string) ($mapping['marketplace_id'] ?? '') !== '') {
+            $storedMarketplace = ['value' => (string) $mapping['marketplace_id'], 'key' => 'marketplace_mappings.marketplace_id'];
+        }
+        $listingStatus = $this->shipping_policy_revise_first_meta_value($meta, self::SHIPPING_POLICY_REVISE_STATUS_META_KEYS);
+
+        $listingId = trim((string) $listing['value']);
+        $offerId = trim((string) $offer['value']);
+        $storedMarketplaceValue = trim((string) $storedMarketplace['value']);
+        $resolvedMarketplace = $storedMarketplaceValue !== '' ? $storedMarketplaceValue : $marketplace;
+        $listingStatusValue = strtolower(trim((string) $listingStatus['value']));
         $oldGroup = trim((string) get_post_meta($productId, '_wei_ebay_last_shipping_group', true));
         if ($oldGroup === '') {
             $oldGroup = trim((string) get_post_meta($productId, '_wei_ebay_shipping_group', true));
         }
         $oldPolicy = trim((string) get_post_meta($productId, '_wei_ebay_last_fulfillment_policy_id', true));
+        $oldPolicySource = $oldPolicy !== '' ? 'local_meta' : 'unavailable';
+        $offerReadAttempted = 'no';
+        $offerReadSuccess = 'no';
+        $offerReadError = '';
+        $currentOfferFulfillmentPolicyId = $oldPolicy;
+        if ($oldPolicy === '' && $offerId !== '') {
+            $offerReadAttempted = 'yes';
+            $read = $this->adapter->read_existing_offer_fulfillment_policy_id($productId, $offerId);
+            if (($read['result'] ?? '') === 'success') {
+                $currentOfferFulfillmentPolicyId = trim((string) ($read['current_fulfillment_policy_id'] ?? ''));
+                if ($currentOfferFulfillmentPolicyId !== '') {
+                    $oldPolicy = $currentOfferFulfillmentPolicyId;
+                    $oldPolicySource = 'ebay_offer_read';
+                    $offerReadSuccess = 'yes';
+                } else {
+                    $offerReadError = 'fulfillment_policy_id_missing_in_offer';
+                }
+            } else {
+                $offerReadError = (string) ($read['error'] ?? 'unknown_offer_read_error');
+            }
+        }
         $resolution = EbayShippingPolicyResolver::resolve_for_product($productId, $settings);
         $newGroup = (string) ($resolution['group'] ?? '');
         $newPolicy = (string) ($resolution['policy_id'] ?? '');
         $skipReason = '';
-        if ($storedMarketplace === '') {
-            $skipReason = 'missing_marketplace';
-        } elseif ($storedMarketplace !== $marketplace) {
+        if ($storedMarketplaceValue !== '' && $storedMarketplaceValue !== $marketplace) {
             $skipReason = 'wrong_marketplace';
         } elseif ($listingId === '') {
             $skipReason = 'missing_listing_id';
         } elseif ($offerId === '') {
             $skipReason = 'missing_offer_id';
-        } elseif (in_array($listingStatus, ['ended', 'sold', 'completed', 'closed', 'deleted'], true)) {
-            $skipReason = 'listing_not_active_' . $listingStatus;
-        } elseif ($listingStatus !== '' && !in_array($listingStatus, ['active', 'published'], true)) {
-            $skipReason = 'listing_not_active_' . $listingStatus;
+        } elseif (in_array($listingStatusValue, ['ended', 'sold', 'completed', 'closed', 'deleted'], true)) {
+            $skipReason = 'listing_not_active_' . $listingStatusValue;
+        } elseif ($listingStatusValue !== '' && !in_array($listingStatusValue, ['active', 'published'], true)) {
+            $skipReason = 'listing_not_active_' . $listingStatusValue;
         } elseif (!empty($resolution['blocked']) || $newGroup === '' || $newPolicy === '') {
             $skipReason = 'no_shipping_group_resolved';
         } elseif ($oldPolicy === '') {
             $skipReason = 'old_fulfillment_policy_id_unknown';
         }
+        $foundKeys = array_keys(array_filter($meta, static fn ($value): bool => trim((string) $value) !== ''));
+        foreach (['remote_listing_id', 'remote_offer_id', 'remote_inventory_id', 'marketplace_id'] as $mappingKey) {
+            if (trim((string) ($mapping[$mappingKey] ?? '')) !== '') {
+                $foundKeys[] = 'marketplace_mappings.' . $mappingKey;
+            }
+        }
+        $foundKeys = array_values(array_unique($foundKeys));
+        $legacyKeys = array_diff($foundKeys, ['_wei_ebay_listing_id', '_wei_ebay_offer_id', '_wei_ebay_listing_url', '_wei_ebay_marketplace', '_wei_ebay_listing_status']);
         $changed = $skipReason === '' && $oldPolicy !== $newPolicy;
         return [
             'product_id' => (string) $productId,
             'title' => $title,
             'sku' => $sku,
-            'ebay_sku' => $ebaySku,
-            'marketplace' => $storedMarketplace !== '' ? $storedMarketplace : $marketplace,
+            'ebay_sku' => trim((string) $ebaySku['value']),
+            'marketplace' => $resolvedMarketplace,
             'listing_id' => $listingId,
             'offer_id' => $offerId,
-            'listing_url' => $listingUrl,
+            'listing_url' => trim((string) $listingUrl['value']),
             'old_shipping_group' => $oldGroup,
             'new_shipping_group' => $newGroup,
             'old_fulfillment_policy_id' => $oldPolicy,
+            'old_fulfillment_policy_source' => $oldPolicySource,
+            'ebay_offer_read_attempted' => $offerReadAttempted,
+            'ebay_offer_read_success' => $offerReadSuccess,
+            'ebay_offer_read_error' => $offerReadError,
+            'current_offer_fulfillment_policy_id' => $currentOfferFulfillmentPolicyId,
             'new_fulfillment_policy_id' => $newPolicy,
             'changed' => $changed ? 'yes' : 'no',
             'skipped' => $skipReason !== '' ? 'yes' : 'no',
             'reason' => $skipReason !== '' ? $skipReason : ($changed ? 'fulfillment_policy_changed' : 'fulfillment_policy_unchanged'),
+            'meta_keys_found' => implode(',', $foundKeys),
+            'listing_id_source' => (string) $listing['key'],
+            'offer_id_source' => (string) $offer['key'],
+            'marketplace_source' => (string) ($storedMarketplace['key'] !== '' ? $storedMarketplace['key'] : 'implicit_EBAY_DE'),
+            'legacy_meta_detected' => $legacyKeys !== [] ? 'yes' : 'no',
         ];
+    }
+
+    private function shipping_policy_revise_checked_meta_keys(): array
+    {
+        return array_values(array_unique(array_merge(
+            self::SHIPPING_POLICY_REVISE_LISTING_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_OFFER_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_INVENTORY_ID_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_LISTING_URL_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_STATUS_META_KEYS,
+            self::SHIPPING_POLICY_REVISE_MARKETPLACE_META_KEYS,
+            ['marketplace_mappings.remote_listing_id', 'marketplace_mappings.remote_offer_id', 'marketplace_mappings.remote_inventory_id', 'marketplace_mappings.marketplace_id']
+        )));
+    }
+
+    private function shipping_policy_revise_product_meta_snapshot(int $productId): array
+    {
+        $snapshot = [];
+        foreach ($this->shipping_policy_revise_checked_meta_keys() as $key) {
+            if (str_starts_with($key, 'marketplace_mappings.')) {
+                continue;
+            }
+            $snapshot[$key] = trim((string) get_post_meta($productId, $key, true));
+        }
+        return $snapshot;
+    }
+
+    private function shipping_policy_revise_first_meta_value(array $meta, array $keys): array
+    {
+        foreach ($keys as $key) {
+            $value = trim((string) ($meta[$key] ?? ''));
+            if ($value !== '') {
+                return ['value' => $value, 'key' => $key];
+            }
+        }
+        return ['value' => '', 'key' => ''];
+    }
+
+    private function shipping_policy_revise_mapping_snapshot(int $productId): array
+    {
+        global $wpdb;
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return [];
+        }
+        $table = $wpdb->prefix . 'marketplace_mappings';
+        if ((string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
+            return [];
+        }
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT remote_listing_id, remote_offer_id, remote_inventory_id, marketplace_id
+             FROM {$table}
+             WHERE marketplace = %s AND status = %s AND woo_product_id = %d
+             ORDER BY id DESC
+             LIMIT 1",
+            'ebay',
+            'active',
+            $productId
+        ), ARRAY_A);
+        return is_array($row) ? array_map(static fn ($value): string => trim((string) $value), $row) : [];
     }
 
     private function shipping_policy_revise_report_paths(): array
@@ -1127,7 +1355,7 @@ class AdminPage
         if (file_put_contents((string) $paths['last_run_json'], wp_json_encode($lastRun, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
             $errors[] = ['target_path' => (string) $paths['last_run_json'], 'reason' => 'write_failed'];
         }
-        $columns = ['timestamp','run_id','marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url','old_shipping_group','new_shipping_group','old_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'];
+        $columns = ['timestamp','run_id','marketplace','dry_run','product_id','title','sku','ebay_sku','listing_id','offer_id','listing_url','old_shipping_group','new_shipping_group','old_fulfillment_policy_id','old_fulfillment_policy_source','ebay_offer_read_attempted','ebay_offer_read_success','ebay_offer_read_error','current_offer_fulfillment_policy_id','new_fulfillment_policy_id','changed','skipped','reason','action','result','error_message'];
         foreach (['actions_csv' => $rows, 'errors_csv' => array_values(array_filter($rows, static fn ($row): bool => (string) ($row['result'] ?? '') === 'error'))] as $key => $csvRows) {
             $fh = fopen((string) $paths[$key], 'w');
             if (!$fh) {
