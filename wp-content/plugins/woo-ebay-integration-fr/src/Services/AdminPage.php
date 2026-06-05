@@ -965,7 +965,8 @@ class AdminPage
         $dryRun = (string) ($_POST['mode'] ?? 'dry_run') !== 'live';
         $batchSize = absint($_POST['batch_size'] ?? 20);
         $batchSize = max(1, min(100, $batchSize));
-        $result = $this->run_shipping_policy_revise_batch($batchSize, $dryRun);
+        $autoRunnerBatchIndex = max(1, absint($_POST['auto_runner_batch_index'] ?? 1));
+        $result = $this->run_shipping_policy_revise_batch($batchSize, $dryRun, $autoRunnerBatchIndex);
         if (!empty($_POST['wei_auto_runner'])) {
             wp_send_json($result);
         }
@@ -973,7 +974,7 @@ class AdminPage
         $this->go();
     }
 
-    private function run_shipping_policy_revise_batch(int $batchSize, bool $dryRun): array
+    private function run_shipping_policy_revise_batch(int $batchSize, bool $dryRun, int $autoRunnerBatchIndex = 1): array
     {
         $startedAt = gmdate('Y-m-d H:i:s');
         $runId = 'wei-shipping-policy-revise-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false);
@@ -998,10 +999,23 @@ class AdminPage
             'offer_read_success' => 0,
             'offer_read_errors' => 0,
             'skipped_unknown_policy_after_read' => 0,
+            'auto_runner_batch_index' => $autoRunnerBatchIndex,
+            'queue_empty' => false,
+            'completed' => false,
+            'remaining_candidates' => 0,
+            'remaining_listings' => 0,
+            'fatal_error' => false,
+            'stopped_reason' => '',
         ];
         $writeErrors = [];
+        $candidatePage = $this->shipping_policy_revise_candidate_page($batchSize, max(0, ($autoRunnerBatchIndex - 1) * $batchSize));
+        $candidateIds = $candidatePage['ids'];
+        $summary['remaining_candidates'] = max(0, (int) $candidatePage['total'] - (($autoRunnerBatchIndex - 1) * $batchSize) - count($candidateIds));
+        $summary['remaining_listings'] = $summary['remaining_candidates'];
+        $summary['queue_empty'] = $candidateIds === [];
+        $summary['completed'] = $summary['queue_empty'] || $summary['remaining_candidates'] === 0;
 
-        foreach ($this->shipping_policy_revise_candidate_ids($batchSize) as $productId) {
+        foreach ($candidateIds as $productId) {
             $row = $this->shipping_policy_revise_evaluate_product($productId, $settings, $marketplace);
             $row['timestamp'] = gmdate('Y-m-d H:i:s');
             $row['run_id'] = $runId;
@@ -1049,7 +1063,7 @@ class AdminPage
         }
 
         $summary['finished_at'] = gmdate('Y-m-d H:i:s');
-        $lastRun = ['summary' => $summary, 'rows' => $rows, 'report_write_error' => null];
+        $lastRun = $summary + ['summary' => $summary, 'rows' => $rows, 'report_write_error' => null];
         $write = $this->write_shipping_policy_revise_reports($paths['paths'], $lastRun, $rows);
         if (!empty($write['errors'])) {
             $writeErrors = $write['errors'];
@@ -1062,13 +1076,17 @@ class AdminPage
         return $lastRun;
     }
 
-    private function shipping_policy_revise_candidate_ids(int $batchSize): array
+    private function shipping_policy_revise_candidate_page(int $batchSize, int $offset = 0): array
     {
+        $batchSize = max(1, min(100, $batchSize));
+        $offset = max(0, $offset);
         $query = new \WP_Query([
             'post_type' => ['product', 'product_variation'],
             'post_status' => ['publish', 'private'],
             'fields' => 'ids',
             'posts_per_page' => $batchSize,
+            'offset' => $offset,
+            'no_found_rows' => false,
             'orderby' => 'ID',
             'order' => 'ASC',
             'meta_query' => [
@@ -1078,7 +1096,16 @@ class AdminPage
                 ['key' => '_wei_fr_ebay_marketplace', 'value' => 'EBAY_FR', 'compare' => '='],
             ],
         ]);
-        return array_map('intval', (array) $query->posts);
+        return [
+            'ids' => array_map('intval', (array) $query->posts),
+            'total' => (int) $query->found_posts,
+        ];
+    }
+
+    private function shipping_policy_revise_candidate_ids(int $batchSize): array
+    {
+        $page = $this->shipping_policy_revise_candidate_page($batchSize, 0);
+        return $page['ids'];
     }
 
     private function shipping_policy_revise_evaluate_product(int $productId, array $settings, string $marketplace): array

@@ -656,18 +656,30 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'German Content', 'Kategor
                 <p class="description">Warning: live mode calls eBay only for changed rows and updates only <code>listingPolicies.fulfillmentPolicyId</code> on existing active EBAY_DE offers.</p>
             </form>
         </div>
-        <div id="wei-shipping-policy-revise-runner" class="wei-actions" data-action="wei_shipping_policy_revise_run" data-nonce="<?php echo esc_attr(wp_create_nonce('wei_shipping_policy_revise_run')); ?>">
-            <strong>Optional Auto runner</strong>
-            <label>mode <select id="wei-shipping-policy-revise-mode"><option value="dry_run">dry-run</option><option value="live">live revise</option></select></label>
-            <label>batch size <input id="wei-shipping-policy-revise-batch-size" type="number" min="1" max="100" value="20" /></label>
-            <button type="button" class="button" id="wei-shipping-policy-revise-start">Start</button>
-            <button type="button" class="button" id="wei-shipping-policy-revise-stop">Stop</button>
-            <span>state: <code data-revise-counter="state">idle</code></span>
-            <span>checked: <code data-revise-counter="checked">0</code></span>
-            <span>changed: <code data-revise-counter="changed">0</code></span>
-            <span>skipped: <code data-revise-counter="skipped">0</code></span>
-            <span>errors: <code data-revise-counter="errors">0</code></span>
-        </div>
+        <section class="wei-auto-runner" id="wei-shipping-policy-revise-runner" data-admin-post-url="<?php echo esc_url($adminPostUrl); ?>" data-action="wei_shipping_policy_revise_run" data-nonce="<?php echo esc_attr(wp_create_nonce('wei_shipping_policy_revise_run')); ?>">
+            <h3>Optional Auto runner</h3>
+            <p class="description">Browser-based automation for <strong>Revise existing listings shipping policy</strong>. It runs one batch at a time, waits for the request to finish, updates counters, then waits the configured delay before the next batch. Live mode updates only <code>listingPolicies.fulfillmentPolicyId</code> on existing active EBAY_DE offers.</p>
+            <div class="wei-auto-runner-controls">
+                <label>Mode <select id="wei-shipping-policy-revise-mode"><option value="dry_run">dry-run</option><option value="live">live revise changed offers only</option></select></label>
+                <label>Batch size <input id="wei-shipping-policy-revise-batch-size" type="number" min="1" max="100" value="20" /></label>
+                <label>Delay between batches <input id="wei-shipping-policy-revise-delay" type="number" min="0" max="3600" step="1" value="5" /> seconds</label>
+                <button type="button" class="button button-primary" id="wei-shipping-policy-revise-start">Start</button>
+                <button type="button" class="button" id="wei-shipping-policy-revise-stop">Stop</button>
+            </div>
+            <div class="wei-grid" id="wei-shipping-policy-revise-progress">
+                <div class="wei-card"><span>batches_completed</span><strong data-revise-counter="batches_completed">0</strong></div>
+                <div class="wei-card"><span>total_checked</span><strong data-revise-counter="total_checked">0</strong></div>
+                <div class="wei-card"><span>total_changed</span><strong data-revise-counter="total_changed">0</strong></div>
+                <div class="wei-card"><span>total_unchanged</span><strong data-revise-counter="total_unchanged">0</strong></div>
+                <div class="wei-card"><span>total_skipped</span><strong data-revise-counter="total_skipped">0</strong></div>
+                <div class="wei-card"><span>total_errors</span><strong data-revise-counter="total_errors">0</strong></div>
+                <div class="wei-card"><span>remaining_candidates</span><strong data-revise-counter="remaining_candidates">-</strong></div>
+                <div class="wei-card"><span>state</span><strong data-revise-counter="state">idle</strong></div>
+                <div class="wei-card"><span>stopped_reason</span><strong data-revise-counter="stopped_reason">-</strong></div>
+            </div>
+            <p><strong>last_batch_result</strong></p>
+            <pre class="wei-scroll wei-auto-runner-log" data-revise-counter="last_batch_result">-</pre>
+        </section>
         <h4>Latest shipping-policy revise report</h4>
         <p>
             <?php if (!empty($shippingPolicyReviseUrls['last_run_json'])): ?><a href="<?php echo esc_url((string) $shippingPolicyReviseUrls['last_run_json']); ?>" target="_blank" rel="noopener noreferrer">last-run JSON</a><?php endif; ?>
@@ -1330,34 +1342,190 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'German Content', 'Kategor
             const reviseStart = document.getElementById('wei-shipping-policy-revise-start');
             const reviseStop = document.getElementById('wei-shipping-policy-revise-stop');
             const reviseBatchSize = document.getElementById('wei-shipping-policy-revise-batch-size');
+            const reviseDelay = document.getElementById('wei-shipping-policy-revise-delay');
             const reviseMode = document.getElementById('wei-shipping-policy-revise-mode');
-            const reviseCounters = {};
-            reviseRunner.querySelectorAll('[data-revise-counter]').forEach(function (node) { reviseCounters[node.getAttribute('data-revise-counter')] = node; });
-            const reviseState = { running: false, inFlight: false, stopped: false };
-            const setRevise = function (key, value) { if (reviseCounters[key]) { reviseCounters[key].textContent = String(value); } };
-            const reviseNumber = function (input, fallback) { const n = parseInt(input && input.value ? input.value : String(fallback), 10); return Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : fallback; };
-            async function runReviseBatch() {
-                if (!reviseState.running || reviseState.inFlight || reviseState.stopped) { return; }
+            const reviseFields = {};
+            reviseRunner.querySelectorAll('[data-revise-counter]').forEach(function (node) {
+                reviseFields[node.getAttribute('data-revise-counter')] = node;
+            });
+
+            const reviseState = {
+                running: false,
+                stopped: false,
+                inFlight: false,
+                batches_completed: 0,
+                total_checked: 0,
+                total_changed: 0,
+                total_unchanged: 0,
+                total_skipped: 0,
+                total_errors: 0,
+                remaining_candidates: '-',
+                stopped_reason: '-',
+                abortController: null,
+                delayTimer: 0,
+            };
+
+            function setReviseField(name, value) {
+                if (reviseFields[name]) {
+                    reviseFields[name].textContent = String(value);
+                }
+            }
+
+            function setReviseUiStatus(status, reason) {
+                setReviseField('state', status);
+                setReviseField('stopped_reason', reason || '-');
+                reviseStart.disabled = status === 'running';
+            }
+
+            function updateReviseCounters(lastBatch) {
+                setReviseField('batches_completed', reviseState.batches_completed);
+                setReviseField('total_checked', reviseState.total_checked);
+                setReviseField('total_changed', reviseState.total_changed);
+                setReviseField('total_unchanged', reviseState.total_unchanged);
+                setReviseField('total_skipped', reviseState.total_skipped);
+                setReviseField('total_errors', reviseState.total_errors);
+                setReviseField('remaining_candidates', reviseState.remaining_candidates);
+                setReviseField('last_batch_result', lastBatch ? JSON.stringify(lastBatch, null, 2) : '-');
+            }
+
+            function reviseNumberFromInput(input, fallback, min, max) {
+                const value = parseInt(input && input.value ? input.value : String(fallback), 10);
+                if (!Number.isFinite(value)) {
+                    return fallback;
+                }
+                return Math.max(min, Math.min(max, value));
+            }
+
+            function stopReviseRunner(reason) {
+                reviseState.stopped = true;
+                reviseState.running = false;
+                if (reviseState.delayTimer) {
+                    window.clearTimeout(reviseState.delayTimer);
+                    reviseState.delayTimer = 0;
+                }
+                if (reviseState.abortController) {
+                    reviseState.abortController.abort();
+                    reviseState.abortController = null;
+                }
+                setReviseUiStatus(reason === 'completed' ? 'completed' : 'stopped', reason || 'manual_stop');
+            }
+
+            function waitRevise(ms) {
+                return new Promise(function (resolve) {
+                    reviseState.delayTimer = window.setTimeout(function () {
+                        reviseState.delayTimer = 0;
+                        resolve();
+                    }, ms);
+                });
+            }
+
+            async function runReviseBatch(batchIndex) {
+                if (reviseState.inFlight) {
+                    throw new Error('double_submit_prevented');
+                }
                 reviseState.inFlight = true;
+                reviseState.abortController = new AbortController();
+
                 const formData = new FormData();
                 formData.append('action', reviseRunner.dataset.action || 'wei_shipping_policy_revise_run');
                 formData.append('_wpnonce', reviseRunner.dataset.nonce || '');
                 formData.append('wei_auto_runner', '1');
+                formData.append('auto_runner_batch_index', String(batchIndex));
                 formData.append('mode', reviseMode ? reviseMode.value : 'dry_run');
-                formData.append('batch_size', String(reviseNumber(reviseBatchSize, 20)));
+                formData.append('batch_size', String(reviseNumberFromInput(reviseBatchSize, 20, 1, 100)));
+
                 try {
-                    const response = await fetch(ajaxurl.replace('admin-ajax.php', 'admin-post.php'), { method: 'POST', credentials: 'same-origin', body: formData });
-                    const payload = await response.json();
-                    const summary = payload && payload.summary ? payload.summary : {};
-                    setRevise('checked', summary.checked || 0); setRevise('changed', summary.changed || 0); setRevise('skipped', summary.skipped || 0); setRevise('errors', summary.errors || 0);
-                    if (!reviseState.stopped && (summary.checked || 0) > 0) { reviseState.inFlight = false; window.setTimeout(runReviseBatch, 1000); return; }
-                    reviseState.running = false; setRevise('state', 'completed');
-                } catch (e) {
-                    reviseState.running = false; setRevise('state', 'error');
-                } finally { reviseState.inFlight = false; }
+                    const response = await fetch(reviseRunner.dataset.adminPostUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        body: formData,
+                        signal: reviseState.abortController.signal,
+                    });
+                    if (!response.ok) {
+                        throw new Error('request_failed_http_' + response.status);
+                    }
+                    const result = await response.json();
+                    if (result && result.success === true && result.data) {
+                        return result.data;
+                    }
+                    return result;
+                } finally {
+                    reviseState.inFlight = false;
+                    reviseState.abortController = null;
+                }
             }
-            reviseStart.addEventListener('click', function () { if (reviseState.running || reviseState.inFlight) { return; } reviseState.running = true; reviseState.stopped = false; setRevise('state', 'running'); runReviseBatch(); });
-            reviseStop.addEventListener('click', function () { reviseState.stopped = true; reviseState.running = false; setRevise('state', 'stopped'); });
+
+            async function startReviseRunner() {
+                if (reviseState.running || reviseState.inFlight) {
+                    return;
+                }
+                reviseState.running = true;
+                reviseState.stopped = false;
+                reviseState.batches_completed = 0;
+                reviseState.total_checked = 0;
+                reviseState.total_changed = 0;
+                reviseState.total_unchanged = 0;
+                reviseState.total_skipped = 0;
+                reviseState.total_errors = 0;
+                reviseState.remaining_candidates = '-';
+                reviseState.stopped_reason = '-';
+                updateReviseCounters(null);
+                setReviseUiStatus('running', '-');
+
+                while (reviseState.running && !reviseState.stopped) {
+                    try {
+                        const batchIndex = reviseState.batches_completed + 1;
+                        const result = await runReviseBatch(batchIndex);
+                        const summary = result && result.summary ? result.summary : result;
+                        const checked = parseInt(summary.checked || 0, 10) || 0;
+                        const changed = parseInt(summary.changed || 0, 10) || 0;
+                        const unchanged = parseInt(summary.unchanged || 0, 10) || 0;
+                        const skipped = parseInt(summary.skipped || 0, 10) || 0;
+                        const errors = parseInt(summary.errors || 0, 10) || 0;
+                        const remaining = Object.prototype.hasOwnProperty.call(summary, 'remaining_candidates') ? (parseInt(summary.remaining_candidates || 0, 10) || 0) : (Object.prototype.hasOwnProperty.call(summary, 'remaining_listings') ? (parseInt(summary.remaining_listings || 0, 10) || 0) : '-');
+
+                        reviseState.batches_completed += 1;
+                        reviseState.total_checked += checked;
+                        reviseState.total_changed += changed;
+                        reviseState.total_unchanged += unchanged;
+                        reviseState.total_skipped += skipped;
+                        reviseState.total_errors += errors;
+                        reviseState.remaining_candidates = remaining;
+                        updateReviseCounters(summary);
+
+                        if (summary.fatal_error || summary.stopped_reason) {
+                            stopReviseRunner(summary.stopped_reason || 'fatal_error');
+                            break;
+                        }
+                        if (summary.queue_empty === true || summary.completed === true) {
+                            stopReviseRunner('completed');
+                            break;
+                        }
+                        if (checked === 0) {
+                            stopReviseRunner('completed');
+                            break;
+                        }
+
+                        await waitRevise(reviseNumberFromInput(reviseDelay, 5, 0, 3600) * 1000);
+                    } catch (error) {
+                        if (reviseState.stopped && error.name === 'AbortError') {
+                            break;
+                        }
+                        stopReviseRunner(error && error.message ? error.message : 'fatal_error');
+                        break;
+                    }
+                }
+            }
+
+            reviseStart.addEventListener('click', startReviseRunner);
+            reviseStop.addEventListener('click', function () {
+                stopReviseRunner('manual_stop');
+            });
+            window.addEventListener('beforeunload', function () {
+                if (reviseState.running || reviseState.inFlight) {
+                    stopReviseRunner('page_unload');
+                }
+            });
         }
 
         const runner = document.getElementById('wei-publish-auto-runner');
