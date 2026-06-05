@@ -1083,6 +1083,10 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
         $worklistDownloadUrl = admin_url('admin-post.php?action=download_wei_fr_report&file=' . rawurlencode('category-mapping-worklist.csv'));
         $allWorklistReady = !empty($all_category_mapping_worklist_summary['worklist_csv_exists']) && (int) ($all_category_mapping_worklist_summary['worklist_csv_size'] ?? 0) > 0;
         $allWorklistDownloadUrl = admin_url('admin-post.php?action=download_wei_fr_report&file=' . rawurlencode('all-category-mapping-worklist.csv'));
+        $wooCategoriesExportSummary = is_array($woo_product_categories_export_summary ?? null) ? $woo_product_categories_export_summary : [];
+        $wooCategoriesExportPath = (string) ($wooCategoriesExportSummary['path'] ?? '');
+        $wooCategoriesExportUrl = (string) ($wooCategoriesExportSummary['url'] ?? '');
+        $wooCategoriesExportDownloadUrl = admin_url('admin-post.php?action=download_wei_fr_report&file=' . rawurlencode('woo-product-categories.csv'));
         $blockedFixRecommendationsReady = !empty($blocked_category_fix_report_summary['recommendations_csv_exists']) && (int) ($blocked_category_fix_report_summary['recommendations_csv_size'] ?? 0) > 0;
         $blockedFixImportReady = !empty($blocked_category_fix_report_summary['fix_import_csv_exists']) && (int) ($blocked_category_fix_report_summary['fix_import_csv_size'] ?? 0) > 0;
         $blockedFixRecommendationDownloadUrl = admin_url('admin-post.php?action=download_wei_fr_report&file=' . rawurlencode('blocked_category_mapping_recommendations.csv'));
@@ -1125,6 +1129,21 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'French Content', 'Kategor
                     <div class="wei-card"><span><?php echo esc_html($label); ?></span><strong><?php echo esc_html((string) ($auditIsComplete ? ($categoryAuditSummary[$key] ?? 0) : ($categoryAuditSummary[$key] ?? 0))); ?></strong></div>
                 <?php endforeach; ?>
             </div>
+        </section>
+
+        <section class="wei-card" data-wei-category-section="woo-categories-csv-export"><h3>Woo product categories CSV export</h3>
+            <p class="description">Read-only export of every WooCommerce <code>product_cat</code>, including empty categories, with hierarchy, product counts and available DE/FR category mappings. This action does not modify products or categories, does not publish anything, and does not call the eBay API.</p>
+            <div class="wei-actions">
+                <form method="post" action="<?php echo esc_url($adminPostUrl); ?>"><?php wp_nonce_field('wei_fr_export_woo_categories_csv'); ?><input type="hidden" name="action" value="wei_fr_export_woo_categories_csv" /><button class="button button-primary">Export Woo categories CSV</button></form>
+                <?php if ($wooCategoriesExportPath !== ''): ?><a class="button" href="<?php echo esc_url($wooCategoriesExportDownloadUrl); ?>">Download Woo categories CSV</a><?php endif; ?>
+            </div>
+            <div class="wei-grid">
+                <div class="wei-card"><span>path</span><strong><?php echo esc_html($wooCategoriesExportPath !== '' ? $wooCategoriesExportPath : '—'); ?></strong></div>
+                <div class="wei-card"><span>url</span><strong><?php echo $wooCategoriesExportUrl !== '' ? '<a href="' . esc_url($wooCategoriesExportUrl) . '">' . esc_html($wooCategoriesExportUrl) . '</a>' : '—'; ?></strong></div>
+                <div class="wei-card"><span>total categories exported</span><strong><?php echo esc_html((string) ($wooCategoriesExportSummary['total_categories_exported'] ?? 0)); ?></strong></div>
+                <div class="wei-card"><span>generated_at</span><strong><?php echo esc_html((string) ($wooCategoriesExportSummary['generated_at'] ?? '—')); ?></strong></div>
+            </div>
+            <?php if (!empty($wooCategoriesExportSummary)): ?><details><summary>Latest Woo categories CSV export summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($wooCategoriesExportSummary, 3000)); ?></pre></details><?php endif; ?>
         </section>
 
         <section class="wei-card" data-wei-category-section="reczne-mapowanie"><h3>Section 2 — Ręczne mapowanie kategoriami</h3>
