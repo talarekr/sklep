@@ -49,8 +49,9 @@ $assertContains($generatorMethod, '$calculateProductCount($termId)', 'recursive 
 $assertContains($directProductIdsMethod, 'SELECT DISTINCT tt.term_id, p.ID AS product_id', 'direct product ID query');
 $assertContains($generatorMethod, '$' . 'directCounts[(int) $' . 'termId] = count((array) $' . 'productIds);', 'direct_count derived from direct product IDs with term IDs preserved');
 $assertContains($pathMethod, "implode(' > '", 'nested category full_path delimiter');
-$assertContains($generatorMethod, "woo_category_mapping_ids('EBAY_DE')", 'DE mapping lookup');
-$assertContains($generatorMethod, "woo_category_mapping_ids('EBAY_FR')", 'FR mapping lookup');
+$assertContains($generatorMethod, "$" . "deMarketplace = 'EBAY_' . 'DE'", 'DE mapping lookup');
+$assertContains($generatorMethod, "woo_category_mapping_ids($" . "deMarketplace)", 'DE mapping lookup call');
+$assertContains($generatorMethod, "woo_category_mapping_ids($" . "frMarketplace)", 'FR mapping lookup call');
 $assertContains($mappingMethod, "wei_ebay_category_mappings", 'legacy DE mappings table');
 $assertContains($mappingMethod, "wei_fr_ebay_category_mappings", 'FR mappings table');
 $assertContains($admin, "'path' => trailingslashit($" . "baseDir) . 'woo-product-categories.csv'", 'export path filename');
