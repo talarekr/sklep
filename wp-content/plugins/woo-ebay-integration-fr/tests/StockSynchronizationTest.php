@@ -72,6 +72,21 @@ foreach ([
     "set_woo_stock_zero_outofstock_mark_sold_enqueue_marketplace_cleanup",
     "_wei_fr_marketplace_cleanup_needed",
     "wei_fr_marketplace_cleanup_requested",
+    'is_ebay_already_closed_error',
+    'already_closed_success_response',
+    'already_closed_success',
+    'ebay_already_closed_detected',
+    'event_marked_processed',
+    'local_listing_state_after',
+    'ended_or_unavailable',
+    'retryable',
+    'the auction has already been closed',
+    'auction already closed',
+    'listing already ended',
+    'item has ended',
+    'listing ended',
+    'already closed',
+    "\$this->mark_event_processed(\$eventId, \$processedIds, \$queue, \$dryRun, (string) \$row['result']);",
 ] as $needle) {
     $assertContains($service, $needle, 'Stock sync service');
 }
@@ -97,6 +112,10 @@ $expectedStockSyncCsvHeaders = [
     'dry_run',
     'result',
     'error_message',
+    'ebay_already_closed_detected',
+    'event_marked_processed',
+    'local_listing_state_after',
+    'retryable',
     'timestamp',
 ];
 $expectedStockSyncCsvHeaderSource = implode('', array_map(static fn(string $header): string => "        '" . $header . "',

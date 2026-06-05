@@ -56,6 +56,9 @@ foreach ([
     'end_ebay_listing_by_listing_id_after_invalid_sku',
     'make_ebay_offer_unavailable_by_offer_id_after_invalid_sku',
     'WEI_STOCK_SYNC_EBAY_ID_FALLBACK',
+    'is_ebay_already_closed_error($res)',
+    'already_closed_success_response($res',
+    'already_closed_success',
 ] as $needle) {
     $assertContains($unavailableBlock, $needle, 'Woo → eBay unavailable ID fallback');
 }
@@ -74,6 +77,9 @@ foreach ([
     $assertContains($retryBlock, $needle, 'Retryable invalid SKU detection');
 }
 $assertContains($syncBlock, 'retryable_after_id_based_stock_sync_fix', 'Invalid SKU CSV retry marker');
+foreach (['ebay_already_closed_detected', 'event_marked_processed', 'local_listing_state_after', 'retryable'] as $needle) {
+    $assertContains($service, $needle, 'Already-closed idempotent success diagnostics');
+}
 $assertContains($client, 'function bulk_update_price_quantity(array $requests, array $context = [])', 'Bulk update context for diagnostics');
 $assertContains($client, 'function end_fixed_price_item_by_listing_id', 'Trading listing-id end fallback client');
 $assertContains($client, "'X-EBAY-API-CALL-NAME' => $" . "callName", 'Trading API call-name header');
@@ -83,6 +89,8 @@ $assertNotContains($unavailableBlock, 'publish_offer(', 'Woo → eBay unavailabl
 $assertNotContains($unavailableBlock, 'create_offer(', 'Woo → eBay unavailable must not create offers');
 $assertNotContains($unavailableBlock, 'create_or_replace_inventory_item(', 'Woo → eBay unavailable must not touch inventory item SKU endpoint');
 $assertNotContains($unavailableBlock, "['quantity' => 1]", 'Woo → eBay unavailable must not increase stock');
+$assertNotContains($unavailableBlock, 'publish_offer(', 'Already-closed idempotent success must not publish/relist');
+$assertNotContains($unavailableBlock, "['quantity' => 1]", 'Already-closed idempotent success must not increase stock');
 
 if ($failures !== []) {
     fwrite(STDERR, implode(PHP_EOL, $failures) . PHP_EOL);
