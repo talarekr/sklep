@@ -134,6 +134,19 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
     <h2>Ovoko ↔ Woo Automatic Sync</h2>
 
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #00a32a;">
+        <h3>Preview Woo → Ovoko create-part payload</h3>
+        <p><strong>Safe one-product dry-run only.</strong> This tool previews an unconfirmed create-part payload from one WooCommerce product. It does not write to Ovoko, does not write to WooCommerce, does not upload images, does not enqueue work, and does not publish anything.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+            <?php wp_nonce_field('gpswiss_ovoko_preview_woo_to_ovoko_create_part'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_preview_woo_to_ovoko_create_part" />
+            <label>product_id: <input type="number" min="1" step="1" name="product_id" value="" style="width:140px;" required /></label>
+            <?php submit_button('Preview Woo → Ovoko create-part payload', 'secondary', 'submit', false); ?>
+        </form>
+        <p><strong>Endpoint safety:</strong> create endpoint remains <code>UNCONFIRMED_CREATE_PART_ENDPOINT</code>. This tool intentionally does not use <code>/crm/changePartStatus</code> or <code>/crm/updatePart</code>.</p>
+    </div>
+
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
         <h3>Ovoko ↔ Woo Automatic Sync</h3>
         <p><strong>Production orchestrator.</strong> The hook <code>gpswiss_ovoko_bidirectional_sync</code> runs <code>Ovoko → Woo date_from sync</code> first and then <code>Woo → Ovoko sale queue</code>. The panel switch below is the only Auto cron control.</p>

@@ -25,6 +25,7 @@ require_once __DIR__ . '/src/Services/OvokoAutoSyncDryRunService.php';
 require_once __DIR__ . '/src/Services/OvokoWooSaleSyncQueue.php';
 require_once __DIR__ . '/src/Services/OvokoBidirectionalSyncOrchestrator.php';
 require_once __DIR__ . '/src/Services/OvokoInternalNotesPriceBackfillService.php';
+require_once __DIR__ . '/src/Services/WooToOvokoCreatePartPreviewService.php';
 require_once __DIR__ . '/src/Services/AdminPage.php';
 require_once __DIR__ . '/src/Plugin.php';
 
