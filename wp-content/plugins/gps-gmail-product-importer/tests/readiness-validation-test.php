@@ -11,6 +11,8 @@ function esc_html_e($text, $domain = null) { echo $text; }
 function wp_parse_args($args, $defaults = array()) { return array_merge($defaults, (array) $args); }
 function get_option($name, $default = false) { return $default; }
 function absint($value) { return abs((int) $value); }
+function taxonomy_exists($taxonomy) { return $taxonomy === 'product_cat'; }
+function term_exists($term, $taxonomy = '') { return ((int) $term === 123 && $taxonomy === 'product_cat') ? array('term_id' => 123, 'term_taxonomy_id' => 123) : null; }
 
 require dirname(__DIR__) . '/gps-gmail-product-importer.php';
 

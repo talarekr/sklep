@@ -1318,8 +1318,38 @@ JS;
         }
         if (absint($analysis['suggested_woo_category_id'] ?? 0) <= 0 || strtolower(trim((string) ($analysis['suggested_woo_category_confidence'] ?? ''))) === 'low' || trim((string) ($analysis['suggested_woo_category_confidence'] ?? '')) === '' || in_array(strtolower(trim((string) ($analysis['suggested_category_source'] ?? ''))), array('', 'none'), true)) {
             $blocking[] = 'invalid_category_mapping';
+        } elseif (!$this->product_cat_term_exists(absint($analysis['suggested_woo_category_id'] ?? 0))) {
+            $blocking[] = 'invalid_category_term';
         }
         return $blocking;
+    }
+
+    private function mapped_suggested_product_cat_id($analysis)
+    {
+        if (!$this->status_indicates_success((string) ($analysis['category_mapping_status'] ?? ''), array('success', 'ok', 'mapped', 'matched'))) {
+            return 0;
+        }
+        return absint($analysis['suggested_woo_category_id'] ?? 0);
+    }
+
+    private function product_cat_term_exists($term_id)
+    {
+        $term_id = absint($term_id);
+        if ($term_id <= 0) {
+            return false;
+        }
+        if (function_exists('taxonomy_exists') && !taxonomy_exists('product_cat')) {
+            return false;
+        }
+        if (function_exists('term_exists')) {
+            $exists = term_exists($term_id, 'product_cat');
+            return $exists && (!function_exists('is_wp_error') || !is_wp_error($exists));
+        }
+        if (function_exists('get_term')) {
+            $term = get_term($term_id, 'product_cat');
+            return $term && (!function_exists('is_wp_error') || !is_wp_error($term));
+        }
+        return false;
     }
 
     private function readiness_response($blocking, $ready_status)
@@ -2043,6 +2073,13 @@ JS;
         if (!$selected_price) {
             return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual or Allegro PLN price is required before creating a Woo draft.');
         }
+        $suggested_category_id = $this->mapped_suggested_product_cat_id($analysis);
+        if ($suggested_category_id <= 0) {
+            return new WP_Error('gps_gmail_missing_mapped_category', 'A mapped Woo product_cat category is required before creating a Woo draft.');
+        }
+        if (!$this->product_cat_term_exists($suggested_category_id)) {
+            return new WP_Error('gps_gmail_invalid_mapped_category', sprintf('Mapped Woo product_cat term %d does not exist.', $suggested_category_id));
+        }
         $status = 'draft';
         $product_id = wp_insert_post(array(
             'post_type' => 'product',
@@ -2091,8 +2128,10 @@ JS;
         update_post_meta($product_id, '_gps_ovoko_category_name', $analysis['ovoko_category_name'] ?? '');
         update_post_meta($product_id, '_gps_ovoko_category_path', $analysis['ovoko_category_path'] ?? '');
         update_post_meta($product_id, '_gps_ovoko_part_category', $analysis['ovoko_part_category'] ?? '');
-        if ($settings['auto_assign_high_confidence_category'] && $analysis['suggested_woo_category_id'] && $analysis['suggested_woo_category_confidence'] === 'high') {
-            wp_set_object_terms($product_id, array((int) $analysis['suggested_woo_category_id']), 'product_cat');
+        $category_assignment = wp_set_object_terms($product_id, array($suggested_category_id), 'product_cat', false);
+        if (is_wp_error($category_assignment)) {
+            wp_delete_post($product_id, true);
+            return $category_assignment;
         }
         $images_imported = 0;
         if ($settings['import_images']) {

@@ -23,6 +23,8 @@ function current_time($type, $gmt = 0) { return '2026-06-07 11:37:28'; }
 function get_post_meta($id, $key = '', $single = false) { return $GLOBALS['gps_test_meta'][$id][$key] ?? ''; }
 function update_post_meta($id, $key, $value) { $GLOBALS['gps_test_meta'][$id][$key] = $value; return true; }
 function is_wp_error($value) { return $value instanceof WP_Error; }
+function taxonomy_exists($taxonomy) { return $taxonomy === 'product_cat'; }
+function term_exists($term, $taxonomy = '') { return ((int) $term === 123 && $taxonomy === 'product_cat') ? array('term_id' => 123, 'term_taxonomy_id' => 123) : null; }
 
 class WP_Error
 {
