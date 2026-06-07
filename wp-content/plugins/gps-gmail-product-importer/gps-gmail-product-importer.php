@@ -481,6 +481,8 @@ JS;
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
             __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
             __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes'),
+            __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
+            __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
             __('Shipping group', 'gps-gmail-product-importer') => array('_gps_shipping_group'),
             __('Woo draft readiness status', 'gps-gmail-product-importer') => array('_gps_woo_draft_readiness_status', '_gps_woo_draft_readiness_checked_at'),
@@ -491,9 +493,12 @@ JS;
             __('Legacy blocking reasons', 'gps-gmail-product-importer') => array('_gps_blocking_reasons'),
             __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id'),
         );
+        $selected_price_source = (string) ($normalized_meta['_gps_selected_price_source'] ?? '');
+        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_suggestion' ? __('Allegro price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
         ?>
         <div id="gps-import-queue-detail" style="margin-top:20px;">
             <h3><?php echo esc_html(sprintf(__('Import Queue Item #%d Details', 'gps-gmail-product-importer'), $item_id)); ?></h3>
+            <p><strong><?php esc_html_e('Woo draft price readiness source:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($price_readiness_label); ?></p>
             <?php foreach ($groups as $label => $keys) : ?>
                 <h4><?php echo esc_html($label); ?></h4>
                 <table class="widefat striped" style="max-width:1100px;margin-bottom:12px;">
@@ -504,6 +509,17 @@ JS;
                     </tbody>
                 </table>
             <?php endforeach; ?>
+            <h4><?php esc_html_e('Set manual price override', 'gps-gmail-product-importer'); ?></h4>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="max-width:720px;margin-bottom:16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
+                <?php wp_nonce_field(self::NONCE_ACTION); ?>
+                <input type="hidden" name="action" value="gps_gmail_product_importer_queue_item_action">
+                <input type="hidden" name="queue_action" value="manual_price_override">
+                <input type="hidden" name="staging_item_id" value="<?php echo esc_attr($item_id); ?>">
+                <p><label><?php esc_html_e('Price PLN', 'gps-gmail-product-importer'); ?> <input type="number" min="0.01" step="0.01" name="manual_price_pln" value="<?php echo esc_attr($normalized_meta['_gps_manual_price_pln'] ?? ''); ?>" required></label></p>
+                <p><label><?php esc_html_e('Note/reason', 'gps-gmail-product-importer'); ?><br><textarea name="manual_price_note" rows="3" style="width:100%;"><?php echo esc_textarea((string) ($normalized_meta['_gps_manual_price_note'] ?? '')); ?></textarea></label></p>
+                <p class="description"><?php esc_html_e('Manual price is stored as manual_override staging meta only. It does not create Woo products and does not mark Allegro research as completed.', 'gps-gmail-product-importer'); ?></p>
+                <?php submit_button(__('Set/update manual price override', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
+            </form>
             <h4><?php esc_html_e('Full message body', 'gps-gmail-product-importer'); ?></h4>
             <pre style="white-space:pre-wrap;max-height:280px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:10px;"><?php echo esc_html($post->post_content); ?></pre>
             <h4><?php esc_html_e('Raw stored meta', 'gps-gmail-product-importer'); ?></h4>
@@ -1168,6 +1184,9 @@ JS;
 
     private function staging_meta_from_analysis($analysis, $staging_status, $duplicate_status, $created_product_id)
     {
+        $selected_price = $this->selected_price_for_analysis($analysis);
+        $analysis['selected_price_pln'] = $selected_price ? $selected_price['price'] : '';
+        $analysis['selected_price_source'] = $selected_price ? $selected_price['source'] : '';
         $woo_readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
         $marketplace_readiness = $this->marketplace_readiness_status($analysis, $staging_status, $created_product_id);
         return array(
@@ -1199,6 +1218,14 @@ JS;
             '_gps_allegro_price_research_status' => sanitize_text_field($analysis['allegro_price_research_status'] ?? ''),
             '_gps_allegro_price_suggestion' => sanitize_text_field($analysis['allegro_price_suggestion'] ?? ''),
             '_gps_allegro_price_currency' => sanitize_text_field($analysis['allegro_price_currency'] ?? ''),
+            '_gps_manual_price_override_enabled' => !empty($analysis['manual_price_override_enabled']) ? '1' : '0',
+            '_gps_manual_price_pln' => sanitize_text_field($analysis['manual_price_pln'] ?? ''),
+            '_gps_manual_price_note' => sanitize_textarea_field($analysis['manual_price_note'] ?? ''),
+            '_gps_manual_price_set_at' => sanitize_text_field($analysis['manual_price_set_at'] ?? ''),
+            '_gps_manual_price_set_by' => absint($analysis['manual_price_set_by'] ?? 0),
+            '_gps_selected_price_pln' => $selected_price ? $selected_price['price'] : '',
+            '_gps_selected_price_source' => $selected_price ? $selected_price['source'] : '',
+            '_gps_selected_price_checked_at' => current_time('mysql', true),
             '_gps_category_mapping_status' => sanitize_text_field($analysis['category_mapping_status'] ?? ''),
             '_gps_suggested_woo_category_id' => absint($analysis['suggested_woo_category_id']),
             '_gps_suggested_woo_category_path' => sanitize_text_field($analysis['suggested_woo_category_path']),
@@ -1273,15 +1300,18 @@ JS;
         if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested'))) {
             $blocking[] = 'missing_ovoko_enrichment';
         }
-        // Allegro must be a completed staging-only API research result with a PLN suggestion.
-        if (!$this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched'))) {
-            $blocking[] = 'missing_allegro_price_research';
-        }
-        if ((float) ($analysis['allegro_price_suggestion'] ?? 0) <= 0 || strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) !== 'PLN') {
-            $blocking[] = 'missing_allegro_price_suggestion';
-        }
-        if (!$this->allegro_readiness_quality_ok($analysis)) {
-            $blocking[] = 'insufficient_allegro_price_research';
+        // Price can come from a clearly marked manual override or completed staging-only Allegro research.
+        $selected_price = $this->selected_price_for_analysis($analysis);
+        if (!$selected_price) {
+            if (!$this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched'))) {
+                $blocking[] = 'missing_allegro_price_research';
+            }
+            if ((float) ($analysis['allegro_price_suggestion'] ?? 0) <= 0 || strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) !== 'PLN') {
+                $blocking[] = 'missing_allegro_price_suggestion';
+            }
+            if (!$this->allegro_readiness_quality_ok($analysis)) {
+                $blocking[] = 'insufficient_allegro_price_research';
+            }
         }
         if (!$this->status_indicates_success((string) ($analysis['category_mapping_status'] ?? ''), array('success', 'ok', 'mapped', 'matched'))) {
             $blocking[] = 'missing_category_mapping';
@@ -1311,6 +1341,32 @@ JS;
         $rank = array('no_match' => 0, 'not_configured' => 0, 'low' => 1, 'medium' => 2, 'high' => 3);
         return ($rank[$confidence] ?? 0) >= ($rank[$required] ?? 2);
     }
+
+    private function selected_price_for_analysis($analysis)
+    {
+        if (!empty($analysis['manual_price_override_enabled']) && (float) ($analysis['manual_price_pln'] ?? 0) > 0) {
+            return array('price' => $this->format_manual_price_number($analysis['manual_price_pln']), 'source' => 'manual_override');
+        }
+        if ($this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched')) && (float) ($analysis['allegro_price_suggestion'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) === 'PLN' && $this->allegro_readiness_quality_ok($analysis)) {
+            return array('price' => $this->format_price_number($analysis['allegro_price_suggestion']), 'source' => 'allegro_suggestion');
+        }
+        return null;
+    }
+
+    private function persist_selected_price_for_staging_item($item_id, $analysis)
+    {
+        $selected = $this->selected_price_for_analysis($analysis);
+        update_post_meta($item_id, '_gps_selected_price_checked_at', current_time('mysql', true));
+        if (!$selected) {
+            update_post_meta($item_id, '_gps_selected_price_pln', '');
+            update_post_meta($item_id, '_gps_selected_price_source', '');
+            return null;
+        }
+        update_post_meta($item_id, '_gps_selected_price_pln', $selected['price']);
+        update_post_meta($item_id, '_gps_selected_price_source', $selected['source']);
+        return $selected;
+    }
+
 
     private function status_indicates_success($status, $allowed_success_statuses)
     {
@@ -1357,6 +1413,9 @@ JS;
                 case 'readiness_validation':
                     $result = $this->run_readiness_validation_for_staging_item($item_id);
                     break;
+                case 'manual_price_override':
+                    $result = $this->set_manual_price_override_for_staging_item($item_id, $_POST);
+                    break;
                 case 'create_woo_draft':
                     $result = $this->create_woo_draft_from_staging_item($item_id);
                     break;
@@ -1367,6 +1426,22 @@ JS;
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => $item_id), admin_url('admin.php')) . '#gps-import-queue-detail');
         exit;
+    }
+
+    private function set_manual_price_override_for_staging_item($item_id, $request)
+    {
+        $raw_price = isset($request['manual_price_pln']) ? trim((string) $request['manual_price_pln']) : '';
+        if ($raw_price === '' || !is_numeric($raw_price) || (float) $raw_price <= 0) {
+            return array('action' => 'manual_price_override', 'staging_item_id' => $item_id, 'result' => 'error', 'error' => 'Manual price must be numeric and greater than 0.', 'writes' => 'none');
+        }
+        $price = $this->format_manual_price_number($raw_price);
+        update_post_meta($item_id, '_gps_manual_price_override_enabled', '1');
+        update_post_meta($item_id, '_gps_manual_price_pln', $price);
+        update_post_meta($item_id, '_gps_manual_price_note', sanitize_textarea_field((string) ($request['manual_price_note'] ?? '')));
+        update_post_meta($item_id, '_gps_manual_price_set_at', current_time('mysql', true));
+        update_post_meta($item_id, '_gps_manual_price_set_by', function_exists('get_current_user_id') ? absint(get_current_user_id()) : 0);
+        $readiness = $this->run_readiness_validation_for_staging_item($item_id);
+        return array('action' => 'manual_price_override', 'staging_item_id' => $item_id, 'result' => 'saved_manual_price_override', 'manual_price_pln' => $price, 'price_source' => 'manual_override', 'readiness' => $readiness, 'writes' => 'staging_meta_only');
     }
 
     private function run_ovoko_enrichment_for_staging_item($item_id)
@@ -1789,6 +1864,13 @@ JS;
         return number_format((float) $value, 2, '.', '');
     }
 
+    private function format_manual_price_number($value)
+    {
+        $formatted = $this->format_price_number($value);
+        $trimmed = rtrim(rtrim($formatted, '0'), '.');
+        return $trimmed === '' ? '0' : $trimmed;
+    }
+
     private function persist_allegro_price_research($item_id, $analysis)
     {
         update_post_meta($item_id, '_gps_allegro_price_research_status', sanitize_text_field((string) ($analysis['status'] ?? '')));
@@ -1837,6 +1919,9 @@ JS;
         $analysis = $this->analysis_from_staging_item($item_id);
         $staging_status = (string) get_post_meta($item_id, '_gps_staging_status', true);
         $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
+        $selected_price = $this->persist_selected_price_for_staging_item($item_id, $analysis);
+        $analysis['selected_price_pln'] = $selected_price ? $selected_price['price'] : '';
+        $analysis['selected_price_source'] = $selected_price ? $selected_price['source'] : '';
         $woo_readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
         $marketplace_readiness = $this->marketplace_readiness_status($analysis, $staging_status, $created_product_id);
         update_post_meta($item_id, '_gps_woo_draft_readiness_status', $woo_readiness['status']);
@@ -1848,7 +1933,7 @@ JS;
         update_post_meta($item_id, '_gps_readiness_status', $woo_readiness['status']);
         update_post_meta($item_id, '_gps_blocking_reasons', wp_json_encode($woo_readiness['blocking_reasons']));
         update_post_meta($item_id, '_gps_readiness_checked_at', current_time('mysql', true));
-        return array('action' => 'readiness_validation', 'staging_item_id' => $item_id, 'result' => $woo_readiness['status'], 'blocking_reasons' => $woo_readiness['blocking_reasons'], 'woo_draft_readiness' => $woo_readiness, 'marketplace_readiness' => $marketplace_readiness, 'writes' => 'staging_meta_only');
+        return array('action' => 'readiness_validation', 'staging_item_id' => $item_id, 'result' => $woo_readiness['status'], 'blocking_reasons' => $woo_readiness['blocking_reasons'], 'price_source' => $selected_price ? $selected_price['source'] : '', 'selected_price_pln' => $selected_price ? $selected_price['price'] : '', 'woo_draft_readiness' => $woo_readiness, 'marketplace_readiness' => $marketplace_readiness, 'writes' => 'staging_meta_only');
     }
 
     private function create_woo_draft_from_staging_item($item_id)
@@ -1903,6 +1988,7 @@ JS;
     {
         $post = get_post($id);
         return array(
+            'staging_item_id' => absint($id),
             'message_id' => get_post_meta($id, '_gps_gmail_message_id', true),
             'thread_id' => get_post_meta($id, '_gps_gmail_thread_id', true),
             'date' => get_post_meta($id, '_gps_gmail_date', true),
@@ -1925,6 +2011,15 @@ JS;
             'allegro_price_currency' => get_post_meta($id, '_gps_allegro_price_currency', true),
             'allegro_price_filtered_offer_count' => get_post_meta($id, '_gps_allegro_price_filtered_offer_count', true),
             'allegro_price_confidence' => get_post_meta($id, '_gps_allegro_price_confidence', true),
+            'manual_price_override_enabled' => get_post_meta($id, '_gps_manual_price_override_enabled', true) === '1',
+            'manual_price_pln' => get_post_meta($id, '_gps_manual_price_pln', true),
+            'manual_price_note' => get_post_meta($id, '_gps_manual_price_note', true),
+            'selected_price_pln' => get_post_meta($id, '_gps_selected_price_pln', true),
+            'selected_price_source' => get_post_meta($id, '_gps_selected_price_source', true),
+            'ovoko_category_id' => get_post_meta($id, '_gps_ovoko_category_id', true),
+            'ovoko_category_name' => get_post_meta($id, '_gps_ovoko_category_name', true),
+            'ovoko_category_path' => get_post_meta($id, '_gps_ovoko_category_path', true),
+            'ovoko_part_category' => get_post_meta($id, '_gps_ovoko_part_category', true),
             'category_mapping_status' => get_post_meta($id, '_gps_category_mapping_status', true),
             'suggested_woo_category_id' => absint(get_post_meta($id, '_gps_suggested_woo_category_id', true)),
             'suggested_woo_category_path' => get_post_meta($id, '_gps_suggested_woo_category_path', true),
@@ -1944,6 +2039,10 @@ JS;
             return new WP_Error('gps_gmail_wc_missing', 'WooCommerce is required to create products.');
         }
         $settings = $this->settings();
+        $selected_price = $this->selected_price_for_analysis($analysis);
+        if (!$selected_price) {
+            return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual or Allegro PLN price is required before creating a Woo draft.');
+        }
         $status = 'draft';
         $product_id = wp_insert_post(array(
             'post_type' => 'product',
@@ -1959,6 +2058,11 @@ JS;
         update_post_meta($product_id, '_stock', 1);
         update_post_meta($product_id, '_stock_status', 'instock');
         update_post_meta($product_id, '_manage_stock', 'yes');
+        update_post_meta($product_id, '_regular_price', $selected_price['price']);
+        update_post_meta($product_id, '_price', $selected_price['price']);
+        update_post_meta($product_id, '_gps_source_staging_item_id', absint($analysis['staging_item_id'] ?? 0));
+        update_post_meta($product_id, '_gps_selected_price_pln', $selected_price['price']);
+        update_post_meta($product_id, '_gps_selected_price_source', $selected_price['source']);
         update_post_meta($product_id, '_gps_gmail_import_message_id', $analysis['message_id']);
         update_post_meta($product_id, '_gps_gmail_import_thread_id', $analysis['thread_id']);
         update_post_meta($product_id, '_gps_gmail_import_subject', $analysis['subject']);
@@ -1983,6 +2087,10 @@ JS;
         update_post_meta($product_id, '_gps_suggested_woo_category_path', $analysis['suggested_woo_category_path']);
         update_post_meta($product_id, '_gps_suggested_woo_category_confidence', $analysis['suggested_woo_category_confidence']);
         update_post_meta($product_id, '_gps_suggested_category_source', $analysis['suggested_category_source']);
+        update_post_meta($product_id, '_gps_ovoko_category_id', $analysis['ovoko_category_id'] ?? '');
+        update_post_meta($product_id, '_gps_ovoko_category_name', $analysis['ovoko_category_name'] ?? '');
+        update_post_meta($product_id, '_gps_ovoko_category_path', $analysis['ovoko_category_path'] ?? '');
+        update_post_meta($product_id, '_gps_ovoko_part_category', $analysis['ovoko_part_category'] ?? '');
         if ($settings['auto_assign_high_confidence_category'] && $analysis['suggested_woo_category_id'] && $analysis['suggested_woo_category_confidence'] === 'high') {
             wp_set_object_terms($product_id, array((int) $analysis['suggested_woo_category_id']), 'product_cat');
         }
