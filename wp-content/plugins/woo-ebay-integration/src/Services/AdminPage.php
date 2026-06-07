@@ -21,7 +21,7 @@ class AdminPage
     private const SHIPPING_POLICY_REVISE_STATUS_META_KEYS = ['_wei_ebay_listing_status', 'listing_status'];
     private const SHIPPING_POLICY_REVISE_MARKETPLACE_META_KEYS = ['_wei_ebay_marketplace'];
 
-    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync)
+    public function __construct(private EbayAuth $auth, private EbayAdapter $adapter, private SyncService $syncService, private OrderImporter $orderImporter, private Logger $logger, private CategoryMappingRepository $categoryRepo, private AutoCategoryMappingService $autoCategoryMapper, private EbaySkuGenerator $skuGenerator, private EbayPriceResolver $priceResolver, private EbayTaxonomyService $taxonomy, private AutoSyncScheduler $scheduler, private StockSyncService $stockSync, private AutoNewProductPublisher $newProductPublisher)
     {
     }
 
@@ -117,6 +117,45 @@ class AdminPage
         add_action('admin_post_wei_run_stock_sync_dry_run', [$this, 'run_stock_sync_dry_run']);
         add_action('admin_post_wei_run_stock_sync_now', [$this, 'run_stock_sync_now']);
         add_action('admin_post_wei_stock_sync_diagnostics', [$this, 'stock_sync_diagnostics']);
+        add_action('admin_post_wei_save_new_product_publish_settings', [$this, 'save_new_product_publish_settings']);
+        add_action('admin_post_wei_run_new_product_publish_dry_run', [$this, 'run_new_product_publish_dry_run']);
+        add_action('admin_post_wei_run_new_product_publish_now', [$this, 'run_new_product_publish_now']);
+    }
+
+
+    public function save_new_product_publish_settings(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('No access');
+        }
+        check_admin_referer('wei_new_product_publish_settings');
+        $this->newProductPublisher->save_settings(wp_unslash($_POST));
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&saved=1&wei_section=new-product-publisher'));
+        exit;
+    }
+
+    public function run_new_product_publish_dry_run(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('No access');
+        }
+        check_admin_referer('wei_new_product_publish_run');
+        $summary = $this->newProductPublisher->run_manual(true);
+        update_option('wei_ebay_new_product_publish_manual_result', $summary, false);
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&wei_section=new-product-publisher&new_product_publish_run=dry_run'));
+        exit;
+    }
+
+    public function run_new_product_publish_now(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('No access');
+        }
+        check_admin_referer('wei_new_product_publish_run');
+        $summary = $this->newProductPublisher->run_manual(false, ['dry_run' => 0]);
+        update_option('wei_ebay_new_product_publish_manual_result', $summary, false);
+        wp_safe_redirect(admin_url('admin.php?page=woo-ebay&wei_section=new-product-publisher&new_product_publish_run=live'));
+        exit;
     }
 
     public function register_menu(): void
@@ -416,6 +455,8 @@ class AdminPage
         $shipping_policy_bulk_status = $this->shipping_policy_bulk_status();
         $shipping_policy_revise_report = $this->shipping_policy_revise_latest_report();
         $basic_specifics_bulk_status = $this->basic_specifics_bulk_status();
+        $new_product_publish_status = $this->newProductPublisher->status();
+        $new_product_publish_settings = $this->newProductPublisher->settings();
         include WEI_PLUGIN_DIR . 'views/admin-page.php';
     }
 

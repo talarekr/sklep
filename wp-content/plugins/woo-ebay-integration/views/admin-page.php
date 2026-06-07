@@ -816,6 +816,48 @@ $sectionLayout = ['Stock synchronization', 'Publish', 'German Content', 'Kategor
 
 
 
+    <div class="wei-box" data-wei-module="new-product-publisher" id="wei-new-product-publisher">
+        <h2>Auto New Product Publisher</h2>
+        <p class="description">Separate safe runner for new WooCommerce products. It does not use the stock sync hook and is dry-run/manual-approval safe by default.</p>
+        <?php $nppStatus = is_array($new_product_publish_status ?? null) ? $new_product_publish_status : []; $nppSettings = is_array($new_product_publish_settings ?? null) ? $new_product_publish_settings : []; $nppReports = is_array($nppStatus['reports'] ?? null) ? $nppStatus['reports'] : []; ?>
+        <div class="wei-grid">
+            <div class="wei-card"><span>status</span><strong><?php echo esc_html(!empty($nppStatus['enabled']) ? 'enabled' : 'disabled'); ?></strong></div>
+            <div class="wei-card"><span>last run</span><strong><?php echo esc_html((string) ($nppStatus['last_run'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>next run</span><strong><?php echo esc_html((string) ($nppStatus['next_run'] ?? '-')); ?></strong></div>
+            <div class="wei-card"><span>queued candidates count</span><strong><?php echo esc_html((string) ($nppStatus['queued_candidates_count'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>published_this_run</span><strong><?php echo esc_html((string) ($nppStatus['published_this_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>skipped_this_run</span><strong><?php echo esc_html((string) ($nppStatus['skipped_this_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>blocked_this_run</span><strong><?php echo esc_html((string) ($nppStatus['blocked_this_run'] ?? 0)); ?></strong></div>
+            <div class="wei-card"><span>errors_this_run</span><strong><?php echo esc_html((string) ($nppStatus['errors_this_run'] ?? 0)); ?></strong></div>
+        </div>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="wei-form-grid">
+            <?php wp_nonce_field('wei_new_product_publish_settings'); ?>
+            <input type="hidden" name="action" value="wei_save_new_product_publish_settings">
+            <label><input type="checkbox" name="auto_new_product_publish_enabled" value="1" <?php checked(!empty($nppSettings['enabled'])); ?>> Enabled</label>
+            <label><input type="checkbox" name="auto_new_product_publish_dry_run" value="1" <?php checked(!empty($nppSettings['dry_run'])); ?>> Dry-run</label>
+            <label>Batch size <input type="number" name="auto_new_product_publish_batch_size" min="1" max="100" value="<?php echo esc_attr((string) ($nppSettings['batch_size'] ?? 20)); ?>"></label>
+            <label>Frequency <select name="auto_new_product_publish_frequency"><option value="hourly" <?php selected(($nppSettings['frequency'] ?? '') === 'hourly'); ?>>Hourly</option><option value="twicedaily" <?php selected(($nppSettings['frequency'] ?? '') === 'twicedaily'); ?>>Twice daily</option><option value="daily" <?php selected(($nppSettings['frequency'] ?? '') === 'daily'); ?>>Daily</option></select></label>
+            <label>Max publishes/run <input type="number" name="auto_new_product_publish_max_publishes_per_run" min="1" max="50" value="<?php echo esc_attr((string) ($nppSettings['max_publishes_per_run'] ?? 1)); ?>"></label>
+            <label><input type="checkbox" name="auto_new_product_publish_publish_only_if_ready" value="1" <?php checked(!empty($nppSettings['publish_only_if_ready'])); ?>> Publish only if readiness = ready</label>
+            <label>Newer than date <input type="date" name="auto_new_product_publish_newer_than_date" value="<?php echo esc_attr((string) ($nppSettings['newer_than_date'] ?? '')); ?>"></label>
+            <label>Include Woo categories <input type="text" name="auto_new_product_publish_include_category_ids" value="<?php echo esc_attr((string) ($nppSettings['include_category_ids'] ?? '')); ?>" placeholder="IDs comma-separated"></label>
+            <label>Exclude Woo categories <input type="text" name="auto_new_product_publish_exclude_category_ids" value="<?php echo esc_attr((string) ($nppSettings['exclude_category_ids'] ?? '')); ?>" placeholder="IDs comma-separated"></label>
+            <label><input type="checkbox" name="auto_new_product_publish_require_manual_approval" value="1" <?php checked(!empty($nppSettings['require_manual_approval'])); ?>> Require manual approval</label>
+            <label><input type="checkbox" name="auto_new_product_publish_auto_generate_language_content" value="1" <?php checked(!empty($nppSettings['auto_generate_language_content'])); ?>> Auto-generate missing language content</label>
+            <label><input type="checkbox" name="auto_new_product_publish_stop_on_first_error" value="1" <?php checked(!empty($nppSettings['stop_on_first_error'])); ?>> Stop on first error</label>
+            <label>Delay between publishes <input type="number" name="auto_new_product_publish_delay_between_publishes" min="0" max="60" value="<?php echo esc_attr((string) ($nppSettings['delay_between_publishes'] ?? 0)); ?>"></label>
+            <p><button class="button button-primary" type="submit">Save Auto New Product Publisher settings</button></p>
+        </form>
+        <div class="wei-actions">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_new_product_publish_run'); ?><input type="hidden" name="action" value="wei_run_new_product_publish_dry_run"><button class="button" type="submit">Dry-run</button></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field('wei_new_product_publish_run'); ?><input type="hidden" name="action" value="wei_run_new_product_publish_now"><button class="button button-secondary" type="submit">Start manual run</button></form>
+        </div>
+        <p><strong>Marketplace:</strong> EBAY_DE. Report links:
+            <?php foreach ($nppReports as $label => $url): ?> <a href="<?php echo esc_url((string) $url); ?>" target="_blank" rel="noopener"><?php echo esc_html((string) $label); ?></a><?php endforeach; ?>
+        </p>
+        <details><summary>Last summary</summary><pre class="wei-scroll"><?php echo esc_html($technicalPreview($nppStatus['last_summary'] ?? [], 4000)); ?></pre></details>
+    </div>
+
     <div class="wei-box" data-wei-module="german-content">
         <h2>3. German Content</h2>
         <p class="description">Generate German title, description, listing template data, Spezifikationen and Artikelmerkmale for eBay.de. These actions write only local German-content meta and do not call eBay APIs.</p>
