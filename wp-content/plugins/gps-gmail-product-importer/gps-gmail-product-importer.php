@@ -344,10 +344,10 @@ JS;
             <p><?php esc_html_e('Stores suggested Woo category ID, path, confidence, and source on staging records before product creation.', 'gps-gmail-product-importer'); ?></p>
 
             <h2><?php echo esc_html__('8. Readiness', 'gps-gmail-product-importer'); ?></h2>
-            <p><?php esc_html_e('Readiness validation stores ready_to_create_product or needs_review plus blocking reasons on each staging record.', 'gps-gmail-product-importer'); ?></p>
+            <p><?php esc_html_e('Readiness validation stores separate Woo draft and marketplace readiness; shipping group is informational for Woo draft creation and only blocks marketplace readiness.', 'gps-gmail-product-importer'); ?></p>
 
             <h2><?php echo esc_html__('9. Create Woo Draft Products', 'gps-gmail-product-importer'); ?></h2>
-            <p><?php esc_html_e('Creates WooCommerce products only from staging items marked ready_to_create_product. Products are always created as post_type product with draft status.', 'gps-gmail-product-importer'); ?></p>
+            <p><?php esc_html_e('Creates WooCommerce draft products from staging items that pass Woo draft readiness. Products are always created as post_type product with draft status.', 'gps-gmail-product-importer'); ?></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
                 <?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_create_woo_drafts">
                 <label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="5"></label>
@@ -397,7 +397,7 @@ JS;
                         <th><?php esc_html_e('Vehicle make/model', 'gps-gmail-product-importer'); ?></th>
                         <th><?php esc_html_e('Images count', 'gps-gmail-product-importer'); ?></th>
                         <th><?php esc_html_e('Staging status', 'gps-gmail-product-importer'); ?></th>
-                        <th><?php esc_html_e('Readiness status', 'gps-gmail-product-importer'); ?></th>
+                        <th><?php esc_html_e('Woo draft readiness status', 'gps-gmail-product-importer'); ?></th>
                         <th><?php esc_html_e('Created product ID', 'gps-gmail-product-importer'); ?></th>
                         <th><?php esc_html_e('Actions', 'gps-gmail-product-importer'); ?></th>
                     </tr>
@@ -406,11 +406,10 @@ JS;
                     <?php foreach ($items as $item) : ?>
                         <?php
                         $item_id = (int) $item->ID;
-                        $readiness = get_post_meta($item_id, '_gps_readiness_status', true);
                         $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
-                        $stored_blocking_reasons_empty = $this->stored_blocking_reasons_empty($item_id);
-                        $current_readiness = $this->readiness_status($this->analysis_from_staging_item($item_id), (string) get_post_meta($item_id, '_gps_staging_status', true), $created_product_id);
-                        $is_ready = $readiness === 'ready_to_create_product' && $stored_blocking_reasons_empty && $current_readiness['status'] === 'ready_to_create_product' && empty($current_readiness['blocking_reasons']);
+                        $current_readiness = $this->woo_draft_readiness_status($this->analysis_from_staging_item($item_id), (string) get_post_meta($item_id, '_gps_staging_status', true), $created_product_id);
+                        $readiness = $current_readiness['status'];
+                        $is_ready = $current_readiness['status'] === 'ready_to_create_product' && empty($current_readiness['blocking_reasons']);
                         $vehicle = trim(get_post_meta($item_id, '_gps_detected_vehicle_make', true) . ' ' . get_post_meta($item_id, '_gps_detected_vehicle_model', true));
                         ?>
                         <tr>
@@ -484,8 +483,12 @@ JS;
             __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
             __('Shipping group', 'gps-gmail-product-importer') => array('_gps_shipping_group'),
-            __('Readiness status', 'gps-gmail-product-importer') => array('_gps_readiness_status', '_gps_readiness_checked_at'),
-            __('Blocking reasons', 'gps-gmail-product-importer') => array('_gps_blocking_reasons'),
+            __('Woo draft readiness status', 'gps-gmail-product-importer') => array('_gps_woo_draft_readiness_status', '_gps_woo_draft_readiness_checked_at'),
+            __('Woo draft blocking reasons', 'gps-gmail-product-importer') => array('_gps_woo_draft_blocking_reasons'),
+            __('Marketplace readiness status', 'gps-gmail-product-importer') => array('_gps_marketplace_readiness_status', '_gps_marketplace_readiness_checked_at'),
+            __('Marketplace blocking reasons', 'gps-gmail-product-importer') => array('_gps_marketplace_blocking_reasons'),
+            __('Legacy readiness status', 'gps-gmail-product-importer') => array('_gps_readiness_status', '_gps_readiness_checked_at'),
+            __('Legacy blocking reasons', 'gps-gmail-product-importer') => array('_gps_blocking_reasons'),
             __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id'),
         );
         ?>
@@ -1165,7 +1168,8 @@ JS;
 
     private function staging_meta_from_analysis($analysis, $staging_status, $duplicate_status, $created_product_id)
     {
-        $readiness = $this->readiness_status($analysis, $staging_status, $created_product_id);
+        $woo_readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
+        $marketplace_readiness = $this->marketplace_readiness_status($analysis, $staging_status, $created_product_id);
         return array(
             '_gps_gmail_message_id' => sanitize_text_field($analysis['message_id']),
             '_gps_gmail_thread_id' => sanitize_text_field($analysis['thread_id']),
@@ -1201,8 +1205,14 @@ JS;
             '_gps_suggested_woo_category_confidence' => sanitize_text_field($analysis['suggested_woo_category_confidence']),
             '_gps_suggested_category_source' => sanitize_text_field($analysis['suggested_category_source']),
             '_gps_shipping_group' => sanitize_text_field($analysis['shipping_group'] ?? ''),
-            '_gps_readiness_status' => $readiness['status'],
-            '_gps_blocking_reasons' => wp_json_encode($readiness['blocking_reasons']),
+            '_gps_woo_draft_readiness_status' => $woo_readiness['status'],
+            '_gps_woo_draft_blocking_reasons' => wp_json_encode($woo_readiness['blocking_reasons']),
+            '_gps_woo_draft_readiness_checked_at' => current_time('mysql', true),
+            '_gps_marketplace_readiness_status' => $marketplace_readiness['status'],
+            '_gps_marketplace_blocking_reasons' => wp_json_encode($marketplace_readiness['blocking_reasons']),
+            '_gps_marketplace_readiness_checked_at' => current_time('mysql', true),
+            '_gps_readiness_status' => $woo_readiness['status'],
+            '_gps_blocking_reasons' => wp_json_encode($woo_readiness['blocking_reasons']),
             '_gps_gmail_created_product_id' => absint($created_product_id),
             '_gps_staging_status' => sanitize_text_field($staging_status),
             '_gps_staged_from_gmail_at' => current_time('mysql', true),
@@ -1211,12 +1221,35 @@ JS;
 
     private function readiness_status($analysis, $staging_status, $created_product_id)
     {
+        return $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
+    }
+
+    private function woo_draft_readiness_status($analysis, $staging_status, $created_product_id)
+    {
+        $blocking = $this->base_readiness_blockers($analysis, $staging_status, $created_product_id);
+        return $this->readiness_response($blocking, 'ready_to_create_product');
+    }
+
+    private function marketplace_readiness_status($analysis, $staging_status, $created_product_id)
+    {
+        $blocking = $this->base_readiness_blockers($analysis, $staging_status, $created_product_id);
+        if (!in_array((string) ($analysis['shipping_group'] ?? ''), $this->allowed_shipping_groups(), true)) {
+            $blocking[] = 'missing_shipping_group';
+        }
+        return $this->readiness_response($blocking, 'ready_for_marketplace');
+    }
+
+    private function base_readiness_blockers($analysis, $staging_status, $created_product_id)
+    {
         $blocking = array();
         if ($created_product_id) {
             $blocking[] = 'product_already_created';
         }
         if ($staging_status === 'duplicate') {
             $blocking[] = 'duplicate';
+        }
+        if (trim((string) ($analysis['message_id'] ?? '')) === '') {
+            $blocking[] = 'missing_gmail_message_id';
         }
         if (trim((string) ($analysis['detected_part_code'] ?? '')) === '') {
             $blocking[] = 'missing_detected_part_code';
@@ -1256,11 +1289,13 @@ JS;
         if (absint($analysis['suggested_woo_category_id'] ?? 0) <= 0 || strtolower(trim((string) ($analysis['suggested_woo_category_confidence'] ?? ''))) === 'low' || trim((string) ($analysis['suggested_woo_category_confidence'] ?? '')) === '' || in_array(strtolower(trim((string) ($analysis['suggested_category_source'] ?? ''))), array('', 'none'), true)) {
             $blocking[] = 'invalid_category_mapping';
         }
-        if (!in_array((string) ($analysis['shipping_group'] ?? ''), $this->allowed_shipping_groups(), true)) {
-            $blocking[] = 'missing_shipping_group';
-        }
+        return $blocking;
+    }
+
+    private function readiness_response($blocking, $ready_status)
+    {
         $blocking = array_values(array_unique($blocking));
-        return array('status' => $blocking ? 'needs_review' : 'ready_to_create_product', 'blocking_reasons' => $blocking);
+        return array('status' => $blocking ? 'needs_review' : $ready_status, 'blocking_reasons' => $blocking);
     }
 
     private function allegro_readiness_quality_ok($analysis)
@@ -1802,11 +1837,18 @@ JS;
         $analysis = $this->analysis_from_staging_item($item_id);
         $staging_status = (string) get_post_meta($item_id, '_gps_staging_status', true);
         $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
-        $readiness = $this->readiness_status($analysis, $staging_status, $created_product_id);
-        update_post_meta($item_id, '_gps_readiness_status', $readiness['status']);
-        update_post_meta($item_id, '_gps_blocking_reasons', wp_json_encode($readiness['blocking_reasons']));
+        $woo_readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
+        $marketplace_readiness = $this->marketplace_readiness_status($analysis, $staging_status, $created_product_id);
+        update_post_meta($item_id, '_gps_woo_draft_readiness_status', $woo_readiness['status']);
+        update_post_meta($item_id, '_gps_woo_draft_blocking_reasons', wp_json_encode($woo_readiness['blocking_reasons']));
+        update_post_meta($item_id, '_gps_woo_draft_readiness_checked_at', current_time('mysql', true));
+        update_post_meta($item_id, '_gps_marketplace_readiness_status', $marketplace_readiness['status']);
+        update_post_meta($item_id, '_gps_marketplace_blocking_reasons', wp_json_encode($marketplace_readiness['blocking_reasons']));
+        update_post_meta($item_id, '_gps_marketplace_readiness_checked_at', current_time('mysql', true));
+        update_post_meta($item_id, '_gps_readiness_status', $woo_readiness['status']);
+        update_post_meta($item_id, '_gps_blocking_reasons', wp_json_encode($woo_readiness['blocking_reasons']));
         update_post_meta($item_id, '_gps_readiness_checked_at', current_time('mysql', true));
-        return array('action' => 'readiness_validation', 'staging_item_id' => $item_id, 'result' => $readiness['status'], 'blocking_reasons' => $readiness['blocking_reasons'], 'writes' => 'staging_meta_only');
+        return array('action' => 'readiness_validation', 'staging_item_id' => $item_id, 'result' => $woo_readiness['status'], 'blocking_reasons' => $woo_readiness['blocking_reasons'], 'woo_draft_readiness' => $woo_readiness, 'marketplace_readiness' => $marketplace_readiness, 'writes' => 'staging_meta_only');
     }
 
     private function create_woo_draft_from_staging_item($item_id)
@@ -1841,9 +1883,12 @@ JS;
 
     private function create_woo_drafts_from_ready_staging($batch_size)
     {
-        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => $batch_size, 'meta_query' => array(array('key' => '_gps_readiness_status', 'value' => 'ready_to_create_product'), array('key' => '_gps_blocking_reasons', 'value' => '[]'), array('key' => '_gps_gmail_created_product_id', 'value' => '0'))));
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max($batch_size, 100), 'meta_query' => array(array('key' => '_gps_gmail_created_product_id', 'value' => '0'))));
         $created = array();
         foreach ($ids as $id) {
+            if (count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); })) >= $batch_size) {
+                break;
+            }
             $result = $this->create_woo_draft_from_staging_item((int) $id);
             if (($result['result'] ?? '') !== 'created_product') {
                 $created[] = array('staging_item_id' => (int) $id, 'blocked' => true, 'reason' => $result['reason'] ?? ($result['error'] ?? 'item_not_ready'), 'readiness' => $result['readiness'] ?? array());
