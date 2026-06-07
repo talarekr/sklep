@@ -7,6 +7,7 @@ $GLOBALS['gps_test_meta'] = array();
 $GLOBALS['gps_test_posts'] = array();
 $GLOBALS['gps_test_next_product_id'] = 9001;
 $GLOBALS['gps_test_terms'] = array();
+$GLOBALS['gps_test_valid_product_cat_terms'] = array(5802 => true);
 
 function add_action() {}
 function register_activation_hook() {}
@@ -28,8 +29,10 @@ function get_post($id) { return $GLOBALS['gps_test_posts'][$id] ?? null; }
 function is_wp_error($value) { return $value instanceof WP_Error; }
 function wc_get_product($id = null) { return true; }
 function wp_insert_post($args, $wp_error = false) { $id = $GLOBALS['gps_test_next_product_id']++; $GLOBALS['gps_test_posts'][$id] = (object) ($args + array('ID' => $id)); return $id; }
-function wp_set_object_terms($object_id, $terms, $taxonomy) { $GLOBALS['gps_test_terms'][] = compact('object_id', 'terms', 'taxonomy'); return true; }
-function taxonomy_exists($taxonomy) { return false; }
+function wp_set_object_terms($object_id, $terms, $taxonomy, $append = false) { $GLOBALS['gps_test_terms'][] = compact('object_id', 'terms', 'taxonomy', 'append'); return true; }
+function taxonomy_exists($taxonomy) { return $taxonomy === 'product_cat' || $taxonomy === 'product_type'; }
+function term_exists($term, $taxonomy = '') { return ($taxonomy === 'product_cat' && !empty($GLOBALS['gps_test_valid_product_cat_terms'][(int) $term])) ? array('term_id' => (int) $term, 'term_taxonomy_id' => (int) $term) : null; }
+function wp_delete_post($post_id, $force_delete = false) { unset($GLOBALS['gps_test_posts'][$post_id]); return true; }
 function has_post_thumbnail($product_id) { return false; }
 
 class WP_Error
@@ -90,8 +93,8 @@ $base = array(
     'ovoko_category_path' => 'Exhaust > DPF',
     'ovoko_part_category' => 'Catalyst',
     'category_mapping_status' => 'mapped',
-    'suggested_woo_category_id' => 123,
-    'suggested_woo_category_path' => 'Parts > Exhaust',
+    'suggested_woo_category_id' => 5802,
+    'suggested_woo_category_path' => 'Filtr cząstek stałych Katalizator / FAP / DPF',
     'suggested_woo_category_confidence' => 'medium',
     'suggested_category_source' => 'ovoko_enrichment',
     'shipping_group' => 'shipping_30',
@@ -140,5 +143,35 @@ $productId = (int) ($created['created_product_id'] ?? 0);
 assert_true($created['result'] === 'created_product' && $productId > 0, 'Woo draft should be created from manual-price-ready item.', $created);
 assert_true(($GLOBALS['gps_test_meta'][$productId]['_regular_price'] ?? '') === '1800' && ($GLOBALS['gps_test_meta'][$productId]['_price'] ?? '') === '1800', 'Created draft should use selected manual price.', $GLOBALS['gps_test_meta'][$productId] ?? array());
 assert_true(($GLOBALS['gps_test_meta'][$productId]['_gps_selected_price_source'] ?? '') === 'manual_override' && ($GLOBALS['gps_test_meta'][$productId]['_gps_source_staging_item_id'] ?? 0) === 60849, 'Created draft should store staging and price source metadata.', $GLOBALS['gps_test_meta'][$productId] ?? array());
+assert_true(($GLOBALS['gps_test_meta'][$productId]['_gps_suggested_woo_category_id'] ?? 0) === 5802 && ($GLOBALS['gps_test_meta'][$productId]['_gps_suggested_woo_category_path'] ?? '') === 'Filtr cząstek stałych Katalizator / FAP / DPF' && ($GLOBALS['gps_test_meta'][$productId]['_gps_suggested_category_source'] ?? '') === 'ovoko_enrichment', 'Created draft should keep suggested category metadata.', $GLOBALS['gps_test_meta'][$productId] ?? array());
+$categoryAssignments = array_values(array_filter($GLOBALS['gps_test_terms'], function ($item) use ($productId) {
+    return (int) $item['object_id'] === $productId && $item['taxonomy'] === 'product_cat';
+}));
+assert_true(count($categoryAssignments) === 1 && $categoryAssignments[0]['terms'] === array(5802) && $categoryAssignments[0]['append'] === false, 'Created draft should assign mapped Woo product_cat term.', $categoryAssignments);
 
-echo "Manual price override tests passed\n";
+$invalidItemId = 60851;
+$GLOBALS['gps_test_posts'][$invalidItemId] = (object) array('ID' => $invalidItemId, 'post_type' => GPS_Gmail_Product_Importer::STAGING_POST_TYPE, 'post_content' => 'Body');
+foreach ($base as $key => $value) {
+    if (is_array($value)) { continue; }
+    $GLOBALS['gps_test_meta'][$invalidItemId]['_gps_' . $key] = $value;
+}
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_message_id'] = 'gmail-60851';
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_thread_id'] = $base['thread_id'];
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_date'] = $base['date'];
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_from'] = $base['from'];
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_subject'] = $base['subject'];
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_label'] = $base['label'];
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_import_image_count'] = 2;
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_images_metadata'] = json_encode($base['images']);
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_warnings'] = '[]';
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_ovoko_enrichment_status'] = 'suggested';
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_staging_status'] = 'imported_from_gmail';
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_created_product_id'] = 0;
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_suggested_woo_category_id'] = 999999;
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_manual_price_override_enabled'] = '1';
+$GLOBALS['gps_test_meta'][$invalidItemId]['_gps_manual_price_pln'] = '1800';
+$invalidCreated = $createDraft->invoke($plugin, $invalidItemId);
+assert_true($invalidCreated['result'] === 'blocked' && in_array('invalid_category_term', $invalidCreated['readiness']['blocking_reasons'] ?? array(), true), 'Invalid mapped category term should block Woo draft creation.', $invalidCreated);
+assert_true(absint($GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_created_product_id'] ?? 0) === 0, 'Invalid mapped category term must not create or link a product.', $GLOBALS['gps_test_meta'][$invalidItemId] ?? array());
+
+echo "Manual price override and category assignment tests passed\n";
