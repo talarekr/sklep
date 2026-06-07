@@ -42,6 +42,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_analyze_sale_stock_endpoint', [$this, 'handle_analyze_sale_stock_endpoint']);
         add_action('admin_post_gpswiss_ovoko_analyze_internal_notes_backfill_api', [$this, 'handle_analyze_internal_notes_backfill_api']);
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
+        add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
         add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
         add_action('admin_post_gpswiss_ovoko_test_updatepart_place_for_product_43302', [$this, 'handle_test_updatepart_place_for_product_43302']);
@@ -187,6 +188,27 @@ class AdminPage
         set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'Settings updated.'], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
+    }
+
+
+    public function handle_preview_woo_to_ovoko_create_part(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_preview_woo_to_ovoko_create_part');
+
+        $rawProductId = $_POST['product_id'] ?? null;
+        $productId = is_array($rawProductId) ? 0 : (int) (string) wp_unslash((string) $rawProductId);
+        $result = (new WooToOvokoCreatePartPreviewService())->preview($productId);
+        if ($rawProductId === null || is_array($rawProductId)) {
+            $result['ok'] = false;
+            $result['would_be_eligible'] = false;
+            $result['validations'][] = ['severity' => 'error', 'code' => 'exactly_one_product_id_required', 'message' => 'Exactly one product_id field is required.'];
+            $result['validation_errors'][] = ['severity' => 'error', 'code' => 'exactly_one_product_id_required', 'message' => 'Exactly one product_id field is required.'];
+        }
+
+        wp_send_json($result);
     }
 
 
