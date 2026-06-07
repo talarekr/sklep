@@ -18,8 +18,13 @@ $reflection = new ReflectionClass(GPS_Gmail_Product_Importer::class);
 $plugin = $reflection->newInstanceWithoutConstructor();
 $readiness = $reflection->getMethod('readiness_status');
 $readiness->setAccessible(true);
+$wooReadiness = $reflection->getMethod('woo_draft_readiness_status');
+$wooReadiness->setAccessible(true);
+$marketplaceReadiness = $reflection->getMethod('marketplace_readiness_status');
+$marketplaceReadiness->setAccessible(true);
 
 $baseReadyAnalysis = array(
+    'message_id' => 'gmail-60849',
     'detected_part_code' => '5Q0131701AN',
     'normalized_part_code' => '5Q0131701AN',
     'detected_oem_part_number' => '5Q0131701AN',
@@ -58,9 +63,9 @@ $staleReadyItem['suggested_category_source'] = 'none';
 $staleReadyItem['shipping_group'] = '';
 
 $notReady = $readiness->invoke($plugin, $staleReadyItem, 'imported_from_gmail', 0);
-$expectedBlockers = array('missing_ovoko_enrichment', 'missing_allegro_price_research', 'missing_category_mapping', 'missing_shipping_group');
+$expectedBlockers = array('missing_ovoko_enrichment', 'missing_allegro_price_research', 'missing_category_mapping');
 if ($notReady['status'] !== 'needs_review') {
-    fwrite(STDERR, 'Missing enrichment/mapping/shipping should force needs_review.' . PHP_EOL);
+    fwrite(STDERR, 'Missing enrichment/mapping should force Woo draft needs_review.' . PHP_EOL);
     var_export($notReady);
     exit(1);
 }
@@ -70,6 +75,22 @@ foreach ($expectedBlockers as $blocker) {
         var_export($notReady);
         exit(1);
     }
+}
+
+
+$emptyShippingGroup = $baseReadyAnalysis;
+$emptyShippingGroup['shipping_group'] = '';
+$wooReadyWithoutShipping = $wooReadiness->invoke($plugin, $emptyShippingGroup, 'imported_from_gmail', 0);
+if ($wooReadyWithoutShipping['status'] !== 'ready_to_create_product' || in_array('missing_shipping_group', $wooReadyWithoutShipping['blocking_reasons'], true)) {
+    fwrite(STDERR, 'Empty shipping group must not block Woo draft readiness.' . PHP_EOL);
+    var_export($wooReadyWithoutShipping);
+    exit(1);
+}
+$marketplaceBlockedWithoutShipping = $marketplaceReadiness->invoke($plugin, $emptyShippingGroup, 'imported_from_gmail', 0);
+if ($marketplaceBlockedWithoutShipping['status'] !== 'needs_review' || !in_array('missing_shipping_group', $marketplaceBlockedWithoutShipping['blocking_reasons'], true)) {
+    fwrite(STDERR, 'Empty shipping group should still block marketplace readiness.' . PHP_EOL);
+    var_export($marketplaceBlockedWithoutShipping);
+    exit(1);
 }
 
 $created = $readiness->invoke($plugin, $baseReadyAnalysis, 'imported_from_gmail', 999);
