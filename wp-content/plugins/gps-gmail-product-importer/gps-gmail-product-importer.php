@@ -368,7 +368,9 @@ JS;
                         $item_id = (int) $item->ID;
                         $readiness = get_post_meta($item_id, '_gps_readiness_status', true);
                         $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
-                        $is_ready = $readiness === 'ready_to_create_product' && !$created_product_id;
+                        $stored_blocking_reasons_empty = $this->stored_blocking_reasons_empty($item_id);
+                        $current_readiness = $this->readiness_status($this->analysis_from_staging_item($item_id), (string) get_post_meta($item_id, '_gps_staging_status', true), $created_product_id);
+                        $is_ready = $readiness === 'ready_to_create_product' && $stored_blocking_reasons_empty && $current_readiness['status'] === 'ready_to_create_product' && empty($current_readiness['blocking_reasons']);
                         $vehicle = trim(get_post_meta($item_id, '_gps_detected_vehicle_make', true) . ' ' . get_post_meta($item_id, '_gps_detected_vehicle_model', true));
                         ?>
                         <tr>
@@ -1150,7 +1152,10 @@ JS;
             '_gps_duplicate_existing_product_id' => absint($analysis['duplicate_existing_product_id']),
             '_gps_gmail_warnings' => wp_json_encode(array_values((array) $analysis['warnings'])),
             '_gps_ovoko_enrichment_status' => sanitize_text_field($analysis['ovoko_enrichment_status'] ?? ''),
+            '_gps_allegro_price_research_status' => sanitize_text_field($analysis['allegro_price_research_status'] ?? ''),
             '_gps_allegro_price_suggestion' => sanitize_text_field($analysis['allegro_price_suggestion'] ?? ''),
+            '_gps_allegro_price_currency' => sanitize_text_field($analysis['allegro_price_currency'] ?? ''),
+            '_gps_category_mapping_status' => sanitize_text_field($analysis['category_mapping_status'] ?? ''),
             '_gps_suggested_woo_category_id' => absint($analysis['suggested_woo_category_id']),
             '_gps_suggested_woo_category_path' => sanitize_text_field($analysis['suggested_woo_category_path']),
             '_gps_suggested_woo_category_confidence' => sanitize_text_field($analysis['suggested_woo_category_confidence']),
@@ -1173,13 +1178,69 @@ JS;
         if ($staging_status === 'duplicate') {
             $blocking[] = 'duplicate';
         }
-        if (empty($analysis['detected_part_code'])) {
-            $blocking[] = 'missing_part_code';
+        if (trim((string) ($analysis['detected_part_code'] ?? '')) === '') {
+            $blocking[] = 'missing_detected_part_code';
+        }
+        if (trim((string) ($analysis['normalized_part_code'] ?? '')) === '') {
+            $blocking[] = 'missing_normalized_part_code';
+        }
+        if (trim((string) ($analysis['detected_oem_part_number'] ?? '')) === '') {
+            $blocking[] = 'missing_detected_oem_part_number';
+        }
+        if (trim((string) ($analysis['normalized_oem_part_number'] ?? '')) === '') {
+            $blocking[] = 'missing_normalized_oem_part_number';
         }
         if (empty($analysis['image_attachments_found'])) {
             $blocking[] = 'missing_images';
         }
+        if (empty($analysis['images']) || !is_array($analysis['images'])) {
+            $blocking[] = 'missing_images_metadata';
+        }
+        // Ovoko status `suggested` is this plugin's successful high-confidence enrichment value.
+        if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested'))) {
+            $blocking[] = 'missing_ovoko_enrichment';
+        }
+        // Allegro status values accepted here must explicitly mean price research completed successfully.
+        if (!$this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('success', 'ok', 'researched', 'completed', 'complete', 'suggested'))) {
+            $blocking[] = 'missing_allegro_price_research';
+        }
+        if ((float) ($analysis['allegro_price_suggestion'] ?? 0) <= 0 || trim((string) ($analysis['allegro_price_currency'] ?? '')) === '') {
+            $blocking[] = 'missing_allegro_price_suggestion';
+        }
+        if (!$this->status_indicates_success((string) ($analysis['category_mapping_status'] ?? ''), array('success', 'ok', 'mapped', 'matched'))) {
+            $blocking[] = 'missing_category_mapping';
+        }
+        if (absint($analysis['suggested_woo_category_id'] ?? 0) <= 0 || strtolower(trim((string) ($analysis['suggested_woo_category_confidence'] ?? ''))) === 'low' || trim((string) ($analysis['suggested_woo_category_confidence'] ?? '')) === '' || in_array(strtolower(trim((string) ($analysis['suggested_category_source'] ?? ''))), array('', 'none'), true)) {
+            $blocking[] = 'invalid_category_mapping';
+        }
+        if (!in_array((string) ($analysis['shipping_group'] ?? ''), $this->allowed_shipping_groups(), true)) {
+            $blocking[] = 'missing_shipping_group';
+        }
+        $blocking = array_values(array_unique($blocking));
         return array('status' => $blocking ? 'needs_review' : 'ready_to_create_product', 'blocking_reasons' => $blocking);
+    }
+
+    private function status_indicates_success($status, $allowed_success_statuses)
+    {
+        return in_array(strtolower(trim((string) $status)), $allowed_success_statuses, true);
+    }
+
+    private function allowed_shipping_groups()
+    {
+        return array('shipping_30', 'shipping_50', 'shipping_130');
+    }
+
+    private function stored_blocking_reasons_empty($item_id)
+    {
+        $stored = get_post_meta($item_id, '_gps_blocking_reasons', true);
+        if ($stored === '' || $stored === array()) {
+            return true;
+        }
+        if (is_array($stored)) {
+            return empty($stored);
+        }
+        $decoded = json_decode((string) $stored, true);
+        return is_array($decoded) ? empty($decoded) : false;
     }
 
     public function handle_import_queue_item_action()
@@ -1329,22 +1390,17 @@ JS;
 
     private function create_woo_drafts_from_ready_staging($batch_size)
     {
-        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => $batch_size, 'meta_query' => array(array('key' => '_gps_readiness_status', 'value' => 'ready_to_create_product'), array('key' => '_gps_gmail_created_product_id', 'value' => '0'))));
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => $batch_size, 'meta_query' => array(array('key' => '_gps_readiness_status', 'value' => 'ready_to_create_product'), array('key' => '_gps_blocking_reasons', 'value' => '[]'), array('key' => '_gps_gmail_created_product_id', 'value' => '0'))));
         $created = array();
         foreach ($ids as $id) {
-            $analysis = $this->analysis_from_staging_item((int) $id);
-            $result = $this->create_product_from_analysis($analysis, array());
-            if (is_wp_error($result)) {
-                update_post_meta($id, '_gps_staging_status', 'error');
-                $created[] = array('staging_item_id' => (int) $id, 'error' => $result->get_error_message());
+            $result = $this->create_woo_draft_from_staging_item((int) $id);
+            if (($result['result'] ?? '') !== 'created_product') {
+                $created[] = array('staging_item_id' => (int) $id, 'blocked' => true, 'reason' => $result['reason'] ?? ($result['error'] ?? 'item_not_ready'), 'readiness' => $result['readiness'] ?? array());
                 continue;
             }
-            update_post_meta($id, '_gps_gmail_created_product_id', absint($result['product_id']));
-            update_post_meta($id, '_gps_staging_status', 'created_product');
-            update_post_meta($id, '_gps_readiness_status', 'created_product');
-            $created[] = array('staging_item_id' => (int) $id, 'created_product_id' => absint($result['product_id']), 'product_status' => 'draft');
+            $created[] = array('staging_item_id' => (int) $id, 'created_product_id' => absint($result['created_product_id']), 'product_status' => 'draft');
         }
-        return array('total_checked' => count($ids), 'total_products_created' => count(array_filter($created, function ($item) { return empty($item['error']); })), 'items' => $created);
+        return array('total_checked' => count($ids), 'total_products_created' => count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); })), 'items' => $created);
     }
 
     private function analysis_from_staging_item($id)
@@ -1367,10 +1423,16 @@ JS;
             'detected_vehicle_make' => get_post_meta($id, '_gps_detected_vehicle_make', true),
             'detected_vehicle_model' => get_post_meta($id, '_gps_detected_vehicle_model', true),
             'detected_vehicle_confidence' => get_post_meta($id, '_gps_detected_vehicle_confidence', true),
+            'ovoko_enrichment_status' => get_post_meta($id, '_gps_ovoko_enrichment_status', true),
+            'allegro_price_research_status' => get_post_meta($id, '_gps_allegro_price_research_status', true),
+            'allegro_price_suggestion' => get_post_meta($id, '_gps_allegro_price_suggestion', true),
+            'allegro_price_currency' => get_post_meta($id, '_gps_allegro_price_currency', true),
+            'category_mapping_status' => get_post_meta($id, '_gps_category_mapping_status', true),
             'suggested_woo_category_id' => absint(get_post_meta($id, '_gps_suggested_woo_category_id', true)),
             'suggested_woo_category_path' => get_post_meta($id, '_gps_suggested_woo_category_path', true),
             'suggested_woo_category_confidence' => get_post_meta($id, '_gps_suggested_woo_category_confidence', true),
             'suggested_category_source' => get_post_meta($id, '_gps_suggested_category_source', true),
+            'shipping_group' => get_post_meta($id, '_gps_shipping_group', true),
             'image_attachments_found' => absint(get_post_meta($id, '_gps_gmail_import_image_count', true)),
             'image_attachment_set_hash' => get_post_meta($id, '_gps_gmail_import_attachment_set_hash', true),
             'images' => json_decode((string) get_post_meta($id, '_gps_gmail_images_metadata', true), true) ?: array(),
