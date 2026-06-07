@@ -18,6 +18,7 @@ use WEI_FR\Services\StockSyncService;
 use WEI_FR\Services\AdminPage;
 use WEI_FR\Services\AutoCategoryMappingService;
 use WEI_FR\Services\AutoSyncScheduler;
+use WEI_FR\Services\AutoNewProductPublisher;
 use WEI_FR\Services\EbayFrCategoryComparisonTool;
 
 class Plugin
@@ -42,13 +43,15 @@ class Plugin
         $orders = new OrderImporter($adapter, $repo, $logger);
         $scheduler = new AutoSyncScheduler($adapter, $orders, $logger);
         $stockSync = new StockSyncService($client, $repo, $logger);
+        $newProductPublisher = new AutoNewProductPublisher($adapter, $categoryRepo, $logger);
         $categoryComparisonTool = new EbayFrCategoryComparisonTool($client, $logger);
-        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler, $stockSync, $categoryComparisonTool);
+        $adminPage = new AdminPage($auth, $adapter, $sync, $orders, $logger, $categoryRepo, $autoCategoryMapper, $skuGenerator, $priceResolver, $taxonomy, $scheduler, $stockSync, $categoryComparisonTool, $newProductPublisher);
 
         Migrations::maybe_upgrade();
         $adminPage->hooks();
         $scheduler->hooks();
         $stockSync->hooks();
+        $newProductPublisher->hooks();
 
         add_action('admin_init', [$auth, 'handle_oauth_callback'], 0);
         add_action('current_screen', [$auth, 'handle_current_screen_oauth_callback'], 0);
