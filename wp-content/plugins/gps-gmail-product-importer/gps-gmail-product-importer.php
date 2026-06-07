@@ -480,7 +480,7 @@ JS;
             __('Vehicle detection', 'gps-gmail-product-importer') => array('_gps_detected_vehicle_make', '_gps_detected_vehicle_model', '_gps_detected_vehicle_confidence'),
             __('Images metadata', 'gps-gmail-product-importer') => array('_gps_gmail_import_image_count', '_gps_gmail_import_attachment_set_hash', '_gps_gmail_images_metadata'),
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
-            __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_part_category', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
+            __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
             __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
             __('Shipping group', 'gps-gmail-product-importer') => array('_gps_shipping_group'),
@@ -2265,7 +2265,8 @@ JS;
         $match_count = count($records);
         $exact = !empty($selected['exact_oem_match']);
         $part_name = $this->ovoko_record_value($selected, array('name', 'part_name', 'title'));
-        $part_category = $this->ovoko_record_value($selected, array('category_title_path', 'category_name', 'category', 'category.title_path', 'category.name'));
+        $category_data = $this->ovoko_extract_category_data($selected);
+        $part_category = $category_data['part_category'];
         $confidence = 'none';
         if ($match_count > 0 && $exact && $match_count === 1 && ($part_name !== '' || $part_category !== '')) {
             $confidence = 'high';
@@ -2290,8 +2291,13 @@ JS;
             'mileage' => $this->ovoko_record_value($selected, array('car.mileage', 'mileage')),
             'part_name' => $part_name,
             'part_category' => $part_category,
+            'category_id' => $category_data['category_id'],
+            'category_name' => $category_data['category_name'],
+            'category_path' => $category_data['category_path'],
+            'raw_category_data' => $this->ovoko_raw_category_data($category_data),
             'oem_numbers' => $this->ovoko_oem_numbers($selected),
             'raw_match_summary' => $this->ovoko_raw_match_summary($selected),
+            'raw_selected_match' => $this->ovoko_raw_selected_match($selected),
             'suggested_category_id' => 0,
             'suggested_category_path' => '',
         );
@@ -2338,6 +2344,169 @@ JS;
         return array_values(array_unique(array_filter(array_map('trim', $values))));
     }
 
+    private function ovoko_extract_category_data($record)
+    {
+        $data = array(
+            'category_id' => '',
+            'category_name' => '',
+            'category_path' => '',
+            'part_category' => '',
+            'source' => '',
+            'reason' => '',
+            'explicit_category_found' => false,
+            'source_value' => '',
+        );
+        if (!is_array($record) || !$record) {
+            $data['reason'] = 'selected match was empty or not an array';
+            return $data;
+        }
+
+        $explicit_paths = array(
+            'category',
+            'category_name',
+            'category_id',
+            'category_path',
+            'category_title_path',
+            'part_category',
+            'car_part_category',
+            'rrr_category',
+            'category.name',
+            'category.title',
+            'category.title_path',
+            'category.path',
+            'category.id',
+        );
+        foreach ($explicit_paths as $path) {
+            $value = $this->array_path_value($record, $path);
+            $this->apply_ovoko_category_value($data, $value, $path);
+        }
+
+        if (!$data['explicit_category_found']) {
+            $nested = $this->find_ovoko_nested_category_object($record);
+            if ($nested) {
+                $this->apply_ovoko_category_value($data, $nested['value'], $nested['path']);
+            }
+        }
+
+        if ($data['explicit_category_found']) {
+            if ($data['part_category'] === '') {
+                $data['part_category'] = $data['category_path'] !== '' ? $data['category_path'] : $data['category_name'];
+            }
+            $data['reason'] = 'category derived from explicit Ovoko category field';
+            return $data;
+        }
+
+        $name = $this->ovoko_record_value($record, array('name'));
+        if ($name !== '') {
+            $data['category_name'] = $name;
+            $data['part_category'] = $name;
+            $data['source'] = 'selected_match.name';
+            $data['source_value'] = $name;
+            $data['reason'] = 'explicit category fields were empty or missing; category derived from selected_match.name fallback';
+        } else {
+            $data['reason'] = 'explicit category fields were empty or missing and selected_match.name was empty';
+        }
+        return $data;
+    }
+
+    private function apply_ovoko_category_value(&$data, $value, $source)
+    {
+        if (is_array($value)) {
+            $id = $this->ovoko_first_scalar($value, array('id', 'category_id', 'rrr_category_id'));
+            $name = $this->ovoko_first_scalar($value, array('name', 'title', 'category_name', 'label'));
+            $path = $this->ovoko_first_scalar($value, array('path', 'title_path', 'category_path', 'breadcrumb'));
+            if ($name === '' && $path !== '') {
+                $name = trim((string) basename(str_replace('>', '/', $path)));
+            }
+            if ($id === '' && $name === '' && $path === '') {
+                return false;
+            }
+            $data['category_id'] = $id !== '' && $data['category_id'] === '' ? sanitize_text_field($id) : $data['category_id'];
+            $data['category_name'] = $name !== '' && $data['category_name'] === '' ? sanitize_text_field($name) : $data['category_name'];
+            $data['category_path'] = $path !== '' && $data['category_path'] === '' ? sanitize_text_field($path) : $data['category_path'];
+            if ($data['part_category'] === '') {
+                $data['part_category'] = $data['category_path'] !== '' ? $data['category_path'] : $data['category_name'];
+            }
+            if ($data['source'] === '') {
+                $data['source'] = $source;
+                $data['source_value'] = $value;
+            }
+            $data['explicit_category_found'] = true;
+            return true;
+        }
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return false;
+        }
+        $clean = sanitize_text_field((string) $value);
+        if (substr($source, -3) === '_id' || $source === 'category.id') {
+            if ($data['category_id'] === '') {
+                $data['category_id'] = $clean;
+            }
+        } elseif (substr($source, -5) === '_path' || in_array($source, array('category.title_path', 'category.path', 'category_title_path'), true)) {
+            if ($data['category_path'] === '') {
+                $data['category_path'] = $clean;
+            }
+            if ($data['category_name'] === '') {
+                $data['category_name'] = trim((string) basename(str_replace('>', '/', $clean)));
+            }
+        } else {
+            if ($data['category_name'] === '') {
+                $data['category_name'] = $clean;
+            }
+        }
+        if ($data['part_category'] === '') {
+            $data['part_category'] = in_array($source, array('part_category', 'car_part_category', 'rrr_category'), true) ? $clean : ($data['category_path'] !== '' ? $data['category_path'] : $data['category_name']);
+        }
+        if ($data['source'] === '') {
+            $data['source'] = $source;
+            $data['source_value'] = $clean;
+        }
+        $data['explicit_category_found'] = true;
+        return true;
+    }
+
+    private function ovoko_first_scalar($array, $keys)
+    {
+        foreach ($keys as $key) {
+            if (isset($array[$key]) && is_scalar($array[$key]) && trim((string) $array[$key]) !== '') {
+                return (string) $array[$key];
+            }
+        }
+        return '';
+    }
+
+    private function find_ovoko_nested_category_object($value, $path = '')
+    {
+        if (!is_array($value)) {
+            return null;
+        }
+        foreach ($value as $key => $child) {
+            $child_path = $path === '' ? (string) $key : $path . '.' . $key;
+            if (is_array($child) && stripos((string) $key, 'category') !== false) {
+                $candidate = array('category_id' => '', 'category_name' => '', 'category_path' => '', 'part_category' => '', 'source' => '', 'reason' => '', 'explicit_category_found' => false, 'source_value' => '');
+                if ($this->apply_ovoko_category_value($candidate, $child, $child_path)) {
+                    return array('path' => $child_path, 'value' => $child);
+                }
+            }
+        }
+        foreach ($value as $key => $child) {
+            if (!is_array($child)) {
+                continue;
+            }
+            $child_path = $path === '' ? (string) $key : $path . '.' . $key;
+            $nested = $this->find_ovoko_nested_category_object($child, $child_path);
+            if ($nested) {
+                return $nested;
+            }
+        }
+        return null;
+    }
+
+    private function ovoko_raw_category_data($category_data)
+    {
+        return wp_json_encode($category_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
     private function ovoko_record_value($record, $paths)
     {
         foreach ($paths as $path) {
@@ -2359,6 +2528,16 @@ JS;
             $value = $value[$part];
         }
         return $value;
+    }
+
+    private function ovoko_raw_selected_match($record)
+    {
+        if (!is_array($record) || !$record) {
+            return '';
+        }
+        $raw = $record;
+        unset($raw['exact_oem_match']);
+        return wp_json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     private function ovoko_raw_match_summary($record)
@@ -2394,6 +2573,11 @@ JS;
             'mileage' => $analysis['mileage'],
             'part_name' => $analysis['part_name'],
             'part_category' => $analysis['part_category'],
+            'category_id' => $analysis['category_id'],
+            'category_name' => $analysis['category_name'],
+            'category_path' => $analysis['category_path'],
+            'raw_category_data' => $analysis['raw_category_data'],
+            'raw_selected_match' => $analysis['raw_selected_match'],
             'oem_numbers' => $analysis['oem_numbers'],
         );
     }
@@ -2450,7 +2634,12 @@ JS;
             '_gps_ovoko_power' => sanitize_text_field($analysis['power']),
             '_gps_ovoko_mileage' => sanitize_text_field($analysis['mileage']),
             '_gps_ovoko_part_name' => sanitize_text_field($analysis['part_name']),
+            '_gps_ovoko_category_id' => sanitize_text_field($analysis['category_id']),
+            '_gps_ovoko_category_name' => sanitize_text_field($analysis['category_name']),
+            '_gps_ovoko_category_path' => sanitize_text_field($analysis['category_path']),
             '_gps_ovoko_part_category' => sanitize_text_field($analysis['part_category']),
+            '_gps_ovoko_raw_category_data' => (string) $analysis['raw_category_data'],
+            '_gps_ovoko_raw_selected_match' => (string) $analysis['raw_selected_match'],
             '_gps_ovoko_oem_numbers' => array_map('sanitize_text_field', (array) $analysis['oem_numbers']),
             '_gps_ovoko_raw_match_summary' => wp_kses_post($analysis['raw_match_summary']),
         );
