@@ -2355,6 +2355,10 @@ JS;
             'reason' => '',
             'explicit_category_found' => false,
             'source_value' => '',
+            'category_id_source' => '',
+            'category_name_source' => '',
+            'category_path_source' => '',
+            'part_category_source' => '',
         );
         if (!is_array($record) || !$record) {
             $data['reason'] = 'selected match was empty or not an array';
@@ -2388,20 +2392,40 @@ JS;
             }
         }
 
+        $name = $this->ovoko_record_value($record, array('name'));
+        if ($name !== '' && ($data['category_name'] === '' || $data['part_category'] === '')) {
+            if ($data['category_name'] === '') {
+                $data['category_name'] = $name;
+                $data['category_name_source'] = 'selected_match.name fallback';
+            }
+            if ($data['part_category'] === '') {
+                $data['part_category'] = $name;
+                $data['part_category_source'] = 'selected_match.name fallback';
+            }
+            if ($data['source'] === '') {
+                $data['source'] = 'selected_match.name';
+                $data['source_value'] = $name;
+            }
+        }
+
         if ($data['explicit_category_found']) {
             if ($data['part_category'] === '') {
                 $data['part_category'] = $data['category_path'] !== '' ? $data['category_path'] : $data['category_name'];
+                $data['part_category_source'] = $data['category_path'] !== '' ? 'category_path' : $data['category_name_source'];
             }
-            $data['reason'] = 'category derived from explicit Ovoko category field';
+            $data['reason'] = $data['category_name_source'] === 'selected_match.name fallback' || $data['part_category_source'] === 'selected_match.name fallback'
+                ? 'category_id derived from explicit Ovoko category field; missing human-readable category fields derived from selected_match.name fallback'
+                : 'category derived from explicit Ovoko category field';
             return $data;
         }
 
-        $name = $this->ovoko_record_value($record, array('name'));
         if ($name !== '') {
             $data['category_name'] = $name;
             $data['part_category'] = $name;
             $data['source'] = 'selected_match.name';
             $data['source_value'] = $name;
+            $data['category_name_source'] = 'selected_match.name fallback';
+            $data['part_category_source'] = 'selected_match.name fallback';
             $data['reason'] = 'explicit category fields were empty or missing; category derived from selected_match.name fallback';
         } else {
             $data['reason'] = 'explicit category fields were empty or missing and selected_match.name was empty';
@@ -2421,11 +2445,24 @@ JS;
             if ($id === '' && $name === '' && $path === '') {
                 return false;
             }
-            $data['category_id'] = $id !== '' && $data['category_id'] === '' ? sanitize_text_field($id) : $data['category_id'];
-            $data['category_name'] = $name !== '' && $data['category_name'] === '' ? sanitize_text_field($name) : $data['category_name'];
-            $data['category_path'] = $path !== '' && $data['category_path'] === '' ? sanitize_text_field($path) : $data['category_path'];
+            if ($id !== '' && $data['category_id'] === '') {
+                $data['category_id'] = sanitize_text_field($id);
+                $data['category_id_source'] = $source;
+            }
+            if ($name !== '' && $data['category_name'] === '') {
+                $data['category_name'] = sanitize_text_field($name);
+                $data['category_name_source'] = $source;
+            }
+            if ($path !== '' && $data['category_path'] === '') {
+                $data['category_path'] = sanitize_text_field($path);
+                $data['category_path_source'] = $source;
+            }
             if ($data['part_category'] === '') {
-                $data['part_category'] = $data['category_path'] !== '' ? $data['category_path'] : $data['category_name'];
+                $part_category = $data['category_path'] !== '' ? $data['category_path'] : $data['category_name'];
+                if ($part_category !== '') {
+                    $data['part_category'] = $part_category;
+                    $data['part_category_source'] = $data['category_path'] !== '' ? $data['category_path_source'] : $data['category_name_source'];
+                }
             }
             if ($data['source'] === '') {
                 $data['source'] = $source;
@@ -2441,21 +2478,29 @@ JS;
         if (substr($source, -3) === '_id' || $source === 'category.id') {
             if ($data['category_id'] === '') {
                 $data['category_id'] = $clean;
+                $data['category_id_source'] = $source;
             }
         } elseif (substr($source, -5) === '_path' || in_array($source, array('category.title_path', 'category.path', 'category_title_path'), true)) {
             if ($data['category_path'] === '') {
                 $data['category_path'] = $clean;
+                $data['category_path_source'] = $source;
             }
             if ($data['category_name'] === '') {
                 $data['category_name'] = trim((string) basename(str_replace('>', '/', $clean)));
+                $data['category_name_source'] = $source;
             }
         } else {
             if ($data['category_name'] === '') {
                 $data['category_name'] = $clean;
+                $data['category_name_source'] = $source;
             }
         }
         if ($data['part_category'] === '') {
-            $data['part_category'] = in_array($source, array('part_category', 'car_part_category', 'rrr_category'), true) ? $clean : ($data['category_path'] !== '' ? $data['category_path'] : $data['category_name']);
+            $part_category = in_array($source, array('part_category', 'car_part_category', 'rrr_category'), true) ? $clean : ($data['category_path'] !== '' ? $data['category_path'] : $data['category_name']);
+            if ($part_category !== '') {
+                $data['part_category'] = $part_category;
+                $data['part_category_source'] = in_array($source, array('part_category', 'car_part_category', 'rrr_category'), true) ? $source : ($data['category_path'] !== '' ? $data['category_path_source'] : $data['category_name_source']);
+            }
         }
         if ($data['source'] === '') {
             $data['source'] = $source;
@@ -2483,7 +2528,7 @@ JS;
         foreach ($value as $key => $child) {
             $child_path = $path === '' ? (string) $key : $path . '.' . $key;
             if (is_array($child) && stripos((string) $key, 'category') !== false) {
-                $candidate = array('category_id' => '', 'category_name' => '', 'category_path' => '', 'part_category' => '', 'source' => '', 'reason' => '', 'explicit_category_found' => false, 'source_value' => '');
+                $candidate = array('category_id' => '', 'category_name' => '', 'category_path' => '', 'part_category' => '', 'source' => '', 'reason' => '', 'explicit_category_found' => false, 'source_value' => '', 'category_id_source' => '', 'category_name_source' => '', 'category_path_source' => '', 'part_category_source' => '');
                 if ($this->apply_ovoko_category_value($candidate, $child, $child_path)) {
                     return array('path' => $child_path, 'value' => $child);
                 }
