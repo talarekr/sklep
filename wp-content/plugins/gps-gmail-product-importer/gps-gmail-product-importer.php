@@ -44,6 +44,7 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_post_gps_gmail_product_importer_dry_run', array($this, 'handle_dry_run'));
         add_action('admin_post_gps_gmail_product_importer_import', array($this, 'handle_import'));
         add_action('admin_post_gps_gmail_product_importer_create_woo_drafts', array($this, 'handle_create_woo_drafts'));
+        add_action('admin_post_gps_gmail_product_importer_full_preparation_batch', array($this, 'handle_full_preparation_batch'));
         add_action('admin_post_gps_gmail_product_importer_queue_item_action', array($this, 'handle_import_queue_item_action'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_test', array($this, 'handle_ovoko_test'));
         add_action('admin_post_gps_gmail_product_importer_allegro_test', array($this, 'handle_allegro_test'));
@@ -375,7 +376,15 @@ JS;
             <h2><?php echo esc_html__('8. Readiness', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Readiness validation stores separate Woo draft and marketplace readiness. Woo draft readiness requires a selected price from manual_override or ovoko_price_suggestion; Allegro is not required.', 'gps-gmail-product-importer'); ?></p>
 
-            <h2><?php echo esc_html__('9. Create Woo Draft Products', 'gps-gmail-product-importer'); ?></h2>
+            <h2><?php echo esc_html__('9. Full Preparation Batch', 'gps-gmail-product-importer'); ?></h2>
+            <p><?php esc_html_e('Runs staging-only preparation for queued items: Ovoko enrichment, category suggestion by code when needed, Ovoko price suggestion, category mapping, and readiness validation. This does not create Woo products, write to Ovoko, call Allegro, or perform CRM-only import.', 'gps-gmail-product-importer'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+                <?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_full_preparation_batch">
+                <label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="5"></label>
+                <?php submit_button(__('Run full preparation batch', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
+            </form>
+
+            <h2><?php echo esc_html__('10. Create Woo Draft Products', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Creates WooCommerce draft products from staging items that pass Woo draft readiness. Products are always created as post_type product with draft status.', 'gps-gmail-product-importer'); ?></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
                 <?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_create_woo_drafts">
@@ -383,7 +392,7 @@ JS;
                 <?php submit_button(__('Create Woo draft products from ready staging items', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?>
             </form>
 
-            <h2><?php echo esc_html__('10. Reports', 'gps-gmail-product-importer'); ?></h2>
+            <h2><?php echo esc_html__('11. Reports', 'gps-gmail-product-importer'); ?></h2>
             <p><?php echo esc_html(sprintf(__('Reports are written under wp-content/uploads/%s/.', 'gps-gmail-product-importer'), self::UPLOAD_DIR)); ?></p>
             <ul>
                 <?php foreach ($this->report_files() as $file => $path) : ?>
@@ -525,7 +534,9 @@ JS;
         $detail_url = add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => $item_id), admin_url('admin.php'));
         echo '<p style="margin:0 0 4px;"><a class="button button-small" href="' . esc_url($detail_url) . '#gps-import-queue-detail">' . esc_html__('View details', 'gps-gmail-product-importer') . '</a></p>';
         $actions = array(
+            'full_preparation' => __('Run full preparation for this item', 'gps-gmail-product-importer'),
             'ovoko_enrichment' => __('Run Ovoko enrichment for this item', 'gps-gmail-product-importer'),
+            'ovoko_category_suggestion' => __('Run Ovoko category suggestion by code for this item', 'gps-gmail-product-importer'),
             'allegro_price_research' => __('Optional legacy diagnostics: run Allegro price research (not production pricing)', 'gps-gmail-product-importer'),
             'ovoko_price_suggestion' => __('Run Ovoko price suggestion for this item', 'gps-gmail-product-importer'),
             'category_mapping' => __('Run category mapping for this item', 'gps-gmail-product-importer'),
@@ -534,12 +545,13 @@ JS;
         );
         foreach ($actions as $action => $label) {
             $disabled = $action === 'create_woo_draft' && !$is_ready;
+            $button_class = $action === 'full_preparation' ? 'button button-primary button-small' : 'button button-small';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:0 0 4px;">';
             wp_nonce_field(self::NONCE_ACTION);
             echo '<input type="hidden" name="action" value="gps_gmail_product_importer_queue_item_action">';
             echo '<input type="hidden" name="queue_action" value="' . esc_attr($action) . '">';
             echo '<input type="hidden" name="staging_item_id" value="' . esc_attr($item_id) . '">';
-            echo '<button type="submit" class="button button-small"' . ($disabled ? ' disabled="disabled"' : '') . '>' . esc_html($label) . '</button>';
+            echo '<button type="submit" class="' . esc_attr($button_class) . '"' . ($disabled ? ' disabled="disabled"' : '') . '>' . esc_html($label) . '</button>';
             echo '</form>';
         }
     }
@@ -562,7 +574,8 @@ JS;
             __('Vehicle detection', 'gps-gmail-product-importer') => array('_gps_detected_vehicle_make', '_gps_detected_vehicle_model', '_gps_detected_vehicle_confidence'),
             __('Images metadata', 'gps-gmail-product-importer') => array('_gps_gmail_import_image_count', '_gps_gmail_import_attachment_set_hash', '_gps_gmail_images_metadata'),
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
-            __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
+            __('Existing Ovoko part match', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
+            __('Ovoko category suggestion by code', 'gps-gmail-product-importer') => array('_gps_ovoko_category_suggestion_status', '_gps_ovoko_category_suggestion_code', '_gps_ovoko_category_suggestion_category_id', '_gps_ovoko_category_suggestion_category_name', '_gps_ovoko_category_suggestion_source', '_gps_ovoko_category_suggestion_checked_at', '_gps_ovoko_category_suggestion_raw_response'),
             __('Ovoko price suggestion fields', 'gps-gmail-product-importer') => array('_gps_ovoko_price_suggestion_status', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_ovoko_price_suggestion_currency', '_gps_ovoko_price_suggestion_raw_value', '_gps_ovoko_price_suggestion_checked_at', '_gps_ovoko_price_suggestion_notes'),
             __('Allegro price fields (optional legacy diagnostics, not production pricing)', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
             __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
@@ -1413,7 +1426,7 @@ JS;
             $blocking[] = 'missing_images_metadata';
         }
         // Ovoko status `suggested` is this plugin's successful high-confidence enrichment value.
-        if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested'))) {
+        if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested', 'no_match', 'needs_review'))) {
             $blocking[] = 'missing_ovoko_enrichment';
         }
         // Production price can come only from manual override or a completed Ovoko price suggestion.
@@ -1539,6 +1552,9 @@ JS;
             $result = array('action' => $queue_action, 'staging_item_id' => $item_id, 'result' => 'error', 'error' => 'Import queue item not found.');
         } else {
             switch ($queue_action) {
+                case 'full_preparation':
+                    $result = $this->run_full_preparation_for_staging_item($item_id);
+                    break;
                 case 'ovoko_enrichment':
                     $result = $this->run_ovoko_enrichment_for_staging_item($item_id);
                     break;
@@ -1547,6 +1563,9 @@ JS;
                     break;
                 case 'ovoko_price_suggestion':
                     $result = $this->run_ovoko_price_suggestion_for_staging_item($item_id);
+                    break;
+                case 'ovoko_category_suggestion':
+                    $result = $this->run_ovoko_category_suggestion_for_staging_item($item_id);
                     break;
                 case 'category_mapping':
                     $result = $this->run_category_mapping_for_staging_item($item_id);
@@ -1672,9 +1691,398 @@ JS;
             update_post_meta($item_id, '_gps_suggested_woo_category_confidence', sanitize_text_field($ovoko['confidence']));
             update_post_meta($item_id, '_gps_suggested_category_source', 'ovoko_enrichment');
         }
+        $category_suggestion = array();
+        if ((int) $ovoko['match_count'] === 0 || $ovoko['confidence'] === 'none') {
+            $category_suggestion = $this->run_ovoko_category_suggestion_for_staging_item($item_id, $oem, false);
+        }
         $price_suggestion = $this->run_ovoko_price_suggestion_for_staging_item($item_id, false);
         $readiness = $this->run_readiness_validation_for_staging_item($item_id);
-        return array('action' => 'ovoko_enrichment', 'staging_item_id' => $item_id, 'result' => 'saved_staging_suggestions', 'match_count' => $ovoko['match_count'], 'confidence' => $ovoko['confidence'], 'price_suggestion' => $price_suggestion, 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+        return array('action' => 'ovoko_enrichment', 'staging_item_id' => $item_id, 'result' => 'saved_staging_suggestions', 'match_count' => $ovoko['match_count'], 'confidence' => $ovoko['confidence'], 'category_suggestion' => $category_suggestion, 'price_suggestion' => $price_suggestion, 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+    }
+
+
+    private function run_ovoko_category_suggestion_for_staging_item($item_id, $code = '', $refresh_readiness = true)
+    {
+        $analysis = $this->analysis_from_staging_item($item_id);
+        $code = trim((string) $code);
+        if ($code === '') {
+            $code = trim((string) ($analysis['detected_oem_part_number'] ?: $analysis['normalized_oem_part_number']));
+        }
+        if ($code === '') {
+            $code = trim((string) ($analysis['detected_part_code'] ?: $analysis['normalized_part_code']));
+        }
+        $checked_at = current_time('mysql', true);
+        $suggestion = $this->normalize_ovoko_category_suggestion_result($this->ovoko_category_suggestion_by_part_code($code, $analysis, $checked_at), $code, $checked_at);
+        $status = sanitize_text_field((string) ($suggestion['status'] ?? 'unavailable'));
+        $category_id = sanitize_text_field((string) ($suggestion['category_id'] ?? ''));
+        $category_name = sanitize_text_field((string) ($suggestion['category_name'] ?? ''));
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_status', $status);
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_code', sanitize_text_field($code));
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', $category_id);
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', $category_name);
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_source', sanitize_text_field((string) ($suggestion['source'] ?? '')));
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_checked_at', sanitize_text_field((string) ($suggestion['checked_at'] ?? $checked_at)));
+        update_post_meta($item_id, '_gps_ovoko_category_suggestion_raw_response', is_string($suggestion['raw_response'] ?? '') ? (string) $suggestion['raw_response'] : wp_json_encode($suggestion['raw_response'] ?? array(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if ($status === 'completed' && $category_id !== '' && $category_name !== '') {
+            $mapped = $this->woo_category_mapping_candidate($category_name, $category_name, 'ovoko_category_suggestion_by_code', 'medium');
+            if (!empty($mapped['id'])) {
+                update_post_meta($item_id, '_gps_suggested_woo_category_id', absint($mapped['id']));
+                update_post_meta($item_id, '_gps_suggested_woo_category_path', sanitize_text_field((string) $mapped['path']));
+                update_post_meta($item_id, '_gps_suggested_woo_category_confidence', sanitize_text_field((string) $mapped['confidence']));
+                update_post_meta($item_id, '_gps_suggested_category_source', sanitize_text_field((string) $mapped['source']));
+            }
+        }
+        $readiness = $refresh_readiness ? $this->run_readiness_validation_for_staging_item($item_id) : array();
+        return array('action' => 'ovoko_category_suggestion', 'staging_item_id' => $item_id, 'result' => $status, 'code' => $code, 'category_id' => $category_id, 'category_name' => $category_name, 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+    }
+
+    private function ovoko_category_suggestion_by_part_code($code, $analysis, $checked_at)
+    {
+        $default = array(
+            'status' => $code === '' ? 'no_suggestion' : 'unavailable',
+            'category_id' => '',
+            'category_name' => '',
+            'source' => 'not_checked',
+            'checked_at' => $checked_at,
+            'raw_response' => array('message' => 'No category suggestion source returned a usable result.'),
+        );
+        if ($code === '') {
+            return $default;
+        }
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters('gps_gmail_product_importer_ovoko_category_suggestion_by_part_code', $default, $code, $analysis);
+            if (is_array($filtered) && $filtered !== $default) {
+                return array_merge($default, $filtered);
+            }
+        }
+        $api_result = $this->ovoko_category_suggestion_from_rrr_api_candidates($code, $checked_at);
+        if (in_array((string) ($api_result['status'] ?? ''), array('completed', 'needs_manual_category_id', 'endpoint_error'), true)) {
+            return $api_result;
+        }
+        $public_result = $this->ovoko_category_suggestion_from_public_code_page($code, $checked_at);
+        if (in_array((string) ($public_result['status'] ?? ''), array('completed', 'needs_manual_category_id', 'endpoint_error', 'no_suggestion'), true)) {
+            return $public_result;
+        }
+        return array_merge($default, array(
+            'source' => 'manual_network_capture_required',
+            'raw_response' => array(
+                'official_api_candidates' => $api_result,
+                'public_code_page' => $public_result,
+                'manual_capture_required' => true,
+            ),
+        ));
+    }
+
+    private function normalize_ovoko_category_suggestion_result($suggestion, $code, $checked_at)
+    {
+        $suggestion = is_array($suggestion) ? $suggestion : array();
+        $category_name = sanitize_text_field((string) ($suggestion['category_name'] ?? $suggestion['name'] ?? ''));
+        $category_id = sanitize_text_field((string) ($suggestion['category_id'] ?? $suggestion['id'] ?? ''));
+        $source = sanitize_text_field((string) ($suggestion['source'] ?? ''));
+        $raw_response = $suggestion['raw_response'] ?? $suggestion;
+        if ($category_name !== '' && $category_id === '') {
+            $resolved = $this->resolve_ovoko_category_id_for_suggestion($category_name);
+            if ((string) ($resolved['category_id'] ?? '') !== '') {
+                $category_id = (string) $resolved['category_id'];
+                $source = trim($source . '+category_id_resolved_from_' . (string) ($resolved['source'] ?? 'catalog'), '+');
+                $raw_response = array('suggestion' => $raw_response, 'category_id_resolution' => $resolved);
+            }
+        }
+        $status = sanitize_text_field((string) ($suggestion['status'] ?? ''));
+        if (in_array($status, array('found', 'success', 'mapped'), true)) {
+            $status = 'completed';
+        }
+        if ($category_name !== '' && $category_id !== '') {
+            $status = 'completed';
+        } elseif ($category_name !== '' && $category_id === '') {
+            $status = 'needs_manual_category_id';
+        } elseif ($status === '') {
+            $status = $code === '' ? 'no_suggestion' : 'unavailable';
+        }
+        return array(
+            'status' => $status,
+            'category_id' => $category_id,
+            'category_name' => $category_name,
+            'source' => $source,
+            'checked_at' => sanitize_text_field((string) ($suggestion['checked_at'] ?? $checked_at)),
+            'raw_response' => $raw_response,
+        );
+    }
+
+    private function ovoko_category_suggestion_from_rrr_api_candidates($code, $checked_at)
+    {
+        if (!$this->ovoko_credentials_detected() || !function_exists('wp_remote_post')) {
+            return array('status' => 'unavailable', 'source' => 'rrr_api_credentials_missing_or_http_unavailable', 'checked_at' => $checked_at, 'raw_response' => array());
+        }
+        $settings = $this->ovoko_integration_settings();
+        $base_url = rtrim((string) $settings['rrr_api_base_url'], '/');
+        if ($base_url === '') {
+            return array('status' => 'unavailable', 'source' => 'rrr_api_base_url_missing', 'checked_at' => $checked_at, 'raw_response' => array());
+        }
+        $auth = array('username' => (string) $settings['rrr_api_username'], 'password' => (string) $settings['rrr_api_password'], 'user_token' => (string) $settings['rrr_api_user_token']);
+        $paths = array(
+            '/get/part/category?manufacturer_code=' . rawurlencode($code),
+            '/get/parts/category?manufacturer_code=' . rawurlencode($code),
+            '/get/categories/suggest?manufacturer_code=' . rawurlencode($code),
+            '/v2/get/part/category?manufacturer_code=' . rawurlencode($code),
+            '/v2/get/parts/category?manufacturer_code=' . rawurlencode($code),
+            '/v2/get/categories/suggest?manufacturer_code=' . rawurlencode($code),
+        );
+        $diagnostics = array();
+        foreach ($paths as $path) {
+            $response = wp_remote_post($base_url . $path, array('timeout' => 10, 'body' => $auth, 'headers' => array('Content-Type' => 'application/x-www-form-urlencoded')));
+            if (is_wp_error($response)) {
+                $diagnostics[] = array('path' => $path, 'error' => $response->get_error_message());
+                continue;
+            }
+            $http_code = (int) wp_remote_retrieve_response_code($response);
+            $body = (string) wp_remote_retrieve_body($response);
+            $decoded = json_decode($body, true);
+            $parsed = $this->parse_ovoko_category_suggestion_payload(is_array($decoded) ? $decoded : $body);
+            $diagnostics[] = array('path' => $path, 'http_code' => $http_code, 'parsed_category_name' => $parsed['category_name'], 'parsed_category_id' => $parsed['category_id'], 'body_excerpt' => substr($body, 0, 500));
+            if ($http_code >= 200 && $http_code < 300 && $parsed['category_name'] !== '') {
+                return array('status' => $parsed['category_id'] !== '' ? 'completed' : 'needs_manual_category_id', 'category_id' => $parsed['category_id'], 'category_name' => $parsed['category_name'], 'source' => 'rrr_api_candidate:' . $path, 'checked_at' => $checked_at, 'raw_response' => array('path' => $path, 'response' => is_array($decoded) ? $decoded : substr($body, 0, 1500)));
+            }
+        }
+        return array('status' => 'unavailable', 'source' => 'rrr_api_candidate_probe_no_supported_endpoint', 'checked_at' => $checked_at, 'raw_response' => array('candidate_results' => $diagnostics));
+    }
+
+    private function ovoko_category_suggestion_from_public_code_page($code, $checked_at)
+    {
+        if (!function_exists('wp_remote_get')) {
+            return array('status' => 'unavailable', 'source' => 'wp_remote_get_unavailable', 'checked_at' => $checked_at, 'raw_response' => array());
+        }
+        $url = 'https://ovoko.pl/oferta/' . rawurlencode($code);
+        $response = wp_remote_get($url, array('timeout' => 12, 'headers' => array('User-Agent' => 'GPS Gmail Product Importer category suggestion/0.1')));
+        if (is_wp_error($response)) {
+            return array('status' => 'endpoint_error', 'source' => 'ovoko_public_code_page', 'checked_at' => $checked_at, 'raw_response' => array('url' => $url, 'error' => $response->get_error_message()));
+        }
+        $http_code = (int) wp_remote_retrieve_response_code($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        if ($http_code < 200 || $http_code >= 300) {
+            return array('status' => 'endpoint_error', 'source' => 'ovoko_public_code_page', 'checked_at' => $checked_at, 'raw_response' => array('url' => $url, 'http_code' => $http_code, 'body_excerpt' => substr($body, 0, 500)));
+        }
+        $parsed = $this->parse_ovoko_public_code_page_category($body, $code);
+        if ($parsed['category_name'] === '') {
+            return array('status' => 'no_suggestion', 'source' => 'ovoko_public_code_page', 'checked_at' => $checked_at, 'raw_response' => array('url' => $url, 'http_code' => $http_code, 'body_excerpt' => substr(wp_strip_all_tags($body), 0, 800)));
+        }
+        return array('status' => $parsed['category_id'] !== '' ? 'completed' : 'needs_manual_category_id', 'category_id' => $parsed['category_id'], 'category_name' => $parsed['category_name'], 'source' => 'ovoko_public_code_page', 'checked_at' => $checked_at, 'raw_response' => array('url' => $url, 'http_code' => $http_code, 'parsed' => $parsed));
+    }
+
+    private function parse_ovoko_category_suggestion_payload($payload)
+    {
+        if (is_string($payload)) {
+            $decoded = json_decode($payload, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            } else {
+                return $this->parse_ovoko_public_code_page_category($payload, '');
+            }
+        }
+        $flat = $this->flatten_array_for_category_suggestion((array) $payload);
+        $id = '';
+        $name = '';
+        foreach ($flat as $path => $value) {
+            if (!is_scalar($value) || trim((string) $value) === '') {
+                continue;
+            }
+            $lower = strtolower((string) $path);
+            if ($id === '' && preg_match('/(^|[._-])(category_id|categoryid|rrr_category_id|id)$/', $lower)) {
+                $id = sanitize_text_field((string) $value);
+            }
+            if ($name === '' && preg_match('/(^|[._-])(category_name|category_title|category|name|title|label|pl|en)$/', $lower) && !preg_match('/(^|[._-])(status|code|id)$/', $lower)) {
+                $candidate = sanitize_text_field((string) $value);
+                if ($candidate !== '' && !preg_match('/^R\d+$/i', $candidate)) {
+                    $name = $candidate;
+                }
+            }
+        }
+        return array('category_id' => $id, 'category_name' => $name);
+    }
+
+    private function parse_ovoko_public_code_page_category($html, $code)
+    {
+        $html = (string) $html;
+        $segment = $html;
+        $marker = 'Więcej ofert z kodem producenta';
+        $marker_pos = stripos($html, $marker);
+        if ($marker_pos !== false) {
+            $segment = substr($html, $marker_pos);
+        }
+        $counts = array();
+        if (preg_match_all('/<a\b[^>]*>(.*?)<\/a>/is', $segment, $matches)) {
+            foreach ($matches[1] as $label_html) {
+                $label = trim(html_entity_decode(wp_strip_all_tags($label_html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                if ($this->looks_like_ovoko_part_category_label($label)) {
+                    $counts[$label] = ($counts[$label] ?? 0) + 1;
+                }
+            }
+        }
+        if (!$counts && preg_match_all('/Image:\s*[^\n<]*?\s([\p{L}][\p{L}\s\/-]{2,60})\s*(?:†|<|\n)/u', $segment, $alt_matches)) {
+            foreach ($alt_matches[1] as $label) {
+                $label = trim((string) $label);
+                if ($this->looks_like_ovoko_part_category_label($label)) {
+                    $counts[$label] = ($counts[$label] ?? 0) + 1;
+                }
+            }
+        }
+        arsort($counts);
+        $category_name = (string) array_key_first($counts);
+        if ($category_name === '' && preg_match('/Części z tym kodem należą do kategorii „([^”]+)”/u', wp_strip_all_tags($html), $m)) {
+            $category_name = trim((string) $m[1]);
+        }
+        $resolved = $category_name !== '' ? $this->resolve_ovoko_category_id_for_suggestion($category_name) : array('category_id' => '', 'source' => '');
+        return array('category_id' => (string) ($resolved['category_id'] ?? ''), 'category_name' => $category_name, 'category_counts' => $counts, 'category_id_resolution' => $resolved);
+    }
+
+    private function looks_like_ovoko_part_category_label($label)
+    {
+        $label = trim((string) $label);
+        if ($label === '' || mb_strlen($label) > 80 || preg_match('/\d/', $label)) {
+            return false;
+        }
+        $reject = array('Strona główna', 'Wyświetl', 'Zobacz wszystkie części', 'Polska', 'Litwa', 'Holandia', 'Audi', 'Volkswagen', 'Skoda', 'Seat', 'Cupra');
+        return !in_array($label, $reject, true);
+    }
+
+    private function resolve_ovoko_category_id_for_suggestion($category_name)
+    {
+        $category_name = trim((string) $category_name);
+        if ($category_name === '') {
+            return array('category_id' => '', 'source' => 'empty_category_name');
+        }
+        if (function_exists('taxonomy_exists') && taxonomy_exists('product_cat') && function_exists('get_term_by')) {
+            $term = get_term_by('name', $category_name, 'product_cat');
+            if (!$term && function_exists('sanitize_title')) {
+                $term = get_term_by('slug', sanitize_title($category_name), 'product_cat');
+            }
+            if ($term && !is_wp_error($term) && function_exists('get_term_meta')) {
+                foreach (array('_gpswiss_ovoko_category_id', 'gpswiss_ovoko_category_id', '_ovoko_category_id', 'ovoko_category_id') as $meta_key) {
+                    $value = trim((string) get_term_meta((int) $term->term_id, $meta_key, true));
+                    if ($value !== '') {
+                        return array('category_id' => $value, 'source' => 'woo_term_meta:' . $meta_key, 'woo_term_id' => (int) $term->term_id);
+                    }
+                }
+            }
+        }
+        $catalog = $this->resolve_ovoko_category_id_from_rrr_catalog($category_name);
+        if ((string) ($catalog['category_id'] ?? '') !== '') {
+            return $catalog;
+        }
+        return array('category_id' => '', 'source' => 'not_found');
+    }
+
+    private function resolve_ovoko_category_id_from_rrr_catalog($category_name)
+    {
+        if (!$this->ovoko_credentials_detected() || !function_exists('wp_remote_post')) {
+            return array('category_id' => '', 'source' => 'rrr_catalog_unavailable');
+        }
+        $settings = $this->ovoko_integration_settings();
+        $base_url = rtrim((string) $settings['rrr_api_base_url'], '/');
+        if ($base_url === '') {
+            return array('category_id' => '', 'source' => 'rrr_catalog_base_url_missing');
+        }
+        $response = wp_remote_post($base_url . '/get/categories/tree', array('timeout' => 15, 'body' => array('username' => (string) $settings['rrr_api_username'], 'password' => (string) $settings['rrr_api_password'], 'user_token' => (string) $settings['rrr_api_user_token']), 'headers' => array('Content-Type' => 'application/x-www-form-urlencoded')));
+        if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) < 200 || (int) wp_remote_retrieve_response_code($response) >= 300) {
+            return array('category_id' => '', 'source' => 'rrr_catalog_endpoint_error');
+        }
+        $decoded = json_decode((string) wp_remote_retrieve_body($response), true);
+        if (!is_array($decoded)) {
+            return array('category_id' => '', 'source' => 'rrr_catalog_non_json');
+        }
+        $needle = $this->normalize_category_label_for_compare($category_name);
+        foreach ($this->flatten_category_catalog_nodes($decoded) as $node) {
+            $id = (string) ($node['id'] ?? $node['category_id'] ?? '');
+            foreach (array('pl', 'en', 'lt', 'name', 'title', 'label') as $key) {
+                $label = (string) ($node[$key] ?? '');
+                if ($id !== '' && $this->normalize_category_label_for_compare($label) === $needle) {
+                    return array('category_id' => $id, 'source' => 'rrr_categories_tree', 'matched_label_key' => $key, 'matched_node' => $node);
+                }
+            }
+        }
+        return array('category_id' => '', 'source' => 'rrr_catalog_no_match');
+    }
+
+    private function flatten_category_catalog_nodes($value)
+    {
+        $nodes = array();
+        if (!is_array($value)) {
+            return $nodes;
+        }
+        $has_id = isset($value['id']) || isset($value['category_id']);
+        if ($has_id) {
+            $nodes[] = $value;
+        }
+        foreach ($value as $child) {
+            if (is_array($child)) {
+                $nodes = array_merge($nodes, $this->flatten_category_catalog_nodes($child));
+            }
+        }
+        return $nodes;
+    }
+
+    private function flatten_array_for_category_suggestion($value, $prefix = '')
+    {
+        $flat = array();
+        foreach ((array) $value as $key => $child) {
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . (string) $key;
+            if (is_array($child)) {
+                $flat += $this->flatten_array_for_category_suggestion($child, $path);
+            } else {
+                $flat[$path] = $child;
+            }
+        }
+        return $flat;
+    }
+
+    private function normalize_category_label_for_compare($label)
+    {
+        $label = function_exists('remove_accents') ? remove_accents((string) $label) : (string) $label;
+        return strtolower(trim(preg_replace('/\s+/', ' ', $label)));
+    }
+
+    private function run_full_preparation_for_staging_item($item_id)
+    {
+        $enrichment = $this->run_ovoko_enrichment_for_staging_item($item_id);
+        $category_suggestion = array();
+        $match_count = absint(get_post_meta($item_id, '_gps_ovoko_match_count', true));
+        $enrichment_status = (string) get_post_meta($item_id, '_gps_ovoko_enrichment_status', true);
+        if ($match_count === 0 || $enrichment_status === 'no_match') {
+            $category_suggestion = $this->run_ovoko_category_suggestion_for_staging_item($item_id, '', false);
+        }
+        $price = $this->run_ovoko_price_suggestion_for_staging_item($item_id, false);
+        $mapping = $this->run_category_mapping_for_staging_item($item_id);
+        $readiness = $this->run_readiness_validation_for_staging_item($item_id);
+        return array_merge(
+            array('action' => 'full_preparation', 'result' => (string) ($readiness['result'] ?? 'needs_review'), 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_write' => true, 'no_allegro_call' => true),
+            $this->full_preparation_summary_for_staging_item($item_id),
+            array('steps' => array('ovoko_enrichment' => $enrichment, 'ovoko_category_suggestion' => $category_suggestion, 'ovoko_price_suggestion' => $price, 'category_mapping' => $mapping, 'readiness_validation' => $readiness))
+        );
+    }
+
+    private function full_preparation_summary_for_staging_item($item_id)
+    {
+        $blocking = json_decode((string) get_post_meta($item_id, '_gps_woo_draft_blocking_reasons', true), true);
+        return array(
+            'staging_item_id' => (int) $item_id,
+            'ovoko_enrichment_status' => get_post_meta($item_id, '_gps_ovoko_enrichment_status', true),
+            'ovoko_match_count' => absint(get_post_meta($item_id, '_gps_ovoko_match_count', true)),
+            'ovoko_selected_match_id' => get_post_meta($item_id, '_gps_ovoko_selected_match_id', true),
+            'ovoko_category_id' => get_post_meta($item_id, '_gps_ovoko_category_id', true),
+            'ovoko_category_name' => get_post_meta($item_id, '_gps_ovoko_category_name', true),
+            'ovoko_category_suggestion_status' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_status', true),
+            'ovoko_category_suggestion_code' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_code', true),
+            'ovoko_category_suggestion_category_id' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true),
+            'ovoko_category_suggestion_category_name' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', true),
+            'ovoko_price_suggestion_status' => get_post_meta($item_id, '_gps_ovoko_price_suggestion_status', true),
+            'ovoko_price_suggestion_pln' => get_post_meta($item_id, '_gps_ovoko_price_suggestion_pln', true),
+            'selected_price_source' => get_post_meta($item_id, '_gps_selected_price_source', true),
+            'selected_price_pln' => get_post_meta($item_id, '_gps_selected_price_pln', true),
+            'category_mapping_status' => get_post_meta($item_id, '_gps_category_mapping_status', true),
+            'suggested_woo_category_id' => absint(get_post_meta($item_id, '_gps_suggested_woo_category_id', true)),
+            'woo_draft_readiness_status' => get_post_meta($item_id, '_gps_woo_draft_readiness_status', true),
+            'woo_draft_blocking_reasons' => is_array($blocking) ? $blocking : array(),
+        );
     }
 
 
@@ -2405,6 +2813,19 @@ JS;
     {
         $path = (string) get_post_meta($item_id, '_gps_suggested_woo_category_path', true);
         $category_id = absint(get_post_meta($item_id, '_gps_suggested_woo_category_id', true));
+        $source = (string) get_post_meta($item_id, '_gps_suggested_category_source', true);
+        if (!$category_id) {
+            $mapped = $this->woo_category_mapping_candidate_from_staging_item($item_id);
+            $category_id = absint($mapped['id']);
+            if ($category_id) {
+                $path = (string) $mapped['path'];
+                $source = (string) $mapped['source'];
+                update_post_meta($item_id, '_gps_suggested_woo_category_id', $category_id);
+                update_post_meta($item_id, '_gps_suggested_woo_category_path', sanitize_text_field($path));
+                update_post_meta($item_id, '_gps_suggested_woo_category_confidence', sanitize_text_field((string) $mapped['confidence']));
+                update_post_meta($item_id, '_gps_suggested_category_source', sanitize_text_field($source));
+            }
+        }
         if (!$category_id && $path !== '' && taxonomy_exists('product_cat')) {
             $category_name = trim((string) basename(str_replace('>', '/', $path)));
             $term = $category_name ? get_term_by('name', $category_name, 'product_cat') : false;
@@ -2419,11 +2840,55 @@ JS;
         $status = $category_id ? 'mapped' : 'needs_manual_mapping';
         update_post_meta($item_id, '_gps_category_mapping_status', $status);
         update_post_meta($item_id, '_gps_category_mapping_checked_at', current_time('mysql', true));
-        if (!get_post_meta($item_id, '_gps_suggested_category_source', true)) {
+        if (!$source) {
             update_post_meta($item_id, '_gps_suggested_category_source', $category_id ? 'import_queue_mapping' : 'manual_review_required');
         }
         $readiness = $this->run_readiness_validation_for_staging_item($item_id);
-        return array('action' => 'category_mapping', 'staging_item_id' => $item_id, 'result' => $status, 'suggested_woo_category_id' => $category_id, 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+        return array('action' => 'category_mapping', 'staging_item_id' => $item_id, 'result' => $status, 'suggested_woo_category_id' => $category_id, 'suggested_category_source' => get_post_meta($item_id, '_gps_suggested_category_source', true), 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+    }
+
+    private function woo_category_mapping_candidate_from_staging_item($item_id)
+    {
+        $sources = array(
+            array(
+                'source' => 'ovoko_selected_match_category',
+                'name' => get_post_meta($item_id, '_gps_ovoko_category_name', true),
+                'path' => get_post_meta($item_id, '_gps_ovoko_category_path', true) ?: get_post_meta($item_id, '_gps_ovoko_part_category', true),
+                'confidence' => get_post_meta($item_id, '_gps_ovoko_confidence', true) ?: 'medium',
+            ),
+            array(
+                'source' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_status', true) === 'completed' && get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true) !== '' ? 'ovoko_category_suggestion_by_code' : '',
+                'name' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_status', true) === 'completed' && get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true) !== '' ? get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', true) : '',
+                'path' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_status', true) === 'completed' && get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true) !== '' ? get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', true) : '',
+                'confidence' => 'medium',
+            ),
+        );
+        foreach ($sources as $source) {
+            $mapped = $this->woo_category_mapping_candidate((string) $source['name'], (string) $source['path'], (string) $source['source'], (string) $source['confidence']);
+            if (!empty($mapped['id'])) {
+                return $mapped;
+            }
+        }
+        return array('id' => 0, 'path' => '', 'source' => '', 'confidence' => '');
+    }
+
+    private function woo_category_mapping_candidate($name, $path, $source, $confidence = 'medium')
+    {
+        if (!function_exists('taxonomy_exists') || !taxonomy_exists('product_cat')) {
+            return array('id' => 0, 'path' => $path, 'source' => $source, 'confidence' => $confidence);
+        }
+        $category_name = trim((string) ($name !== '' ? $name : basename(str_replace('>', '/', $path))));
+        if ($category_name === '') {
+            return array('id' => 0, 'path' => $path, 'source' => $source, 'confidence' => $confidence);
+        }
+        $term = get_term_by('name', $category_name, 'product_cat');
+        if (!$term) {
+            $term = get_term_by('slug', sanitize_title($category_name), 'product_cat');
+        }
+        if (!$term || is_wp_error($term)) {
+            return array('id' => 0, 'path' => $path !== '' ? $path : $category_name, 'source' => $source, 'confidence' => $confidence);
+        }
+        return array('id' => (int) $term->term_id, 'path' => $path !== '' ? $path : $category_name, 'source' => $source, 'confidence' => $confidence ?: 'medium');
     }
 
     private function run_readiness_validation_for_staging_item($item_id)
@@ -2476,6 +2941,25 @@ JS;
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
         exit;
+    }
+
+    public function handle_full_preparation_batch()
+    {
+        $this->verify_admin_action();
+        $result = $this->run_full_preparation_batch(max(1, min(25, absint($_POST['batch_size'] ?? 5))));
+        set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
+        wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
+        exit;
+    }
+
+    private function run_full_preparation_batch($batch_size)
+    {
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max(1, min(25, absint($batch_size))), 'orderby' => 'modified', 'order' => 'DESC'));
+        $items = array();
+        foreach ($ids as $id) {
+            $items[] = $this->run_full_preparation_for_staging_item((int) $id);
+        }
+        return array('action' => 'full_preparation_batch', 'result' => 'completed', 'batch_size' => max(1, min(25, absint($batch_size))), 'total_processed' => count($items), 'items' => $items, 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_write' => true, 'no_allegro_call' => true);
     }
 
     private function create_woo_drafts_from_ready_staging($batch_size)
@@ -2552,6 +3036,11 @@ JS;
             'ovoko_category_name' => get_post_meta($id, '_gps_ovoko_category_name', true),
             'ovoko_category_path' => get_post_meta($id, '_gps_ovoko_category_path', true),
             'ovoko_part_category' => get_post_meta($id, '_gps_ovoko_part_category', true),
+            'ovoko_category_suggestion_status' => get_post_meta($id, '_gps_ovoko_category_suggestion_status', true),
+            'ovoko_category_suggestion_code' => get_post_meta($id, '_gps_ovoko_category_suggestion_code', true),
+            'ovoko_category_suggestion_category_id' => get_post_meta($id, '_gps_ovoko_category_suggestion_category_id', true),
+            'ovoko_category_suggestion_category_name' => get_post_meta($id, '_gps_ovoko_category_suggestion_category_name', true),
+            'ovoko_category_suggestion_source' => get_post_meta($id, '_gps_ovoko_category_suggestion_source', true),
             'category_mapping_status' => get_post_meta($id, '_gps_category_mapping_status', true),
             'suggested_woo_category_id' => absint(get_post_meta($id, '_gps_suggested_woo_category_id', true)),
             'suggested_woo_category_path' => get_post_meta($id, '_gps_suggested_woo_category_path', true),
