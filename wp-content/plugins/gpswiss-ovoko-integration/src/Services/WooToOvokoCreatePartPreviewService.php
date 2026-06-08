@@ -93,7 +93,7 @@ class WooToOvokoCreatePartPreviewService
         $result['source_woo_fields_meta_used'] = [
             'post' => ['ID' => $productId, 'post_type' => $postType, 'post_status' => $status, 'post_title' => $title],
             'product_methods' => ['get_sku', 'get_price', 'get_regular_price', 'get_sale_price', 'get_stock_status', 'get_stock_quantity', 'get_image_id', 'get_gallery_image_ids'],
-            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place', '_gps_selected_price_pln', '_gps_selected_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_confidence', '_gps_allegro_price_query', '_gps_manual_price_pln']))),
+            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place', '_gps_selected_price_pln', '_gps_selected_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_confidence', '_gps_allegro_price_query', '_gps_manual_price_pln', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source']))),
             'taxonomy' => ['product_cat'],
         ];
 
@@ -546,6 +546,15 @@ class WooToOvokoCreatePartPreviewService
             return 'Cena testowa/ręczna: ' . $price . ' PLN' . "\n" . 'Źródło: manual_override';
         }
 
+        if ($source === 'ovoko_price_suggestion') {
+            $ovokoSource = (string) ($priceData['ovoko_source'] ?? '');
+            return implode("\n", array_filter([
+                'Sugerowana cena Ovoko: ' . $price . ' PLN',
+                'Źródło: ' . ($ovokoSource !== '' ? $ovokoSource : 'ovoko_price_suggestion'),
+                'Dane z dopasowanej części Ovoko',
+            ], static function ($line) { return $line !== ''; }));
+        }
+
         if (in_array($source, ['allegro_api', 'allegro_suggestion'], true)) {
             $lines = ['Sugerowana cena Allegro: ' . $price . ' PLN', 'Źródło: Allegro API'];
             $filteredOfferCount = (string) ($priceData['filtered_offer_count'] ?? '');
@@ -586,6 +595,15 @@ class WooToOvokoCreatePartPreviewService
                 'confidence' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_confidence']),
                 'filtered_offer_count' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_filtered_offer_count']),
                 'query' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_query']),
+            ];
+        }
+
+        if ($source === 'ovoko_price_suggestion') {
+            $ovokoPrice = $this->first_non_empty_meta($metaProductIds, ['_gps_ovoko_price_suggestion_pln']);
+            return [
+                'source' => $source,
+                'price' => $this->format_crm_only_price($price !== '' ? $price : $ovokoPrice),
+                'ovoko_source' => $this->first_non_empty_meta($metaProductIds, ['_gps_ovoko_price_suggestion_source']),
             ];
         }
 

@@ -89,6 +89,9 @@ final class GPS_Gmail_Product_Importer
             'ovoko_enrichment_dry_run' => 1,
             'ovoko_enrichment_save_suggestions' => 1,
             'ovoko_enrichment_delay_between_batches' => 3,
+            'ovoko_price_fallback_enabled' => 1,
+            'ovoko_eur_to_pln_fallback_rate' => '',
+            'ovoko_prefer_internal_notes_price' => 1,
             'batch_size' => 5,
             'product_status' => 'draft',
             'import_images' => 1,
@@ -149,6 +152,9 @@ final class GPS_Gmail_Product_Importer
             'ovoko_enrichment_dry_run' => empty($input['ovoko_enrichment_dry_run']) ? 0 : 1,
             'ovoko_enrichment_save_suggestions' => empty($input['ovoko_enrichment_save_suggestions']) ? 0 : 1,
             'ovoko_enrichment_delay_between_batches' => max(1, min(60, absint($input['ovoko_enrichment_delay_between_batches'] ?? 3))),
+            'ovoko_price_fallback_enabled' => empty($input['ovoko_price_fallback_enabled']) ? 0 : 1,
+            'ovoko_eur_to_pln_fallback_rate' => isset($input['ovoko_eur_to_pln_fallback_rate']) && is_numeric(str_replace(',', '.', (string) $input['ovoko_eur_to_pln_fallback_rate'])) && (float) str_replace(',', '.', (string) $input['ovoko_eur_to_pln_fallback_rate']) > 0 ? sanitize_text_field(str_replace(',', '.', (string) $input['ovoko_eur_to_pln_fallback_rate'])) : '',
+            'ovoko_prefer_internal_notes_price' => empty($input['ovoko_prefer_internal_notes_price']) ? 0 : 1,
             'batch_size' => max(1, min(25, absint($input['batch_size'] ?? 5))),
             'product_status' => $status,
             'import_images' => empty($input['import_images']) ? 0 : 1,
@@ -275,6 +281,9 @@ JS;
                     <tr><th><label for="gps-ovoko-enrichment-batch-size"><?php esc_html_e('Ovoko enrichment batch size', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-enrichment-batch-size" type="number" min="1" max="25" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_batch_size]" value="<?php echo esc_attr($settings['ovoko_enrichment_batch_size']); ?>"></td></tr>
                     <tr><th><?php esc_html_e('Dry-run by default', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_dry_run]" value="1" <?php checked($settings['ovoko_enrichment_dry_run'], 1); ?>> <?php esc_html_e('Preview Ovoko API enrichment without Woo product writes', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><?php esc_html_e('Save suggestions', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_save_suggestions]" value="1" <?php checked($settings['ovoko_enrichment_save_suggestions'], 1); ?>> <?php esc_html_e('Live enrichment saves only _gps_ovoko_* suggestion meta and optional high-confidence category assignment.', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Enable Ovoko price fallback', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_price_fallback_enabled]" value="1" <?php checked($settings['ovoko_price_fallback_enabled'], 1); ?>> <?php esc_html_e('Use selected Ovoko match price as staff-only fallback when Allegro is unavailable or not selected', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><label for="gps-ovoko-eur-rate"><?php esc_html_e('EUR→PLN fallback rate', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-eur-rate" class="small-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_eur_to_pln_fallback_rate]" value="<?php echo esc_attr($settings['ovoko_eur_to_pln_fallback_rate']); ?>"><p class="description"><?php esc_html_e('Optional. Used only when selected Ovoko price is EUR and no PLN value exists.', 'gps-gmail-product-importer'); ?></p></td></tr>
+                    <tr><th><?php esc_html_e('Prefer Ovoko internal_notes price', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_prefer_internal_notes_price]" value="1" <?php checked($settings['ovoko_prefer_internal_notes_price'], 1); ?>> <?php esc_html_e('Use numeric internal_notes before original_price PLN', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-ovoko-enrichment-delay"><?php esc_html_e('Ovoko enrichment delay between batches', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-enrichment-delay" type="number" min="1" max="60" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_delay_between_batches]" value="<?php echo esc_attr($settings['ovoko_enrichment_delay_between_batches']); ?>"> <?php esc_html_e('seconds', 'gps-gmail-product-importer'); ?></td></tr>
                     <tr><th><label for="gps-gmail-batch-size"><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-gmail-batch-size" type="number" min="1" max="25" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[batch_size]" value="<?php echo esc_attr($settings['batch_size']); ?>"></td></tr>
                     <tr><th><?php esc_html_e('Product status default', 'gps-gmail-product-importer'); ?></th><td><select name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[product_status]"><option value="draft" <?php selected($settings['product_status'], 'draft'); ?>><?php esc_html_e('Draft', 'gps-gmail-product-importer'); ?></option><option value="pending_review" <?php selected($settings['product_status'], 'pending_review'); ?>><?php esc_html_e('Pending review', 'gps-gmail-product-importer'); ?></option></select><p class="description"><?php esc_html_e('Default is draft. Products are never published automatically.', 'gps-gmail-product-importer'); ?></p></td></tr>
@@ -513,6 +522,7 @@ JS;
         $actions = array(
             'ovoko_enrichment' => __('Run Ovoko enrichment for this item', 'gps-gmail-product-importer'),
             'allegro_price_research' => __('Run Allegro price research for this item', 'gps-gmail-product-importer'),
+            'ovoko_price_suggestion' => __('Run Ovoko price suggestion for this item', 'gps-gmail-product-importer'),
             'category_mapping' => __('Run category mapping for this item', 'gps-gmail-product-importer'),
             'readiness_validation' => __('Run readiness validation for this item', 'gps-gmail-product-importer'),
             'create_woo_draft' => __('Create Woo Draft Product', 'gps-gmail-product-importer'),
@@ -548,6 +558,7 @@ JS;
             __('Images metadata', 'gps-gmail-product-importer') => array('_gps_gmail_import_image_count', '_gps_gmail_import_attachment_set_hash', '_gps_gmail_images_metadata'),
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
             __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
+            __('Ovoko price suggestion fields', 'gps-gmail-product-importer') => array('_gps_ovoko_price_suggestion_status', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_ovoko_price_suggestion_currency', '_gps_ovoko_price_suggestion_raw_value', '_gps_ovoko_price_suggestion_checked_at', '_gps_ovoko_price_suggestion_notes'),
             __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
             __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
             __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at'),
@@ -562,11 +573,14 @@ JS;
             __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id', '_gps_gmail_created_product_at', '_gps_gmail_created_product_checked_at', '_gps_gmail_created_product_status'),
         );
         $selected_price_source = (string) ($normalized_meta['_gps_selected_price_source'] ?? '');
-        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_api' ? __('Allegro API price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
+        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_api' ? __('Allegro API price suggestion', 'gps-gmail-product-importer') : ($selected_price_source === 'ovoko_price_suggestion' ? __('Ovoko price suggestion fallback', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer')));
+        $allegro_unavailable_message = $this->allegro_unavailable_message_from_meta($normalized_meta);
         ?>
         <div id="gps-import-queue-detail" style="margin-top:20px;">
             <h3><?php echo esc_html(sprintf(__('Import Queue Item #%d Details', 'gps-gmail-product-importer'), $item_id)); ?></h3>
             <p><strong><?php esc_html_e('Woo draft price readiness source:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($price_readiness_label); ?></p>
+            <p><strong><?php esc_html_e('Selected price priority:', 'gps-gmail-product-importer'); ?></strong> <?php esc_html_e('manual_override → allegro_api → ovoko_price_suggestion → no selected price', 'gps-gmail-product-importer'); ?></p>
+            <?php if ($allegro_unavailable_message !== '') : ?><p><strong><?php esc_html_e('Allegro unavailable/access denied:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($allegro_unavailable_message); ?></p><?php endif; ?>
             <?php foreach ($groups as $label => $keys) : ?>
                 <h4><?php echo esc_html($label); ?></h4>
                 <table class="widefat striped" style="max-width:1100px;margin-bottom:12px;">
@@ -1396,7 +1410,7 @@ JS;
         if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested'))) {
             $blocking[] = 'missing_ovoko_enrichment';
         }
-        // Price can come from a clearly marked manual override or completed staging-only Allegro research.
+        // Price can come from manual override, completed Allegro research, or a completed Ovoko price fallback suggestion.
         $selected_price = $this->selected_price_for_analysis($analysis);
         if (!$selected_price) {
             if (!$this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched'))) {
@@ -1476,6 +1490,9 @@ JS;
         if ($this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched')) && (float) ($analysis['allegro_price_suggestion'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) === 'PLN' && $this->allegro_readiness_quality_ok($analysis)) {
             return array('price' => $this->format_price_number($analysis['allegro_price_suggestion']), 'source' => 'allegro_api');
         }
+        if ($this->status_indicates_success((string) ($analysis['ovoko_price_suggestion_status'] ?? ''), array('completed')) && (float) ($analysis['ovoko_price_suggestion_pln'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['ovoko_price_suggestion_currency'] ?? ''))) === 'PLN') {
+            return array('price' => $this->format_manual_price_number($analysis['ovoko_price_suggestion_pln']), 'source' => 'ovoko_price_suggestion');
+        }
         return null;
     }
 
@@ -1532,6 +1549,9 @@ JS;
                     break;
                 case 'allegro_price_research':
                     $result = $this->run_allegro_price_research_for_staging_item($item_id);
+                    break;
+                case 'ovoko_price_suggestion':
+                    $result = $this->run_ovoko_price_suggestion_for_staging_item($item_id);
                     break;
                 case 'category_mapping':
                     $result = $this->run_category_mapping_for_staging_item($item_id);
@@ -1657,8 +1677,91 @@ JS;
             update_post_meta($item_id, '_gps_suggested_woo_category_confidence', sanitize_text_field($ovoko['confidence']));
             update_post_meta($item_id, '_gps_suggested_category_source', 'ovoko_enrichment');
         }
+        $price_suggestion = $this->run_ovoko_price_suggestion_for_staging_item($item_id, false);
         $readiness = $this->run_readiness_validation_for_staging_item($item_id);
-        return array('action' => 'ovoko_enrichment', 'staging_item_id' => $item_id, 'result' => 'saved_staging_suggestions', 'match_count' => $ovoko['match_count'], 'confidence' => $ovoko['confidence'], 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+        return array('action' => 'ovoko_enrichment', 'staging_item_id' => $item_id, 'result' => 'saved_staging_suggestions', 'match_count' => $ovoko['match_count'], 'confidence' => $ovoko['confidence'], 'price_suggestion' => $price_suggestion, 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+    }
+
+
+    private function run_ovoko_price_suggestion_for_staging_item($item_id, $refresh_readiness = true)
+    {
+        $settings = $this->settings();
+        $checked_at = current_time('mysql', true);
+        if (empty($settings['ovoko_price_fallback_enabled'])) {
+            $result = array('status' => 'disabled', 'pln' => '', 'source' => '', 'currency' => '', 'raw_value' => '', 'checked_at' => $checked_at, 'notes' => 'Ovoko price fallback is disabled in settings.');
+        } else {
+            $raw = get_post_meta($item_id, '_gps_ovoko_raw_selected_match', true);
+            $selected = is_array($raw) ? $raw : json_decode((string) $raw, true);
+            if (!is_array($selected)) {
+                $result = array('status' => 'no_price', 'pln' => '', 'source' => '', 'currency' => '', 'raw_value' => '', 'checked_at' => $checked_at, 'notes' => 'No selected Ovoko match JSON is available.');
+            } else {
+                $result = $this->extract_ovoko_price_suggestion($selected, $settings, $checked_at);
+            }
+        }
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_status', sanitize_text_field((string) $result['status']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_pln', sanitize_text_field((string) $result['pln']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_source', sanitize_text_field((string) $result['source']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_currency', sanitize_text_field((string) $result['currency']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_raw_value', sanitize_text_field((string) $result['raw_value']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_checked_at', sanitize_text_field((string) $result['checked_at']));
+        update_post_meta($item_id, '_gps_ovoko_price_suggestion_notes', sanitize_textarea_field((string) $result['notes']));
+        $readiness = $refresh_readiness ? $this->run_readiness_validation_for_staging_item($item_id) : array();
+        return array('action' => 'ovoko_price_suggestion', 'staging_item_id' => $item_id, 'result' => $result['status'], 'price_pln' => $result['pln'], 'source' => $result['source'], 'readiness' => $readiness, 'writes' => 'staging_meta_only');
+    }
+
+    private function extract_ovoko_price_suggestion(array $selected, array $settings, $checked_at)
+    {
+        $prefer_notes = !empty($settings['ovoko_prefer_internal_notes_price']);
+        $notes_value = $this->extract_numeric_price_from_text((string) ($selected['internal_notes'] ?? ''));
+        if ($prefer_notes && $notes_value !== '') {
+            return array('status' => 'completed', 'pln' => $this->format_manual_price_number($notes_value), 'source' => 'ovoko_internal_notes', 'currency' => 'PLN', 'raw_value' => (string) $selected['internal_notes'], 'checked_at' => $checked_at, 'notes' => 'Numeric price extracted from Ovoko internal_notes as PLN.');
+        }
+        $original_price = trim((string) ($selected['original_price'] ?? ''));
+        $original_currency = strtoupper(trim((string) ($selected['original_currency'] ?? '')));
+        if ($original_price !== '' && is_numeric(str_replace(',', '.', $original_price)) && $original_currency === 'PLN') {
+            return array('status' => 'completed', 'pln' => $this->format_manual_price_number(str_replace(',', '.', $original_price)), 'source' => 'ovoko_original_price', 'currency' => 'PLN', 'raw_value' => $original_price, 'checked_at' => $checked_at, 'notes' => 'Original Ovoko price used as PLN.');
+        }
+        if (!$prefer_notes && $notes_value !== '') {
+            return array('status' => 'completed', 'pln' => $this->format_manual_price_number($notes_value), 'source' => 'ovoko_internal_notes', 'currency' => 'PLN', 'raw_value' => (string) $selected['internal_notes'], 'checked_at' => $checked_at, 'notes' => 'Numeric price extracted from Ovoko internal_notes as PLN.');
+        }
+        $price = trim((string) ($selected['price'] ?? ''));
+        $currency = strtoupper(trim((string) ($selected['currency'] ?? '')));
+        if ($price !== '' && is_numeric(str_replace(',', '.', $price))) {
+            $normalized_price = str_replace(',', '.', $price);
+            if ($currency === 'PLN') {
+                return array('status' => 'completed', 'pln' => $this->format_manual_price_number($normalized_price), 'source' => 'ovoko_price_pln', 'currency' => 'PLN', 'raw_value' => $price, 'checked_at' => $checked_at, 'notes' => 'Ovoko price used as PLN.');
+            }
+            if ($currency === 'EUR') {
+                $rate = trim((string) ($settings['ovoko_eur_to_pln_fallback_rate'] ?? ''));
+                if ($rate !== '' && is_numeric(str_replace(',', '.', $rate)) && (float) str_replace(',', '.', $rate) > 0) {
+                    return array('status' => 'completed', 'pln' => $this->format_manual_price_number(((float) $normalized_price) * ((float) str_replace(',', '.', $rate))), 'source' => 'ovoko_price_eur_converted', 'currency' => 'PLN', 'raw_value' => $price, 'checked_at' => $checked_at, 'notes' => 'Ovoko EUR price converted to PLN using configured fallback rate ' . str_replace(',', '.', $rate) . '.');
+                }
+                return array('status' => 'needs_conversion', 'pln' => '', 'source' => 'ovoko_price_eur', 'currency' => 'EUR', 'raw_value' => $price, 'checked_at' => $checked_at, 'notes' => 'Ovoko price is EUR and no EUR→PLN fallback rate is configured.');
+            }
+        }
+        return array('status' => 'no_price', 'pln' => '', 'source' => '', 'currency' => '', 'raw_value' => '', 'checked_at' => $checked_at, 'notes' => 'Selected Ovoko match does not contain a usable price suggestion.');
+    }
+
+    private function extract_numeric_price_from_text($text)
+    {
+        if (preg_match('/(?<!\d)(\d+(?:[\.,]\d+)?)(?!\d)/', (string) $text, $matches)) {
+            return str_replace(',', '.', $matches[1]);
+        }
+        return '';
+    }
+
+    private function allegro_unavailable_message_from_meta($meta)
+    {
+        $status = strtolower(trim((string) ($meta['_gps_allegro_price_research_status'] ?? '')));
+        $code = trim((string) ($meta['_gps_allegro_price_error_code'] ?? ''));
+        $http = trim((string) ($meta['_gps_allegro_price_error_http_status'] ?? ''));
+        $notes = trim((string) ($meta['_gps_allegro_price_notes'] ?? ''));
+        $response = is_scalar($meta['_gps_allegro_price_error_response'] ?? '') ? (string) ($meta['_gps_allegro_price_error_response'] ?? '') : wp_json_encode($meta['_gps_allegro_price_error_response'] ?? array());
+        $haystack = strtolower($status . ' ' . $code . ' ' . $http . ' ' . $notes . ' ' . $response);
+        if (strpos($haystack, 'accessdenied') !== false || strpos($haystack, 'access denied') !== false || $http === '403' || in_array($status, array('error', 'unavailable'), true)) {
+            return trim('HTTP ' . $http . ' ' . $code . ' ' . $notes);
+        }
+        return '';
     }
 
     private function run_allegro_price_research_for_staging_item($item_id)
@@ -1753,10 +1856,13 @@ JS;
                 'error_checked_at' => $checked_at,
             ));
             $readiness = $this->run_readiness_validation_for_staging_item($item_id);
-            update_post_meta($item_id, '_gps_selected_price_pln', sanitize_text_field((string) $previous_selected_price));
-            update_post_meta($item_id, '_gps_selected_price_source', sanitize_text_field((string) $previous_selected_source));
-            update_post_meta($item_id, '_gps_selected_price_checked_at', sanitize_text_field((string) $previous_selected_checked_at));
-            return array('action' => 'allegro_price_research', 'staging_item_id' => $item_id, 'result' => 'api_error', 'errors' => $error_messages, 'diagnostics' => $first_diagnostics, 'readiness' => $readiness, 'selected_price_preserved' => true, 'writes' => 'staging_meta_only');
+            $preserved_selected_price = in_array((string) $previous_selected_source, array('manual_override', 'allegro_api'), true) && (float) $previous_selected_price > 0;
+            if ($preserved_selected_price) {
+                update_post_meta($item_id, '_gps_selected_price_pln', sanitize_text_field((string) $previous_selected_price));
+                update_post_meta($item_id, '_gps_selected_price_source', sanitize_text_field((string) $previous_selected_source));
+                update_post_meta($item_id, '_gps_selected_price_checked_at', sanitize_text_field((string) $previous_selected_checked_at));
+            }
+            return array('action' => 'allegro_price_research', 'staging_item_id' => $item_id, 'result' => 'api_error', 'errors' => $error_messages, 'diagnostics' => $first_diagnostics, 'readiness' => $readiness, 'selected_price_preserved' => $preserved_selected_price, 'writes' => 'staging_meta_only');
         }
 
         $analysis = $this->analyze_allegro_price_offers($queries, $offers, $settings);
@@ -2435,6 +2541,13 @@ JS;
             'allegro_price_error_response' => get_post_meta($id, '_gps_allegro_price_error_response', true),
             'allegro_price_error_code' => get_post_meta($id, '_gps_allegro_price_error_code', true),
             'allegro_price_error_checked_at' => get_post_meta($id, '_gps_allegro_price_error_checked_at', true),
+            'ovoko_price_suggestion_status' => get_post_meta($id, '_gps_ovoko_price_suggestion_status', true),
+            'ovoko_price_suggestion_pln' => get_post_meta($id, '_gps_ovoko_price_suggestion_pln', true),
+            'ovoko_price_suggestion_source' => get_post_meta($id, '_gps_ovoko_price_suggestion_source', true),
+            'ovoko_price_suggestion_currency' => get_post_meta($id, '_gps_ovoko_price_suggestion_currency', true),
+            'ovoko_price_suggestion_raw_value' => get_post_meta($id, '_gps_ovoko_price_suggestion_raw_value', true),
+            'ovoko_price_suggestion_checked_at' => get_post_meta($id, '_gps_ovoko_price_suggestion_checked_at', true),
+            'ovoko_price_suggestion_notes' => get_post_meta($id, '_gps_ovoko_price_suggestion_notes', true),
             'manual_price_override_enabled' => get_post_meta($id, '_gps_manual_price_override_enabled', true) === '1',
             'manual_price_pln' => get_post_meta($id, '_gps_manual_price_pln', true),
             'manual_price_note' => get_post_meta($id, '_gps_manual_price_note', true),
@@ -2465,7 +2578,7 @@ JS;
         $settings = $this->settings();
         $selected_price = $this->selected_price_for_analysis($analysis);
         if (!$selected_price) {
-            return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual or Allegro PLN price is required before creating a Woo draft.');
+            return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual, Allegro, or Ovoko fallback PLN price is required before creating a Woo draft.');
         }
         $suggested_category_id = $this->mapped_suggested_product_cat_id($analysis);
         if ($suggested_category_id <= 0) {
@@ -2510,6 +2623,14 @@ JS;
                 update_post_meta($product_id, $allegro_meta_key, $analysis[ltrim($allegro_meta_key, '_gps_')]);
             } elseif (isset($analysis[$allegro_meta_key])) {
                 update_post_meta($product_id, $allegro_meta_key, $analysis[$allegro_meta_key]);
+            }
+        }
+        foreach (array('_gps_ovoko_price_suggestion_status', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_ovoko_price_suggestion_currency', '_gps_ovoko_price_suggestion_raw_value', '_gps_ovoko_price_suggestion_checked_at', '_gps_ovoko_price_suggestion_notes') as $ovoko_price_meta_key) {
+            $analysis_key = ltrim($ovoko_price_meta_key, '_gps_');
+            if (array_key_exists($analysis_key, $analysis)) {
+                update_post_meta($product_id, $ovoko_price_meta_key, $analysis[$analysis_key]);
+            } elseif (isset($analysis[$ovoko_price_meta_key])) {
+                update_post_meta($product_id, $ovoko_price_meta_key, $analysis[$ovoko_price_meta_key]);
             }
         }
         update_post_meta($product_id, '_gps_gmail_import_message_id', $analysis['message_id']);
