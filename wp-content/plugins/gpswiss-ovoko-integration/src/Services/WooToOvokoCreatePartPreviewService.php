@@ -6,7 +6,7 @@ class WooToOvokoCreatePartPreviewService
 {
     private const ACTION_NAME = 'Preview Woo product → Ovoko create-part payload';
     private const MODE = 'dry_run_no_ovoko_write_no_woo_write';
-    private const PROPOSED_ENDPOINT = 'LIKELY_UNVERIFIED_ENDPOINT';
+    private const PROPOSED_ENDPOINT = 'DOCUMENTED_ENDPOINT_WRITE_BLOCKED';
     private const PROPOSED_ENDPOINT_PATH = '/crm/importPart';
     private const ALLOWED_STATUSES = ['draft'];
     private const PART_IDENTIFIER_META_KEYS = [
@@ -143,7 +143,7 @@ class WooToOvokoCreatePartPreviewService
         $result['authentication_style'] = $contract['authentication_style'];
         $result['image_handling'] = $contract['image_handling'];
         $result['would_create_as_draft_or_unpublished'] = 'unknown';
-        $result['draft_visibility_field'] = 'status';
+        $result['draft_visibility_field'] = null;
         $result['draft_visibility_value'] = null;
         $result['draft_visibility_confirmation_required'] = true;
 
@@ -187,10 +187,10 @@ class WooToOvokoCreatePartPreviewService
             'no_woo_write' => true,
             'proposed_endpoint' => self::PROPOSED_ENDPOINT,
             'proposed_endpoint_path' => self::PROPOSED_ENDPOINT_PATH,
-            'endpoint_confirmation_required' => true,
-            'payload_format_confirmation_required' => true,
+            'endpoint_confirmation_required' => false,
+            'payload_format_confirmation_required' => false,
             'would_create_as_draft_or_unpublished' => 'unknown',
-            'draft_visibility_field' => 'status',
+            'draft_visibility_field' => null,
             'draft_visibility_value' => null,
             'draft_visibility_confirmation_required' => true,
             'create_part_contract_report' => [],
@@ -238,14 +238,23 @@ class WooToOvokoCreatePartPreviewService
         return [
             'source' => [
                 'official_openapi_url' => 'https://api.rrr.lt/openapi/swagger.yaml',
+                'official_docs_url' => 'https://api.rrr.lt/docs/',
                 'checked_on' => '2026-06-08',
                 'repo_evidence' => ['RrrApiClient currently implements /crm/changePartStatus and /crm/updatePart writes only; no create/import call exists.'],
+            ],
+            'documentation_audit' => [
+                'status' => 'confirmed_by_documentation',
+                'repo_docs_found' => ['wp-content/plugins/gpswiss-ovoko-integration/README.md', 'RRR_API_AUTH_TEST.md'],
+                'included_openapi_or_pdf_found' => false,
+                'official_source_used' => 'https://api.rrr.lt/openapi/swagger.yaml',
+                'official_source_status' => 'confirmed_by_documentation',
+                'notes' => 'Repository search found references to the official RRR docs/spec but no bundled OpenAPI/PDF file. Findings below are backed by the official OpenAPI schema where marked confirmed_by_documentation.',
             ],
             'candidate_endpoints' => [
                 [
                     'path' => '/crm/importPart',
                     'method' => 'POST',
-                    'status' => 'documented_likely_unverified_for_this_shop',
+                    'status' => 'confirmed_by_documentation',
                     'summary' => 'Official OpenAPI summary: Import part.',
                     'content_type' => 'application/x-www-form-urlencoded',
                 ],
@@ -259,14 +268,14 @@ class WooToOvokoCreatePartPreviewService
                 'success_rule' => 'JSON status_code must be R200; HTTP 200 alone is insufficient.',
             ],
             'required_fields' => ['username', 'password', 'user_token', 'category_id', 'car_id', 'quality', 'status'],
-            'optional_fields' => ['position', 'notes', 'place', 'manufacturer_code', 'visible_code', 'other_code', 'optional_codes', 'external_id', 'internal_notes', 'price', 'original_currency', 'photo', 'photos[]', 'sticker_note', 'english'],
+            'optional_fields' => ['position', 'notes', 'place', 'manufacturer_code', 'visible_code', 'other_code', 'optional_codes[]', 'id_bridge', 'external_id', 'sell_price', 'sell_vat_null', 'sell_date', 'internal_notes', 'tires', 'rims', 'rims_spacing', 'rims_fixing_points', 'tires_width', 'rims_central_diameter', 'rims_quantity', 'tires_height', 'tires_tread_depth', 'tires_quantity', 'price', 'original_currency', 'photo', 'photos[]', 'sticker_note', 'english'],
             'field_contract' => [
                 'category' => ['field' => 'category_id', 'notes' => 'Level 3 category required by OpenAPI.'],
-                'price' => ['field' => 'price', 'currency_field' => 'original_currency', 'currency_allowed_values' => ['EUR', 'PLN'], 'notes' => 'OpenAPI says price must be filled to be shown in shop.'],
+                'price' => ['field' => 'price', 'currency_field' => 'original_currency', 'currency_allowed_values' => ['EUR', 'PLN'], 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'OpenAPI says price must be filled to be shown in shop, but it does not explicitly confirm immediate public listing behavior.'],
                 'part_code_oem' => ['primary_field' => 'manufacturer_code', 'visible_field' => 'visible_code', 'additional_fields' => ['other_code', 'optional_codes[]']],
                 'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'Woo-only products need a confirmed RRR car_id or confirmed alternative before live import.'],
                 'warehouse_location' => ['field' => 'place', 'required' => false],
-                'stock_status' => ['field' => 'status', 'required' => true, 'notes' => 'Values are numeric status IDs; safest non-public value is not confirmed.'],
+                'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned stock/sales states, not publication visibility states.'],
             ],
             'image_handling' => [
                 'mode' => 'url_form_fields',
@@ -277,15 +286,97 @@ class WooToOvokoCreatePartPreviewService
             ],
             'draft_unpublished_visibility_support' => [
                 'explicit_draft_field_found' => false,
-                'visibility_fields_found' => ['status'],
+                'visibility_fields_found' => [],
                 'status_values_confirmed' => false,
-                'draft_visibility_field' => 'status',
+                'status_field_is_operational_stock_sales_status' => true,
+                'draft_visibility_field' => null,
                 'draft_visibility_value' => null,
                 'would_create_as_draft_or_unpublished' => 'unknown',
                 'confirmation_required' => true,
-                'notes' => 'OpenAPI exposes required numeric status but does not document which value is draft/unpublished/hidden/inactive. /get/part_status should be probed/read and Ovoko must confirm semantics before live create.',
+                'notes' => 'OpenAPI exposes required numeric status, but the read-only /get/part_status probe returned operational inventory/sales lifecycle values (0 In stock, 1 Reserved, 2 Sold out, 3 Returned, 4 Written off), not listing publication visibility values. Draft/unpublished/hidden behavior remains unconfirmed and must not be guessed.',
             ],
             'latest_part_status_probe_result' => $this->latest_part_status_probe_result(),
+            'documentation_backed_findings' => [
+                'what_import_part_does' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'POST /crm/importPart imports a part using application/x-www-form-urlencoded request data and returns part_id, msg, and status_code on success.',
+                ],
+                'required_fields' => [
+                    'status' => 'confirmed_by_documentation',
+                    'fields' => ['username', 'password', 'user_token', 'category_id', 'car_id', 'quality', 'status'],
+                ],
+                'optional_fields' => [
+                    'status' => 'confirmed_by_documentation',
+                    'fields' => ['position', 'notes', 'place', 'manufacturer_code', 'visible_code', 'other_code', 'optional_codes[]', 'id_bridge', 'external_id', 'sell_price', 'sell_vat_null', 'sell_date', 'internal_notes', 'tires', 'rims', 'rims_spacing', 'rims_fixing_points', 'tires_width', 'rims_central_diameter', 'rims_quantity', 'tires_height', 'tires_tread_depth', 'tires_quantity', 'price', 'original_currency', 'photo', 'photos[]', 'sticker_note', 'english'],
+                ],
+                'status_field_meaning' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'The importPart schema describes status as the status ID assigned to the part. The documented status catalog endpoint is /get/part_status, whose observed values are operational stock/sales states, not publication visibility states.',
+                ],
+                'public_immediately_after_import' => [
+                    'status' => 'unknown',
+                    'answer' => 'The OpenAPI schema does not explicitly say whether /crm/importPart creates a public shop/marketplace listing immediately. It only documents that price must be filled to be shown in shop.',
+                ],
+                'hidden_draft_unpublished_private_field' => [
+                    'status' => 'not_found_in_documentation',
+                    'answer' => 'No importPart field named hidden, draft, unpublished, private, public, visible, visibility, publish, published, active, disabled, shop visibility, or marketplace visibility is documented.',
+                ],
+                'hide_unpublish_after_import_endpoint' => [
+                    'status' => 'not_found_in_documentation',
+                    'candidate_documented_existing_part_writes' => ['/crm/updatePart', '/crm/changePartStatus', '/crm/deletePart'],
+                    'answer' => 'The OpenAPI documents update, status-change, and delete endpoints for existing parts, but no hide/unpublish-specific endpoint or visibility field.',
+                ],
+                'external_id_idempotency' => [
+                    'status' => 'unknown',
+                    'answer' => 'external_id is documented on importPart as Local id and /v2/get/parts supports external_ids filtering. Unlike importCar, importPart documentation does not state that duplicate external_id aborts import or returns the existing part, so idempotency is not confirmed by documentation.',
+                ],
+                'photo_handling' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'photo is a photo URL. photos[] must include the same first value as photo for correct main photo upload and thumbnail generation.',
+                ],
+                'category_id' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'category_id is the part category ID field, and a level 3 category is required.',
+                ],
+                'car_id' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'car_id is required and is the car ID assigned to the part. The OpenAPI does not document a Woo-only alternative; it must come from an existing/imported RRR car record or another documented car lookup/import workflow.',
+                ],
+                'quality' => [
+                    'status' => 'confirmed_by_documentation',
+                    'answer' => 'quality is required and is the quality ID assigned to the part. The OpenAPI documents /get/part_quality as the CRM Info endpoint for the part quality list, but importPart does not enumerate allowed quality IDs inline.',
+                ],
+                'shop_url_show_url' => [
+                    'status' => 'unknown',
+                    'answer' => 'The part response schema includes shop_url and show_url, but the OpenAPI does not define their semantics or say that missing shop_url means internal-only.',
+                ],
+            ],
+            'listing_visibility_audit' => [
+                'scope' => 'Documentation-backed audit of the official OpenAPI schema plus repository documentation references. No /crm/importPart or write endpoint call is made.',
+                'searched_terms' => ['importPart', '/crm/importPart', 'status', 'visible', 'visibility', 'active', 'enabled', 'publish', 'published', 'hidden', 'show', 'shop', 'marketplace', 'on_sale', 'display', 'listing', 'public', 'private', 'draft', 'disabled', 'external_id', 'shop_url', 'show_url', 'category_id', 'car_id', 'quality', 'photo', 'photos'],
+                'import_part_visibility_field_separate_from_status' => [
+                    'status' => 'not_found_in_documentation',
+                    'answer' => 'No documented importPart publication visibility field separate from operational status was found.',
+                ],
+                'imported_parts_not_visible_by_default_setting' => [
+                    'status' => 'not_found_in_documentation',
+                    'answer' => 'No documented per-request field or API setting was found that creates imported parts hidden/unpublished by default.',
+                ],
+                'status_0_public_effect' => [
+                    'status' => 'unknown',
+                    'answer' => 'Documentation/observed status catalog identifies status 0 as In stock / Na stanie, but docs do not state whether importPart with status=0 is public immediately.',
+                ],
+                'draft_import_queue_mode' => [
+                    'status' => 'not_found_in_documentation',
+                    'answer' => 'No documented draft/import queue mode for /crm/importPart was found.',
+                ],
+                'remaining_unknowns' => [
+                    'Whether /crm/importPart creates a public shop/marketplace listing immediately when required fields and price are present.',
+                    'Whether business settings outside the API schema affect default imported-part visibility.',
+                    'Exact semantics of shop_url versus show_url and whether missing shop_url proves internal-only state.',
+                    'Whether external_id can safely enforce idempotency for part import without a public listing side effect.',
+                ],
+            ],
             'write_safety' => [
                 'live_create_implemented' => false,
                 'no_ovoko_write' => true,
@@ -317,6 +408,8 @@ class WooToOvokoCreatePartPreviewService
             'candidate_inactive_statuses' => array_values((array) ($result['candidate_inactive_statuses'] ?? [])),
             'candidate_public_statuses' => array_values((array) ($result['candidate_public_statuses'] ?? [])),
             'candidate_sold_statuses' => array_values((array) ($result['candidate_sold_statuses'] ?? [])),
+            'operational_stock_sales_statuses' => array_values((array) ($result['operational_stock_sales_statuses'] ?? [])),
+            'status_catalog_scope' => (string) (($result['interpretation_summary']['status_catalog_scope'] ?? '') ?: ($result['status_catalog_scope'] ?? '')),
             'unknown_statuses' => array_values((array) ($result['unknown_statuses'] ?? [])),
             'interpretation_summary' => (array) ($result['interpretation_summary'] ?? []),
         ];
@@ -354,8 +447,9 @@ class WooToOvokoCreatePartPreviewService
                 'sale_price' => is_numeric($salePrice) ? (float) $salePrice : $salePrice,
             ],
             '_confirmation_required' => [
-                'endpoint' => true,
-                'payload_format' => true,
+                'endpoint' => false,
+                'payload_format' => false,
+                'publication_visibility_behavior' => true,
                 'status_draft_unpublished_value' => true,
                 'car_id_source' => $carId['value'] === '',
                 'quality_value' => $qualityId['value'] === '',
@@ -392,8 +486,8 @@ class WooToOvokoCreatePartPreviewService
         $blockers[] = 'explicit_admin_confirmation_required';
         $blockers[] = 'single_product_only_required';
         $blockers[] = 'recent_dry_run_preview_required';
-        $blockers[] = 'endpoint_contract_not_confirmed';
-        $blockers[] = 'payload_contract_not_confirmed';
+        $blockers[] = 'publication_visibility_behavior_not_confirmed';
+        $blockers[] = 'business_approval_for_public_import_required';
         $blockers[] = 'draft_unpublished_behavior_not_confirmed';
         return [
             'ready' => false,

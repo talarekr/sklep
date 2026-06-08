@@ -108,6 +108,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                             <li><strong>Status count:</strong> <code><?php echo esc_html((string) ($noticePayload['status_count'] ?? 0)); ?></code></li>
                             <li><strong>Checked at:</strong> <code><?php echo esc_html((string) ($noticePayload['checked_at'] ?? '')); ?></code></li>
                             <li><strong>No writes:</strong> <code><?php echo !empty($noticePayload['no_ovoko_write']) && !empty($noticePayload['no_woo_write']) ? 'yes' : 'unknown'; ?></code></li>
+                            <li><strong>Status catalog scope:</strong> <code><?php echo esc_html((string) ($noticePayload['interpretation_summary']['status_catalog_scope'] ?? 'unknown')); ?></code></li>
                         </ul>
                         <?php $statusRows = array_values(array_filter((array) ($noticePayload['statuses'] ?? []), 'is_array')); ?>
                         <?php if ($statusRows !== []): ?>
@@ -122,7 +123,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                                 <?php endforeach; ?>
                             </tbody></table>
                         <?php endif; ?>
-                        <p><strong>Interpretation:</strong> candidates are diagnostic only and do not confirm safe create behavior for <code>/crm/importPart</code>.</p>
+                        <p><strong>Interpretation:</strong> <code>/get/part_status</code> is diagnostic only. The latest probe showed operational stock/sales lifecycle states, not confirmed listing publication or draft visibility controls for <code>/crm/importPart</code>.</p>
                     </div>
                 <?php elseif ($showProductSummary): ?>
                     <ul style="margin-left:18px;">
@@ -170,12 +171,12 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>product_id: <input type="number" min="1" step="1" name="product_id" value="" style="width:140px;" required /></label>
             <?php submit_button('Preview Woo → Ovoko create-part payload', 'secondary', 'submit', false); ?>
         </form>
-        <p><strong>Endpoint safety:</strong> create endpoint remains <code>LIKELY_UNVERIFIED_ENDPOINT</code> (<code>/crm/importPart</code>) and is not called here. This tool intentionally does not use <code>/crm/changePartStatus</code> or <code>/crm/updatePart</code>.</p>
+        <p><strong>Endpoint safety:</strong> create endpoint is documented as <code>/crm/importPart</code>, but remains write-blocked here because publication visibility behavior is not confirmed. This tool intentionally does not call <code>/crm/importPart</code>, <code>/crm/changePartStatus</code>, or <code>/crm/updatePart</code>.</p>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">
         <h3>Read Ovoko/RRR part statuses</h3>
-        <p><strong>Read-only diagnostic.</strong> Calls only the read endpoint <code>/get/part_status</code> using standard RRR auth form fields. It does not call <code>/crm/importPart</code>, does not call any write endpoint, does not require a product ID, does not write WooCommerce data, and does not touch cron.</p>
+        <p><strong>Read-only diagnostic.</strong> Calls only the read endpoint <code>/get/part_status</code> using standard RRR auth form fields. It does not call <code>/crm/importPart</code>, does not call any write endpoint, does not require a product ID, does not write WooCommerce data, and does not touch cron. Current findings treat this endpoint as operational stock/sales status, not publication visibility.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('gpswiss_ovoko_read_part_statuses'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_read_part_statuses" />

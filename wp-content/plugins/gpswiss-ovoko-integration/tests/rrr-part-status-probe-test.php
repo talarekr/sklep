@@ -44,10 +44,11 @@ function gpswiss_status_run(string $name, callable $test): void
     $GLOBALS['gpswiss_rrr_status_test_response_body'] = wp_json_encode([
         'status_code' => 'R200',
         'data' => [
-            ['id' => 1, 'name' => 'Available', 'visible' => true, 'active' => true],
-            ['id' => 2, 'name' => 'Sold', 'sold' => true],
-            ['id' => 3, 'name' => 'Draft review'],
-            ['id' => 4, 'name' => 'Warehouse hidden', 'visible' => false],
+            ['id' => 0, 'name' => 'In stock / Na stanie'],
+            ['id' => 1, 'name' => 'Reserved / Zarezerwowano'],
+            ['id' => 2, 'name' => 'Sold out / Sprzedano'],
+            ['id' => 3, 'name' => 'Returned / Zwrot'],
+            ['id' => 4, 'name' => 'Written off / Wycofany'],
         ],
     ]);
     $test(new RrrApiClient([
@@ -77,26 +78,22 @@ gpswiss_status_run('parsed status list is displayed in result shape', function (
     $result = $client->read_part_statuses();
     gpswiss_status_assert($result['ok'] === true, 'Probe should be ok for valid fixture.');
     gpswiss_status_assert($result['http_status'] === 200, 'HTTP status missing.');
-    gpswiss_status_assert($result['status_count'] === 4, 'Status count mismatch.');
-    gpswiss_status_assert($result['statuses'][0]['id'] === '1', 'Status ID missing.');
-    gpswiss_status_assert($result['statuses'][0]['name'] === 'Available', 'Status name missing.');
+    gpswiss_status_assert($result['status_count'] === 5, 'Status count mismatch.');
+    gpswiss_status_assert($result['statuses'][0]['id'] === '0', 'Status ID missing.');
+    gpswiss_status_assert($result['statuses'][0]['name'] === 'In stock / Na stanie', 'Status name missing.');
     gpswiss_status_assert(isset($result['parsed_response']['data']), 'Parsed response missing.');
     gpswiss_status_assert($result['raw_response'] !== '', 'Raw response missing.');
     gpswiss_status_assert($result['checked_at'] !== '', 'checked_at missing.');
 });
 
-gpswiss_status_run('label-only draft candidate is not confirmed', function (RrrApiClient $client): void {
+gpswiss_status_run('operational stock and sales statuses do not confirm publication visibility', function (RrrApiClient $client): void {
     $result = $client->read_part_statuses();
-    gpswiss_status_assert($result['candidate_draft_statuses'][0]['id'] === '3', 'Draft candidate missing.');
-    gpswiss_status_assert($result['candidate_draft_statuses'][0]['interpretation'] === 'inferred_from_label', 'Label-only draft must be inferred only.');
-    gpswiss_status_assert($result['candidate_draft_statuses'][0]['confidence'] !== 'high', 'Label-only draft must not be high-confidence confirmed.');
-});
-
-gpswiss_status_run('explicit hidden flag is confirmed but live readiness still requires confirmation', function (RrrApiClient $client): void {
-    $result = $client->read_part_statuses();
-    gpswiss_status_assert($result['candidate_hidden_statuses'][0]['id'] === '4', 'Hidden candidate missing.');
-    gpswiss_status_assert($result['candidate_hidden_statuses'][0]['interpretation'] === 'confirmed_by_response', 'Explicit hidden/visible=false flag should be response-confirmed.');
-    gpswiss_status_assert($result['interpretation_summary']['draft_unpublished_behavior_confirmed'] === true, 'Explicit non-public response signal should be noted.');
+    gpswiss_status_assert($result['candidate_draft_statuses'] === [], 'Operational statuses must not become draft candidates.');
+    gpswiss_status_assert($result['candidate_hidden_statuses'] === [], 'Operational statuses must not become hidden candidates.');
+    gpswiss_status_assert(count($result['operational_stock_sales_statuses']) === 5, 'Operational status classification missing.');
+    gpswiss_status_assert($result['interpretation_summary']['status_catalog_scope'] === 'operational_stock_sales_lifecycle', 'Status catalog should be marked operational.');
+    gpswiss_status_assert($result['interpretation_summary']['part_status_is_publication_visibility_catalog'] === false, 'Part status catalog must not be treated as publication visibility.');
+    gpswiss_status_assert($result['interpretation_summary']['draft_unpublished_behavior_confirmed'] === false, 'Draft/unpublished behavior must remain unconfirmed.');
 });
 
 gpswiss_status_run('unknown status behavior blocks future live readiness', function (RrrApiClient $client): void {
