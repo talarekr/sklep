@@ -540,3 +540,19 @@ gpswiss_run_preview_test('CRM-only preview omits notes/listing text when storage
     gpswiss_assert($result['listing_text_preview'] === '', 'Empty storage location must produce empty listing_text_preview.');
     gpswiss_assert($result['listing_text_source'] === '', 'Empty storage location must produce empty listing_text_source.');
 });
+
+gpswiss_run_preview_test('trusted panel marketplace category suggestion supplies Ovoko category and reports missing Woo mapping', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product(60908);
+    $GLOBALS['gpswiss_test_terms'][60908] = [];
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_status', 'completed');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_code', '06K145654L');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_category_id', '278');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_category_name', 'Turbina');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_category_path', 'Silnik i osprzęt > Turbosprężarki i inne części > Turbina');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_confidence', 'high');
+    gpswiss_set_meta(60908, '_gps_ovoko_category_suggestion_source_type', 'panel_marketplace_category_suggestions');
+    $result = $service->preview(60908);
+    gpswiss_assert((int) ($result['proposed_payload']['category_id'] ?? 0) === 278, 'Trusted panel category suggestion should supply category_id 278.');
+    gpswiss_assert(in_array('missing_woo_category_mapping_for_ovoko_category_278', gpswiss_codes($result), true), 'Missing Woo mapping should be reported for detected Ovoko category 278.');
+    gpswiss_assert(!in_array('missing_ovoko_category_id', gpswiss_codes($result), true), 'Trusted panel suggestion should avoid missing Ovoko category resolution fallback.');
+});

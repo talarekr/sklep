@@ -161,6 +161,36 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
     <h2>Ovoko ↔ Woo Automatic Sync</h2>
 
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Ovoko marketplace category suggestions diagnostic source</h3>
+        <p>Configures the panel endpoint <code>/api/v1/ovoko-marketplace-category-suggestions?partCode={code}</code>. Browser bearer/session auth is diagnostic-only and not production-safe unless Ovoko confirms API access.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:grid;gap:10px;max-width:860px;margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_save_marketplace_category_suggestions_settings'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_save_marketplace_category_suggestions_settings" />
+            <label><strong>Marketplace category suggestion base URL</strong>
+                <input type="url" name="ovoko_marketplace_category_suggestions_base_url" value="<?php echo esc_attr((string) ($data['settings']['ovoko_marketplace_category_suggestions_base_url'] ?? '')); ?>" placeholder="https://gregorswiss.rrr.lt" class="regular-text" />
+            </label>
+            <label><strong>Auth mode</strong>
+                <select name="ovoko_marketplace_category_suggestions_auth_mode">
+                    <?php $marketplaceAuthMode = (string) ($data['settings']['ovoko_marketplace_category_suggestions_auth_mode'] ?? 'none'); ?>
+                    <option value="none" <?php selected($marketplaceAuthMode, 'none'); ?>>none</option>
+                    <option value="crm_credentials" <?php selected($marketplaceAuthMode, 'crm_credentials'); ?>>crm_credentials</option>
+                    <option value="bearer_token_manual_diagnostic_only" <?php selected($marketplaceAuthMode, 'bearer_token_manual_diagnostic_only'); ?>>bearer_token_manual_diagnostic_only</option>
+                </select>
+            </label>
+            <label><strong>Bearer token (manual diagnostic only; leave blank to keep existing)</strong>
+                <input type="password" name="ovoko_marketplace_category_suggestions_bearer_token" value="" autocomplete="off" class="regular-text" />
+            </label>
+            <?php submit_button('Save category suggestion diagnostic config', 'secondary', 'submit', false); ?>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_test_category_prediction_by_code'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_test_category_prediction_by_code" />
+            <label>Test Ovoko category prediction by code: <input type="text" name="part_code" value="06K145654L" /></label>
+            <?php submit_button('Test Ovoko category prediction by code', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
         <h3>Woo → Ovoko CRM-only import settings</h3>
