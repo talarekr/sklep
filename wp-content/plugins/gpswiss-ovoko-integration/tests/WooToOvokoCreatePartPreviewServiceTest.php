@@ -216,6 +216,41 @@ gpswiss_run_preview_test('valid draft product preview', function (WooToOvokoCrea
     gpswiss_assert($result['live_create_still_requires_manual_confirmation'] === true, 'Live create must still require manual confirmation.');
 });
 
+gpswiss_run_preview_test('CRM-only preview omits price fields and includes Allegro internal note guidance', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_gps_selected_price_source', 'allegro_api');
+    gpswiss_set_meta(123, '_gps_selected_price_pln', '1800.00');
+    gpswiss_set_meta(123, '_gps_allegro_price_suggestion', '1800.00');
+    gpswiss_set_meta(123, '_gps_allegro_price_filtered_offer_count', '7');
+    gpswiss_set_meta(123, '_gps_allegro_price_confidence', 'high');
+    gpswiss_set_meta(123, '_gps_allegro_price_query', '5Q0131701AN');
+    $result = $service->preview(123);
+    gpswiss_assert($result['selected_price_source'] === 'allegro_api', 'Selected price source should be shown in preview.');
+    gpswiss_assert($result['selected_price_pln'] === '1800', 'Selected price PLN should be shown in preview.');
+    gpswiss_assert($result['price_fields_omitted_from_ovoko_payload'] === true, 'Preview should confirm price fields are omitted.');
+    foreach (['price', 'original_price', 'currency'] as $forbidden) {
+        gpswiss_assert(!array_key_exists($forbidden, $result['proposed_payload']), $forbidden . ' must not be present in CRM-only payload.');
+    }
+    gpswiss_assert($result['e_shop_available_after_import'] === false, 'CRM-only import should remain non-public after import.');
+    $notes = (string) ($result['proposed_payload']['internal_notes'] ?? '');
+    gpswiss_assert(str_contains($notes, 'Sugerowana cena Allegro: 1800 PLN'), 'Allegro suggested price note missing.');
+    gpswiss_assert(str_contains($notes, 'Źródło: Allegro API'), 'Allegro source note missing.');
+    gpswiss_assert(str_contains($notes, 'Liczba ofert filtrowanych: 7'), 'Filtered offer count missing from internal notes.');
+    gpswiss_assert(str_contains($notes, 'Confidence: high'), 'Confidence missing from internal notes.');
+    gpswiss_assert(str_contains($notes, 'Query: 5Q0131701AN'), 'Query missing from internal notes.');
+    gpswiss_assert($result['internal_notes_preview'] === $notes, 'Internal notes preview should match payload internal_notes.');
+});
+
+gpswiss_run_preview_test('CRM-only preview keeps manual override internal note behavior', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_gps_selected_price_source', 'manual_override');
+    gpswiss_set_meta(123, '_gps_selected_price_pln', '1000.00');
+    $result = $service->preview(123);
+    gpswiss_assert($result['selected_price_source'] === 'manual_override', 'Manual override source should be shown in preview.');
+    gpswiss_assert(($result['proposed_payload']['internal_notes'] ?? '') === "Cena testowa/ręczna: 1000 PLN\nŹródło: manual_override", 'Manual override internal_notes should stay unchanged.');
+    gpswiss_assert(!array_key_exists('price', $result['proposed_payload']) && !array_key_exists('original_price', $result['proposed_payload']) && !array_key_exists('currency', $result['proposed_payload']), 'Manual override CRM-only payload must omit price fields.');
+});
+
 gpswiss_run_preview_test('image preview extraction', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     gpswiss_set_meta(123, '_thumbnail_id', '501');

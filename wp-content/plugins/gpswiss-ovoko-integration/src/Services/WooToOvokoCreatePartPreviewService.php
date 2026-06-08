@@ -93,7 +93,7 @@ class WooToOvokoCreatePartPreviewService
         $result['source_woo_fields_meta_used'] = [
             'post' => ['ID' => $productId, 'post_type' => $postType, 'post_status' => $status, 'post_title' => $title],
             'product_methods' => ['get_sku', 'get_price', 'get_regular_price', 'get_sale_price', 'get_stock_status', 'get_stock_quantity', 'get_image_id', 'get_gallery_image_ids'],
-            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place']))),
+            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place', '_gps_selected_price_pln', '_gps_selected_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_confidence', '_gps_allegro_price_query', '_gps_manual_price_pln']))),
             'taxonomy' => ['product_cat'],
         ];
 
@@ -163,6 +163,11 @@ class WooToOvokoCreatePartPreviewService
         $result['photos_included'] = !empty($images['image_urls']);
         $result['photo_payload_mode'] = (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields');
         $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency'];
+        $priceSuggestionData = $this->crm_only_price_suggestion_data($productId);
+        $result['selected_price_source'] = (string) ($priceSuggestionData['source'] ?? '');
+        $result['selected_price_pln'] = (string) ($priceSuggestionData['price'] ?? '');
+        $result['internal_notes_preview'] = $this->crm_only_internal_notes_from_price_data($priceSuggestionData);
+        $result['price_fields_omitted_from_ovoko_payload'] = true;
         $result['live_create_still_requires_manual_confirmation'] = true;
         $result['car_id'] = $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null;
         $result['car_id_source'] = (string) $carId['key'];
@@ -232,6 +237,10 @@ class WooToOvokoCreatePartPreviewService
             'car_id_is_placeholder' => false,
             'car_id_review_required' => false,
             'omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
+            'selected_price_source' => '',
+            'selected_price_pln' => '',
+            'internal_notes_preview' => '',
+            'price_fields_omitted_from_ovoko_payload' => true,
             'live_create_still_requires_manual_confirmation' => true,
             'create_part_contract_report' => [],
             'future_live_readiness' => [],
@@ -522,7 +531,11 @@ class WooToOvokoCreatePartPreviewService
 
     private function crm_only_internal_notes(int $productId): string
     {
-        $priceData = $this->crm_only_price_suggestion_data($productId);
+        return $this->crm_only_internal_notes_from_price_data($this->crm_only_price_suggestion_data($productId));
+    }
+
+    private function crm_only_internal_notes_from_price_data(array $priceData): string
+    {
         $price = (string) ($priceData['price'] ?? '');
         $source = (string) ($priceData['source'] ?? '');
         if ($price === '' || $source === '') {
@@ -535,9 +548,17 @@ class WooToOvokoCreatePartPreviewService
 
         if (in_array($source, ['allegro_api', 'allegro_suggestion'], true)) {
             $lines = ['Sugerowana cena Allegro: ' . $price . ' PLN', 'Źródło: Allegro API'];
+            $filteredOfferCount = (string) ($priceData['filtered_offer_count'] ?? '');
+            if ($filteredOfferCount !== '') {
+                $lines[] = 'Liczba ofert filtrowanych: ' . $filteredOfferCount;
+            }
             $confidence = (string) ($priceData['confidence'] ?? '');
             if ($confidence !== '') {
                 $lines[] = 'Confidence: ' . $confidence;
+            }
+            $query = (string) ($priceData['query'] ?? '');
+            if ($query !== '') {
+                $lines[] = 'Query: ' . $query;
             }
             return implode("\n", $lines);
         }
@@ -563,6 +584,8 @@ class WooToOvokoCreatePartPreviewService
                 'source' => $source,
                 'price' => $this->format_crm_only_price($price !== '' ? $price : $allegroPrice),
                 'confidence' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_confidence']),
+                'filtered_offer_count' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_filtered_offer_count']),
+                'query' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_query']),
             ];
         }
 

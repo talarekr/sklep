@@ -113,6 +113,38 @@ $invalidManual = $base + array('manual_price_override_enabled' => true, 'manual_
 $invalidReady = $readiness->invoke($plugin, $invalidManual, 'imported_from_gmail', 0);
 assert_true($invalidReady['status'] === 'needs_review', 'Invalid manual price should block readiness when Allegro is absent.', $invalidReady);
 
+$allegro = $base + array(
+    'allegro_price_research_status' => 'completed',
+    'allegro_price_suggestion' => '1100.00',
+    'allegro_price_currency' => 'PLN',
+    'allegro_price_filtered_offer_count' => 5,
+    'allegro_price_confidence' => 'high',
+);
+$selectedAllegro = $selectPrice->invoke($plugin, $allegro);
+assert_true($selectedAllegro['source'] === 'allegro_api' && $selectedAllegro['price'] === '1100.00', 'Completed Allegro result should set selected Allegro API price when no manual override is enabled.', $selectedAllegro);
+$allegroReady = $readiness->invoke($plugin, $allegro, 'imported_from_gmail', 0);
+assert_true($allegroReady['status'] === 'ready_to_create_product', 'Completed valid Allegro research should allow Woo draft readiness.', $allegroReady);
+
+$noMatch = $base + array(
+    'allegro_price_research_status' => 'no_match',
+    'allegro_price_suggestion' => '',
+    'allegro_price_currency' => '',
+    'allegro_price_filtered_offer_count' => 0,
+    'allegro_price_confidence' => 'no_match',
+);
+assert_true($selectPrice->invoke($plugin, $noMatch) === null, 'Allegro no_match must not create a selected price.');
+
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['allegro_readiness_min_confidence'] = 'medium';
+$lowConfidence = $base + array(
+    'allegro_price_research_status' => 'completed',
+    'allegro_price_suggestion' => '1000.00',
+    'allegro_price_currency' => 'PLN',
+    'allegro_price_filtered_offer_count' => 1,
+    'allegro_price_confidence' => 'low',
+);
+assert_true($selectPrice->invoke($plugin, $lowConfidence) === null, 'Allegro low confidence below configured threshold must block selected price.');
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['allegro_readiness_min_confidence'] = 'medium';
+
 $GLOBALS['gps_test_posts'][60849] = (object) array('ID' => 60849, 'post_type' => GPS_Gmail_Product_Importer::STAGING_POST_TYPE, 'post_content' => 'Body');
 foreach ($base as $key => $value) {
     if (is_array($value)) { continue; }
@@ -173,5 +205,37 @@ $GLOBALS['gps_test_meta'][$invalidItemId]['_gps_manual_price_pln'] = '1800';
 $invalidCreated = $createDraft->invoke($plugin, $invalidItemId);
 assert_true($invalidCreated['result'] === 'blocked' && in_array('invalid_category_term', $invalidCreated['readiness']['blocking_reasons'] ?? array(), true), 'Invalid mapped category term should block Woo draft creation.', $invalidCreated);
 assert_true(absint($GLOBALS['gps_test_meta'][$invalidItemId]['_gps_gmail_created_product_id'] ?? 0) === 0, 'Invalid mapped category term must not create or link a product.', $GLOBALS['gps_test_meta'][$invalidItemId] ?? array());
+
+$allegroItemId = 60852;
+$GLOBALS['gps_test_posts'][$allegroItemId] = (object) array('ID' => $allegroItemId, 'post_type' => GPS_Gmail_Product_Importer::STAGING_POST_TYPE, 'post_content' => 'Body');
+foreach ($base as $key => $value) {
+    if (is_array($value)) { continue; }
+    $GLOBALS['gps_test_meta'][$allegroItemId]['_gps_' . $key] = $value;
+}
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_message_id'] = 'gmail-60852';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_thread_id'] = $base['thread_id'];
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_date'] = $base['date'];
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_from'] = $base['from'];
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_subject'] = $base['subject'];
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_label'] = $base['label'];
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_import_image_count'] = 2;
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_images_metadata'] = json_encode($base['images']);
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_warnings'] = '[]';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_ovoko_enrichment_status'] = 'suggested';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_staging_status'] = 'imported_from_gmail';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_gmail_created_product_id'] = 0;
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_research_status'] = 'completed';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_query'] = '5Q0131701AN';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_filtered_offer_count'] = 7;
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_confidence'] = 'high';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_suggestion'] = '1800.00';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_currency'] = 'PLN';
+$GLOBALS['gps_test_meta'][$allegroItemId]['_gps_allegro_price_source'] = 'allegro_api';
+$createdAllegro = $createDraft->invoke($plugin, $allegroItemId);
+$allegroProductId = (int) ($createdAllegro['created_product_id'] ?? 0);
+assert_true($createdAllegro['result'] === 'created_product' && $allegroProductId > 0, 'Woo draft should be created from Allegro-price-ready item.', $createdAllegro);
+assert_true(($GLOBALS['gps_test_meta'][$allegroProductId]['_regular_price'] ?? '') === '1800.00' && ($GLOBALS['gps_test_meta'][$allegroProductId]['_price'] ?? '') === '1800.00', 'Woo draft should use Allegro selected price.', $GLOBALS['gps_test_meta'][$allegroProductId] ?? array());
+assert_true(($GLOBALS['gps_test_meta'][$allegroProductId]['_gps_selected_price_source'] ?? '') === 'allegro_api', 'Woo draft should store Allegro API selected price source.', $GLOBALS['gps_test_meta'][$allegroProductId] ?? array());
+assert_true(($GLOBALS['gps_test_meta'][$allegroProductId]['_gps_allegro_price_query'] ?? '') === '5Q0131701AN' && ($GLOBALS['gps_test_meta'][$allegroProductId]['_gps_allegro_price_filtered_offer_count'] ?? 0) == 7, 'Woo draft should copy Allegro research meta for Ovoko internal_notes.', $GLOBALS['gps_test_meta'][$allegroProductId] ?? array());
 
 echo "Manual price override and category assignment tests passed\n";
