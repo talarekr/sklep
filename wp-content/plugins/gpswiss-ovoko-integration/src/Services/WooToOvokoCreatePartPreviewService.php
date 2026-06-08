@@ -83,7 +83,7 @@ class WooToOvokoCreatePartPreviewService
         $storageLocation = $this->storage_location($productId);
         $qualityId = $this->resolved_quality_id($productId);
         $importStatus = $this->resolved_import_status();
-        $carId = $this->first_meta_value($productId, ['_ovoko_car_id', 'ovoko_car_id', '_rrr_car_id', 'rrr_car_id', '_gps_source_car_id']);
+        $carId = $this->resolved_car_id($productId);
 
         $result['product_status'] = $status;
         $result['post_type'] = $postType;
@@ -92,7 +92,7 @@ class WooToOvokoCreatePartPreviewService
         $result['source_woo_fields_meta_used'] = [
             'post' => ['ID' => $productId, 'post_type' => $postType, 'post_status' => $status, 'post_title' => $title],
             'product_methods' => ['get_sku', 'get_price', 'get_regular_price', 'get_sale_price', 'get_stock_status', 'get_stock_quantity', 'get_image_id', 'get_gallery_image_ids'],
-            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place']))),
+            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place']))),
             'taxonomy' => ['product_cat'],
         ];
 
@@ -121,7 +121,9 @@ class WooToOvokoCreatePartPreviewService
             $this->add_validation($result, 'error', 'missing_ovoko_category_id', 'Ovoko/RRR importPart requires category_id; no mapped Ovoko category ID was found.');
         }
         if ($carId['value'] === '') {
-            $this->add_validation($result, 'error', 'missing_required_car_id', 'CRM-only importPart preview requires a mapped Ovoko/RRR car_id before any future live import.');
+            $this->add_validation($result, 'error', 'missing_required_car_id', 'CRM-only importPart preview requires either a product Ovoko/RRR car_id or a configured CRM-only placeholder car_id before any future live import.');
+        } elseif (!empty($carId['is_placeholder'])) {
+            $this->add_validation($result, 'warning', 'using_placeholder_car_id', 'Using configured placeholder car_id only to satisfy /crm/importPart. Staff must correct vehicle mapping in Ovoko before publishing.');
         }
         if ($qualityId['value'] === '') {
             $this->add_validation($result, 'error', 'missing_required_quality', 'CRM-only importPart preview requires a configured/default quality value before any future live import.');
@@ -157,6 +159,10 @@ class WooToOvokoCreatePartPreviewService
         $result['photos_included'] = !empty($images['image_urls']);
         $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency'];
         $result['live_create_still_requires_manual_confirmation'] = true;
+        $result['car_id'] = $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null;
+        $result['car_id_source'] = (string) $carId['key'];
+        $result['car_id_is_placeholder'] = !empty($carId['is_placeholder']);
+        $result['car_id_review_required'] = !empty($carId['review_required']);
 
         $result['proposed_payload'] = $this->build_crm_only_payload($title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
         $result['full_payload_preview'] = $this->build_full_payload_preview($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId, $importStatus);
@@ -179,6 +185,10 @@ class WooToOvokoCreatePartPreviewService
             'description' => $description,
             'regular_price' => is_numeric($regularPrice) ? (float) $regularPrice : $regularPrice,
             'sale_price' => is_numeric($salePrice) ? (float) $salePrice : $salePrice,
+            'car_id' => $result['car_id'],
+            'car_id_source' => $result['car_id_source'],
+            'car_id_is_placeholder' => $result['car_id_is_placeholder'],
+            'car_id_review_required' => $result['car_id_review_required'],
         ];
 
         $this->finalize($result);
@@ -210,6 +220,10 @@ class WooToOvokoCreatePartPreviewService
             'e_shop_available_after_import' => false,
             'non_public_reason' => 'missing_price',
             'photos_included' => false,
+            'car_id' => null,
+            'car_id_source' => '',
+            'car_id_is_placeholder' => false,
+            'car_id_review_required' => false,
             'omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
             'live_create_still_requires_manual_confirmation' => true,
             'create_part_contract_report' => [],
@@ -293,7 +307,7 @@ class WooToOvokoCreatePartPreviewService
                 'category' => ['field' => 'category_id', 'notes' => 'Level 3 category required by OpenAPI.'],
                 'price' => ['field' => 'price', 'currency_field' => 'original_currency', 'currency_allowed_values' => ['EUR', 'PLN'], 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'OpenAPI says price > 0.00 plus a photo URL are required for the part to be available in e-shop; CRM-only initial import intentionally omits price while keeping photos.'],
                 'part_code_oem' => ['primary_field' => 'manufacturer_code', 'visible_field' => 'visible_code', 'additional_fields' => ['other_code', 'optional_codes[]']],
-                'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'Woo-only products need a confirmed RRR car_id or confirmed alternative before live import.'],
+                'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'For CRM-only no-price imports, a configured placeholder car_id may satisfy the required technical field, but staff must correct vehicle mapping in Ovoko before publishing. Placeholder car_id is never allowed for full/public imports with price.'],
                 'warehouse_location' => ['field' => 'place', 'required' => false],
                 'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned stock/sales states, not publication visibility states.'],
             ],
@@ -361,7 +375,7 @@ class WooToOvokoCreatePartPreviewService
                 ],
                 'car_id' => [
                     'status' => 'confirmed_by_documentation',
-                    'answer' => 'car_id is required and is the car ID assigned to the part. The OpenAPI does not document a Woo-only alternative; it must come from an existing/imported RRR car record or another documented car lookup/import workflow.',
+                    'answer' => 'car_id is required by importPart. For Woo/Gmail CRM-only no-price imports, preview may use a configured placeholder car_id as a technical field only; it is not authoritative vehicle compatibility and must be manually corrected in Ovoko before publishing.',
                 ],
                 'quality' => [
                     'status' => 'confirmed_by_documentation',
@@ -439,7 +453,8 @@ class WooToOvokoCreatePartPreviewService
     private function build_crm_only_payload(string $title, string $sku, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
     {
         $imageUrls = (array) ($images['image_urls'] ?? []);
-        return [
+        $placeholderNote = !empty($carId['is_placeholder']) ? $this->default_placeholder_car_note() : '';
+        $payload = [
             'category_id' => $categoryPayload['category_id'],
             'car_id' => $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null,
             'quality' => $qualityId['value'] !== '' && ctype_digit((string) $qualityId['value']) ? (int) $qualityId['value'] : null,
@@ -466,15 +481,26 @@ class WooToOvokoCreatePartPreviewService
                 'woo_category' => $categoryPayload['woo_category'],
                 'quality_source' => $qualityId['key'],
                 'car_id_source' => $carId['key'],
+                'car_id_is_placeholder' => !empty($carId['is_placeholder']),
+                'car_id_review_required' => !empty($carId['review_required']),
             ],
             '_confirmation_required' => [
                 'endpoint' => false,
                 'payload_format' => false,
                 'live_create_manual_confirmation' => true,
                 'car_id_source' => $carId['value'] === '',
+                'car_id_placeholder_review' => !empty($carId['is_placeholder']),
                 'quality_value' => $qualityId['value'] === '',
             ],
         ];
+
+        if ($placeholderNote !== '') {
+            $payload['internal_notes'] = $placeholderNote;
+            $payload['sticker_note'] = $placeholderNote;
+            $payload['_placeholder_car_note'] = $placeholderNote;
+        }
+
+        return $payload;
     }
 
     private function build_full_payload_preview(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
@@ -485,14 +511,25 @@ class WooToOvokoCreatePartPreviewService
         $payload['_source_summary']['regular_price'] = is_numeric($regularPrice) ? (float) $regularPrice : $regularPrice;
         $payload['_source_summary']['sale_price'] = is_numeric($salePrice) ? (float) $salePrice : $salePrice;
 
+        $warnings = [];
+        if (is_numeric($price) && (float) $price > 0 && !empty($payload['photo'])) {
+            $warnings[] = [
+                'code' => 'price_and_photos_may_enable_e_shop_availability',
+                'message' => 'Including price > 0 and a photo URL may make the part available in e-shop.',
+            ];
+        }
+        if (!empty($carId['is_placeholder'])) {
+            $warnings[] = [
+                'code' => 'placeholder_car_id_not_allowed_for_public_import',
+                'message' => 'Configured placeholder car_id is allowed only for CRM-only imports without price and must not be used for any full/public import payload.',
+            ];
+            $payload['car_id'] = null;
+            $payload['_placeholder_car_id_not_allowed_for_public_import'] = true;
+        }
+
         return [
             'payload' => $payload,
-            'warnings' => is_numeric($price) && (float) $price > 0 && !empty($payload['photo'])
-                ? [[
-                    'code' => 'price_and_photos_may_enable_e_shop_availability',
-                    'message' => 'Including price > 0 and a photo URL may make the part available in e-shop.',
-                ]]
-                : [],
+            'warnings' => $warnings,
         ];
     }
 
@@ -513,12 +550,19 @@ class WooToOvokoCreatePartPreviewService
     private function future_live_readiness(array $result, array $categoryPayload, array $images, string $price, string $sku, array $carId, array $qualityId): array
     {
         $blockers = [];
+        $usesPlaceholderCarId = !empty($carId['is_placeholder']);
+        $crmOnlyNoPricePolicyAllowsPlaceholder = $usesPlaceholderCarId
+            && (string) ($result['create_strategy'] ?? '') === 'crm_only_non_public_initial_import'
+            && !empty($result['e_shop_visibility_rule_confirmed_by_documentation'])
+            && empty($result['e_shop_available_after_import'])
+            && in_array('price', (array) ($result['omitted_for_non_public_import'] ?? []), true);
         if ($result['product_status'] !== 'draft') { $blockers[] = 'product_status_must_be_draft_or_approved'; }
         if (!empty($result['duplicate_checks']['has_existing_ovoko_part_id'])) { $blockers[] = 'existing_ovoko_part_id'; }
         if ($sku === '') { $blockers[] = 'missing_sku'; }
         if ($categoryPayload['category_id'] === null) { $blockers[] = 'missing_ovoko_category_id'; }
         if (empty($images['image_urls'])) { $blockers[] = 'missing_image'; }
         if ($carId['value'] === '') { $blockers[] = 'missing_required_car_id'; }
+        if ($usesPlaceholderCarId && !$crmOnlyNoPricePolicyAllowsPlaceholder) { $blockers[] = 'placeholder_car_id_not_allowed_for_selected_strategy'; }
         if ($qualityId['value'] === '') { $blockers[] = 'missing_required_quality'; }
         $blockers[] = 'explicit_admin_confirmation_required';
         $blockers[] = 'single_product_only_required';
@@ -531,6 +575,16 @@ class WooToOvokoCreatePartPreviewService
             'live_creation_enabled' => false,
             'crm_only_non_public_initial_import_omits_price' => true,
             'photos_included_for_internal_review' => !empty($images['image_urls']),
+            'placeholder_car_id_allowed_for_crm_only_no_price_import' => $crmOnlyNoPricePolicyAllowsPlaceholder,
+            'placeholder_car_id_requires_admin_confirmation' => $usesPlaceholderCarId,
+            'placeholder_car_id_live_import_constraints' => [
+                'strategy' => 'crm_only_non_public_initial_import',
+                'price_omitted' => true,
+                'e_shop_available_after_import' => false,
+                'admin_must_explicitly_confirm_placeholder_car_id_usage' => true,
+                'live_action_scope' => 'single_product_only',
+                'never_for_full_public_import_with_price' => true,
+            ],
         ];
     }
 
@@ -563,6 +617,60 @@ class WooToOvokoCreatePartPreviewService
         return $post ? (string) ($post->post_content ?? '') : '';
     }
 
+
+    private function resolved_car_id(int $productId): array
+    {
+        $carId = $this->first_meta_value($productId, ['_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id']);
+        if ($carId['value'] !== '') {
+            $carId['is_placeholder'] = false;
+            $carId['review_required'] = false;
+            return $carId;
+        }
+
+        $default = $this->option_value('gpswiss_ovoko_default_crm_import_car_id', '');
+        if ($default !== '' && ctype_digit($default)) {
+            return [
+                'key' => 'configured_placeholder_car_id',
+                'value' => $default,
+                'is_placeholder' => true,
+                'review_required' => true,
+            ];
+        }
+
+        return ['key' => '', 'value' => '', 'is_placeholder' => false, 'review_required' => false];
+    }
+
+    private function default_placeholder_car_note(): string
+    {
+        $note = $this->option_value('gpswiss_ovoko_default_crm_import_car_note', '');
+        if ($note !== '') {
+            return $note;
+        }
+
+        return 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.';
+    }
+
+    private function option_value(string $key, string $default): string
+    {
+        if (!function_exists('get_option')) {
+            return $default;
+        }
+
+        $value = trim((string) get_option($key, ''));
+        if ($value !== '') {
+            return $value;
+        }
+
+        $settings = get_option('gpswiss_ovoko_settings', []);
+        if (is_array($settings) && array_key_exists($key, $settings)) {
+            $value = trim((string) $settings[$key]);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return $default;
+    }
 
     private function resolved_quality_id(int $productId): array
     {

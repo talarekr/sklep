@@ -22,6 +22,7 @@ class AdminPage
     {
         add_action('admin_menu', [$this, 'register_admin_page']);
         add_action('admin_post_gpswiss_ovoko_save_settings', [$this, 'handle_save_settings']);
+        add_action('admin_post_gpswiss_ovoko_save_crm_import_settings', [$this, 'handle_save_crm_import_settings']);
         add_action('admin_post_gpswiss_ovoko_test_callback', [$this, 'handle_test_callback']);
         add_action('admin_post_gpswiss_ovoko_check_supply_connector', [$this, 'handle_check_supply_connector']);
         add_action('admin_post_gpswiss_ovoko_check_rrr_api', [$this, 'handle_check_rrr_api']);
@@ -187,6 +188,29 @@ class AdminPage
 
         $this->service->save_settings($_POST);
         set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'Settings updated.'], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_save_crm_import_settings(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_save_crm_import_settings');
+
+        $settings = $this->service->get_settings();
+        $defaultCrmCarId = preg_replace('/\D+/', '', (string) ($_POST['gpswiss_ovoko_default_crm_import_car_id'] ?? ''));
+        $defaultCrmCarNote = sanitize_text_field((string) ($_POST['gpswiss_ovoko_default_crm_import_car_note'] ?? 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.'));
+        $settings['gpswiss_ovoko_default_crm_import_car_id'] = (string) $defaultCrmCarId;
+        $settings['gpswiss_ovoko_default_crm_import_car_note'] = $defaultCrmCarNote;
+
+        update_option(OvokoIntegrationService::OPTION_KEY, $settings, false);
+        update_option('gpswiss_ovoko_default_crm_import_car_id', $settings['gpswiss_ovoko_default_crm_import_car_id'], false);
+        update_option('gpswiss_ovoko_default_crm_import_car_note', $settings['gpswiss_ovoko_default_crm_import_car_note'], false);
+
+        set_transient('gpswiss_ovoko_notice', ['type' => 'success', 'text' => 'CRM-only import settings updated.'], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }

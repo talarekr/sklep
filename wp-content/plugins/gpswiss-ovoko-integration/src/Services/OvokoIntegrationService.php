@@ -71,6 +71,8 @@ class OvokoIntegrationService
             'ovoko_exclude_gearbox_products' => true,
             'ovoko_csv_mapping' => [],
             'ovoko_csv_mapping_status' => [],
+            'gpswiss_ovoko_default_crm_import_car_id' => '',
+            'gpswiss_ovoko_default_crm_import_car_note' => 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.',
         ];
     }
 
@@ -125,7 +127,12 @@ class OvokoIntegrationService
             $clean['ovoko_original_image_bearer_token'] = $newOriginalImageToken;
         }
         $clean['ovoko_exclude_gearbox_products'] = !isset($settings['ovoko_exclude_gearbox_products']) || !empty($settings['ovoko_exclude_gearbox_products']);
+        $defaultCrmCarId = preg_replace('/\D+/', '', (string) ($settings['gpswiss_ovoko_default_crm_import_car_id'] ?? ''));
+        $clean['gpswiss_ovoko_default_crm_import_car_id'] = (string) $defaultCrmCarId;
+        $clean['gpswiss_ovoko_default_crm_import_car_note'] = sanitize_text_field((string) ($settings['gpswiss_ovoko_default_crm_import_car_note'] ?? 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.'));
         update_option(self::OPTION_KEY, $clean, false);
+        update_option('gpswiss_ovoko_default_crm_import_car_id', $clean['gpswiss_ovoko_default_crm_import_car_id'], false);
+        update_option('gpswiss_ovoko_default_crm_import_car_note', $clean['gpswiss_ovoko_default_crm_import_car_note'], false);
     }
 
     public function register_routes(): void
