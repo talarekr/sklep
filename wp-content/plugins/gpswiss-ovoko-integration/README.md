@@ -903,41 +903,42 @@ Scope and safety outcome:
 - No live Woo → Ovoko create/publish path is implemented.
 - Existing production cron behavior remains unchanged.
 - The preview action remains dry-run only with `would_send=false`, `no_ovoko_write=true`, and `no_woo_write=true`.
+- No `/crm/importPart` call, write endpoint call, Ovoko part create/update, or cron change was made during this audit.
 
-Findings from the current plugin and official RRR OpenAPI:
-- The existing `RrrApiClient` write methods only cover existing-part operations: `POST /crm/changePartStatus` and `POST /crm/updatePart`.
-- `POST /crm/changePartStatus` is for changing the numeric status of an existing part and requires `part_id`; it is not a create endpoint.
-- `POST /crm/updatePart` is for updating an existing part and requires `part_id`; it is not sufficient as a new-part create endpoint unless Ovoko/RRR explicitly documents create-on-update behavior.
-- The official RRR OpenAPI lists `POST /crm/importPart` with `application/x-www-form-urlencoded` body as the documented import/create candidate for parts. This endpoint is treated as likely but unverified for this shop until confirmed without creating a live listing.
+Documentation sources searched:
+- Repository docs/code were searched for `importPart`, `/crm/importPart`, `status`, `visible`, `visibility`, `hidden`, `publish`, `published`, `shop`, `marketplace`, `active`, `disabled`, `draft`, `show_url`, `shop_url`, `external_id`, `category_id`, `car_id`, `quality`, `photo`, and `photos`.
+- Repository references point to the official RRR API docs UI `https://api.rrr.lt/docs/` and official OpenAPI spec `https://api.rrr.lt/openapi/swagger.yaml`; no bundled OpenAPI/PDF documentation file was found in the project.
+- Findings below use only documentation-backed statuses: `confirmed_by_documentation`, `not_found_in_documentation`, and `unknown`.
 
-Likely create-part contract from the official OpenAPI:
-- Candidate endpoint: `POST /crm/importPart`.
-- Authentication: form fields `username`, `password`, and `user_token` in an `application/x-www-form-urlencoded` request.
-- Required fields: `username`, `password`, `user_token`, `category_id`, `car_id`, `quality`, and `status`.
-- Optional fields include `position`, `notes`, `place`, `manufacturer_code`, `visible_code`, `other_code`, `optional_codes[]`, `external_id`, `internal_notes`, `price`, `original_currency`, `photo`, `photos[]`, `sticker_note`, and `english`.
-- Category field: `category_id`; the OpenAPI notes that a level-3 category is required.
-- Price fields: `price` plus `original_currency` (`EUR` or `PLN`); the OpenAPI notes that price must be filled to show the part in the shop.
-- Part/OEM fields: `manufacturer_code`, `visible_code`, `other_code`, and `optional_codes[]`.
-- Vehicle field: `car_id` is required by the OpenAPI, so Woo-only products need a confirmed RRR vehicle/car ID source or a confirmed API alternative before live create.
-- Warehouse/storage field: `place` is optional and maps to the storage/location value when available.
-- Images are URL form fields, not binary upload in this endpoint: `photo` for the main image and `photos[]` for ordered gallery URLs. The first `photos[]` value must match `photo` for correct thumbnail generation.
+Documentation-backed `/crm/importPart` findings:
+- `confirmed_by_documentation`: the official OpenAPI documents `POST /crm/importPart` under CRM Import with summary “Import part”, `application/x-www-form-urlencoded` request body, `importPartRequest` schema, and `importPartResponse` containing `part_id`, `msg`, and `status_code`.
+- `confirmed_by_documentation`: required fields are `username`, `password`, `user_token`, `category_id`, `car_id`, `quality`, and `status`.
+- `confirmed_by_documentation`: optional fields include `position`, `notes`, `place`, `manufacturer_code`, `visible_code`, `other_code`, `optional_codes[]`, deprecated `id_bridge`, `external_id`, sale fields, `internal_notes`, tire/rim fields, `price`, `original_currency`, `photo`, `photos[]`, `sticker_note`, and `english`.
+- `confirmed_by_documentation`: `category_id` is the Ovoko/RRR part category ID and the schema says a level-3 category is required.
+- `confirmed_by_documentation`: `car_id` is required and is the car ID assigned to the part. The docs do not provide a Woo-only alternative; it must come from an existing/imported RRR car record or another documented car lookup/import workflow.
+- `confirmed_by_documentation`: `quality` is required and is the quality ID assigned to the part. Allowed IDs are not enumerated inline in `importPartRequest`; the docs expose `/get/part_quality` as the CRM Info endpoint for the quality list.
+- `confirmed_by_documentation`: `status` is the status ID assigned to the part. The separate `/get/part_status` catalog has already been confirmed as operational stock/sales status (`0 = In stock / Na stanie`, `1 = Reserved / Zarezerwowano`, `2 = Sold out / Sprzedano`, `3 = Returned / Zwrot`, `4 = Written off / Wycofany`), not publication visibility.
+- `confirmed_by_documentation`: `price` is documented as “must be filled in order to be shown in shop”; `original_currency` allows `EUR` or `PLN`.
+- `confirmed_by_documentation`: `photo` is a photo URL, and `photos[]` must have the same first value as `photo` for correct main photo upload and thumbnail generation.
+- `confirmed_by_documentation`: `external_id` exists on `importPart` as “Local id”, and `/v2/get/parts` supports an `external_ids` query filter.
+- `unknown`: `external_id` idempotency for part import is not documented. Unlike `importCar`, the `importPart` docs do not state that an existing `external_id` aborts import or returns an existing part.
 
-Draft/unpublished/hidden support findings:
-- The OpenAPI exposes a required numeric `status` field for `importPart`, `updatePart`, and `changePartStatus`.
-- No explicit `draft`, `published`, `visible`, `shop_visible`, `marketplace_visible`, `active`, `hidden`, or `disabled` field was found in the documented `importPartRequest` schema.
-- The safest non-public state cannot be selected yet because the numeric status values and marketplace visibility semantics are not documented in the schema.
-- Before live create is enabled, `/get/part_status` must be probed/read and Ovoko/RRR must confirm which `status` value, if any, creates a draft/unpublished/hidden/inactive listing. The plugin must not guess this value.
+Publication/visibility findings:
+- `not_found_in_documentation`: no `draft`, `hidden`, `unpublished`, `private`, `public`, `visible`, `visibility`, `published`, `publish`, `active`, `disabled`, shop visibility, or marketplace visibility field was found in `importPartRequest`.
+- `unknown`: the OpenAPI does not explicitly state whether `/crm/importPart` creates a public shop/marketplace listing immediately. The only shop-publication clue in the schema is that `price` must be filled to be shown in shop.
+- `not_found_in_documentation`: no documented draft/import queue mode for `/crm/importPart` was found.
+- `not_found_in_documentation`: no hide/unpublish-specific endpoint was found. The docs include `/crm/updatePart`, `/crm/changePartStatus`, and `/crm/deletePart` for existing parts, but no documented visibility/unpublish endpoint or field.
+- `unknown`: `/get/part/{id}` response schemas include `shop_url` and `show_url`, but the OpenAPI does not define their semantics or say that absence of `shop_url` means internal-only.
 
 Updated preview behavior:
-- `proposed_endpoint` is now the marker `LIKELY_UNVERIFIED_ENDPOINT`.
-- `proposed_endpoint_path` is `/crm/importPart`.
-- `endpoint_confirmation_required=true` and `payload_format_confirmation_required=true` remain set.
-- Draft fields are exposed as confirmation-required: `would_create_as_draft_or_unpublished="unknown"`, `draft_visibility_field="status"`, `draft_visibility_value=null`, and `draft_visibility_confirmation_required=true`.
-- Future live readiness remains blocked by design until explicit admin confirmation, single-product scope, recent dry-run preview, confirmed endpoint contract, confirmed payload contract, and confirmed draft/unpublished behavior are all present.
+- `proposed_endpoint` is now `DOCUMENTED_ENDPOINT_WRITE_BLOCKED` and `proposed_endpoint_path` is `/crm/importPart`.
+- `endpoint_confirmation_required=false` and `payload_format_confirmation_required=false` because the official OpenAPI confirms the endpoint path and form-encoded required payload shape.
+- Draft/publication fields remain confirmation-required: `would_create_as_draft_or_unpublished="unknown"`, `draft_visibility_field=null`, `draft_visibility_value=null`, and `draft_visibility_confirmation_required=true`.
+- Future live create remains blocked by design until explicit admin confirmation, single-product scope, recent dry-run preview, confirmed publication visibility behavior, and business approval for any public import behavior are all present.
 
 ### Read-only part status probe before any create-part live test
 
-A new admin diagnostic tool is available as **Read Ovoko/RRR part statuses**.
+The admin diagnostic tool **Read Ovoko/RRR part statuses** remains read-only.
 
 Safety guarantees:
 - calls only the read endpoint candidate `POST /get/part_status` with standard RRR form auth fields,
@@ -947,11 +948,32 @@ Safety guarantees:
 - writes no Woo product data and no Ovoko/RRR data,
 - does not touch automatic cron settings or behavior.
 
-The output records `endpoint_used`, HTTP status, parsed response, normalized statuses, raw response, `checked_at`, and interpretation buckets: `candidate_draft_statuses`, `candidate_hidden_statuses`, `candidate_inactive_statuses`, `candidate_public_statuses`, and `candidate_sold_statuses`.
+The output records `endpoint_used`, HTTP status, parsed response, normalized statuses, raw response, `checked_at`, and interpretation buckets. The probe reports `operational_stock_sales_statuses` and `interpretation_summary.status_catalog_scope=operational_stock_sales_lifecycle` when all returned statuses are stock/sales lifecycle states.
 
 Interpretation rules are intentionally conservative:
-- explicit response flags such as `draft=true`, `visible=false`, `active=false`, `hidden=true`, `sold=true`, or similar are marked `confirmed_by_response`,
-- label/name/code matches such as “draft”, “hidden”, “inactive”, “sold”, or “reserved” are marked only `inferred_from_label`,
-- absent or ambiguous visibility data remains `unknown`/confirmation-required.
+- `/get/part_status` operational labels such as “In stock”, “Reserved”, “Sold out”, “Returned”, and “Written off” are not treated as draft/unpublished/hidden publication controls,
+- explicit publication flags would still be recorded if a future response contains them, but the current probe result does not contain such flags,
+- absent or ambiguous publication visibility data remains `unknown`/confirmation-required.
 
-The Woo → Ovoko create-part preview contract report now includes the latest saved part status probe summary, when available. Future live create remains blocked until the endpoint contract, payload contract, draft/unpublished behavior, and exact non-public create status value are all confirmed.
+### Listing visibility audit findings
+
+Read-only audit scope: official OpenAPI documentation plus repository documentation references. No `/crm/importPart` or write endpoint was called.
+
+Answers to the current visibility questions:
+1. `/crm/importPart` visibility field separate from `status`: `not_found_in_documentation`.
+2. RRR/Ovoko setting to create imported parts as not visible by default: `not_found_in_documentation` for the API schema; account-level business settings remain `unknown` because they are not described in the OpenAPI.
+3. `status=0` public effect: `unknown`. Documentation/observed status catalog says `0 = In stock / Na stanie`, but does not state whether import with `status=0` appears publicly in shop/marketplace immediately.
+4. Separate hide/unpublish endpoint after import: `not_found_in_documentation`. Existing documented writes are update/status-change/delete, not publication visibility controls.
+5. `shop_url` vs `show_url` in `/get/part/{id}`: `unknown`; both fields are present in response schemas, but not defined.
+6. Part without `shop_url` as internal-only: `unknown`; absence of `shop_url` is not documented as an internal-only signal.
+7. Draft/import queue mode for `/crm/importPart`: `not_found_in_documentation`.
+8. `external_id` idempotency without public listing creation: `unknown`; the field and filter are documented, but duplicate-import behavior is not documented for parts.
+
+Remaining unknowns:
+- whether `/crm/importPart` creates a public shop/marketplace listing immediately when required fields and price are present,
+- whether business settings outside the API schema affect default imported-part visibility,
+- exact semantics of `shop_url` versus `show_url`, and whether missing `shop_url` proves internal-only state,
+- whether `external_id` can safely enforce idempotency for part import without a public listing side effect.
+
+The Woo → Ovoko create-part preview contract report now includes documentation-backed findings with `confirmed_by_documentation`, `not_found_in_documentation`, and `unknown` statuses plus the latest saved part status probe summary and a `listing_visibility_audit` section. Future live create remains blocked until publication behavior and business acceptance are explicitly decided.
+

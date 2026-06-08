@@ -2889,6 +2889,7 @@ class RrrApiClient
             'candidate_inactive_statuses' => [],
             'candidate_public_statuses' => [],
             'candidate_sold_statuses' => [],
+            'operational_stock_sales_statuses' => [],
             'unknown_statuses' => [],
             'interpretation_summary' => [
                 'draft_unpublished_behavior_confirmed' => false,
@@ -2994,6 +2995,7 @@ class RrrApiClient
             'candidate_inactive_statuses' => [],
             'candidate_public_statuses' => [],
             'candidate_sold_statuses' => [],
+            'operational_stock_sales_statuses' => [],
             'unknown_statuses' => [],
         ];
 
@@ -3036,8 +3038,12 @@ class RrrApiClient
                 $groups['candidate_sold_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains sold or reserved wording'];
             }
 
+            if ($this->label_has_any($label, ['in stock', 'na stanie', 'available', 'reserved', 'zarezerwowano', 'sold out', 'sold', 'sprzedano', 'returned', 'zwrot', 'written off', 'wycofany'])) {
+                $groups['operational_stock_sales_statuses'][] = $base + ['interpretation' => 'operational_stock_sales_lifecycle', 'confidence' => 'medium', 'evidence' => 'label/id matches inventory or sales lifecycle wording, not listing publication wording'];
+            }
+
             $matchedIds = [];
-            foreach (['candidate_draft_statuses', 'candidate_hidden_statuses', 'candidate_inactive_statuses', 'candidate_public_statuses', 'candidate_sold_statuses'] as $groupKey) {
+            foreach (['candidate_draft_statuses', 'candidate_hidden_statuses', 'candidate_inactive_statuses', 'candidate_public_statuses', 'candidate_sold_statuses', 'operational_stock_sales_statuses'] as $groupKey) {
                 foreach ($groups[$groupKey] as $candidate) {
                     $matchedIds[] = (string) ($candidate['id'] ?? '');
                 }
@@ -3048,12 +3054,18 @@ class RrrApiClient
         }
 
         $confirmedNonPublic = array_values(array_filter(array_merge($groups['candidate_draft_statuses'], $groups['candidate_hidden_statuses'], $groups['candidate_inactive_statuses']), static fn(array $row): bool => ($row['interpretation'] ?? '') === 'confirmed_by_response'));
+        $operationalCount = count($groups['operational_stock_sales_statuses']);
+        $statusCount = count($statuses);
+        $looksOperationalOnly = $statusCount > 0 && $operationalCount === $statusCount && $confirmedNonPublic === [];
+
         $groups['interpretation_summary'] = [
-            'draft_unpublished_behavior_confirmed' => $confirmedNonPublic !== [],
-            'non_public_status_value_confirmed' => $confirmedNonPublic !== [],
-            'safe_non_public_status_value' => $confirmedNonPublic[0]['id'] ?? null,
-            'confirmation_required' => $confirmedNonPublic === [],
-            'notes' => $confirmedNonPublic === [] ? 'No final create-safe non-public status is confirmed. Do not use /crm/importPart live.' : 'A non-public candidate has explicit response evidence, but /crm/importPart create behavior still requires controlled confirmation before live use.',
+            'status_catalog_scope' => $looksOperationalOnly ? 'operational_stock_sales_lifecycle' : 'unknown_or_mixed',
+            'part_status_is_publication_visibility_catalog' => false,
+            'draft_unpublished_behavior_confirmed' => false,
+            'non_public_status_value_confirmed' => false,
+            'safe_non_public_status_value' => null,
+            'confirmation_required' => true,
+            'notes' => $looksOperationalOnly ? 'The /get/part_status catalog appears to describe inventory/sales lifecycle states, not listing publication visibility. Do not use it to infer draft/unpublished import behavior.' : 'No final create-safe non-public publication status is confirmed. Do not use /crm/importPart live.',
         ];
 
         return $groups;

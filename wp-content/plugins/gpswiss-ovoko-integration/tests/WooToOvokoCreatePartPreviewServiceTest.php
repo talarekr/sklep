@@ -190,10 +190,10 @@ gpswiss_run_preview_test('valid draft product preview', function (WooToOvokoCrea
     gpswiss_assert($result['ok'] === true, 'Valid preview should be ok.');
     gpswiss_assert($result['would_be_eligible'] === true, 'Valid draft should be eligible.');
     gpswiss_assert($result['would_send'] === false, 'Dry-run must never send.');
-    gpswiss_assert($result['proposed_endpoint'] === 'LIKELY_UNVERIFIED_ENDPOINT', 'Endpoint must remain likely-but-unverified marker.');
+    gpswiss_assert($result['proposed_endpoint'] === 'DOCUMENTED_ENDPOINT_WRITE_BLOCKED', 'Endpoint should be documented but write-blocked.');
     gpswiss_assert($result['proposed_endpoint_path'] === '/crm/importPart', 'Likely endpoint path missing.');
-    gpswiss_assert($result['endpoint_confirmation_required'] === true, 'Endpoint must remain confirmation-required.');
-    gpswiss_assert($result['payload_format_confirmation_required'] === true, 'Payload format must remain confirmation-required.');
+    gpswiss_assert($result['endpoint_confirmation_required'] === false, 'Endpoint path is confirmed by documentation.');
+    gpswiss_assert($result['payload_format_confirmation_required'] === false, 'Payload format is confirmed by documentation.');
     gpswiss_assert($result['proposed_payload']['external_id'] === 'SKU-123', 'Payload SKU/external_id missing.');
     gpswiss_assert($result['proposed_payload']['manufacturer_code'] === 'ABC-123', 'Payload manufacturer/OEM code missing.');
     gpswiss_assert($result['proposed_payload']['category_id'] === 777, 'Payload category_id missing.');
@@ -273,7 +273,7 @@ gpswiss_run_preview_test('draft visibility remains unknown and confirmation-requ
     gpswiss_seed_valid_product();
     $result = $service->preview(123);
     gpswiss_assert($result['would_create_as_draft_or_unpublished'] === 'unknown', 'Draft/unpublished behavior should be unknown.');
-    gpswiss_assert($result['draft_visibility_field'] === 'status', 'Draft visibility field should identify status as candidate.');
+    gpswiss_assert($result['draft_visibility_field'] === null, 'No separate draft visibility field should be guessed.');
     gpswiss_assert($result['draft_visibility_value'] === null, 'Draft visibility value must not be guessed.');
     gpswiss_assert($result['draft_visibility_confirmation_required'] === true, 'Draft visibility confirmation must be required.');
     gpswiss_assert(in_array('draft_unpublished_behavior_not_confirmed', $result['future_live_readiness']['blockers'], true), 'Draft behavior blocker missing.');
@@ -285,6 +285,13 @@ gpswiss_run_preview_test('contract report identifies importPart without live pub
     gpswiss_assert($report['candidate_endpoints'][0]['method'] === 'POST', 'importPart HTTP method missing.');
     gpswiss_assert(in_array('status', $report['required_fields'], true), 'Required status field missing from contract.');
     gpswiss_assert($report['draft_unpublished_visibility_support']['confirmation_required'] === true, 'Draft confirmation requirement missing.');
+    gpswiss_assert($report['draft_unpublished_visibility_support']['status_field_is_operational_stock_sales_status'] === true, 'Status should be marked operational stock/sales.');
+    gpswiss_assert($report['candidate_endpoints'][0]['status'] === 'confirmed_by_documentation', 'importPart endpoint should be documentation-confirmed.');
+    gpswiss_assert($report['documentation_backed_findings']['required_fields']['status'] === 'confirmed_by_documentation', 'Required fields should be documentation-confirmed.');
+    gpswiss_assert($report['documentation_backed_findings']['hidden_draft_unpublished_private_field']['status'] === 'not_found_in_documentation', 'Hidden/draft field finding missing.');
+    gpswiss_assert($report['documentation_backed_findings']['public_immediately_after_import']['status'] === 'unknown', 'Public import behavior must remain unknown.');
+    gpswiss_assert($report['listing_visibility_audit']['import_part_visibility_field_separate_from_status']['status'] === 'not_found_in_documentation', 'Listing visibility audit missing importPart finding.');
+    gpswiss_assert($report['listing_visibility_audit']['status_0_public_effect']['status'] === 'unknown', 'status=0 public effect must remain unknown.');
     gpswiss_assert($report['write_safety']['live_create_implemented'] === false, 'Live create must not be implemented.');
 });
 
@@ -294,12 +301,13 @@ gpswiss_run_preview_test('contract report includes latest part status probe summ
         'ok' => true,
         'checked_at' => '2026-06-08T00:00:00+00:00',
         'endpoint_used' => '/get/part_status',
-        'status_count' => 2,
-        'candidate_draft_statuses' => [['id' => '3', 'name' => 'Draft', 'interpretation' => 'inferred_from_label']],
-        'interpretation_summary' => ['confirmation_required' => true, 'safe_non_public_status_value' => null],
+        'status_count' => 5,
+        'operational_stock_sales_statuses' => [['id' => '0', 'name' => 'In stock / Na stanie', 'interpretation' => 'operational_stock_sales_lifecycle']],
+        'interpretation_summary' => ['status_catalog_scope' => 'operational_stock_sales_lifecycle', 'confirmation_required' => true, 'safe_non_public_status_value' => null],
     ];
     $report = $service->create_part_contract_report();
     gpswiss_assert($report['latest_part_status_probe_result']['available'] === true, 'Latest status probe summary missing.');
     gpswiss_assert($report['latest_part_status_probe_result']['endpoint_used'] === '/get/part_status', 'Latest status probe endpoint missing.');
     gpswiss_assert($report['latest_part_status_probe_result']['interpretation_summary']['confirmation_required'] === true, 'Latest status probe confirmation requirement missing.');
+    gpswiss_assert($report['latest_part_status_probe_result']['status_catalog_scope'] === 'operational_stock_sales_lifecycle', 'Latest status probe should surface operational scope.');
 });
