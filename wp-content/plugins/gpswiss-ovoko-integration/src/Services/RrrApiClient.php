@@ -2862,6 +2862,282 @@ class RrrApiClient
 
 
 
+
+    public function read_part_statuses(): array
+    {
+        $endpointPath = '/get/part_status';
+        $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
+        $checkedAt = gmdate('c');
+
+        $base = [
+            'ok' => false,
+            'action_name' => 'Read Ovoko/RRR part statuses',
+            'mode' => 'read_only_no_write',
+            'endpoint' => $endpointPath,
+            'endpoint_used' => $endpointPath,
+            'method' => 'POST',
+            'read_endpoint_family' => '/get',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'http_status' => null,
+            'status_code' => '',
+            'message' => '',
+            'parsed_response' => [],
+            'statuses' => [],
+            'status_count' => 0,
+            'candidate_draft_statuses' => [],
+            'candidate_hidden_statuses' => [],
+            'candidate_inactive_statuses' => [],
+            'candidate_public_statuses' => [],
+            'candidate_sold_statuses' => [],
+            'unknown_statuses' => [],
+            'interpretation_summary' => [
+                'draft_unpublished_behavior_confirmed' => false,
+                'non_public_status_value_confirmed' => false,
+                'safe_non_public_status_value' => null,
+                'confirmation_required' => true,
+            ],
+            'raw_response' => '',
+            'checked_at' => $checkedAt,
+            'no_ovoko_write' => true,
+            'no_woo_write' => true,
+            'write_endpoints_called' => [],
+        ];
+
+        if ($baseUrl === '') {
+            return array_merge($base, ['message' => 'Missing RRR base URL.']);
+        }
+
+        $response = wp_remote_post($baseUrl . $endpointPath, [
+            'timeout' => 12,
+            'body' => $this->get_auth_form_fields(),
+            'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
+        ]);
+
+        if (is_wp_error($response)) {
+            return array_merge($base, ['message' => 'RRR part status read failed: ' . $response->get_error_code() . ' ' . $response->get_error_message()]);
+        }
+
+        $httpStatus = (int) wp_remote_retrieve_response_code($response);
+        $rawBody = (string) wp_remote_retrieve_body($response);
+        $decoded = json_decode($rawBody, true);
+        $parsed = is_array($decoded) ? $decoded : [];
+        $statusCode = is_array($decoded) ? sanitize_text_field((string) ($decoded['status_code'] ?? '')) : '';
+        $message = is_array($decoded)
+            ? sanitize_text_field((string) ($decoded['message'] ?? $decoded['msg'] ?? $decoded['error'] ?? ''))
+            : 'Non-JSON response from part status endpoint.';
+
+        $statuses = $this->normalize_part_status_rows($parsed);
+        $interpretations = $this->interpret_part_statuses($statuses);
+
+        return array_merge($base, $interpretations, [
+            'ok' => $httpStatus === 200 && ($statusCode === '' || $statusCode === 'R200') && $statuses !== [],
+            'http_status' => $httpStatus,
+            'status_code' => $statusCode,
+            'message' => $message,
+            'parsed_response' => $parsed,
+            'statuses' => $statuses,
+            'status_count' => count($statuses),
+            'raw_response' => $rawBody,
+            'checked_at' => $checkedAt,
+        ]);
+    }
+
+    public function normalize_part_status_rows(array $payload): array
+    {
+        $source = [];
+        foreach (['data', 'list', 'statuses', 'part_statuses', 'part_status', 'status_list'] as $key) {
+            if (isset($payload[$key]) && is_array($payload[$key])) {
+                $source = $payload[$key];
+                break;
+            }
+        }
+        if ($source === [] && $this->array_is_status_map($payload)) {
+            $source = $payload;
+        }
+
+        $rows = [];
+        foreach ($source as $key => $row) {
+            if (!is_array($row)) {
+                if (is_scalar($row)) {
+                    $row = ['id' => $key, 'name' => $row];
+                } else {
+                    continue;
+                }
+            }
+
+            $id = $this->first_scalar_value($row, ['id', 'status_id', 'code', 'value', 'status']);
+            if ($id === '' && is_scalar($key)) {
+                $id = (string) $key;
+            }
+            $name = $this->first_scalar_value($row, ['name', 'title', 'label', 'status_name', 'translation', 'description']);
+            $code = $this->first_scalar_value($row, ['code', 'key', 'slug', 'status_code']);
+            $flags = $this->extract_part_status_flags($row);
+
+            $rows[] = [
+                'id' => sanitize_text_field((string) $id),
+                'code' => sanitize_text_field((string) $code),
+                'name' => sanitize_text_field((string) $name),
+                'raw' => $row,
+                'visibility_flags' => $flags,
+                'visibility_signal_fields' => array_keys($flags),
+            ];
+        }
+
+        return $rows;
+    }
+
+    public function interpret_part_statuses(array $statuses): array
+    {
+        $groups = [
+            'candidate_draft_statuses' => [],
+            'candidate_hidden_statuses' => [],
+            'candidate_inactive_statuses' => [],
+            'candidate_public_statuses' => [],
+            'candidate_sold_statuses' => [],
+            'unknown_statuses' => [],
+        ];
+
+        foreach ($statuses as $status) {
+            $label = mb_strtolower(trim((string) (($status['name'] ?? '') . ' ' . ($status['code'] ?? '') . ' ' . ($status['id'] ?? ''))));
+            $flags = (array) ($status['visibility_flags'] ?? []);
+            $base = [
+                'id' => (string) ($status['id'] ?? ''),
+                'code' => (string) ($status['code'] ?? ''),
+                'name' => (string) ($status['name'] ?? ''),
+            ];
+
+            if ($this->flag_truthy($flags, ['draft', 'is_draft', 'unpublished', 'is_unpublished'])) {
+                $groups['candidate_draft_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'high', 'evidence' => 'explicit draft/unpublished flag'];
+            } elseif ($this->label_has_any($label, ['draft', 'unpublished', 'nieopublik', 'roboc'])) {
+                $groups['candidate_draft_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains draft or unpublished wording'];
+            }
+
+            if ($this->flag_truthy($flags, ['hidden', 'is_hidden']) || $this->flag_falsey($flags, ['visible', 'is_visible', 'shop_visible', 'marketplace_visible', 'public', 'published'])) {
+                $groups['candidate_hidden_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'high', 'evidence' => 'explicit hidden flag or explicit visible/public flag is false'];
+            } elseif ($this->label_has_any($label, ['hidden', 'hide', 'invisible', 'ukryt', 'niewidocz'])) {
+                $groups['candidate_hidden_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains hidden wording'];
+            }
+
+            if ($this->flag_falsey($flags, ['active', 'is_active']) || $this->flag_truthy($flags, ['inactive', 'disabled', 'is_disabled'])) {
+                $groups['candidate_inactive_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'high', 'evidence' => 'explicit active flag is false or inactive/disabled flag is true'];
+            } elseif ($this->label_has_any($label, ['inactive', 'disabled', 'deactivated', 'nieakty', 'wyłącz'])) {
+                $groups['candidate_inactive_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains inactive or disabled wording'];
+            }
+
+            if ($this->flag_truthy($flags, ['visible', 'is_visible', 'shop_visible', 'marketplace_visible', 'public', 'published', 'active', 'is_active'])) {
+                $groups['candidate_public_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'medium', 'evidence' => 'explicit visible/public/active flag is true'];
+            } elseif ($this->label_has_any($label, ['available', 'active', 'public', 'published', 'for sale', 'on sale', 'aktywn'])) {
+                $groups['candidate_public_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'low', 'evidence' => 'label/code suggests public or active'];
+            }
+
+            if ($this->flag_truthy($flags, ['sold', 'is_sold', 'reserved', 'is_reserved'])) {
+                $groups['candidate_sold_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'high', 'evidence' => 'explicit sold/reserved flag'];
+            } elseif ($this->label_has_any($label, ['sold', 'reserved', 'sprzed', 'rezerw'])) {
+                $groups['candidate_sold_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains sold or reserved wording'];
+            }
+
+            $matchedIds = [];
+            foreach (['candidate_draft_statuses', 'candidate_hidden_statuses', 'candidate_inactive_statuses', 'candidate_public_statuses', 'candidate_sold_statuses'] as $groupKey) {
+                foreach ($groups[$groupKey] as $candidate) {
+                    $matchedIds[] = (string) ($candidate['id'] ?? '');
+                }
+            }
+            if (!in_array((string) ($base['id'] ?? ''), $matchedIds, true)) {
+                $groups['unknown_statuses'][] = $base + ['interpretation' => 'unknown', 'confidence' => 'unknown', 'evidence' => 'No explicit visibility/status flags or recognized label wording.'];
+            }
+        }
+
+        $confirmedNonPublic = array_values(array_filter(array_merge($groups['candidate_draft_statuses'], $groups['candidate_hidden_statuses'], $groups['candidate_inactive_statuses']), static fn(array $row): bool => ($row['interpretation'] ?? '') === 'confirmed_by_response'));
+        $groups['interpretation_summary'] = [
+            'draft_unpublished_behavior_confirmed' => $confirmedNonPublic !== [],
+            'non_public_status_value_confirmed' => $confirmedNonPublic !== [],
+            'safe_non_public_status_value' => $confirmedNonPublic[0]['id'] ?? null,
+            'confirmation_required' => $confirmedNonPublic === [],
+            'notes' => $confirmedNonPublic === [] ? 'No final create-safe non-public status is confirmed. Do not use /crm/importPart live.' : 'A non-public candidate has explicit response evidence, but /crm/importPart create behavior still requires controlled confirmation before live use.',
+        ];
+
+        return $groups;
+    }
+
+    private function array_is_status_map(array $payload): bool
+    {
+        if ($payload === []) {
+            return false;
+        }
+        foreach ($payload as $key => $value) {
+            if (!is_scalar($key) || !(is_scalar($value) || is_array($value))) {
+                return false;
+            }
+        }
+        return !isset($payload['status_code']) && !isset($payload['message']) && !isset($payload['msg']);
+    }
+
+    private function first_scalar_value(array $row, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (isset($row[$key]) && is_scalar($row[$key]) && trim((string) $row[$key]) !== '') {
+                return (string) $row[$key];
+            }
+        }
+        return '';
+    }
+
+    private function extract_part_status_flags(array $row): array
+    {
+        $flags = [];
+        foreach ($row as $key => $value) {
+            $normalizedKey = strtolower((string) $key);
+            if (!preg_match('/(visible|hidden|active|inactive|disabled|draft|publish|public|sold|reserved|marketplace|shop)/', $normalizedKey)) {
+                continue;
+            }
+            if (is_bool($value) || is_numeric($value) || is_string($value)) {
+                $flags[$normalizedKey] = $value;
+            }
+        }
+        return $flags;
+    }
+
+    private function flag_truthy(array $flags, array $keys): bool
+    {
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $flags)) {
+                if ($flags[$key] === true) {
+                    return true;
+                }
+                if (in_array(strtolower((string) $flags[$key]), ['1', 'true', 'yes', 'y'], true)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private function flag_falsey(array $flags, array $keys): bool
+    {
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $flags)) {
+                if ($flags[$key] === false) {
+                    return true;
+                }
+                if (in_array(strtolower((string) $flags[$key]), ['0', 'false', 'no', 'n'], true)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private function label_has_any(string $label, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if ($needle !== '' && str_contains($label, $needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
     public function change_part_status(string $partId, string|int $status): array
     {
         $partId = trim((string) $partId);
