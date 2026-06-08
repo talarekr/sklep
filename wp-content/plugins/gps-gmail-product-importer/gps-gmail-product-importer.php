@@ -260,6 +260,9 @@ JS;
             <?php if ($last_result) : ?>
                 <?php
                 $last_result_is_error = !empty($last_result['error']) || in_array((string) ($last_result['result'] ?? ''), array('error', 'blocked'), true);
+                if (($last_result['action'] ?? '') === 'allegro_price_research' && in_array((string) ($last_result['result'] ?? ''), array('api_error', 'not_configured', 'no_query'), true)) {
+                    $last_result_is_error = false;
+                }
                 $last_result_message = $this->admin_result_notice_message($last_result);
                 ?>
                 <div class="notice <?php echo $last_result_is_error ? 'notice-error' : 'notice-success'; ?> is-dismissible">
@@ -281,7 +284,7 @@ JS;
                     <tr><th><label for="gps-ovoko-enrichment-batch-size"><?php esc_html_e('Ovoko enrichment batch size', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-enrichment-batch-size" type="number" min="1" max="25" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_batch_size]" value="<?php echo esc_attr($settings['ovoko_enrichment_batch_size']); ?>"></td></tr>
                     <tr><th><?php esc_html_e('Dry-run by default', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_dry_run]" value="1" <?php checked($settings['ovoko_enrichment_dry_run'], 1); ?>> <?php esc_html_e('Preview Ovoko API enrichment without Woo product writes', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><?php esc_html_e('Save suggestions', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_save_suggestions]" value="1" <?php checked($settings['ovoko_enrichment_save_suggestions'], 1); ?>> <?php esc_html_e('Live enrichment saves only _gps_ovoko_* suggestion meta and optional high-confidence category assignment.', 'gps-gmail-product-importer'); ?></label></td></tr>
-                    <tr><th><?php esc_html_e('Enable Ovoko price fallback', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_price_fallback_enabled]" value="1" <?php checked($settings['ovoko_price_fallback_enabled'], 1); ?>> <?php esc_html_e('Use selected Ovoko match price as staff-only fallback when Allegro is unavailable or not selected', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Enable Ovoko price suggestion', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_price_fallback_enabled]" value="1" <?php checked($settings['ovoko_price_fallback_enabled'], 1); ?>> <?php esc_html_e('Use selected Ovoko match price as the primary automatic price suggestion for Woo drafts', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-ovoko-eur-rate"><?php esc_html_e('EUR→PLN fallback rate', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-eur-rate" class="small-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_eur_to_pln_fallback_rate]" value="<?php echo esc_attr($settings['ovoko_eur_to_pln_fallback_rate']); ?>"><p class="description"><?php esc_html_e('Optional. Used only when selected Ovoko price is EUR and no PLN value exists.', 'gps-gmail-product-importer'); ?></p></td></tr>
                     <tr><th><?php esc_html_e('Prefer Ovoko internal_notes price', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_prefer_internal_notes_price]" value="1" <?php checked($settings['ovoko_prefer_internal_notes_price'], 1); ?>> <?php esc_html_e('Use numeric internal_notes before original_price PLN', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-ovoko-enrichment-delay"><?php esc_html_e('Ovoko enrichment delay between batches', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-enrichment-delay" type="number" min="1" max="60" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_delay_between_batches]" value="<?php echo esc_attr($settings['ovoko_enrichment_delay_between_batches']); ?>"> <?php esc_html_e('seconds', 'gps-gmail-product-importer'); ?></td></tr>
@@ -289,8 +292,8 @@ JS;
                     <tr><th><?php esc_html_e('Product status default', 'gps-gmail-product-importer'); ?></th><td><select name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[product_status]"><option value="draft" <?php selected($settings['product_status'], 'draft'); ?>><?php esc_html_e('Draft', 'gps-gmail-product-importer'); ?></option><option value="pending_review" <?php selected($settings['product_status'], 'pending_review'); ?>><?php esc_html_e('Pending review', 'gps-gmail-product-importer'); ?></option></select><p class="description"><?php esc_html_e('Default is draft. Products are never published automatically.', 'gps-gmail-product-importer'); ?></p></td></tr>
                     <tr><th><?php esc_html_e('Import images', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[import_images]" value="1" <?php checked($settings['import_images'], 1); ?>> <?php esc_html_e('Import jpg/jpeg/png/webp attachments', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><?php esc_html_e('Duplicate protection', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[duplicate_protection]" value="1" <?php checked($settings['duplicate_protection'], 1); ?>> <?php esc_html_e('Skip existing Gmail message IDs and possible OEM duplicates', 'gps-gmail-product-importer'); ?></label></td></tr>
-                    <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Uses this plugin's own Allegro API credentials to search public offers and save staging-only price suggestions. Woo drafts may use the selected hint as draft price, but Ovoko CRM-only imports must receive it only in internal_notes, never as public price fields.", 'gps-gmail-product-importer'); ?></p></th></tr>
-                    <tr><th><?php esc_html_e('Enable Allegro API', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_api_enabled]" value="1" <?php checked($settings['allegro_api_enabled'], 1); ?>> <?php esc_html_e('Allow item-scoped Allegro price research actions', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Optional legacy diagnostics only. Uses this plugin's own Allegro API credentials to search public offers and save staging-only _gps_allegro_* data; results are not used for production selected price, Woo draft readiness, or Ovoko CRM-only price fields.", 'gps-gmail-product-importer'); ?></p></th></tr>
+                    <tr><th><?php esc_html_e('Enable Allegro API', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_api_enabled]" value="1" <?php checked($settings['allegro_api_enabled'], 1); ?>> <?php esc_html_e('Allow optional item-scoped Allegro diagnostic actions', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-allegro-environment"><?php esc_html_e('Allegro environment', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-environment" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_environment]"><option value="production" <?php selected($settings['allegro_environment'], 'production'); ?>><?php esc_html_e('Production', 'gps-gmail-product-importer'); ?></option><option value="sandbox" <?php selected($settings['allegro_environment'], 'sandbox'); ?>><?php esc_html_e('Sandbox', 'gps-gmail-product-importer'); ?></option></select></td></tr>
                     <tr><th><label for="gps-allegro-client-id"><?php esc_html_e('Allegro client ID', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-id" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_id]" value="<?php echo esc_attr($settings['allegro_client_id']); ?>"></td></tr>
                     <tr><th><label for="gps-allegro-client-secret"><?php esc_html_e('Allegro client secret', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-secret" type="password" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_secret]" value="<?php echo esc_attr($settings['allegro_client_secret']); ?>" autocomplete="off"></td></tr>
@@ -319,6 +322,8 @@ JS;
 
             <h2><?php echo esc_html__('3. Import Queue', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Gmail Scan writes parsed messages into staging/import queue records first. Woo, eBay, and Ovoko publishing are not performed by the scan.', 'gps-gmail-product-importer'); ?></p>
+            <p><strong><?php esc_html_e('Price source priority:', 'gps-gmail-product-importer'); ?></strong> <?php esc_html_e('manual_override → ovoko_price_suggestion → no selected price', 'gps-gmail-product-importer'); ?></p>
+            <p class="description"><?php esc_html_e('Allegro price research is disabled by default, optional legacy diagnostics only, and not used in the production Gmail → Woo → Ovoko flow.', 'gps-gmail-product-importer'); ?></p>
             <?php $this->render_import_queue_admin_view(); ?>
 
             <h2><?php echo esc_html__('4. Gmail Scan', 'gps-gmail-product-importer'); ?></h2>
@@ -357,8 +362,8 @@ JS;
                 <?php submit_button(__('Save Ovoko suggestions', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?>
             </form>
 
-            <h2><?php echo esc_html__('6. Allegro Price Research', 'gps-gmail-product-importer'); ?></h2>
-            <p><?php esc_html_e('Use the item action in the import queue to call Allegro public offer search for a staged item. Results are saved only as _gps_allegro_* staging meta.', 'gps-gmail-product-importer'); ?></p>
+            <h2><?php echo esc_html__('6. Allegro Price Research (optional legacy diagnostics)', 'gps-gmail-product-importer'); ?></h2>
+            <p><?php esc_html_e('Allegro price research is disabled by default and not used in the production pricing flow. Optional item-scoped diagnostics save only _gps_allegro_* staging meta and never select or overwrite the Woo draft price.', 'gps-gmail-product-importer'); ?></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
                 <?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_allegro_test">
                 <?php submit_button(__('Test Allegro API connection', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
@@ -368,7 +373,7 @@ JS;
             <p><?php esc_html_e('Stores suggested Woo category ID, path, confidence, and source on staging records before product creation.', 'gps-gmail-product-importer'); ?></p>
 
             <h2><?php echo esc_html__('8. Readiness', 'gps-gmail-product-importer'); ?></h2>
-            <p><?php esc_html_e('Readiness validation stores separate Woo draft and marketplace readiness; shipping group is informational for Woo draft creation and only blocks marketplace readiness.', 'gps-gmail-product-importer'); ?></p>
+            <p><?php esc_html_e('Readiness validation stores separate Woo draft and marketplace readiness. Woo draft readiness requires a selected price from manual_override or ovoko_price_suggestion; Allegro is not required.', 'gps-gmail-product-importer'); ?></p>
 
             <h2><?php echo esc_html__('9. Create Woo Draft Products', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Creates WooCommerce draft products from staging items that pass Woo draft readiness. Products are always created as post_type product with draft status.', 'gps-gmail-product-importer'); ?></p>
@@ -521,7 +526,7 @@ JS;
         echo '<p style="margin:0 0 4px;"><a class="button button-small" href="' . esc_url($detail_url) . '#gps-import-queue-detail">' . esc_html__('View details', 'gps-gmail-product-importer') . '</a></p>';
         $actions = array(
             'ovoko_enrichment' => __('Run Ovoko enrichment for this item', 'gps-gmail-product-importer'),
-            'allegro_price_research' => __('Run Allegro price research for this item', 'gps-gmail-product-importer'),
+            'allegro_price_research' => __('Optional legacy diagnostics: run Allegro price research (not production pricing)', 'gps-gmail-product-importer'),
             'ovoko_price_suggestion' => __('Run Ovoko price suggestion for this item', 'gps-gmail-product-importer'),
             'category_mapping' => __('Run category mapping for this item', 'gps-gmail-product-importer'),
             'readiness_validation' => __('Run readiness validation for this item', 'gps-gmail-product-importer'),
@@ -559,7 +564,7 @@ JS;
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
             __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
             __('Ovoko price suggestion fields', 'gps-gmail-product-importer') => array('_gps_ovoko_price_suggestion_status', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_ovoko_price_suggestion_currency', '_gps_ovoko_price_suggestion_raw_value', '_gps_ovoko_price_suggestion_checked_at', '_gps_ovoko_price_suggestion_notes'),
-            __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
+            __('Allegro price fields (optional legacy diagnostics, not production pricing)', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
             __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
             __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
@@ -573,14 +578,15 @@ JS;
             __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id', '_gps_gmail_created_product_at', '_gps_gmail_created_product_checked_at', '_gps_gmail_created_product_status'),
         );
         $selected_price_source = (string) ($normalized_meta['_gps_selected_price_source'] ?? '');
-        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_api' ? __('Allegro API price suggestion', 'gps-gmail-product-importer') : ($selected_price_source === 'ovoko_price_suggestion' ? __('Ovoko price suggestion fallback', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer')));
+        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'ovoko_price_suggestion' ? __('Ovoko price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
         $allegro_unavailable_message = $this->allegro_unavailable_message_from_meta($normalized_meta);
         ?>
         <div id="gps-import-queue-detail" style="margin-top:20px;">
             <h3><?php echo esc_html(sprintf(__('Import Queue Item #%d Details', 'gps-gmail-product-importer'), $item_id)); ?></h3>
             <p><strong><?php esc_html_e('Woo draft price readiness source:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($price_readiness_label); ?></p>
-            <p><strong><?php esc_html_e('Selected price priority:', 'gps-gmail-product-importer'); ?></strong> <?php esc_html_e('manual_override → allegro_api → ovoko_price_suggestion → no selected price', 'gps-gmail-product-importer'); ?></p>
-            <?php if ($allegro_unavailable_message !== '') : ?><p><strong><?php esc_html_e('Allegro unavailable/access denied:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($allegro_unavailable_message); ?></p><?php endif; ?>
+            <p><strong><?php esc_html_e('Price source priority:', 'gps-gmail-product-importer'); ?></strong> <?php esc_html_e('manual_override → ovoko_price_suggestion → no selected price', 'gps-gmail-product-importer'); ?></p>
+            <p class="description"><?php esc_html_e('Allegro price research is disabled / optional / not used in production flow.', 'gps-gmail-product-importer'); ?></p>
+            <?php if ($allegro_unavailable_message !== '') : ?><p class="description"><strong><?php esc_html_e('Optional Allegro diagnostic note:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($allegro_unavailable_message); ?></p><?php endif; ?>
             <?php foreach ($groups as $label => $keys) : ?>
                 <h4><?php echo esc_html($label); ?></h4>
                 <table class="widefat striped" style="max-width:1100px;margin-bottom:12px;">
@@ -1410,18 +1416,10 @@ JS;
         if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested'))) {
             $blocking[] = 'missing_ovoko_enrichment';
         }
-        // Price can come from manual override, completed Allegro research, or a completed Ovoko price fallback suggestion.
+        // Production price can come only from manual override or a completed Ovoko price suggestion.
         $selected_price = $this->selected_price_for_analysis($analysis);
         if (!$selected_price) {
-            if (!$this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched'))) {
-                $blocking[] = 'missing_allegro_price_research';
-            }
-            if ((float) ($analysis['allegro_price_suggestion'] ?? 0) <= 0 || strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) !== 'PLN') {
-                $blocking[] = 'missing_allegro_price_suggestion';
-            }
-            if (!$this->allegro_readiness_quality_ok($analysis)) {
-                $blocking[] = 'insufficient_allegro_price_research';
-            }
+            $blocking[] = 'missing_selected_price';
         }
         if (!$this->status_indicates_success((string) ($analysis['category_mapping_status'] ?? ''), array('success', 'ok', 'mapped', 'matched'))) {
             $blocking[] = 'missing_category_mapping';
@@ -1486,9 +1484,6 @@ JS;
     {
         if (!empty($analysis['manual_price_override_enabled']) && (float) ($analysis['manual_price_pln'] ?? 0) > 0) {
             return array('price' => $this->format_manual_price_number($analysis['manual_price_pln']), 'source' => 'manual_override');
-        }
-        if ($this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched')) && (float) ($analysis['allegro_price_suggestion'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) === 'PLN' && $this->allegro_readiness_quality_ok($analysis)) {
-            return array('price' => $this->format_price_number($analysis['allegro_price_suggestion']), 'source' => 'allegro_api');
         }
         if ($this->status_indicates_success((string) ($analysis['ovoko_price_suggestion_status'] ?? ''), array('completed')) && (float) ($analysis['ovoko_price_suggestion_pln'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['ovoko_price_suggestion_currency'] ?? ''))) === 'PLN') {
             return array('price' => $this->format_manual_price_number($analysis['ovoko_price_suggestion_pln']), 'source' => 'ovoko_price_suggestion');
@@ -1688,7 +1683,7 @@ JS;
         $settings = $this->settings();
         $checked_at = current_time('mysql', true);
         if (empty($settings['ovoko_price_fallback_enabled'])) {
-            $result = array('status' => 'disabled', 'pln' => '', 'source' => '', 'currency' => '', 'raw_value' => '', 'checked_at' => $checked_at, 'notes' => 'Ovoko price fallback is disabled in settings.');
+            $result = array('status' => 'disabled', 'pln' => '', 'source' => '', 'currency' => '', 'raw_value' => '', 'checked_at' => $checked_at, 'notes' => 'Ovoko price suggestion extraction is disabled in settings.');
         } else {
             $raw = get_post_meta($item_id, '_gps_ovoko_raw_selected_match', true);
             $selected = is_array($raw) ? $raw : json_decode((string) $raw, true);
@@ -1783,7 +1778,7 @@ JS;
                 'source' => '',
                 'suggestion' => '',
                 'currency' => '',
-                'notes' => 'Allegro price research service is not configured in this plugin yet. No marketplace request or price write was performed.',
+                'notes' => 'Optional Allegro diagnostics are disabled or not configured. No marketplace request or selected-price write was performed.',
             ));
             return array('action' => 'allegro_price_research', 'staging_item_id' => $item_id, 'result' => 'not_configured', 'writes' => 'staging_meta_only');
         }
@@ -1856,7 +1851,7 @@ JS;
                 'error_checked_at' => $checked_at,
             ));
             $readiness = $this->run_readiness_validation_for_staging_item($item_id);
-            $preserved_selected_price = in_array((string) $previous_selected_source, array('manual_override', 'allegro_api'), true) && (float) $previous_selected_price > 0;
+            $preserved_selected_price = in_array((string) $previous_selected_source, array('manual_override', 'ovoko_price_suggestion'), true) && (float) $previous_selected_price > 0;
             if ($preserved_selected_price) {
                 update_post_meta($item_id, '_gps_selected_price_pln', sanitize_text_field((string) $previous_selected_price));
                 update_post_meta($item_id, '_gps_selected_price_source', sanitize_text_field((string) $previous_selected_source));
@@ -2578,7 +2573,7 @@ JS;
         $settings = $this->settings();
         $selected_price = $this->selected_price_for_analysis($analysis);
         if (!$selected_price) {
-            return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual, Allegro, or Ovoko fallback PLN price is required before creating a Woo draft.');
+            return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual or Ovoko suggestion PLN price is required before creating a Woo draft.');
         }
         $suggested_category_id = $this->mapped_suggested_product_cat_id($analysis);
         if ($suggested_category_id <= 0) {
