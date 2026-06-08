@@ -93,7 +93,7 @@ class WooToOvokoCreatePartPreviewService
         $result['source_woo_fields_meta_used'] = [
             'post' => ['ID' => $productId, 'post_type' => $postType, 'post_status' => $status, 'post_title' => $title],
             'product_methods' => ['get_sku', 'get_price', 'get_regular_price', 'get_sale_price', 'get_stock_status', 'get_stock_quantity', 'get_image_id', 'get_gallery_image_ids'],
-            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place', '_gps_selected_price_pln', '_gps_selected_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_confidence', '_gps_allegro_price_query', '_gps_manual_price_pln', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source']))),
+            'meta_keys' => array_values(array_unique(array_merge(['_sku', '_price', '_regular_price', '_sale_price', '_stock_status', '_stock', '_thumbnail_id', '_product_image_gallery'], self::PART_IDENTIFIER_META_KEYS, self::DUPLICATE_META_KEYS, ['_ovoko_manufacturer_code', 'ovoko_id', 'source', '_ovoko_car_id', 'ovoko_car_id', '_gps_ovoko_car_id', 'gps_ovoko_car_id', '_ovoko_quality_id', 'ovoko_quality_id', '_gps_storage_location', 'storage_location', 'place', '_gps_selected_price_pln', '_gps_selected_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_confidence', '_gps_allegro_price_query', '_gps_manual_price_pln', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_empty_price_allowed_reason', '_gps_price_required_for_woo_draft', '_gps_price_required_for_crm_only_import', '_gps_ovoko_category_review_required', '_gps_ovoko_category_review_reason']))),
             'taxonomy' => ['product_cat'],
         ];
 
@@ -167,13 +167,22 @@ class WooToOvokoCreatePartPreviewService
         $result['photo_payload_mode'] = (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields');
         $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency', 'original_currency'];
         $priceSuggestionData = $this->crm_only_price_suggestion_data($productId);
+        $fixedNoPriceMode = (($categoryPayload['category_mode'] ?? '') === 'fixed_import_category_manual_review') && $this->empty_price_allowed_for_product($productId);
         $result['selected_price_source'] = (string) ($priceSuggestionData['source'] ?? '');
         $result['selected_price_pln'] = (string) ($priceSuggestionData['price'] ?? '');
-        $result['internal_notes_preview'] = $this->crm_only_internal_notes_from_price_data($priceSuggestionData);
+        $result['internal_notes_preview'] = $fixedNoPriceMode ? '' : $this->crm_only_internal_notes_from_price_data($priceSuggestionData);
         $result['listing_text_preview'] = $storageLocation;
         $result['listing_text_source'] = $storageLocation !== '' ? 'gmail_storage_location' : '';
         $result['price_fields_omitted'] = true;
         $result['price_fields_omitted_from_ovoko_payload'] = true;
+        $result['category_mode'] = (string) ($categoryPayload['category_mode'] ?? '');
+        $result['category_review_required'] = !empty($categoryPayload['category_review_required']);
+        $result['fixed_category_id'] = ($categoryPayload['category_mode'] ?? '') === 'fixed_import_category_manual_review' ? $categoryPayload['category_id'] : null;
+        $result['fixed_category_name'] = (string) ($categoryPayload['category_name'] ?? '');
+        $result['empty_price_allowed'] = $this->empty_price_allowed_for_product($productId);
+        $result['price_review_required'] = $result['empty_price_allowed'] && trim((string) ($priceSuggestionData['price'] ?? '')) === '';
+        $result['public_import_allowed'] = false;
+        $result['crm_only_no_price_strategy'] = $result['empty_price_allowed'] && $result['category_mode'] === 'fixed_import_category_manual_review';
         $result['live_create_still_requires_manual_confirmation'] = true;
         $result['car_id'] = $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null;
         $result['car_id_source'] = (string) $carId['key'];
@@ -490,7 +499,7 @@ class WooToOvokoCreatePartPreviewService
     private function build_crm_only_payload(int $productId, string $title, string $sku, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
     {
         $imageUrls = (array) ($images['image_urls'] ?? []);
-        $internalNotes = $this->crm_only_internal_notes($productId);
+        $internalNotes = $this->crm_only_internal_notes($productId, $categoryPayload, $storageLocation, (string) $partIdentifier['value']);
         $payload = [
             'category_id' => $categoryPayload['category_id'],
             'car_id' => $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null,
@@ -525,6 +534,8 @@ class WooToOvokoCreatePartPreviewService
                 'stock_quantity' => $stockQuantity,
                 'part_identifier_source' => $partIdentifier['key'],
                 'woo_category' => $categoryPayload['woo_category'],
+                'category_mode' => (string) ($categoryPayload['category_mode'] ?? ''),
+                'category_review_required' => !empty($categoryPayload['category_review_required']),
                 'quality_source' => $qualityId['key'],
                 'car_id_source' => $carId['key'],
                 'car_id_is_placeholder' => !empty($carId['is_placeholder']),
@@ -552,9 +563,34 @@ class WooToOvokoCreatePartPreviewService
         return $payload;
     }
 
-    private function crm_only_internal_notes(int $productId): string
+    private function crm_only_internal_notes(int $productId, array $categoryPayload = [], string $storageLocation = '', string $partCode = ''): string
     {
-        return $this->crm_only_internal_notes_from_price_data($this->crm_only_price_suggestion_data($productId));
+        $priceNotes = $this->crm_only_internal_notes_from_price_data($this->crm_only_price_suggestion_data($productId));
+        if (($categoryPayload['category_mode'] ?? '') === 'fixed_import_category_manual_review' && $this->empty_price_allowed_for_product($productId)) {
+            return '';
+        }
+        if (($categoryPayload['category_mode'] ?? '') !== 'fixed_import_category_manual_review' || empty($categoryPayload['category_review_required'])) {
+            return $priceNotes;
+        }
+        $categoryName = (string) ($categoryPayload['category_name'] ?? '');
+        $categoryId = (string) ($categoryPayload['category_id'] ?? '');
+        if ($priceNotes === '') {
+            return implode("\n", array(
+                'KATEGORIA I CENA DO POPRAWY W OVOKO',
+                'Tymczasowa kategoria importu: ' . trim($categoryName . ' (' . $categoryId . ')'),
+                'Cena: do uzupełnienia w Ovoko',
+                'Powód: wszystkie produkty z Gmail importu trafiają najpierw do jednej kategorii technicznej i bez ceny',
+                'Kod części: ' . $partCode,
+                'Magazyn: ' . $storageLocation,
+            ));
+        }
+        return $priceNotes . "\n\n" . implode("\n", array(
+            'KATEGORIA DO POPRAWY W OVOKO',
+            'Tymczasowa kategoria importu: ' . trim($categoryName . ' (' . $categoryId . ')'),
+            'Powód: wszystkie produkty z Gmail importu trafiają najpierw do jednej kategorii technicznej',
+            'Kod części: ' . $partCode,
+            'Magazyn: ' . $storageLocation,
+        ));
     }
 
     private function crm_only_internal_notes_from_price_data(array $priceData): string
@@ -674,6 +710,13 @@ class WooToOvokoCreatePartPreviewService
                 'message' => 'Including price > 0 and a photo URL may make the part available in e-shop.',
             ];
         }
+        if (($categoryPayload['category_mode'] ?? '') === 'fixed_import_category_manual_review') {
+            $warnings[] = [
+                'code' => 'fixed_placeholder_category_not_allowed_for_public_import',
+                'message' => 'Fixed placeholder category is allowed only for CRM-only manual-review imports and must never be used for full/public import payloads.',
+            ];
+            $payload['_fixed_placeholder_category_not_allowed_for_public_import'] = true;
+        }
         if (!empty($carId['is_placeholder'])) {
             $warnings[] = [
                 'code' => 'placeholder_car_id_not_allowed_for_public_import',
@@ -691,6 +734,18 @@ class WooToOvokoCreatePartPreviewService
 
     private function category_payload(array $categoryReadiness): array
     {
+        if (!empty($categoryReadiness['fixed_import_category']['category_id'])) {
+            $fixed = (array) $categoryReadiness['fixed_import_category'];
+            return [
+                'category_id' => (int) $fixed['category_id'],
+                'category_name' => (string) ($fixed['category_name'] ?? ''),
+                'woo_category' => ['term_id' => null, 'name' => '', 'slug' => ''],
+                'category_mode' => 'fixed_import_category_manual_review',
+                'category_review_required' => true,
+                'category_review_reason' => 'fixed import category used; staff must correct category in Ovoko before publishing',
+                'confidence' => 'placeholder',
+            ];
+        }
         $mapped = (array) ($categoryReadiness['mapped_terms'] ?? []);
         $first = $mapped[0] ?? [];
         $id = isset($first['ovoko_category_id']) && ctype_digit((string) $first['ovoko_category_id']) ? (int) $first['ovoko_category_id'] : null;
@@ -870,6 +925,10 @@ class WooToOvokoCreatePartPreviewService
 
     private function category_mapping_readiness(int $productId): array
     {
+        $fixed = $this->fixed_import_category_from_product($productId);
+        if ($fixed !== []) {
+            return ['known' => true, 'terms' => [], 'mapped_terms' => [], 'unmapped_terms' => [], 'ready' => true, 'mapping_meta_keys_checked' => ['_gps_ovoko_category_suggestion_*'], 'trusted_panel_suggestion' => [], 'fixed_import_category' => $fixed, 'mapping_message' => 'Fixed CRM-only import category used; staff must review in Ovoko.'];
+        }
         $terms = function_exists('wp_get_post_terms') ? wp_get_post_terms($productId, 'product_cat') : [];
         if (!is_array($terms)) {
             return ['known' => false, 'terms' => [], 'mapped_terms' => [], 'unmapped_terms' => [], 'mapping_meta_keys_checked' => ['_gpswiss_ovoko_category_id', 'gpswiss_ovoko_category_id', '_ovoko_category_id', 'ovoko_category_id']];
@@ -900,6 +959,40 @@ class WooToOvokoCreatePartPreviewService
         return ['known' => true, 'terms' => array_merge($mapped, $unmapped), 'mapped_terms' => $mapped, 'unmapped_terms' => $unmapped, 'ready' => ($terms !== [] && $unmapped === []) || $trustedSuggestion !== [], 'mapping_meta_keys_checked' => $keys, 'trusted_panel_suggestion' => $trustedSuggestion, 'mapping_message' => ($trustedSuggestion !== [] && $mapped === []) ? 'Ovoko category detected but Woo category mapping missing' : ''];
     }
 
+
+    private function fixed_import_category_from_product(int $productId): array
+    {
+        $status = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_status', true));
+        $sourceType = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_source_type', true));
+        $categoryId = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_category_id', true));
+        if ($status !== 'fixed_import_category_manual_review' || $sourceType !== 'fixed_import_category_manual_review' || !ctype_digit($categoryId)) {
+            return [];
+        }
+        return [
+            'category_id' => (int) $categoryId,
+            'category_name' => trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_category_name', true)),
+            'confidence' => trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_confidence', true)) ?: 'placeholder',
+            'source_type' => $sourceType,
+            'status' => $status,
+            'review_required' => trim((string) get_post_meta($productId, '_gps_ovoko_category_review_required', true)) === '1',
+            'review_reason' => trim((string) get_post_meta($productId, '_gps_ovoko_category_review_reason', true)),
+        ];
+    }
+
+    private function empty_price_allowed_for_product(int $productId): bool
+    {
+        $stagingItemId = (int) get_post_meta($productId, '_gps_source_staging_item_id', true);
+        $ids = $stagingItemId > 0 ? [$productId, $stagingItemId] : [$productId];
+        foreach ($ids as $id) {
+            if (trim((string) get_post_meta((int) $id, '_gps_empty_price_allowed_reason', true)) === 'fixed_category_crm_only_import_review_flow') {
+                return true;
+            }
+            if (trim((string) get_post_meta((int) $id, '_gps_price_required_for_woo_draft', true)) === '0') {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private function trusted_panel_category_suggestion(int $productId): array
     {

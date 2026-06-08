@@ -9,7 +9,8 @@ function __($text, $domain = null) { return $text; }
 function esc_html__($text, $domain = null) { return $text; }
 function esc_html_e($text, $domain = null) { echo $text; }
 function wp_parse_args($args, $defaults = array()) { return array_merge($defaults, (array) $args); }
-function get_option($name, $default = false) { return $default; }
+$GLOBALS['gps_test_options'] = array();
+function get_option($name, $default = false) { return $GLOBALS['gps_test_options'][$name] ?? $default; }
 function absint($value) { return abs((int) $value); }
 function taxonomy_exists($taxonomy) { return $taxonomy === 'product_cat'; }
 function term_exists($term, $taxonomy = '') { return ((int) $term === 123 && $taxonomy === 'product_cat') ? array('term_id' => 123, 'term_taxonomy_id' => 123) : null; }
@@ -92,6 +93,37 @@ $marketplaceBlockedWithoutShipping = $marketplaceReadiness->invoke($plugin, $emp
 if ($marketplaceBlockedWithoutShipping['status'] !== 'needs_review' || !in_array('missing_shipping_group', $marketplaceBlockedWithoutShipping['blocking_reasons'], true)) {
     fwrite(STDERR, 'Empty shipping group should still block marketplace readiness.' . PHP_EOL);
     var_export($marketplaceBlockedWithoutShipping);
+    exit(1);
+}
+
+
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS] = GPS_Gmail_Product_Importer::default_settings();
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_enabled'] = 1;
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_id'] = '278';
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_name'] = 'Turbina';
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['allow_empty_price_for_fixed_category_crm_only_import'] = 1;
+
+$fixedNoPrice = $baseReadyAnalysis;
+$fixedNoPrice['staging_item_id'] = 60908;
+$fixedNoPrice['ovoko_enrichment_status'] = '';
+$fixedNoPrice['ovoko_price_suggestion_status'] = 'no_price';
+$fixedNoPrice['ovoko_price_suggestion_pln'] = '';
+$fixedNoPrice['ovoko_price_suggestion_currency'] = '';
+$fixedNoPrice['category_mapping_status'] = 'missing_ovoko_category_resolution';
+$fixedNoPrice['suggested_woo_category_id'] = 0;
+$fixedNoPrice['suggested_woo_category_confidence'] = '';
+$fixedNoPrice['suggested_category_source'] = '';
+$fixedNoPrice['shipping_group'] = '';
+$fixedReady = $wooReadiness->invoke($plugin, $fixedNoPrice, 'imported_from_gmail', 0);
+if ($fixedReady['status'] !== 'ready_to_create_product' || $fixedReady['blocking_reasons'] !== array()) {
+    fwrite(STDERR, 'Fixed category + empty price allowed should let item 60908 become ready_to_create_product without price/category mapping/enrichment.' . PHP_EOL);
+    var_export($fixedReady);
+    exit(1);
+}
+$fixedMarketplace = $marketplaceReadiness->invoke($plugin, $fixedNoPrice, 'imported_from_gmail', 0);
+if ($fixedMarketplace['status'] !== 'needs_review' || !in_array('missing_shipping_group', $fixedMarketplace['blocking_reasons'], true)) {
+    fwrite(STDERR, 'Fixed category Woo readiness must not remove marketplace-specific blockers.' . PHP_EOL);
+    var_export($fixedMarketplace);
     exit(1);
 }
 
