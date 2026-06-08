@@ -491,7 +491,7 @@ JS;
             __('Marketplace blocking reasons', 'gps-gmail-product-importer') => array('_gps_marketplace_blocking_reasons'),
             __('Legacy readiness status', 'gps-gmail-product-importer') => array('_gps_readiness_status', '_gps_readiness_checked_at'),
             __('Legacy blocking reasons', 'gps-gmail-product-importer') => array('_gps_blocking_reasons'),
-            __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id'),
+            __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id', '_gps_gmail_created_product_at', '_gps_gmail_created_product_checked_at', '_gps_gmail_created_product_status'),
         );
         $selected_price_source = (string) ($normalized_meta['_gps_selected_price_source'] ?? '');
         $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_suggestion' ? __('Allegro price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
@@ -509,6 +509,16 @@ JS;
                     </tbody>
                 </table>
             <?php endforeach; ?>
+            <h4><?php esc_html_e('Reset created Woo product link', 'gps-gmail-product-importer'); ?></h4>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="max-width:720px;margin-bottom:16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
+                <?php wp_nonce_field(self::NONCE_ACTION); ?>
+                <input type="hidden" name="action" value="gps_gmail_product_importer_queue_item_action">
+                <input type="hidden" name="queue_action" value="reset_created_woo_product_link">
+                <input type="hidden" name="staging_item_id" value="<?php echo esc_attr($item_id); ?>">
+                <p class="description"><?php esc_html_e('Clears only the staging item created-product link and refreshes readiness. It never deletes or creates Woo products.', 'gps-gmail-product-importer'); ?></p>
+                <p><label><input type="checkbox" name="force_reset_created_product_link" value="1"> <?php esc_html_e('Force reset even if the linked Woo product still exists and is not in trash', 'gps-gmail-product-importer'); ?></label></p>
+                <?php submit_button(__('Reset created Woo product link', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
+            </form>
             <h4><?php esc_html_e('Set manual price override', 'gps-gmail-product-importer'); ?></h4>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="max-width:720px;margin-bottom:16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
                 <?php wp_nonce_field(self::NONCE_ACTION); ?>
@@ -1443,6 +1453,9 @@ JS;
                 case 'readiness_validation':
                     $result = $this->run_readiness_validation_for_staging_item($item_id);
                     break;
+                case 'reset_created_woo_product_link':
+                    $result = $this->reset_created_woo_product_link_for_staging_item($item_id, !empty($_POST['force_reset_created_product_link']));
+                    break;
                 case 'manual_price_override':
                     $result = $this->set_manual_price_override_for_staging_item($item_id, $_POST);
                     break;
@@ -1456,6 +1469,58 @@ JS;
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => $item_id), admin_url('admin.php')) . '#gps-import-queue-detail');
         exit;
+    }
+
+
+    private function reset_created_woo_product_link_for_staging_item($item_id, $force = false)
+    {
+        $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
+        $linked_product = $created_product_id ? get_post($created_product_id) : null;
+        $linked_product_status = $linked_product ? (string) ($linked_product->post_status ?? '') : '';
+        $linked_product_exists_active = $linked_product && $linked_product_status !== 'trash';
+
+        if ($linked_product_exists_active && !$force) {
+            return array(
+                'action' => 'reset_created_woo_product_link',
+                'staging_item_id' => $item_id,
+                'result' => 'blocked',
+                'reason' => 'linked_product_still_exists',
+                'created_product_id' => $created_product_id,
+                'linked_product_status' => $linked_product_status,
+                'writes' => 'none',
+            );
+        }
+
+        $created_product_meta_keys = array(
+            '_gps_gmail_created_product_id',
+            '_gps_gmail_created_product_at',
+            '_gps_gmail_created_product_checked_at',
+            '_gps_gmail_created_product_status',
+            '_gps_gmail_created_product_error',
+            '_gps_created_product_id',
+            '_gps_created_product_at',
+            '_gps_created_product_status',
+        );
+        foreach ($created_product_meta_keys as $meta_key) {
+            delete_post_meta($item_id, $meta_key);
+        }
+        update_post_meta($item_id, '_gps_gmail_created_product_id', 0);
+        update_post_meta($item_id, '_gps_staging_status', 'imported_from_gmail');
+
+        $readiness = $this->run_readiness_validation_for_staging_item($item_id);
+        $woo_status = (string) ($readiness['woo_draft_readiness']['status'] ?? ($readiness['result'] ?? 'needs_review'));
+        update_post_meta($item_id, '_gps_staging_status', $woo_status === 'ready_to_create_product' ? 'ready_to_create_product' : 'needs_review');
+
+        return array(
+            'action' => 'reset_created_woo_product_link',
+            'staging_item_id' => $item_id,
+            'result' => 'reset_created_product_link',
+            'created_product_id' => $created_product_id,
+            'linked_product_status' => $linked_product ? $linked_product_status : 'missing',
+            'forced' => (bool) $force,
+            'readiness' => $readiness,
+            'writes' => 'staging_meta_only',
+        );
     }
 
     private function set_manual_price_override_for_staging_item($item_id, $request)
