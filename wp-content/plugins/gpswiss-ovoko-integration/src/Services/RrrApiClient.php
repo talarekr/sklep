@@ -3360,7 +3360,7 @@ class RrrApiClient
             return ['ok' => false, 'http_code' => null, 'status_code' => null, 'message' => 'Missing RRR base URL', 'part_id' => '', 'raw_body' => ''];
         }
 
-        $body = $payload + $this->get_auth_form_fields();
+        $body = self::encode_repeated_form_fields($payload + $this->get_auth_form_fields());
         $response = wp_remote_post($baseUrl . '/crm/importPart', [
             'timeout' => 20,
             'body' => $body,
@@ -3405,6 +3405,22 @@ class RrrApiClient
             'raw_body' => $rawBody,
         ];
     }
+
+    public static function encode_repeated_form_fields(array $payload): string
+    {
+        $pairs = [];
+        foreach ($payload as $key => $value) {
+            if (is_array($value)) {
+                foreach ($value as $item) {
+                    $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode((string) $item);
+                }
+                continue;
+            }
+            $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode((string) $value);
+        }
+        return implode('&', $pairs);
+    }
+
 
     private function post_form(string $path, array $payload, bool $includeRawPayload = false): array
     {

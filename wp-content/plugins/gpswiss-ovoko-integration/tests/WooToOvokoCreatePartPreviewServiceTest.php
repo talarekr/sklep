@@ -14,6 +14,7 @@ $GLOBALS['gpswiss_test_attachments'] = [];
 $GLOBALS['gpswiss_test_products'] = [];
 $GLOBALS['gpswiss_test_writes'] = [];
 $GLOBALS['gpswiss_test_options'] = [];
+$GLOBALS['gpswiss_test_http_overrides'] = [];
 
 class GPSwissPreviewTestProduct
 {
@@ -43,6 +44,8 @@ function gpswiss_reset_preview_test_state(): void
     $GLOBALS['gpswiss_test_products'] = [];
     $GLOBALS['gpswiss_test_writes'] = [];
     $GLOBALS['gpswiss_test_options'] = [];
+    $GLOBALS['gpswiss_test_http_overrides'] = [];
+$GLOBALS['gpswiss_test_http_overrides'] = [];
 }
 
 function gpswiss_add_post(int $id, string $postType = 'product', string $status = 'draft', string $title = 'Test product'): void
@@ -87,7 +90,13 @@ function wp_get_post_terms(int $id, string $taxonomy): array { return $taxonomy 
 function get_term_meta(int $termId, string $key, bool $single = false): mixed { return $GLOBALS['gpswiss_test_term_meta'][$termId][$key] ?? ''; }
 function get_post_thumbnail_id(int $id): int { return (int) get_post_meta($id, '_thumbnail_id', true); }
 function wp_get_attachment_url(int $id): string { return (string) ($GLOBALS['gpswiss_test_attachments'][$id] ?? ''); }
+function get_attached_file(int $id): string { return '/tmp/gpswiss-preview-' . $id . '.jpg'; }
 function wp_http_validate_url(string $url): bool { return str_starts_with($url, 'http://') || str_starts_with($url, 'https://'); }
+function is_wp_error(mixed $thing): bool { return false; }
+function gpswiss_preview_http_response_for_url(string $url): array { $override = $GLOBALS['gpswiss_test_http_overrides'][$url] ?? null; if (is_array($override)) { return $override; } return ['response' => ['code' => 200], 'headers' => ['content-type' => 'image/jpeg', 'content-length' => '12345']]; }
+function wp_remote_head(string $url, array $args = []): array { return gpswiss_preview_http_response_for_url($url); }
+function wp_remote_get(string $url, array $args = []): array { return gpswiss_preview_http_response_for_url($url); }
+function wp_remote_retrieve_response_code(array $response): int { return (int) ($response['response']['code'] ?? 0); }
 function get_posts(array $args): array
 {
     $results = [];

@@ -73,7 +73,9 @@ class WooToOvokoCrmOnlyImportService
             $result['ok'] = false;
             $result['status'] = 'failed';
             $result['error_code'] = 'ovoko_import_failed';
-            $result['message'] = 'Ovoko /crm/importPart did not return HTTP 200 + status_code R200 + part_id.';
+            $result['message'] = $this->response_has_photo_file_missing_error($response)
+                ? 'Ovoko rejected photo field. Image payload format/accessibility must be fixed before retry.'
+                : 'Ovoko /crm/importPart did not return HTTP 200 + status_code R200 + part_id.';
             $result['part_id'] = '';
             $this->store_failure($productId, $result, $response);
             return $result;
@@ -202,8 +204,16 @@ class WooToOvokoCrmOnlyImportService
             'photo_present' => trim((string) ($payload['photo'] ?? '')) !== '',
             'photos_count' => count(array_filter($photos, static fn($url): bool => trim((string) $url) !== '')),
             'photos_included' => trim((string) ($payload['photo'] ?? '')) !== '' && $photos !== [],
+            'photo_equals_first_photos' => $photos !== [] && trim((string) ($payload['photo'] ?? '')) === trim((string) ($photos[0] ?? '')),
         ];
     }
+
+    private function response_has_photo_file_missing_error(array $response): bool
+    {
+        $haystack = strtolower(wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+        return str_contains($haystack, 'photo') && str_contains($haystack, 'file does not exist');
+    }
+
 
     private function call_import(array $payload): array
     {
