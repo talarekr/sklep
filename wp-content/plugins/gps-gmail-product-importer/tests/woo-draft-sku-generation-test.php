@@ -181,7 +181,8 @@ update_post_meta($productId, '_ovoko_car_id', 9002);
 $preview = (new WooToOvokoCreatePartPreviewService())->preview($productId);
 $codes = array_map(static fn(array $row): string => (string) $row['code'], (array) $preview['validations']);
 gps_assert(!in_array('missing_sku', $codes, true), 'Ovoko preview should not report missing_sku for a Gmail-created draft.', $preview);
-gps_assert($preview['would_be_eligible'] === true, 'Ovoko preview should be eligible after Gmail draft SKU generation.', $preview);
+gps_assert($preview['would_be_eligible'] === false && ($preview['non_public_reason'] ?? '') === 'missing_price', 'Ovoko CRM-only preview should remain safely ineligible/non-public when the draft has no selected price.', $preview);
+gps_assert(!empty($preview['no_ovoko_write']) && !empty($preview['no_woo_write']), 'Ovoko CRM-only preview must remain dry-run/no-write for a no-price Gmail draft.', $preview);
 gps_assert(($preview['proposed_payload']['sku'] ?? '') === 'GPS-GMAIL-60849', 'Ovoko proposed payload should include the generated Gmail SKU.', $preview);
 
 echo "Woo draft SKU generation tests passed\n";
