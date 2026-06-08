@@ -69,9 +69,13 @@ $ovokoAnalysis = array('ovoko_price_suggestion_status' => 'completed', 'ovoko_pr
 $selected = $selected_price_for_analysis->invoke($plugin, $ovokoAnalysis + array('manual_price_override_enabled' => true, 'manual_price_pln' => '1900'));
 assert_true($selected['source'] === 'manual_override' && $selected['price'] === '1900', 'Manual override must win over Ovoko suggestion.', $selected);
 $selected = $selected_price_for_analysis->invoke($plugin, $ovokoAnalysis + array('allegro_price_research_status' => 'completed', 'allegro_price_suggestion' => '2000', 'allegro_price_currency' => 'PLN', 'allegro_price_filtered_offer_count' => 9));
-assert_true($selected['source'] === 'allegro_api' && $selected['price'] === '2000.00', 'Valid Allegro result must win over Ovoko suggestion.', $selected);
+assert_true($selected['source'] === 'ovoko_price_suggestion' && $selected['price'] === '1800', 'Ovoko suggestion must win because Allegro is not part of production pricing.', $selected);
+$selected = $selected_price_for_analysis->invoke($plugin, array('allegro_price_research_status' => 'completed', 'allegro_price_suggestion' => '2000', 'allegro_price_currency' => 'PLN', 'allegro_price_filtered_offer_count' => 9));
+assert_true($selected === null, 'Allegro alone must not create a selected price.', $selected);
 $selected = $selected_price_for_analysis->invoke($plugin, $ovokoAnalysis + array('allegro_price_research_status' => 'error', 'allegro_price_error_http_status' => 403, 'allegro_price_error_code' => 'AccessDenied'));
-assert_true($selected['source'] === 'ovoko_price_suggestion' && $selected['price'] === '1800', 'Allegro AccessDenied must allow Ovoko fallback.', $selected);
+assert_true($selected['source'] === 'ovoko_price_suggestion' && $selected['price'] === '1800', 'Allegro AccessDenied must not affect Ovoko selected price.', $selected);
+$selected = $selected_price_for_analysis->invoke($plugin, array());
+assert_true($selected === null, 'No manual override and no Ovoko suggestion should leave no selected price.', $selected);
 
 $GLOBALS['gps_test_meta'][60849]['_gps_ovoko_raw_selected_match'] = wp_json_encode($item60849);
 $run = $run_ovoko_price_suggestion_for_staging_item->invoke($plugin, 60849, true);

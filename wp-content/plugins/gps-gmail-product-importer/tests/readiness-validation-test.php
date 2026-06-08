@@ -35,11 +35,10 @@ $baseReadyAnalysis = array(
     'image_attachments_found' => 2,
     'images' => array(array('attachment_id' => 'img-1')),
     'ovoko_enrichment_status' => 'suggested',
-    'allegro_price_research_status' => 'researched',
-    'allegro_price_suggestion' => '199.99',
-    'allegro_price_currency' => 'PLN',
-    'allegro_price_filtered_offer_count' => 5,
-    'allegro_price_confidence' => 'high',
+    'ovoko_price_suggestion_status' => 'completed',
+    'ovoko_price_suggestion_pln' => '199.99',
+    'ovoko_price_suggestion_currency' => 'PLN',
+    'ovoko_price_suggestion_source' => 'ovoko_internal_notes',
     'category_mapping_status' => 'mapped',
     'suggested_woo_category_id' => 123,
     'suggested_woo_category_confidence' => 'medium',
@@ -56,9 +55,9 @@ if ($ready['status'] !== 'ready_to_create_product' || $ready['blocking_reasons']
 
 $staleReadyItem = $baseReadyAnalysis;
 $staleReadyItem['ovoko_enrichment_status'] = '';
-$staleReadyItem['allegro_price_research_status'] = '';
-$staleReadyItem['allegro_price_suggestion'] = '';
-$staleReadyItem['allegro_price_currency'] = '';
+$staleReadyItem['ovoko_price_suggestion_status'] = '';
+$staleReadyItem['ovoko_price_suggestion_pln'] = '';
+$staleReadyItem['ovoko_price_suggestion_currency'] = '';
 $staleReadyItem['category_mapping_status'] = '';
 $staleReadyItem['suggested_woo_category_id'] = 0;
 $staleReadyItem['suggested_woo_category_confidence'] = 'low';
@@ -66,9 +65,9 @@ $staleReadyItem['suggested_category_source'] = 'none';
 $staleReadyItem['shipping_group'] = '';
 
 $notReady = $readiness->invoke($plugin, $staleReadyItem, 'imported_from_gmail', 0);
-$expectedBlockers = array('missing_ovoko_enrichment', 'missing_allegro_price_research', 'missing_category_mapping');
+$expectedBlockers = array('missing_ovoko_enrichment', 'missing_selected_price', 'missing_category_mapping');
 if ($notReady['status'] !== 'needs_review') {
-    fwrite(STDERR, 'Missing enrichment/mapping should force Woo draft needs_review.' . PHP_EOL);
+    fwrite(STDERR, 'Missing enrichment/price/mapping should force Woo draft needs_review.' . PHP_EOL);
     var_export($notReady);
     exit(1);
 }

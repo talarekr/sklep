@@ -101,8 +101,8 @@ $baseReadyAnalysis = array(
     'suggested_category_source' => 'ovoko_enrichment',
     'shipping_group' => 'shipping_30',
 );
-$missingAllegro = $readiness->invoke($plugin, $baseReadyAnalysis, 'imported_from_gmail', 0);
-assert_true(in_array('missing_allegro_price_research', $missingAllegro['blocking_reasons'], true), 'Readiness must be blocked when Allegro research is missing.', $missingAllegro);
+$missingPrice = $readiness->invoke($plugin, $baseReadyAnalysis, 'imported_from_gmail', 0);
+assert_true(in_array('missing_selected_price', $missingPrice['blocking_reasons'], true) && !in_array('missing_allegro_price_research', $missingPrice['blocking_reasons'], true), 'Readiness must be blocked only by missing selected price, not missing Allegro research.', $missingPrice);
 
 $validAllegro = $baseReadyAnalysis + array(
     'allegro_price_research_status' => 'completed',
@@ -111,7 +111,18 @@ $validAllegro = $baseReadyAnalysis + array(
     'allegro_price_filtered_offer_count' => 5,
     'allegro_price_confidence' => 'high',
 );
-$ready = $readiness->invoke($plugin, $validAllegro, 'imported_from_gmail', 0);
-assert_true($ready['status'] === 'ready_to_create_product' && $ready['blocking_reasons'] === array(), 'Readiness should pass when completed Allegro research is valid.', $ready);
+$stillBlocked = $readiness->invoke($plugin, $validAllegro, 'imported_from_gmail', 0);
+assert_true($stillBlocked['status'] === 'needs_review' && in_array('missing_selected_price', $stillBlocked['blocking_reasons'], true), 'Valid Allegro diagnostics alone must not satisfy Woo draft readiness.', $stillBlocked);
+
+$validOvokoWithAllegroError = $baseReadyAnalysis + array(
+    'ovoko_price_suggestion_status' => 'completed',
+    'ovoko_price_suggestion_pln' => '1800',
+    'ovoko_price_suggestion_currency' => 'PLN',
+    'allegro_price_research_status' => 'api_error',
+    'allegro_price_error_http_status' => '403',
+    'allegro_price_error_code' => 'AccessDenied',
+);
+$ready = $readiness->invoke($plugin, $validOvokoWithAllegroError, 'imported_from_gmail', 0);
+assert_true($ready['status'] === 'ready_to_create_product' && $ready['blocking_reasons'] === array(), 'Allegro AccessDenied diagnostics must not block readiness when Ovoko price exists.', $ready);
 
 echo "Allegro price research tests passed\n";
