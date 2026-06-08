@@ -86,6 +86,7 @@ $many = $analyze->invoke($plugin, array('5Q0131701AN'), array(
 assert_true($many['filtered_offer_count'] === 5 && $many['median_pln'] === '1100.00' && $many['min_pln'] === '900.00' && $many['max_pln'] === '1300.00' && $many['confidence'] === 'high', 'Multiple matches should filter repair services and compute median/min/max.', $many);
 
 $baseReadyAnalysis = array(
+    'staging_item_id' => 60849,
     'message_id' => 'gmail-60849',
     'detected_part_code' => '5Q0131701AN',
     'normalized_part_code' => '5Q0131701AN',

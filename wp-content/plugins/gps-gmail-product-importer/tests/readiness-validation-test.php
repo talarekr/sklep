@@ -26,6 +26,7 @@ $marketplaceReadiness = $reflection->getMethod('marketplace_readiness_status');
 $marketplaceReadiness->setAccessible(true);
 
 $baseReadyAnalysis = array(
+    'staging_item_id' => 60849,
     'message_id' => 'gmail-60849',
     'detected_part_code' => '5Q0131701AN',
     'normalized_part_code' => '5Q0131701AN',
