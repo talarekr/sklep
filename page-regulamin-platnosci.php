@@ -62,7 +62,7 @@ get_header();
             <p>Czas realizacji zamówienia zależy od dostępności produktu i wynosi zazwyczaj od 1 do kilku dni roboczych.</p>
 
             <h2>6. Zwroty</h2>
-            <p>Konsument ma prawo odstąpić od umowy w terminie 21 dni od dnia otrzymania towaru.</p>
+            <p>Konsument ma prawo odstąpić od umowy w terminie 14 dni od dnia otrzymania towaru.</p>
             <p>Zwrot jest możliwy pod warunkiem, że:</p>
             <ul>
                 <li>produkt nie był używany ani montowany</li>
@@ -72,10 +72,10 @@ get_header();
             </ul>
             <p>Koszt zwrotu ponosi Klient.</p>
             <p>Zwrot środków następuje po otrzymaniu i weryfikacji towaru.</p>
-            <p>Po upływie 21 dni zwrot nie przysługuje.</p>
+            <p>Po upływie 14 dni zwrot nie przysługuje.</p>
 
             <h2>7. Wymiana towaru</h2>
-            <p>Wymiana produktu możliwa jest w terminie 21 dni od otrzymania przesyłki.</p>
+            <p>Wymiana produktu możliwa jest w terminie 14 dni od otrzymania przesyłki.</p>
             <p>Dotyczy zarówno konsumentów, jak i przedsiębiorców.</p>
             <p>Warunki jak przy zwrocie.</p>
             <p>Koszty wymiany ponosi Klient (zwrot + ponowna wysyłka).</p>
