@@ -162,11 +162,14 @@ class WooToOvokoCreatePartPreviewService
         $result['non_public_reason'] = 'missing_price';
         $result['photos_included'] = !empty($images['image_urls']);
         $result['photo_payload_mode'] = (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields');
-        $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency'];
+        $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency', 'original_currency'];
         $priceSuggestionData = $this->crm_only_price_suggestion_data($productId);
         $result['selected_price_source'] = (string) ($priceSuggestionData['source'] ?? '');
         $result['selected_price_pln'] = (string) ($priceSuggestionData['price'] ?? '');
         $result['internal_notes_preview'] = $this->crm_only_internal_notes_from_price_data($priceSuggestionData);
+        $result['listing_text_preview'] = $storageLocation;
+        $result['listing_text_source'] = $storageLocation !== '' ? 'gmail_storage_location' : '';
+        $result['price_fields_omitted'] = true;
         $result['price_fields_omitted_from_ovoko_payload'] = true;
         $result['live_create_still_requires_manual_confirmation'] = true;
         $result['car_id'] = $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null;
@@ -236,10 +239,13 @@ class WooToOvokoCreatePartPreviewService
             'car_id_source' => '',
             'car_id_is_placeholder' => false,
             'car_id_review_required' => false,
-            'omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
+            'omitted_for_non_public_import' => ['price', 'original_price', 'currency', 'original_currency'],
             'selected_price_source' => '',
             'selected_price_pln' => '',
             'internal_notes_preview' => '',
+            'listing_text_preview' => '',
+            'listing_text_source' => '',
+            'price_fields_omitted' => true,
             'price_fields_omitted_from_ovoko_payload' => true,
             'live_create_still_requires_manual_confirmation' => true,
             'create_part_contract_report' => [],
@@ -325,6 +331,8 @@ class WooToOvokoCreatePartPreviewService
                 'part_code_oem' => ['primary_field' => 'manufacturer_code', 'visible_field' => 'visible_code', 'additional_fields' => ['other_code', 'optional_codes[]']],
                 'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'For CRM-only no-price imports, a configured placeholder car_id may satisfy the required technical field, but staff must correct vehicle mapping in Ovoko before publishing. Placeholder car_id is never allowed for full/public imports with price.'],
                 'warehouse_location' => ['field' => 'place', 'required' => false],
+                'listing_ad_text' => ['field' => 'notes', 'required' => false, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'CRM-only import uses notes only for the Gmail storage location/warehouse number; Woo/Gmail body text and suggested prices must not be sent here.'],
+                'sticker_note' => ['field' => 'sticker_note', 'required' => false, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Intentionally omitted for CRM-only import.'],
                 'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned stock/sales states, not publication visibility states.'],
             ],
             'image_handling' => [
@@ -498,7 +506,15 @@ class WooToOvokoCreatePartPreviewService
             '_auth_fields_omitted_from_preview' => ['username', 'password', 'user_token'],
             '_create_strategy' => 'crm_only_non_public_initial_import',
             '_non_public_reason' => 'missing_price',
-            '_omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
+            '_omitted_for_non_public_import' => ['price', 'original_price', 'currency', 'original_currency'],
+            '_text_field_policy' => [
+                'listing_ad_text_field' => 'notes',
+                'listing_text_source' => $storageLocation !== '' ? 'gmail_storage_location' : '',
+                'listing_text_contains_storage_location_only' => $storageLocation !== '',
+                'description_omitted' => true,
+                'sticker_note_omitted' => true,
+                'suggested_price_kept_staff_only_in_internal_notes' => true,
+            ],
             '_source_summary' => [
                 'title' => $title,
                 'sku' => $sku,
@@ -521,6 +537,10 @@ class WooToOvokoCreatePartPreviewService
                 'quality_value' => $qualityId['value'] === '',
             ],
         ];
+
+        if ($storageLocation !== '') {
+            $payload['notes'] = $storageLocation;
+        }
 
         if ($internalNotes !== '') {
             $payload['internal_notes'] = $internalNotes;

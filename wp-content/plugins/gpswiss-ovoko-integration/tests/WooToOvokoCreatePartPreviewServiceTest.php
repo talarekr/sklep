@@ -226,7 +226,7 @@ gpswiss_run_preview_test('CRM-only preview omits price fields and includes Ovoko
     gpswiss_assert($result['selected_price_source'] === 'ovoko_price_suggestion', 'Selected price source should be shown in preview.');
     gpswiss_assert($result['selected_price_pln'] === '1800', 'Selected price PLN should be shown in preview.');
     gpswiss_assert($result['price_fields_omitted_from_ovoko_payload'] === true, 'Preview should confirm price fields are omitted.');
-    foreach (['price', 'original_price', 'currency'] as $forbidden) {
+    foreach (['price', 'original_price', 'currency', 'original_currency'] as $forbidden) {
         gpswiss_assert(!array_key_exists($forbidden, $result['proposed_payload']), $forbidden . ' must not be present in CRM-only payload.');
     }
     gpswiss_assert($result['e_shop_available_after_import'] === false, 'CRM-only import should remain non-public after import.');
@@ -367,7 +367,8 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_assert($payload['status'] === 0, '60886 status/default import status missing.');
     gpswiss_assert($payload['quality'] === 2, '60886 quality missing.');
     gpswiss_assert($payload['car_id'] === 9002, '60886 car_id missing.');
-    gpswiss_assert(!array_key_exists('notes', $payload), '60886 CRM-only preview must not send Gmail body in notes.');
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', '60886 CRM-only preview must send storage location in notes/listing text.');
+    gpswiss_assert(!str_contains((string) ($payload['notes'] ?? ''), '1000'), '60886 notes/listing text must not contain price.');
     gpswiss_assert(!array_key_exists('description', $payload), '60886 CRM-only preview must not send Gmail body in description.');
     gpswiss_assert(($payload['internal_notes'] ?? '') === "Cena testowa/ręczna: 1000 PLN\nŹródło: manual_override", '60886 manual price guidance missing from internal_notes.');
     gpswiss_assert(!array_key_exists('sticker_note', $payload), '60886 sticker_note must remain omitted.');
@@ -375,9 +376,12 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_assert(count($payload['photos[]']) === 3, '60886 image URLs missing.');
     gpswiss_assert($result['non_public_reason'] === 'missing_price', '60886 non-public reason missing_price missing.');
     gpswiss_assert($result['photos_included'] === true, '60886 photos_included missing.');
-    gpswiss_assert($result['omitted_for_non_public_import'] === ['price', 'original_price', 'currency'], '60886 omitted fields summary missing.');
+    gpswiss_assert($result['omitted_for_non_public_import'] === ['price', 'original_price', 'currency', 'original_currency'], '60886 omitted fields summary missing.');
     gpswiss_assert($payload['_source_summary']['stock_quantity'] === 1, '60886 stock missing.');
     gpswiss_assert($payload['place'] === '2KNS', '60886 storage location missing.');
+    gpswiss_assert($result['listing_text_preview'] === '2KNS', '60886 listing_text_preview must show storage location.');
+    gpswiss_assert($result['listing_text_source'] === 'gmail_storage_location', '60886 listing_text_source missing.');
+    gpswiss_assert($result['price_fields_omitted'] === true, '60886 price_fields_omitted flag missing.');
 });
 
 gpswiss_run_preview_test('missing Ovoko category ID blocks preview readiness', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -418,6 +422,7 @@ gpswiss_run_preview_test('placeholder car_id adds warning without note fields', 
     $result = $service->preview(123);
     gpswiss_assert(in_array('using_placeholder_car_id', gpswiss_codes($result), true), 'Placeholder warning missing.');
     gpswiss_assert(!array_key_exists('internal_notes', $result['proposed_payload']), 'Placeholder warning must not populate internal_notes.');
+    gpswiss_assert(!str_contains((string) ($result['proposed_payload']['notes'] ?? ''), 'Manual vehicle review required.'), 'Placeholder warning must not populate notes/listing text.');
     gpswiss_assert(!array_key_exists('sticker_note', $result['proposed_payload']), 'Placeholder warning must not populate sticker_note.');
     gpswiss_assert($result['future_live_readiness']['placeholder_car_id_requires_admin_confirmation'] === true, 'Placeholder admin confirmation flag missing.');
 });
@@ -524,4 +529,14 @@ gpswiss_run_preview_test('contract report includes latest part status probe summ
     gpswiss_assert($report['latest_part_status_probe_result']['endpoint_used'] === '/get/part_status', 'Latest status probe endpoint missing.');
     gpswiss_assert($report['latest_part_status_probe_result']['interpretation_summary']['confirmation_required'] === true, 'Latest status probe confirmation requirement missing.');
     gpswiss_assert($report['latest_part_status_probe_result']['status_catalog_scope'] === 'operational_stock_sales_lifecycle', 'Latest status probe should surface operational scope.');
+});
+
+
+gpswiss_run_preview_test('CRM-only preview omits notes/listing text when storage location is empty', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_gps_storage_location', '');
+    $result = $service->preview(123);
+    gpswiss_assert(!array_key_exists('notes', $result['proposed_payload']) || trim((string) $result['proposed_payload']['notes']) === '', 'Empty storage location must omit or empty notes/listing text.');
+    gpswiss_assert($result['listing_text_preview'] === '', 'Empty storage location must produce empty listing_text_preview.');
+    gpswiss_assert($result['listing_text_source'] === '', 'Empty storage location must produce empty listing_text_source.');
 });
