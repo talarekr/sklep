@@ -311,3 +311,35 @@ gpswiss_run_preview_test('contract report includes latest part status probe summ
     gpswiss_assert($report['latest_part_status_probe_result']['interpretation_summary']['confirmation_required'] === true, 'Latest status probe confirmation requirement missing.');
     gpswiss_assert($report['latest_part_status_probe_result']['status_catalog_scope'] === 'operational_stock_sales_lifecycle', 'Latest status probe should surface operational scope.');
 });
+
+gpswiss_run_preview_test('UI status evidence includes Szkic and confirm availability', function (WooToOvokoCreatePartPreviewService $service): void {
+    $report = $service->create_part_contract_report();
+    $evidence = $report['ovoko_ui_status_filter_evidence'];
+    gpswiss_assert($evidence['contains_szkic'] === true, 'UI status evidence must include Szkic.');
+    gpswiss_assert(in_array('Szkic', $evidence['statuses'], true), 'Szkic label missing from evidence list.');
+    gpswiss_assert(in_array('Potwierdź dostępność części', $evidence['statuses'], true), 'Confirm availability label missing from evidence list.');
+    gpswiss_assert($report['draft_unpublished_visibility_support']['part_status_endpoint_incomplete_for_ui_statuses'] === true, '/get/part_status incompleteness must be documented.');
+});
+
+gpswiss_run_preview_test('live write remains blocked while Szkic API value is unknown', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $result = $service->preview(123);
+    gpswiss_assert($result['would_send'] === false && $result['no_ovoko_write'] === true, 'Preview must remain no-write.');
+    gpswiss_assert($result['intended_import_status_label'] === 'Szkic', 'Preview should surface intended Szkic label.');
+    gpswiss_assert($result['intended_import_status_value'] === 'unknown', 'Szkic value must remain unknown until confirmed.');
+    gpswiss_assert($result['draft_visibility_confirmation_required'] === true, 'Unknown Szkic value must require confirmation.');
+    gpswiss_assert(in_array('draft_unpublished_behavior_not_confirmed', $result['future_live_readiness']['blockers'], true), 'Unknown Szkic value must block future live readiness.');
+    gpswiss_assert($result['future_live_readiness']['live_creation_enabled'] === false, 'Live creation must remain disabled.');
+});
+
+gpswiss_run_preview_test('configured Szkic value is surfaced but live write remains disabled', function (WooToOvokoCreatePartPreviewService $service): void {
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_confirmed_szkic_status_value'] = ['value' => 6, 'source' => 'manual_panel_network_capture'];
+    gpswiss_seed_valid_product();
+    $result = $service->preview(123);
+    gpswiss_assert($result['intended_import_status_label'] === 'Szkic', 'Configured preview should keep Szkic label.');
+    gpswiss_assert($result['intended_import_status_value'] === 6, 'Configured Szkic numeric value missing.');
+    gpswiss_assert($result['proposed_payload']['status'] === 6, 'Configured Szkic value should be included in proposed payload only.');
+    gpswiss_assert($result['would_create_as_draft_or_unpublished'] === true, 'Configured Szkic should mark draft behavior as confirmed.');
+    gpswiss_assert($result['draft_visibility_confirmation_required'] === false, 'Configured Szkic should clear draft visibility confirmation.');
+    gpswiss_assert($result['would_send'] === false && $result['future_live_readiness']['live_creation_enabled'] === false, 'Configured Szkic must not enable live writes.');
+});

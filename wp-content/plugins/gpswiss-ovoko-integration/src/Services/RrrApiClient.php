@@ -2943,6 +2943,51 @@ class RrrApiClient
         ]);
     }
 
+    public function diagnose_part_list_status_filter_options(array $manualPanelPayload = []): array
+    {
+        $manualOptions = $this->normalize_part_status_rows($manualPanelPayload);
+        $interpretations = $this->interpret_part_statuses($manualOptions);
+        $labels = array_map(static fn(array $row): string => (string) ($row['name'] ?? ''), $manualOptions);
+
+        return array_merge($interpretations, [
+            'ok' => $manualOptions !== [],
+            'action_name' => 'Diagnose Ovoko parts-list status filter options',
+            'mode' => 'read_only_no_write_manual_panel_payload_supported',
+            'no_ovoko_write' => true,
+            'no_woo_write' => true,
+            'write_endpoints_called' => [],
+            'official_openapi_status_endpoints' => ['/get/part_status'],
+            'official_openapi_part_list_endpoint' => '/v2/get/parts',
+            'candidate_panel_network_terms_to_search' => [
+                'draft',
+                'szkic',
+                'confirm availability',
+                'availability confirmation',
+                'pending',
+                'incomplete',
+                'unpublished',
+                'hidden',
+                'visible',
+                'visibility',
+                'listing status',
+                'part status',
+                'status_id',
+                'status[]',
+                'filter status',
+                'shop status',
+                'marketplace status',
+            ],
+            'manual_panel_statuses' => $manualOptions,
+            'manual_panel_status_labels' => $labels,
+            'manual_panel_contains_szkic' => $this->labels_include($labels, 'szkic'),
+            'manual_panel_contains_confirm_availability' => $this->labels_include($labels, 'potwierdź dostępność') || $this->labels_include($labels, 'confirm availability'),
+            'szkic_status_value' => $this->first_status_id_for_label($manualOptions, ['szkic', 'draft']),
+            'confirm_availability_status_value' => $this->first_status_id_for_label($manualOptions, ['potwierdź dostępność', 'confirm availability', 'availability confirmation']),
+            'part_status_endpoint_assessment' => '/get/part_status remains incomplete for the Ovoko UI parts-list filter when it lacks Szkic and Potwierdź dostępność części.',
+            'safe_next_step' => 'Paste a browser Network response/request payload from the Ovoko parts list filter into this diagnostic; it parses values without calling /crm/importPart or any write endpoint.',
+        ]);
+    }
+
     public function normalize_part_status_rows(array $payload): array
     {
         $source = [];
@@ -3010,7 +3055,7 @@ class RrrApiClient
 
             if ($this->flag_truthy($flags, ['draft', 'is_draft', 'unpublished', 'is_unpublished'])) {
                 $groups['candidate_draft_statuses'][] = $base + ['interpretation' => 'confirmed_by_response', 'confidence' => 'high', 'evidence' => 'explicit draft/unpublished flag'];
-            } elseif ($this->label_has_any($label, ['draft', 'unpublished', 'nieopublik', 'roboc'])) {
+            } elseif ($this->label_has_any($label, ['draft', 'szkic', 'unpublished', 'nieopublik', 'roboc'])) {
                 $groups['candidate_draft_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains draft or unpublished wording'];
             }
 
@@ -3038,7 +3083,7 @@ class RrrApiClient
                 $groups['candidate_sold_statuses'][] = $base + ['interpretation' => 'inferred_from_label', 'confidence' => 'medium', 'evidence' => 'label/code contains sold or reserved wording'];
             }
 
-            if ($this->label_has_any($label, ['in stock', 'na stanie', 'available', 'reserved', 'zarezerwowano', 'sold out', 'sold', 'sprzedano', 'returned', 'zwrot', 'written off', 'wycofany'])) {
+            if ($this->label_has_any($label, ['in stock', 'na stanie', 'available', 'reserved', 'zarezerwowano', 'sold out', 'sold', 'sprzedano', 'sprzedane', 'returned', 'zwrot', 'zwrócony', 'written off', 'wycofany', 'wycofana'])) {
                 $groups['operational_stock_sales_statuses'][] = $base + ['interpretation' => 'operational_stock_sales_lifecycle', 'confidence' => 'medium', 'evidence' => 'label/id matches inventory or sales lifecycle wording, not listing publication wording'];
             }
 
@@ -3069,6 +3114,31 @@ class RrrApiClient
         ];
 
         return $groups;
+    }
+
+    private function labels_include(array $labels, string $needle): bool
+    {
+        $needle = mb_strtolower($needle);
+        foreach ($labels as $label) {
+            if (str_contains(mb_strtolower((string) $label), $needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function first_status_id_for_label(array $statuses, array $needles): ?string
+    {
+        foreach ($statuses as $status) {
+            $label = mb_strtolower(trim(((string) ($status['name'] ?? '')) . ' ' . ((string) ($status['code'] ?? ''))));
+            foreach ($needles as $needle) {
+                if ($needle !== '' && str_contains($label, mb_strtolower($needle))) {
+                    $id = trim((string) ($status['id'] ?? ''));
+                    return $id === '' ? null : $id;
+                }
+            }
+        }
+        return null;
     }
 
     private function array_is_status_map(array $payload): bool

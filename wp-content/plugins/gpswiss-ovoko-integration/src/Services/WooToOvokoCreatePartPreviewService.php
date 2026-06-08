@@ -25,6 +25,16 @@ class WooToOvokoCreatePartPreviewService
         'source_part_id',
         'external_part_id',
     ];
+    private const OVOKO_UI_STATUS_FILTER_LABELS = [
+        'Na stanie',
+        'Zarezerwowano',
+        'Sprzedane',
+        'Zwrócony',
+        'Wycofana',
+        'Potwierdź dostępność części',
+        'Szkic',
+    ];
+
 
     public function preview(int $productId): array
     {
@@ -79,6 +89,7 @@ class WooToOvokoCreatePartPreviewService
         $duplicates = $this->duplicate_checks($productId, $sku, $manufacturerCode, $partIdentifier['value']);
         $description = $this->product_description($product, $productId);
         $contract = $this->create_part_contract_report();
+        $draftStatus = $this->confirmed_szkic_status();
         $categoryPayload = $this->category_payload($categoryReadiness);
         $storageLocation = $this->storage_location($productId);
         $qualityId = $this->first_meta_value($productId, ['_ovoko_quality_id', 'ovoko_quality_id', '_rrr_quality_id', 'rrr_quality_id']);
@@ -142,12 +153,15 @@ class WooToOvokoCreatePartPreviewService
         $result['proposed_endpoint_path'] = self::PROPOSED_ENDPOINT_PATH;
         $result['authentication_style'] = $contract['authentication_style'];
         $result['image_handling'] = $contract['image_handling'];
-        $result['would_create_as_draft_or_unpublished'] = 'unknown';
-        $result['draft_visibility_field'] = null;
-        $result['draft_visibility_value'] = null;
-        $result['draft_visibility_confirmation_required'] = true;
+        $result['intended_import_status_label'] = 'Szkic';
+        $result['intended_import_status_value'] = $draftStatus['confirmed'] ? $draftStatus['value'] : 'unknown';
+        $result['would_create_as_draft_or_unpublished'] = $draftStatus['confirmed'] ? true : 'unknown';
+        $result['draft_visibility_field'] = $draftStatus['confirmed'] ? 'status' : null;
+        $result['draft_visibility_value'] = $draftStatus['confirmed'] ? $draftStatus['value'] : null;
+        $result['draft_visibility_confirmation_required'] = !$draftStatus['confirmed'];
+        $result['draft_status_confirmation_source'] = $draftStatus['source'];
 
-        $result['proposed_payload'] = $this->build_proposed_payload($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId);
+        $result['proposed_payload'] = $this->build_proposed_payload($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId, $draftStatus);
 
         $result['future_live_readiness'] = $this->future_live_readiness($result, $categoryPayload, $images, $price, $sku, $carId, $qualityId);
 
@@ -193,6 +207,8 @@ class WooToOvokoCreatePartPreviewService
             'draft_visibility_field' => null,
             'draft_visibility_value' => null,
             'draft_visibility_confirmation_required' => true,
+            'intended_import_status_label' => 'Szkic',
+            'intended_import_status_value' => 'unknown',
             'create_part_contract_report' => [],
             'future_live_readiness' => [],
             'candidate_endpoints' => [],
@@ -235,6 +251,8 @@ class WooToOvokoCreatePartPreviewService
 
     public function create_part_contract_report(): array
     {
+        $draftStatus = $this->confirmed_szkic_status();
+
         return [
             'source' => [
                 'official_openapi_url' => 'https://api.rrr.lt/openapi/swagger.yaml',
@@ -275,7 +293,7 @@ class WooToOvokoCreatePartPreviewService
                 'part_code_oem' => ['primary_field' => 'manufacturer_code', 'visible_field' => 'visible_code', 'additional_fields' => ['other_code', 'optional_codes[]']],
                 'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'Woo-only products need a confirmed RRR car_id or confirmed alternative before live import.'],
                 'warehouse_location' => ['field' => 'place', 'required' => false],
-                'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned stock/sales states, not publication visibility states.'],
+                'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned only stock/sales states and is incomplete for the Ovoko UI parts-list status filter because the UI also shows availability-confirmation and draft statuses.'],
             ],
             'image_handling' => [
                 'mode' => 'url_form_fields',
@@ -287,15 +305,28 @@ class WooToOvokoCreatePartPreviewService
             'draft_unpublished_visibility_support' => [
                 'explicit_draft_field_found' => false,
                 'visibility_fields_found' => [],
-                'status_values_confirmed' => false,
+                'status_values_confirmed' => $draftStatus['confirmed'],
                 'status_field_is_operational_stock_sales_status' => true,
-                'draft_visibility_field' => null,
-                'draft_visibility_value' => null,
-                'would_create_as_draft_or_unpublished' => 'unknown',
-                'confirmation_required' => true,
-                'notes' => 'OpenAPI exposes required numeric status, but the read-only /get/part_status probe returned operational inventory/sales lifecycle values (0 In stock, 1 Reserved, 2 Sold out, 3 Returned, 4 Written off), not listing publication visibility values. Draft/unpublished/hidden behavior remains unconfirmed and must not be guessed.',
+                'part_status_endpoint_incomplete_for_ui_statuses' => true,
+                'intended_import_status_label' => 'Szkic',
+                'intended_import_status_value' => $draftStatus['confirmed'] ? $draftStatus['value'] : 'unknown',
+                'draft_visibility_field' => $draftStatus['confirmed'] ? 'status' : null,
+                'draft_visibility_value' => $draftStatus['confirmed'] ? $draftStatus['value'] : null,
+                'would_create_as_draft_or_unpublished' => $draftStatus['confirmed'] ? true : 'unknown',
+                'confirmation_required' => !$draftStatus['confirmed'],
+                'notes' => 'OpenAPI exposes required numeric status, but the read-only /get/part_status probe returned operational inventory/sales lifecycle values (0 In stock, 1 Reserved, 2 Sold out, 3 Returned, 4 Written off), while the Ovoko web-panel parts list filter also shows Potwierdź dostępność części and Szkic. The exact Szkic API value remains unconfirmed unless explicitly configured from panel/network evidence.',
             ],
             'latest_part_status_probe_result' => $this->latest_part_status_probe_result(),
+            'ovoko_ui_status_filter_evidence' => [
+                'source' => 'manual Ovoko web panel observation supplied 2026-06-08',
+                'statuses' => self::OVOKO_UI_STATUS_FILTER_LABELS,
+                'contains_szkic' => true,
+                'contains_confirm_availability' => true,
+                'api_values_confirmed' => $draftStatus['confirmed'],
+                'szkic_status_value' => $draftStatus['confirmed'] ? $draftStatus['value'] : 'unknown',
+                'confirm_availability_status_value' => 'unknown',
+                'part_status_endpoint_assessment' => '/get/part_status is incomplete for UI/listing statuses unless panel network evidence proves otherwise.',
+            ],
             'documentation_backed_findings' => [
                 'what_import_part_does' => [
                     'status' => 'confirmed_by_documentation',
@@ -311,7 +342,7 @@ class WooToOvokoCreatePartPreviewService
                 ],
                 'status_field_meaning' => [
                     'status' => 'confirmed_by_documentation',
-                    'answer' => 'The importPart schema describes status as the status ID assigned to the part. The documented status catalog endpoint is /get/part_status, whose observed values are operational stock/sales states, not publication visibility states.',
+                    'answer' => 'The importPart schema describes status as the status ID assigned to the part. The documented status catalog endpoint is /get/part_status, but its observed values are operational stock/sales states and do not include the Ovoko UI filter statuses Potwierdź dostępność części or Szkic.',
                 ],
                 'public_immediately_after_import' => [
                     'status' => 'unknown',
@@ -353,7 +384,7 @@ class WooToOvokoCreatePartPreviewService
             ],
             'listing_visibility_audit' => [
                 'scope' => 'Documentation-backed audit of the official OpenAPI schema plus repository documentation references. No /crm/importPart or write endpoint call is made.',
-                'searched_terms' => ['importPart', '/crm/importPart', 'status', 'visible', 'visibility', 'active', 'enabled', 'publish', 'published', 'hidden', 'show', 'shop', 'marketplace', 'on_sale', 'display', 'listing', 'public', 'private', 'draft', 'disabled', 'external_id', 'shop_url', 'show_url', 'category_id', 'car_id', 'quality', 'photo', 'photos'],
+                'searched_terms' => ['importPart', '/crm/importPart', 'status', 'status_id', 'status[]', 'filter status', 'part status', 'listing status', 'shop status', 'marketplace status', 'visible', 'visibility', 'active', 'enabled', 'publish', 'published', 'hidden', 'show', 'shop', 'marketplace', 'on_sale', 'display', 'listing', 'public', 'private', 'draft', 'szkic', 'pending', 'incomplete', 'unpublished', 'availability', 'confirm availability', 'Potwierdź dostępność części', 'disabled', 'external_id', 'shop_url', 'show_url', 'category_id', 'car_id', 'quality', 'photo', 'photos'],
                 'import_part_visibility_field_separate_from_status' => [
                     'status' => 'not_found_in_documentation',
                     'answer' => 'No documented importPart publication visibility field separate from operational status was found.',
@@ -371,6 +402,9 @@ class WooToOvokoCreatePartPreviewService
                     'answer' => 'No documented draft/import queue mode for /crm/importPart was found.',
                 ],
                 'remaining_unknowns' => [
+                    'The exact numeric/API value for Szkic in the Ovoko panel status filter.',
+                    'Whether Potwierdź dostępność części is passed as status, another availability field, or a separate filter parameter.',
+                    'Whether /crm/importPart accepts the Szkic value and creates a draft/unpublished listing.',
                     'Whether /crm/importPart creates a public shop/marketplace listing immediately when required fields and price are present.',
                     'Whether business settings outside the API schema affect default imported-part visibility.',
                     'Exact semantics of shop_url versus show_url and whether missing shop_url proves internal-only state.',
@@ -383,6 +417,27 @@ class WooToOvokoCreatePartPreviewService
                 'no_woo_write' => true,
             ],
         ];
+    }
+
+
+    private function confirmed_szkic_status(): array
+    {
+        $default = ['confirmed' => false, 'value' => null, 'source' => 'not_configured'];
+        if (!function_exists('get_option')) {
+            return $default + ['source' => 'get_option_unavailable'];
+        }
+
+        $raw = get_option('gpswiss_ovoko_confirmed_szkic_status_value', null);
+        $source = 'gpswiss_ovoko_confirmed_szkic_status_value';
+        if (is_array($raw)) {
+            $source = (string) ($raw['source'] ?? $source);
+            $raw = $raw['value'] ?? null;
+        }
+        if (is_int($raw) || (is_string($raw) && preg_match('/^-?\d+$/', trim($raw)) === 1)) {
+            return ['confirmed' => true, 'value' => (int) $raw, 'source' => $source];
+        }
+
+        return $default;
     }
 
     private function latest_part_status_probe_result(): array
@@ -415,14 +470,14 @@ class WooToOvokoCreatePartPreviewService
         ];
     }
 
-    private function build_proposed_payload(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId): array
+    private function build_proposed_payload(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId, array $draftStatus): array
     {
         $imageUrls = (array) ($images['image_urls'] ?? []);
         $payload = [
             'category_id' => $categoryPayload['category_id'],
             'car_id' => $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null,
             'quality' => $qualityId['value'] !== '' && ctype_digit((string) $qualityId['value']) ? (int) $qualityId['value'] : null,
-            'status' => null,
+            'status' => $draftStatus['confirmed'] ? $draftStatus['value'] : null,
             'notes' => $description,
             'place' => $storageLocation,
             'manufacturer_code' => $manufacturerCode !== '' ? $manufacturerCode : (string) $partIdentifier['value'],
@@ -449,8 +504,8 @@ class WooToOvokoCreatePartPreviewService
             '_confirmation_required' => [
                 'endpoint' => false,
                 'payload_format' => false,
-                'publication_visibility_behavior' => true,
-                'status_draft_unpublished_value' => true,
+                'publication_visibility_behavior' => !$draftStatus['confirmed'],
+                'status_draft_unpublished_value' => !$draftStatus['confirmed'],
                 'car_id_source' => $carId['value'] === '',
                 'quality_value' => $qualityId['value'] === '',
             ],
@@ -486,9 +541,9 @@ class WooToOvokoCreatePartPreviewService
         $blockers[] = 'explicit_admin_confirmation_required';
         $blockers[] = 'single_product_only_required';
         $blockers[] = 'recent_dry_run_preview_required';
-        $blockers[] = 'publication_visibility_behavior_not_confirmed';
+        if ($result['draft_visibility_confirmation_required']) { $blockers[] = 'publication_visibility_behavior_not_confirmed'; }
         $blockers[] = 'business_approval_for_public_import_required';
-        $blockers[] = 'draft_unpublished_behavior_not_confirmed';
+        if ($result['draft_visibility_confirmation_required']) { $blockers[] = 'draft_unpublished_behavior_not_confirmed'; }
         return [
             'ready' => false,
             'blocked' => true,

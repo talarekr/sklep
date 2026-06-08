@@ -106,3 +106,23 @@ gpswiss_status_run('unknown status behavior blocks future live readiness', funct
     gpswiss_status_assert($result['interpretation_summary']['confirmation_required'] === true, 'Unknown status behavior must remain confirmation-required.');
     gpswiss_status_assert($result['interpretation_summary']['safe_non_public_status_value'] === null, 'Unknown status must not select safe value.');
 });
+
+gpswiss_status_run('manual panel diagnostic extracts Szkic and confirm availability values without writes', function (RrrApiClient $client): void {
+    $payload = ['statuses' => [
+        ['id' => 0, 'label' => 'Na stanie'],
+        ['id' => 1, 'label' => 'Zarezerwowano'],
+        ['id' => 2, 'label' => 'Sprzedane'],
+        ['id' => 3, 'label' => 'Zwrócony'],
+        ['id' => 4, 'label' => 'Wycofana'],
+        ['id' => 5, 'label' => 'Potwierdź dostępność części'],
+        ['id' => 6, 'label' => 'Szkic'],
+    ]];
+    $result = $client->diagnose_part_list_status_filter_options($payload);
+    gpswiss_status_assert($result['ok'] === true, 'Manual panel diagnostic should parse options.');
+    gpswiss_status_assert($result['manual_panel_contains_szkic'] === true, 'Szkic must be detected.');
+    gpswiss_status_assert($result['manual_panel_contains_confirm_availability'] === true, 'Confirm availability must be detected.');
+    gpswiss_status_assert($result['szkic_status_value'] === '6', 'Szkic value should be extracted from manual payload.');
+    gpswiss_status_assert($result['confirm_availability_status_value'] === '5', 'Confirm availability value should be extracted from manual payload.');
+    gpswiss_status_assert($GLOBALS['gpswiss_rrr_status_test_requests'] === [], 'Manual panel diagnostic must not perform HTTP requests.');
+    gpswiss_status_assert($GLOBALS['gpswiss_rrr_status_test_writes'] === [], 'Manual panel diagnostic must not perform writes.');
+});
