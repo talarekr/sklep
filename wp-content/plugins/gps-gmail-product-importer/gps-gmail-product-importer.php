@@ -249,7 +249,14 @@ JS;
         <div class="wrap">
             <h1><?php echo esc_html__('GPS Gmail Importer', 'gps-gmail-product-importer'); ?></h1>
             <?php if ($last_result) : ?>
-                <div class="notice notice-info"><pre><?php echo esc_html(wp_json_encode($last_result, JSON_PRETTY_PRINT)); ?></pre></div>
+                <?php
+                $last_result_is_error = !empty($last_result['error']) || in_array((string) ($last_result['result'] ?? ''), array('error', 'blocked'), true);
+                $last_result_message = $this->admin_result_notice_message($last_result);
+                ?>
+                <div class="notice <?php echo $last_result_is_error ? 'notice-error' : 'notice-success'; ?> is-dismissible">
+                    <p><strong><?php echo esc_html($last_result_message); ?></strong></p>
+                    <pre><?php echo esc_html(wp_json_encode($last_result, JSON_PRETTY_PRINT)); ?></pre>
+                </div>
             <?php endif; ?>
 
             <h2><?php echo esc_html__('1. Settings', 'gps-gmail-product-importer'); ?></h2>
@@ -365,6 +372,23 @@ JS;
         <?php
     }
 
+    private function admin_result_notice_message($result)
+    {
+        $result = (array) $result;
+        $action = (string) ($result['action'] ?? '');
+        $status = (string) ($result['result'] ?? '');
+        if ($action === 'reset_created_woo_product_link' && $status === 'reset_created_product_link') {
+            return __('Created Woo product link was reset for the import queue item.', 'gps-gmail-product-importer');
+        }
+        if ($action === 'reset_created_woo_product_link' && $status === 'blocked') {
+            return __('Reset created Woo product link was blocked because the linked product still exists. Check force reset to proceed.', 'gps-gmail-product-importer');
+        }
+        if (!empty($result['error'])) {
+            return (string) $result['error'];
+        }
+        return __('Import queue action completed.', 'gps-gmail-product-importer');
+    }
+
     private function render_import_queue_admin_view()
     {
         $items = get_posts(array(
@@ -438,6 +462,42 @@ JS;
         <?php endif;
     }
 
+    private function render_reset_created_product_link_form($item_id)
+    {
+        $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
+        if ($created_product_id <= 0) {
+            return;
+        }
+
+        $linked_product = get_post($created_product_id);
+        $linked_product_exists = (bool) $linked_product;
+        $linked_product_status = $linked_product_exists ? (string) ($linked_product->post_status ?? '') : '';
+        $requires_force = $linked_product_exists && $linked_product_status !== 'trash';
+        ?>
+        <div style="max-width:720px;margin:12px 0 16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
+            <h4 style="margin-top:0;"><?php esc_html_e('Reset created Woo product link', 'gps-gmail-product-importer'); ?></h4>
+            <table class="widefat striped" style="margin-bottom:12px;">
+                <tbody>
+                    <tr><th style="width:260px;"><?php esc_html_e('Linked created product ID', 'gps-gmail-product-importer'); ?></th><td><?php echo esc_html($created_product_id); ?></td></tr>
+                    <tr><th><?php esc_html_e('Linked product exists', 'gps-gmail-product-importer'); ?></th><td><?php echo esc_html($linked_product_exists ? __('Yes', 'gps-gmail-product-importer') : __('No', 'gps-gmail-product-importer')); ?></td></tr>
+                    <tr><th><?php esc_html_e('Linked product post status', 'gps-gmail-product-importer'); ?></th><td><?php echo esc_html($linked_product_exists ? ($linked_product_status ?: __('unknown', 'gps-gmail-product-importer')) : __('missing/deleted', 'gps-gmail-product-importer')); ?></td></tr>
+                </tbody>
+            </table>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field(self::NONCE_ACTION); ?>
+                <input type="hidden" name="action" value="gps_gmail_product_importer_queue_item_action">
+                <input type="hidden" name="queue_action" value="reset_created_woo_product_link">
+                <input type="hidden" name="staging_item_id" value="<?php echo esc_attr($item_id); ?>">
+                <p class="description"><?php esc_html_e('Clears only the staging item created-product link and refreshes readiness. It never deletes or creates Woo products.', 'gps-gmail-product-importer'); ?></p>
+                <?php if ($requires_force) : ?>
+                    <p><label><input type="checkbox" name="force_reset_created_product_link" value="1"> <?php esc_html_e('Force reset even if the linked Woo product still exists and is not in trash', 'gps-gmail-product-importer'); ?></label></p>
+                <?php endif; ?>
+                <?php submit_button(__('Reset created Woo product link', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
+            </form>
+        </div>
+        <?php
+    }
+
     private function render_import_queue_item_actions($item_id, $is_ready)
     {
         $detail_url = add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => $item_id), admin_url('admin.php'));
@@ -509,16 +569,7 @@ JS;
                     </tbody>
                 </table>
             <?php endforeach; ?>
-            <h4><?php esc_html_e('Reset created Woo product link', 'gps-gmail-product-importer'); ?></h4>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="max-width:720px;margin-bottom:16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
-                <?php wp_nonce_field(self::NONCE_ACTION); ?>
-                <input type="hidden" name="action" value="gps_gmail_product_importer_queue_item_action">
-                <input type="hidden" name="queue_action" value="reset_created_woo_product_link">
-                <input type="hidden" name="staging_item_id" value="<?php echo esc_attr($item_id); ?>">
-                <p class="description"><?php esc_html_e('Clears only the staging item created-product link and refreshes readiness. It never deletes or creates Woo products.', 'gps-gmail-product-importer'); ?></p>
-                <p><label><input type="checkbox" name="force_reset_created_product_link" value="1"> <?php esc_html_e('Force reset even if the linked Woo product still exists and is not in trash', 'gps-gmail-product-importer'); ?></label></p>
-                <?php submit_button(__('Reset created Woo product link', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
-            </form>
+            <?php $this->render_reset_created_product_link_form($item_id); ?>
             <h4><?php esc_html_e('Set manual price override', 'gps-gmail-product-importer'); ?></h4>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="max-width:720px;margin-bottom:16px;padding:12px;background:#fff;border:1px solid #ccd0d4;">
                 <?php wp_nonce_field(self::NONCE_ACTION); ?>
