@@ -13,7 +13,13 @@ function register_activation_hook() {}
 function register_post_type() {}
 function __($text, $domain = null) { return $text; }
 function esc_html__($text, $domain = null) { return $text; }
+function esc_html($value) { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); }
 function esc_html_e($text, $domain = null) { echo $text; }
+function esc_attr($value) { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); }
+function esc_url($value) { return (string) $value; }
+function admin_url($path = '') { return 'https://example.test/wp-admin/' . ltrim((string) $path, '/'); }
+function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true) { $field = '<input type="hidden" name="' . esc_attr($name) . '" value="test-nonce">'; if ($echo) { echo $field; } return $field; }
+function submit_button($text = null, $type = 'primary', $name = 'submit', $wrap = true, $other_attributes = null) { echo '<button type="submit" name="' . esc_attr($name) . '">' . htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8') . '</button>'; }
 function wp_parse_args($args, $defaults = array()) { return array_merge($defaults, (array) $args); }
 function get_option($name, $default = false) { return $GLOBALS['gps_test_options'][$name] ?? $default; }
 function absint($value) { return abs((int) $value); }
@@ -36,6 +42,8 @@ $reflection = new ReflectionClass(GPS_Gmail_Product_Importer::class);
 $plugin = $reflection->newInstanceWithoutConstructor();
 $resetLink = $reflection->getMethod('reset_created_woo_product_link_for_staging_item');
 $resetLink->setAccessible(true);
+$renderResetForm = $reflection->getMethod('render_reset_created_product_link_form');
+$renderResetForm->setAccessible(true);
 
 function assert_true($condition, $message, $payload = null) {
     if (!$condition) {
@@ -118,6 +126,23 @@ assert_true(($GLOBALS['gps_test_meta'][60849]['_gps_manual_price_pln'] ?? '') ==
 assert_true(($GLOBALS['gps_test_meta'][60849]['_gps_woo_draft_readiness_status'] ?? '') === 'ready_to_create_product', 'Forced reset should refresh Woo draft readiness.', $GLOBALS['gps_test_meta'][60849]);
 assert_true(($GLOBALS['gps_test_meta'][60849]['_gps_readiness_status'] ?? '') === 'ready_to_create_product', 'Forced reset should refresh legacy readiness.', $GLOBALS['gps_test_meta'][60849]);
 assert_true(($GLOBALS['gps_test_meta'][60849]['_gps_staging_status'] ?? '') === 'ready_to_create_product', 'Ready item staging status should be restored after reset.', $GLOBALS['gps_test_meta'][60849]);
+
+seed_ready_staging_item(null);
+ob_start();
+$renderResetForm->invoke($plugin, 60849);
+$missingProductForm = ob_get_clean();
+assert_true(strpos($missingProductForm, 'Reset created Woo product link') !== false, 'Reset form should render when created product ID meta is present.');
+assert_true(strpos($missingProductForm, '60850') !== false, 'Reset form should show the linked created product ID.', $missingProductForm);
+assert_true(strpos($missingProductForm, 'missing/deleted') !== false, 'Reset form should show missing/deleted when the linked product no longer exists.', $missingProductForm);
+assert_true(strpos($missingProductForm, 'force_reset_created_product_link') === false, 'Missing-product reset form should not show the force checkbox.', $missingProductForm);
+assert_true(strpos($missingProductForm, 'gps_gmail_product_importer_queue_item_action') !== false && strpos($missingProductForm, 'reset_created_woo_product_link') !== false && strpos($missingProductForm, 'staging_item_id') !== false && strpos($missingProductForm, '_wpnonce') !== false, 'Reset form should include action, queue action, staging item ID, and nonce fields.', $missingProductForm);
+
+seed_ready_staging_item('draft');
+ob_start();
+$renderResetForm->invoke($plugin, 60849);
+$activeProductForm = ob_get_clean();
+assert_true(strpos($activeProductForm, 'draft') !== false, 'Reset form should show linked product post status when it exists.', $activeProductForm);
+assert_true(strpos($activeProductForm, 'force_reset_created_product_link') !== false, 'Existing active product reset form should show the force checkbox.', $activeProductForm);
 
 seed_ready_staging_item(null);
 unset($GLOBALS['gps_test_meta'][60849]['_gps_manual_price_override_enabled'], $GLOBALS['gps_test_meta'][60849]['_gps_manual_price_pln']);
