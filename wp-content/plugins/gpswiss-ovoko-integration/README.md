@@ -918,23 +918,26 @@ Documentation-backed `/crm/importPart` findings:
 - `confirmed_by_documentation`: `car_id` is required and is the car ID assigned to the part. The docs do not provide a Woo-only alternative; it must come from an existing/imported RRR car record or another documented car lookup/import workflow.
 - `confirmed_by_documentation`: `quality` is required and is the quality ID assigned to the part. Allowed IDs are not enumerated inline in `importPartRequest`; the docs expose `/get/part_quality` as the CRM Info endpoint for the quality list.
 - `confirmed_by_documentation`: `status` is the status ID assigned to the part. The separate `/get/part_status` catalog has already been confirmed as operational stock/sales status (`0 = In stock / Na stanie`, `1 = Reserved / Zarezerwowano`, `2 = Sold out / Sprzedano`, `3 = Returned / Zwrot`, `4 = Written off / Wycofany`), not publication visibility.
-- `confirmed_by_documentation`: `price` is documented as “must be filled in order to be shown in shop”; `original_currency` allows `EUR` or `PLN`.
+- `confirmed_by_documentation`: e-shop availability requires `price > 0.00` and a photo URL. `original_currency` allows `EUR` or `PLN`.
 - `confirmed_by_documentation`: `photo` is a photo URL, and `photos[]` must have the same first value as `photo` for correct main photo upload and thumbnail generation.
 - `confirmed_by_documentation`: `external_id` exists on `importPart` as “Local id”, and `/v2/get/parts` supports an `external_ids` query filter.
 - `unknown`: `external_id` idempotency for part import is not documented. Unlike `importCar`, the `importPart` docs do not state that an existing `external_id` aborts import or returns an existing part.
 
 Publication/visibility findings:
 - `not_found_in_documentation`: no `draft`, `hidden`, `unpublished`, `private`, `public`, `visible`, `visibility`, `published`, `publish`, `active`, `disabled`, shop visibility, or marketplace visibility field was found in `importPartRequest`.
-- `unknown`: the OpenAPI does not explicitly state whether `/crm/importPart` creates a public shop/marketplace listing immediately. The only shop-publication clue in the schema is that `price` must be filled to be shown in shop.
+- `confirmed_by_documentation`: a CRM-only import that includes `photo`/`photos[]` but omits price is interpreted as not available in e-shop after import, because the documented e-shop rule requires `price > 0.00` as well as a photo URL.
 - `not_found_in_documentation`: no documented draft/import queue mode for `/crm/importPart` was found.
 - `not_found_in_documentation`: no hide/unpublish-specific endpoint was found. The docs include `/crm/updatePart`, `/crm/changePartStatus`, and `/crm/deletePart` for existing parts, but no documented visibility/unpublish endpoint or field.
 - `unknown`: `/get/part/{id}` response schemas include `shop_url` and `show_url`, but the OpenAPI does not define their semantics or say that absence of `shop_url` means internal-only.
 
 Updated preview behavior:
-- `proposed_endpoint` is now `DOCUMENTED_ENDPOINT_WRITE_BLOCKED` and `proposed_endpoint_path` is `/crm/importPart`.
+- The admin action is **Preview Woo → Ovoko CRM-only import payload**.
+- `proposed_endpoint` is `DOCUMENTED_ENDPOINT_WRITE_BLOCKED` and `proposed_endpoint_path` is `/crm/importPart`.
 - `endpoint_confirmation_required=false` and `payload_format_confirmation_required=false` because the official OpenAPI confirms the endpoint path and form-encoded required payload shape.
-- Draft/publication fields remain confirmation-required: `would_create_as_draft_or_unpublished="unknown"`, `draft_visibility_field=null`, `draft_visibility_value=null`, and `draft_visibility_confirmation_required=true`.
-- Future live create remains blocked by design until explicit admin confirmation, single-product scope, recent dry-run preview, confirmed publication visibility behavior, and business approval for any public import behavior are all present.
+- `create_strategy=crm_only_non_public_initial_import`, `e_shop_visibility_rule_confirmed_by_documentation=true`, `e_shop_available_after_import=false`, `non_public_reason=missing_price`, `photos_included=true` when images are present, and `omitted_for_non_public_import=["price", "original_price", "currency"]`.
+- The CRM-only `proposed_payload` includes `photo` and `photos[]` for internal review but intentionally omits `price`, `original_price`, and `currency`/`original_currency`.
+- `full_payload_preview` may include price and photos for comparison, but warns that including `price > 0` and a photo URL may make the part available in e-shop.
+- Future live create remains disabled/not implemented and still requires manual confirmation; preview mode does not call `/crm/importPart` or any write endpoint.
 
 ### Read-only part status probe before any create-part live test
 

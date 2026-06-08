@@ -68,6 +68,8 @@ function gpswiss_seed_valid_product(int $id = 123): void
     gpswiss_set_meta($id, '_stock', '1');
     gpswiss_set_meta($id, '_part_number', 'ABC-123');
     gpswiss_set_meta($id, '_manufacturer_code', 'ABC-123');
+    gpswiss_set_meta($id, '_ovoko_car_id', '9001');
+    gpswiss_set_meta($id, '_ovoko_quality_id', '2');
     $GLOBALS['gpswiss_test_terms'][$id] = [(object) ['term_id' => 9, 'name' => 'Mapped category', 'slug' => 'mapped-category']];
     $GLOBALS['gpswiss_test_term_meta'][9]['_ovoko_category_id'] = '777';
     gpswiss_set_meta($id, '_thumbnail_id', '501');
@@ -168,11 +170,13 @@ gpswiss_run_preview_test('missing SKU', function (WooToOvokoCreatePartPreviewSer
     gpswiss_assert(in_array('missing_sku', gpswiss_codes($result), true), 'Missing SKU validation missing.');
 });
 
-gpswiss_run_preview_test('missing price', function (WooToOvokoCreatePartPreviewService $service): void {
+gpswiss_run_preview_test('missing price keeps CRM-only preview non-public instead of blocking', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     gpswiss_set_meta(123, '_price', '');
     $result = $service->preview(123);
-    gpswiss_assert(in_array('missing_or_non_numeric_price', gpswiss_codes($result), true), 'Missing price validation missing.');
+    gpswiss_assert(!in_array('missing_or_non_numeric_price', gpswiss_codes($result), true), 'Missing price must not block CRM-only preview.');
+    gpswiss_assert($result['non_public_reason'] === 'missing_price', 'Missing price should be the non-public reason.');
+    gpswiss_assert($result['e_shop_available_after_import'] === false, 'Missing price should keep e-shop availability false.');
 });
 
 gpswiss_run_preview_test('missing part identifier', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -197,6 +201,10 @@ gpswiss_run_preview_test('valid draft product preview', function (WooToOvokoCrea
     gpswiss_assert($result['proposed_payload']['external_id'] === 'SKU-123', 'Payload SKU/external_id missing.');
     gpswiss_assert($result['proposed_payload']['manufacturer_code'] === 'ABC-123', 'Payload manufacturer/OEM code missing.');
     gpswiss_assert($result['proposed_payload']['category_id'] === 777, 'Payload category_id missing.');
+    gpswiss_assert($result['create_strategy'] === 'crm_only_non_public_initial_import', 'CRM-only strategy missing.');
+    gpswiss_assert($result['e_shop_visibility_rule_confirmed_by_documentation'] === true, 'E-shop visibility rule should be documentation-confirmed.');
+    gpswiss_assert($result['e_shop_available_after_import'] === false, 'CRM-only import should not be e-shop available after import.');
+    gpswiss_assert($result['live_create_still_requires_manual_confirmation'] === true, 'Live create must still require manual confirmation.');
 });
 
 gpswiss_run_preview_test('image preview extraction', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -211,6 +219,9 @@ gpswiss_run_preview_test('image preview extraction', function (WooToOvokoCreateP
     gpswiss_assert($result['images']['gallery_image_ids'] === [502, 503], 'Gallery image IDs missing.');
     gpswiss_assert(count($result['images']['image_urls']) === 3, 'Image URLs not extracted.');
     gpswiss_assert($result['images']['upload_policy'] === 'preview_urls_only_no_upload', 'Upload policy must forbid upload.');
+    gpswiss_assert($result['proposed_payload']['photo'] === 'https://example.test/501.jpg', 'CRM-only payload should include first photo URL.');
+    gpswiss_assert($result['proposed_payload']['photos[]'] === ['https://example.test/501.jpg', 'https://example.test/502.jpg', 'https://example.test/503.jpg'], 'CRM-only payload should include all photo URLs.');
+    gpswiss_assert($result['photos_included'] === true, 'CRM-only preview should mark photos included.');
 });
 
 gpswiss_run_preview_test('no write performed', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -230,6 +241,8 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_set_meta(60886, '_part_number', '5Q0131701AN');
     gpswiss_set_meta(60886, '_manufacturer_code', '5Q0131701AN');
     gpswiss_set_meta(60886, '_gps_storage_location', '2KNS');
+    gpswiss_set_meta(60886, '_ovoko_car_id', '9002');
+    gpswiss_set_meta(60886, '_ovoko_quality_id', '2');
     gpswiss_set_meta(60886, '_thumbnail_id', '601');
     gpswiss_set_meta(60886, '_product_image_gallery', '602,603');
     $GLOBALS['gpswiss_test_posts'][60886]->post_content = 'Gmail description/body';
@@ -244,10 +257,20 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_assert($result['would_send'] === false && $result['no_ovoko_write'] === true && $result['no_woo_write'] === true, 'Preview must be no-write.');
     gpswiss_assert($payload['external_id'] === 'GPS-GMAIL-60849', '60886 SKU missing.');
     gpswiss_assert($payload['manufacturer_code'] === '5Q0131701AN', '60886 OEM missing.');
-    gpswiss_assert($payload['price'] === 1000.0, '60886 price missing.');
-    gpswiss_assert($payload['original_currency'] === 'PLN', '60886 currency missing.');
+    gpswiss_assert(!array_key_exists('price', $payload), 'CRM-only payload must omit price.');
+    gpswiss_assert(!array_key_exists('original_price', $payload), 'CRM-only payload must omit original_price.');
+    gpswiss_assert(!array_key_exists('currency', $payload), 'CRM-only payload must omit currency.');
+    gpswiss_assert(!array_key_exists('original_currency', $payload), 'CRM-only payload must omit original_currency.');
     gpswiss_assert($payload['category_id'] === 1407, '60886 Ovoko category ID missing.');
+    gpswiss_assert($payload['status'] === 0, '60886 status/default import status missing.');
+    gpswiss_assert($payload['quality'] === 2, '60886 quality missing.');
+    gpswiss_assert($payload['car_id'] === 9002, '60886 car_id missing.');
+    gpswiss_assert($payload['notes'] === 'Gmail description/body', '60886 Gmail notes/description missing.');
+    gpswiss_assert($payload['photo'] === 'https://example.test/60886-1.jpg', '60886 first photo URL missing.');
     gpswiss_assert(count($payload['photos[]']) === 3, '60886 image URLs missing.');
+    gpswiss_assert($result['non_public_reason'] === 'missing_price', '60886 non-public reason missing_price missing.');
+    gpswiss_assert($result['photos_included'] === true, '60886 photos_included missing.');
+    gpswiss_assert($result['omitted_for_non_public_import'] === ['price', 'original_price', 'currency'], '60886 omitted fields summary missing.');
     gpswiss_assert($payload['_source_summary']['stock_quantity'] === 1, '60886 stock missing.');
     gpswiss_assert($payload['place'] === '2KNS', '60886 storage location missing.');
 });
@@ -260,6 +283,24 @@ gpswiss_run_preview_test('missing Ovoko category ID blocks preview readiness', f
     gpswiss_assert($result['would_be_eligible'] === false, 'Missing Ovoko category ID should block preview readiness.');
 });
 
+gpswiss_run_preview_test('missing car_id blocks CRM-only preview readiness', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $result = $service->preview(123);
+    gpswiss_assert(in_array('missing_required_car_id', gpswiss_codes($result), true), 'Missing car_id validation missing.');
+    gpswiss_assert($result['would_be_eligible'] === false, 'Missing car_id should block CRM-only preview readiness.');
+});
+
+gpswiss_run_preview_test('CRM-only preview omits price fields and full preview warns with price plus photos', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $result = $service->preview(123);
+    gpswiss_assert(!array_key_exists('price', $result['proposed_payload']), 'CRM-only payload must omit price.');
+    gpswiss_assert(!array_key_exists('original_price', $result['proposed_payload']), 'CRM-only payload must omit original_price.');
+    gpswiss_assert(!array_key_exists('currency', $result['proposed_payload']), 'CRM-only payload must omit currency.');
+    gpswiss_assert(($result['full_payload_preview']['payload']['price'] ?? null) === 199.99, 'Full payload preview may include price.');
+    gpswiss_assert(($result['full_payload_preview']['warnings'][0]['code'] ?? '') === 'price_and_photos_may_enable_e_shop_availability', 'Full payload preview should warn when price and photos are included.');
+});
+
 gpswiss_run_preview_test('missing image blocks future live readiness', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     gpswiss_set_meta(123, '_thumbnail_id', '');
@@ -269,14 +310,14 @@ gpswiss_run_preview_test('missing image blocks future live readiness', function 
     gpswiss_assert(in_array('missing_image', $result['future_live_readiness']['blockers'], true), 'Missing image future-live blocker missing.');
 });
 
-gpswiss_run_preview_test('draft visibility remains unknown and confirmation-required', function (WooToOvokoCreatePartPreviewService $service): void {
+gpswiss_run_preview_test('CRM-only visibility relies on omitted price and live action remains disabled', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     $result = $service->preview(123);
-    gpswiss_assert($result['would_create_as_draft_or_unpublished'] === 'unknown', 'Draft/unpublished behavior should be unknown.');
-    gpswiss_assert($result['draft_visibility_field'] === null, 'No separate draft visibility field should be guessed.');
-    gpswiss_assert($result['draft_visibility_value'] === null, 'Draft visibility value must not be guessed.');
-    gpswiss_assert($result['draft_visibility_confirmation_required'] === true, 'Draft visibility confirmation must be required.');
-    gpswiss_assert(in_array('draft_unpublished_behavior_not_confirmed', $result['future_live_readiness']['blockers'], true), 'Draft behavior blocker missing.');
+    gpswiss_assert($result['would_create_as_draft_or_unpublished'] === false, 'CRM-only strategy should not rely on unconfirmed draft status.');
+    gpswiss_assert($result['draft_visibility_field'] === 'price', 'CRM-only visibility guard should be price omission.');
+    gpswiss_assert($result['draft_visibility_value'] === 'omitted', 'CRM-only visibility guard should omit price.');
+    gpswiss_assert($result['future_live_readiness']['live_creation_enabled'] === false, 'Live creation must remain disabled/not implemented.');
+    gpswiss_assert(in_array('explicit_admin_confirmation_required', $result['future_live_readiness']['blockers'], true), 'Manual confirmation blocker missing.');
 });
 
 gpswiss_run_preview_test('contract report identifies importPart without live publishing', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -284,12 +325,12 @@ gpswiss_run_preview_test('contract report identifies importPart without live pub
     gpswiss_assert($report['candidate_endpoints'][0]['path'] === '/crm/importPart', 'importPart endpoint candidate missing.');
     gpswiss_assert($report['candidate_endpoints'][0]['method'] === 'POST', 'importPart HTTP method missing.');
     gpswiss_assert(in_array('status', $report['required_fields'], true), 'Required status field missing from contract.');
-    gpswiss_assert($report['draft_unpublished_visibility_support']['confirmation_required'] === true, 'Draft confirmation requirement missing.');
+    gpswiss_assert($report['draft_unpublished_visibility_support']['confirmation_required'] === false, 'CRM-only visibility no longer depends on draft confirmation.');
     gpswiss_assert($report['draft_unpublished_visibility_support']['status_field_is_operational_stock_sales_status'] === true, 'Status should be marked operational stock/sales.');
     gpswiss_assert($report['candidate_endpoints'][0]['status'] === 'confirmed_by_documentation', 'importPart endpoint should be documentation-confirmed.');
     gpswiss_assert($report['documentation_backed_findings']['required_fields']['status'] === 'confirmed_by_documentation', 'Required fields should be documentation-confirmed.');
     gpswiss_assert($report['documentation_backed_findings']['hidden_draft_unpublished_private_field']['status'] === 'not_found_in_documentation', 'Hidden/draft field finding missing.');
-    gpswiss_assert($report['documentation_backed_findings']['public_immediately_after_import']['status'] === 'unknown', 'Public import behavior must remain unknown.');
+    gpswiss_assert($report['documentation_backed_findings']['public_immediately_after_import']['status'] === 'conditional_rule_confirmed_by_documentation', 'Public import rule should be conditionally documentation-confirmed.');
     gpswiss_assert($report['listing_visibility_audit']['import_part_visibility_field_separate_from_status']['status'] === 'not_found_in_documentation', 'Listing visibility audit missing importPart finding.');
     gpswiss_assert($report['listing_visibility_audit']['status_0_public_effect']['status'] === 'unknown', 'status=0 public effect must remain unknown.');
     gpswiss_assert($report['write_safety']['live_create_implemented'] === false, 'Live create must not be implemented.');
