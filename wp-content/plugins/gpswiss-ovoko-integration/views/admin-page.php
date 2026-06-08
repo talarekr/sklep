@@ -189,7 +189,41 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>product_id: <input type="number" min="1" step="1" name="product_id" value="" style="width:140px;" required /></label>
             <?php submit_button('Preview Woo → Ovoko CRM-only import payload', 'secondary', 'submit', false); ?>
         </form>
-        <p><strong>Endpoint safety:</strong> create endpoint is documented as <code>/crm/importPart</code>, but remains write-blocked here. CRM-only preview includes photos and omits price because the documented e-shop rule requires price &gt; 0.00 plus a photo URL. This tool intentionally does not call <code>/crm/importPart</code>, <code>/crm/changePartStatus</code>, or <code>/crm/updatePart</code>.</p>
+        <p><strong>Endpoint safety:</strong> create endpoint is documented as <code>/crm/importPart</code>. CRM-only preview includes photos and omits price because the documented e-shop rule requires price &gt; 0.00 plus a photo URL. The live action below is separate, manual, confirmation-gated, one-product-only, and still forbids price fields.</p>
+
+        <details style="margin-top:14px;border:2px solid #d63638;padding:12px;background:#fff7f7;">
+            <summary><strong>Create Ovoko CRM-only part from this Woo draft</strong> — danger zone, single product only</summary>
+            <p><strong>Action label:</strong> Create Ovoko CRM-only part from Woo draft</p>
+            <p><strong>No bulk. No cron. No product-save hook.</strong> This manual form immediately regenerates the CRM-only preview for exactly one Woo draft product and calls <code>/crm/importPart</code> only if all safety checks pass.</p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="gpswiss-ovoko-crm-only-live-form" style="display:grid;gap:10px;max-width:920px;">
+                <?php wp_nonce_field('gpswiss_ovoko_create_crm_only_part_from_woo'); ?>
+                <input type="hidden" name="action" value="gpswiss_ovoko_create_crm_only_part_from_woo" />
+                <label><strong>Product ID</strong> <input type="number" min="1" step="1" name="product_id" value="60886" required style="width:140px;" /></label>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">
+                    <div><strong>SKU/external_id:</strong> regenerated from Woo preview immediately before live request</div>
+                    <div><strong>category_id:</strong> regenerated from mapped Woo category</div>
+                    <div><strong>car_id and source:</strong> regenerated from product meta or configured placeholder</div>
+                    <div><strong>endpoint:</strong> <code>/crm/importPart</code></div>
+                    <div><strong>omitted price fields:</strong> <code>price</code>, <code>original_price</code>, <code>currency</code></div>
+                    <div><strong>photo/photos count:</strong> validated from preview; <code>photo</code> and <code>photos[]</code> are required</div>
+                </div>
+                <p style="color:#b32d2e;"><strong>Placeholder car warning:</strong> if the preview uses configured placeholder <code>car_id</code>, it is allowed only for this CRM-only no-price import. Staff must correct vehicle mapping in Ovoko before publishing.</p>
+                <p><strong>Idempotency:</strong> this action blocks existing <code>_ovoko_part_id</code>, <code>ovoko_part_id</code>, <code>part_id</code>, <code>source_part_id</code>, and <code>external_part_id</code>. external_id duplicate behavior is not fully documented for importPart.</p>
+                <label><input type="checkbox" name="confirm_placeholder_car_id" value="1" required /> I understand this uses a placeholder car_id and staff must correct vehicle mapping in Ovoko before publishing.</label>
+                <label><input type="checkbox" name="confirm_live_one_product" value="1" required /> I understand this will call /crm/importPart live for one product only.</label>
+                <label><input type="checkbox" name="confirm_no_price_non_public" value="1" required /> I understand no price will be sent, so the part should not be available in e-shop according to documentation.</label>
+                <?php submit_button('Create CRM-only Ovoko part now', 'delete gpswiss-ovoko-crm-only-live-submit', 'submit', false, ['disabled' => 'disabled']); ?>
+            </form>
+            <script>
+            document.addEventListener('change', function (event) {
+                var form = event.target.closest('.gpswiss-ovoko-crm-only-live-form');
+                if (!form) { return; }
+                var boxes = Array.prototype.slice.call(form.querySelectorAll('input[type="checkbox"][required]'));
+                var button = form.querySelector('.gpswiss-ovoko-crm-only-live-submit');
+                if (button) { button.disabled = !boxes.every(function (box) { return box.checked; }); }
+            });
+            </script>
+        </details>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">
