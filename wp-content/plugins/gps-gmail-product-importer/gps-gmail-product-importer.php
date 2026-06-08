@@ -46,6 +46,7 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_post_gps_gmail_product_importer_create_woo_drafts', array($this, 'handle_create_woo_drafts'));
         add_action('admin_post_gps_gmail_product_importer_queue_item_action', array($this, 'handle_import_queue_item_action'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_test', array($this, 'handle_ovoko_test'));
+        add_action('admin_post_gps_gmail_product_importer_allegro_test', array($this, 'handle_allegro_test'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_dry_run', array($this, 'handle_ovoko_enrichment_dry_run'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_save', array($this, 'handle_ovoko_enrichment_save'));
         add_action('wp_ajax_gps_gmail_product_importer_import_batch', array($this, 'ajax_import_batch'));
@@ -99,6 +100,7 @@ final class GPS_Gmail_Product_Importer
             'allegro_api_enabled' => 0,
             'allegro_client_id' => '',
             'allegro_client_secret' => '',
+            'allegro_environment' => 'production',
             'allegro_access_token' => '',
             'allegro_refresh_token' => '',
             'allegro_token_expires_at' => '',
@@ -158,6 +160,7 @@ final class GPS_Gmail_Product_Importer
             'allegro_api_enabled' => empty($input['allegro_api_enabled']) ? 0 : 1,
             'allegro_client_id' => sanitize_text_field($input['allegro_client_id'] ?? ''),
             'allegro_client_secret' => sanitize_text_field($input['allegro_client_secret'] ?? ''),
+            'allegro_environment' => in_array(($input['allegro_environment'] ?? 'production'), array('production', 'sandbox'), true) ? sanitize_text_field($input['allegro_environment']) : 'production',
             'allegro_access_token' => sanitize_text_field($input['allegro_access_token'] ?? ''),
             'allegro_refresh_token' => sanitize_text_field($input['allegro_refresh_token'] ?? ''),
             'allegro_token_expires_at' => sanitize_text_field($input['allegro_token_expires_at'] ?? ''),
@@ -279,6 +282,7 @@ JS;
                     <tr><th><?php esc_html_e('Duplicate protection', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[duplicate_protection]" value="1" <?php checked($settings['duplicate_protection'], 1); ?>> <?php esc_html_e('Skip existing Gmail message IDs and possible OEM duplicates', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Uses this plugin's own Allegro API credentials to search public offers and save staging-only price suggestions. Woo drafts may use the selected hint as draft price, but Ovoko CRM-only imports must receive it only in internal_notes, never as public price fields.", 'gps-gmail-product-importer'); ?></p></th></tr>
                     <tr><th><?php esc_html_e('Enable Allegro API', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_api_enabled]" value="1" <?php checked($settings['allegro_api_enabled'], 1); ?>> <?php esc_html_e('Allow item-scoped Allegro price research actions', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><label for="gps-allegro-environment"><?php esc_html_e('Allegro environment', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-environment" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_environment]"><option value="production" <?php selected($settings['allegro_environment'], 'production'); ?>><?php esc_html_e('Production', 'gps-gmail-product-importer'); ?></option><option value="sandbox" <?php selected($settings['allegro_environment'], 'sandbox'); ?>><?php esc_html_e('Sandbox', 'gps-gmail-product-importer'); ?></option></select></td></tr>
                     <tr><th><label for="gps-allegro-client-id"><?php esc_html_e('Allegro client ID', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-id" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_id]" value="<?php echo esc_attr($settings['allegro_client_id']); ?>"></td></tr>
                     <tr><th><label for="gps-allegro-client-secret"><?php esc_html_e('Allegro client secret', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-secret" type="password" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_secret]" value="<?php echo esc_attr($settings['allegro_client_secret']); ?>" autocomplete="off"></td></tr>
                     <tr><th><label for="gps-allegro-access-token"><?php esc_html_e('Allegro access token', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-access-token" type="password" class="large-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_access_token]" value="<?php echo esc_attr($settings['allegro_access_token']); ?>" autocomplete="off"></td></tr>
@@ -346,6 +350,10 @@ JS;
 
             <h2><?php echo esc_html__('6. Allegro Price Research', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Use the item action in the import queue to call Allegro public offer search for a staged item. Results are saved only as _gps_allegro_* staging meta.', 'gps-gmail-product-importer'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+                <?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_allegro_test">
+                <?php submit_button(__('Test Allegro API connection', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?>
+            </form>
 
             <h2><?php echo esc_html__('7. Category Mapping', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Stores suggested Woo category ID, path, confidence, and source on staging records before product creation.', 'gps-gmail-product-importer'); ?></p>
@@ -540,7 +548,7 @@ JS;
             __('Images metadata', 'gps-gmail-product-importer') => array('_gps_gmail_import_image_count', '_gps_gmail_import_attachment_set_hash', '_gps_gmail_images_metadata'),
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
             __('Ovoko enrichment fields', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
-            __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes'),
+            __('Allegro price fields', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
             __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
             __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
@@ -694,6 +702,15 @@ JS;
         $this->verify_admin_action();
         $oem = sanitize_text_field(wp_unslash($_POST['oem'] ?? ''));
         $result = $this->test_ovoko_oem_lookup($oem);
+        set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
+        wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
+        exit;
+    }
+
+    public function handle_allegro_test()
+    {
+        $this->verify_admin_action();
+        $result = $this->test_allegro_api_connection();
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
         exit;
@@ -1290,6 +1307,10 @@ JS;
             '_gps_allegro_price_suggestion' => sanitize_text_field($analysis['allegro_price_suggestion'] ?? ''),
             '_gps_allegro_price_currency' => sanitize_text_field($analysis['allegro_price_currency'] ?? ''),
             '_gps_allegro_price_notes' => sanitize_textarea_field($analysis['allegro_price_notes'] ?? ''),
+            '_gps_allegro_price_error_http_status' => absint($analysis['allegro_price_error_http_status'] ?? 0),
+            '_gps_allegro_price_error_response' => sanitize_textarea_field($analysis['allegro_price_error_response'] ?? ''),
+            '_gps_allegro_price_error_code' => sanitize_text_field($analysis['allegro_price_error_code'] ?? ''),
+            '_gps_allegro_price_error_checked_at' => sanitize_text_field($analysis['allegro_price_error_checked_at'] ?? ''),
             '_gps_manual_price_override_enabled' => !empty($analysis['manual_price_override_enabled']) ? '1' : '0',
             '_gps_manual_price_pln' => sanitize_text_field($analysis['manual_price_pln'] ?? ''),
             '_gps_manual_price_note' => sanitize_textarea_field($analysis['manual_price_note'] ?? ''),
@@ -1690,7 +1711,10 @@ JS;
         foreach ($queries as $query) {
             $lookup = $this->allegro_search_offers($query, $settings);
             if (is_wp_error($lookup)) {
-                $errors[] = $lookup->get_error_message();
+                $errors[] = array(
+                    'message' => $lookup->get_error_message(),
+                    'data' => $lookup->get_error_data(),
+                );
                 continue;
             }
             foreach ((array) ($lookup['offers'] ?? array()) as $offer) {
@@ -1700,6 +1724,14 @@ JS;
         }
 
         if (!$offers && $errors) {
+            $first_error = $errors[0] ?? array();
+            $first_diagnostics = $first_error['data']['diagnostics'] ?? array();
+            $error_messages = array_map(function ($error) {
+                return is_array($error) ? (string) ($error['message'] ?? '') : (string) $error;
+            }, $errors);
+            $previous_selected_price = get_post_meta($item_id, '_gps_selected_price_pln', true);
+            $previous_selected_source = get_post_meta($item_id, '_gps_selected_price_source', true);
+            $previous_selected_checked_at = get_post_meta($item_id, '_gps_selected_price_checked_at', true);
             $this->persist_allegro_price_research($item_id, array(
                 'status' => 'api_error',
                 'checked_at' => $checked_at,
@@ -1714,9 +1746,17 @@ JS;
                 'source' => 'allegro_api',
                 'suggestion' => '',
                 'currency' => '',
-                'notes' => 'Allegro API request failed: ' . implode(' | ', array_slice($errors, 0, 3)),
+                'notes' => 'Allegro API request failed: ' . implode(' | ', array_slice($error_messages, 0, 3)),
+                'error_http_status' => absint($first_diagnostics['http_status'] ?? 0),
+                'error_response' => (string) ($first_diagnostics['sanitized_response_body'] ?? ''),
+                'error_code' => (string) ($first_diagnostics['classification'] ?? ''),
+                'error_checked_at' => $checked_at,
             ));
-            return array('action' => 'allegro_price_research', 'staging_item_id' => $item_id, 'result' => 'api_error', 'errors' => $errors, 'writes' => 'staging_meta_only');
+            $readiness = $this->run_readiness_validation_for_staging_item($item_id);
+            update_post_meta($item_id, '_gps_selected_price_pln', sanitize_text_field((string) $previous_selected_price));
+            update_post_meta($item_id, '_gps_selected_price_source', sanitize_text_field((string) $previous_selected_source));
+            update_post_meta($item_id, '_gps_selected_price_checked_at', sanitize_text_field((string) $previous_selected_checked_at));
+            return array('action' => 'allegro_price_research', 'staging_item_id' => $item_id, 'result' => 'api_error', 'errors' => $error_messages, 'diagnostics' => $first_diagnostics, 'readiness' => $readiness, 'selected_price_preserved' => true, 'writes' => 'staging_meta_only');
         }
 
         $analysis = $this->analyze_allegro_price_offers($queries, $offers, $settings);
@@ -1770,46 +1810,236 @@ JS;
         return strtoupper(preg_replace('/[^A-Z0-9]/i', '', trim((string) $query)));
     }
 
-    private function allegro_search_offers($query, $settings)
+    private function allegro_environment($settings)
     {
-        $token = $this->allegro_access_token($settings);
-        if (is_wp_error($token)) {
-            return $token;
-        }
+        return (($settings['allegro_environment'] ?? 'production') === 'sandbox') ? 'sandbox' : 'production';
+    }
+
+    private function allegro_api_base_url($settings)
+    {
+        return $this->allegro_environment($settings) === 'sandbox' ? 'https://api.allegro.pl.allegrosandbox.pl' : 'https://api.allegro.pl';
+    }
+
+    private function allegro_auth_token_url($settings)
+    {
+        return $this->allegro_environment($settings) === 'sandbox' ? 'https://allegro.pl.allegrosandbox.pl/auth/oauth/token' : 'https://allegro.pl/auth/oauth/token';
+    }
+
+    private function allegro_listing_request($query, $settings, $token, $limit = 1)
+    {
         $country = $this->sanitize_allegro_country($settings['allegro_marketplace_country'] ?? 'PL');
         $marketplace = array('PL' => 'allegro-pl', 'CZ' => 'allegro-cz', 'SK' => 'allegro-sk')[$country];
         $currency = array('PL' => 'PLN', 'CZ' => 'CZK', 'SK' => 'EUR')[$country];
-        $url = add_query_arg(array(
-            'phrase' => $query,
-            'marketplaceId' => $marketplace,
-            'shipping.country' => $country,
-            'currency' => $currency,
-            'limit' => max(1, min(60, absint($settings['allegro_search_limit'] ?? 20))),
-            'fallback' => 'false',
-        ), 'https://api.allegro.pl/offers/listing');
-        $response = wp_remote_get($url, array(
-            'timeout' => 20,
+        return array(
+            'url' => add_query_arg(array(
+                'phrase' => $query,
+                'marketplaceId' => $marketplace,
+                'shipping.country' => $country,
+                'currency' => $currency,
+                'limit' => max(1, min(60, absint($limit))),
+                'fallback' => 'false',
+            ), $this->allegro_api_base_url($settings) . '/offers/listing'),
             'headers' => array(
                 'Authorization' => 'Bearer ' . $token,
                 'Accept' => 'application/vnd.allegro.public.v1+json',
             ),
+        );
+    }
+
+    private function test_allegro_api_connection()
+    {
+        $settings = $this->settings();
+        $context = array();
+        $token = $this->allegro_access_token($settings, $context);
+        $request = array(
+            'url' => $this->allegro_api_base_url($settings) . '/offers/listing',
+            'headers' => array('Accept' => 'application/vnd.allegro.public.v1+json'),
+        );
+        if (!is_wp_error($token)) {
+            $request = $this->allegro_listing_request('test', $settings, $token, 1);
+            $response = wp_remote_get($request['url'], array('timeout' => 20, 'headers' => $request['headers']));
+            return $this->allegro_connection_diagnostics($response, $request, $settings, $context);
+        }
+        $error_data = $token->get_error_data();
+        $diagnostics = is_array($error_data) && !empty($error_data['diagnostics']) ? (array) $error_data['diagnostics'] : $this->allegro_connection_diagnostics(null, $request, $settings, $context);
+        $diagnostics['result'] = 'token_error';
+        $diagnostics['error'] = $token->get_error_message();
+        if (($diagnostics['classification'] ?? 'not_403') === 'not_403') {
+            $diagnostics['classification'] = empty($context['access_token_exists']) ? 'missing_header' : 'invalid_token';
+        }
+        return $diagnostics;
+    }
+
+    private function allegro_connection_diagnostics($response, $request, $settings, $context = array())
+    {
+        $status = is_wp_error($response) || $response === null ? 0 : (int) wp_remote_retrieve_response_code($response);
+        $raw_body = is_wp_error($response) || $response === null ? '' : (string) wp_remote_retrieve_body($response);
+        $response_headers = is_wp_error($response) || $response === null ? array() : $this->normalize_http_headers(wp_remote_retrieve_headers($response));
+        $sanitized_body = $this->sanitize_allegro_response_body($raw_body);
+        return array(
+            'action' => 'allegro_api_connection_test',
+            'result' => ($status >= 200 && $status < 300) ? 'success' : 'error',
+            'endpoint_url' => (string) ($request['url'] ?? ''),
+            'environment' => $this->allegro_environment($settings),
+            'access_token_exists' => !empty($context['access_token_exists']),
+            'token_expiry' => $context['token_expiry'] ?? $this->format_allegro_token_expiry($settings['allegro_token_expires_at'] ?? ''),
+            'refresh_attempted' => !empty($context['refresh_attempted']),
+            'http_status' => $status,
+            'sanitized_response_body' => $sanitized_body,
+            'allegro_trace_request_id_headers' => $this->extract_trace_request_headers($response_headers),
+            'headers_used_sanitized' => $this->sanitize_allegro_headers((array) ($request['headers'] ?? array())),
+            'classification' => $this->classify_allegro_api_response($status, $sanitized_body, $response_headers, (array) ($request['headers'] ?? array()), $settings),
+        );
+    }
+
+    private function allegro_wp_error_with_diagnostics($error, $response, $request, $settings, $context)
+    {
+        $diagnostics = $this->allegro_connection_diagnostics($response, $request, $settings, $context);
+        $data = is_array($error->get_error_data()) ? $error->get_error_data() : array();
+        $data['diagnostics'] = $diagnostics;
+        return new WP_Error($error->get_error_code(), $error->get_error_message(), $data);
+    }
+
+    private function normalize_http_headers($headers)
+    {
+        if (is_object($headers) && method_exists($headers, 'getAll')) {
+            $headers = $headers->getAll();
+        } elseif (is_object($headers)) {
+            $headers = (array) $headers;
+        }
+        $normalized = array();
+        foreach ((array) $headers as $key => $value) {
+            $normalized[strtolower((string) $key)] = is_array($value) ? implode(', ', array_map('strval', $value)) : (string) $value;
+        }
+        return $normalized;
+    }
+
+    private function sanitize_allegro_headers($headers)
+    {
+        $sanitized = array();
+        foreach ((array) $headers as $key => $value) {
+            $lower = strtolower((string) $key);
+            if (in_array($lower, array('authorization', 'proxy-authorization', 'cookie', 'set-cookie'), true) || strpos($lower, 'token') !== false || strpos($lower, 'secret') !== false) {
+                $sanitized[$key] = '[redacted]';
+            } else {
+                $sanitized[$key] = is_array($value) ? implode(', ', array_map('sanitize_text_field', $value)) : sanitize_text_field((string) $value);
+            }
+        }
+        return $sanitized;
+    }
+
+    private function sanitize_allegro_response_body($raw_body)
+    {
+        $raw_body = (string) $raw_body;
+        $decoded = json_decode($raw_body, true);
+        if (is_array($decoded)) {
+            $clean = $this->redact_sensitive_payload($decoded);
+            return wp_json_encode($clean, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+        $clean = preg_replace('/(access_token|refresh_token|token|client_secret|authorization)(["\'\s:=]+)([^"\'\s,&}]+)/i', '$1$2[redacted]', $raw_body);
+        return mb_substr(wp_strip_all_tags((string) $clean), 0, 4000);
+    }
+
+    private function redact_sensitive_payload($payload)
+    {
+        $redacted = array();
+        foreach ((array) $payload as $key => $value) {
+            $lower = strtolower((string) $key);
+            if (strpos($lower, 'token') !== false || strpos($lower, 'secret') !== false || $lower === 'authorization' || $lower === 'password') {
+                $redacted[$key] = '[redacted]';
+            } elseif (is_array($value)) {
+                $redacted[$key] = $this->redact_sensitive_payload($value);
+            } else {
+                $redacted[$key] = is_string($value) ? mb_substr($value, 0, 1000) : $value;
+            }
+        }
+        return $redacted;
+    }
+
+    private function extract_trace_request_headers($headers)
+    {
+        $matches = array();
+        foreach ((array) $headers as $key => $value) {
+            $lower = strtolower((string) $key);
+            if (strpos($lower, 'trace') !== false || strpos($lower, 'request') !== false || strpos($lower, 'correlation') !== false || strpos($lower, 'allegro') !== false) {
+                $matches[$key] = sanitize_text_field((string) $value);
+            }
+        }
+        return $matches;
+    }
+
+    private function classify_allegro_api_response($status, $body, $response_headers, $request_headers, $settings)
+    {
+        $text = strtolower((string) $body . ' ' . wp_json_encode($response_headers));
+        if (empty($request_headers['Authorization'])) {
+            return 'missing_header';
+        }
+        if (strpos($text, 'expired') !== false) {
+            return 'expired_token';
+        }
+        if (strpos($text, 'invalid_token') !== false || strpos($text, 'invalid token') !== false || strpos($text, 'unauthorized') !== false) {
+            return 'invalid_token';
+        }
+        if (strpos($text, 'sandbox') !== false || strpos($text, 'production') !== false || strpos($text, 'environment') !== false || strpos($text, 'issuer') !== false) {
+            return 'wrong_environment';
+        }
+        if (strpos($text, 'scope') !== false || strpos($text, 'forbidden') !== false || strpos($text, 'permission') !== false) {
+            return 'forbidden_scope';
+        }
+        if (strpos($text, 'missing') !== false && (strpos($text, 'header') !== false || strpos($text, 'authorization') !== false || strpos($text, 'accept') !== false)) {
+            return 'missing_header';
+        }
+        if ((int) $status === 403) {
+            return 'unknown_403';
+        }
+        return 'not_403';
+    }
+
+    private function format_allegro_token_expiry($value)
+    {
+        $timestamp = $this->allegro_token_expiry_timestamp($value);
+        if (!$timestamp) {
+            return '';
+        }
+        return gmdate('Y-m-d H:i:s', $timestamp) . ' UTC (' . $timestamp . ')';
+    }
+
+    private function allegro_search_offers($query, $settings)
+    {
+        $token_context = array();
+        $token = $this->allegro_access_token($settings, $token_context);
+        if (is_wp_error($token)) {
+            return $token;
+        }
+        $request = $this->allegro_listing_request($query, $settings, $token, max(1, min(60, absint($settings['allegro_search_limit'] ?? 20))));
+        $response = wp_remote_get($request['url'], array(
+            'timeout' => 20,
+            'headers' => $request['headers'],
         ));
         $body = $this->allegro_json_response($response);
         if (is_wp_error($body)) {
-            return $body;
+            return $this->allegro_wp_error_with_diagnostics($body, $response, $request, $settings, $token_context);
         }
         return array('offers' => $this->extract_allegro_listing_offers($body));
     }
 
-    private function allegro_access_token($settings)
+    private function allegro_access_token($settings, &$context = null)
     {
         $settings = (array) $settings;
         $token = trim((string) ($settings['allegro_access_token'] ?? ''));
         $expires_at = $this->allegro_token_expiry_timestamp($settings['allegro_token_expires_at'] ?? '');
+        if (is_array($context)) {
+            $context['access_token_exists'] = $token !== '';
+            $context['token_expiry'] = $this->format_allegro_token_expiry($settings['allegro_token_expires_at'] ?? '');
+            $context['refresh_attempted'] = false;
+        }
         if ($token !== '' && (!$expires_at || time() < $expires_at - 60)) {
             return $token;
         }
         if (trim((string) ($settings['allegro_refresh_token'] ?? '')) !== '' && trim((string) ($settings['allegro_client_id'] ?? '')) !== '' && trim((string) ($settings['allegro_client_secret'] ?? '')) !== '') {
+            if (is_array($context)) {
+                $context['refresh_attempted'] = true;
+            }
             return $this->refresh_allegro_token($settings);
         }
         if (trim((string) ($settings['allegro_client_id'] ?? '')) !== '' && trim((string) ($settings['allegro_client_secret'] ?? '')) !== '') {
@@ -1820,7 +2050,7 @@ JS;
 
     private function refresh_allegro_token($settings)
     {
-        $response = wp_remote_post('https://allegro.pl/auth/oauth/token', array(
+        $response = wp_remote_post($this->allegro_auth_token_url($settings), array(
             'timeout' => 20,
             'headers' => array('Authorization' => 'Basic ' . base64_encode((string) $settings['allegro_client_id'] . ':' . (string) $settings['allegro_client_secret'])),
             'body' => array('grant_type' => 'refresh_token', 'refresh_token' => (string) $settings['allegro_refresh_token']),
@@ -1830,7 +2060,7 @@ JS;
 
     private function request_allegro_client_credentials_token($settings)
     {
-        $response = wp_remote_post('https://allegro.pl/auth/oauth/token', array(
+        $response = wp_remote_post($this->allegro_auth_token_url($settings), array(
             'timeout' => 20,
             'headers' => array('Authorization' => 'Basic ' . base64_encode((string) $settings['allegro_client_id'] . ':' . (string) $settings['allegro_client_secret'])),
             'body' => array('grant_type' => 'client_credentials'),
@@ -1842,7 +2072,16 @@ JS;
     {
         $body = $this->allegro_json_response($response);
         if (is_wp_error($body)) {
-            return $body;
+            $request = array(
+                'url' => $this->allegro_auth_token_url($settings),
+                'headers' => array('Authorization' => 'Basic ' . base64_encode((string) $settings['allegro_client_id'] . ':' . (string) $settings['allegro_client_secret'])),
+            );
+            $diagnostics = $this->allegro_connection_diagnostics($response, $request, $settings, array(
+                'access_token_exists' => trim((string) ($settings['allegro_access_token'] ?? '')) !== '',
+                'token_expiry' => $this->format_allegro_token_expiry($settings['allegro_token_expires_at'] ?? ''),
+                'refresh_attempted' => trim((string) ($settings['allegro_refresh_token'] ?? '')) !== '',
+            ));
+            return new WP_Error($body->get_error_code(), $body->get_error_message(), array('diagnostics' => $diagnostics));
         }
         $access_token = sanitize_text_field($body['access_token'] ?? '');
         if ($access_token === '') {
@@ -2047,6 +2286,18 @@ JS;
         update_post_meta($item_id, '_gps_allegro_price_suggestion', sanitize_text_field((string) ($analysis['suggestion'] ?? '')));
         update_post_meta($item_id, '_gps_allegro_price_currency', sanitize_text_field((string) ($analysis['currency'] ?? '')));
         update_post_meta($item_id, '_gps_allegro_price_notes', sanitize_textarea_field((string) ($analysis['notes'] ?? '')));
+        if (array_key_exists('error_http_status', $analysis)) {
+            update_post_meta($item_id, '_gps_allegro_price_error_http_status', absint($analysis['error_http_status']));
+        }
+        if (array_key_exists('error_response', $analysis)) {
+            update_post_meta($item_id, '_gps_allegro_price_error_response', sanitize_textarea_field((string) $analysis['error_response']));
+        }
+        if (array_key_exists('error_code', $analysis)) {
+            update_post_meta($item_id, '_gps_allegro_price_error_code', sanitize_text_field((string) $analysis['error_code']));
+        }
+        if (array_key_exists('error_checked_at', $analysis)) {
+            update_post_meta($item_id, '_gps_allegro_price_error_checked_at', sanitize_text_field((string) $analysis['error_checked_at']));
+        }
     }
 
     private function run_category_mapping_for_staging_item($item_id)
@@ -2180,6 +2431,10 @@ JS;
             'allegro_price_suggestion' => get_post_meta($id, '_gps_allegro_price_suggestion', true),
             'allegro_price_currency' => get_post_meta($id, '_gps_allegro_price_currency', true),
             'allegro_price_notes' => get_post_meta($id, '_gps_allegro_price_notes', true),
+            'allegro_price_error_http_status' => get_post_meta($id, '_gps_allegro_price_error_http_status', true),
+            'allegro_price_error_response' => get_post_meta($id, '_gps_allegro_price_error_response', true),
+            'allegro_price_error_code' => get_post_meta($id, '_gps_allegro_price_error_code', true),
+            'allegro_price_error_checked_at' => get_post_meta($id, '_gps_allegro_price_error_checked_at', true),
             'manual_price_override_enabled' => get_post_meta($id, '_gps_manual_price_override_enabled', true) === '1',
             'manual_price_pln' => get_post_meta($id, '_gps_manual_price_pln', true),
             'manual_price_note' => get_post_meta($id, '_gps_manual_price_note', true),
@@ -2250,7 +2505,7 @@ JS;
         update_post_meta($product_id, '_gps_source_staging_item_id', absint($analysis['staging_item_id'] ?? 0));
         update_post_meta($product_id, '_gps_selected_price_pln', $selected_price['price']);
         update_post_meta($product_id, '_gps_selected_price_source', $selected_price['source']);
-        foreach (array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes') as $allegro_meta_key) {
+        foreach (array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at') as $allegro_meta_key) {
             if (array_key_exists(ltrim($allegro_meta_key, '_gps_'), $analysis)) {
                 update_post_meta($product_id, $allegro_meta_key, $analysis[ltrim($allegro_meta_key, '_gps_')]);
             } elseif (isset($analysis[$allegro_meta_key])) {
