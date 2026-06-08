@@ -290,6 +290,73 @@ gpswiss_run_preview_test('missing car_id blocks CRM-only preview readiness', fun
     gpswiss_assert(in_array('missing_required_car_id', gpswiss_codes($result), true), 'Missing car_id validation missing.');
     gpswiss_assert($result['would_be_eligible'] === false, 'Missing car_id should block CRM-only preview readiness.');
 });
+gpswiss_run_preview_test('configured placeholder car_id fills missing product car_id', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
+    $result = $service->preview(123);
+    gpswiss_assert(!in_array('missing_required_car_id', gpswiss_codes($result), true), 'Configured placeholder should avoid missing_required_car_id.');
+    gpswiss_assert($result['would_be_eligible'] === true, 'Configured placeholder should allow CRM-only preview eligibility when other checks pass.');
+    gpswiss_assert($result['car_id'] === 494, 'Root car_id should use configured placeholder.');
+    gpswiss_assert($result['car_id_source'] === 'configured_placeholder_car_id', 'Placeholder car_id source missing.');
+    gpswiss_assert($result['car_id_is_placeholder'] === true, 'Placeholder marker missing.');
+    gpswiss_assert($result['car_id_review_required'] === true, 'Review-required marker missing.');
+    gpswiss_assert($result['proposed_payload']['car_id'] === 494, 'CRM-only payload should include configured placeholder car_id.');
+    gpswiss_assert(($result['proposed_payload']['_source_summary']['car_id_source'] ?? '') === 'configured_placeholder_car_id', 'Payload source summary should identify placeholder source.');
+});
+
+gpswiss_run_preview_test('placeholder car_id adds warning and note fields', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_note'] = 'Manual vehicle review required.';
+    $result = $service->preview(123);
+    gpswiss_assert(in_array('using_placeholder_car_id', gpswiss_codes($result), true), 'Placeholder warning missing.');
+    gpswiss_assert($result['proposed_payload']['internal_notes'] === 'Manual vehicle review required.', 'Placeholder internal note missing.');
+    gpswiss_assert($result['proposed_payload']['sticker_note'] === 'Manual vehicle review required.', 'Placeholder sticker note missing.');
+    gpswiss_assert($result['future_live_readiness']['placeholder_car_id_requires_admin_confirmation'] === true, 'Placeholder admin confirmation flag missing.');
+});
+
+gpswiss_run_preview_test('placeholder car_id allowed only for CRM-only no-price import', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
+    $result = $service->preview(123);
+    gpswiss_assert($result['create_strategy'] === 'crm_only_non_public_initial_import', 'CRM-only strategy should be required for placeholder.');
+    gpswiss_assert($result['e_shop_available_after_import'] === false, 'Placeholder should only be allowed for non-public import.');
+    gpswiss_assert(in_array('price', $result['omitted_for_non_public_import'], true), 'Placeholder should only be allowed when price is omitted.');
+    gpswiss_assert($result['future_live_readiness']['placeholder_car_id_allowed_for_crm_only_no_price_import'] === true, 'Placeholder should be allowed by CRM-only no-price policy.');
+});
+
+gpswiss_run_preview_test('placeholder car_id not allowed for full public payload with price', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
+    $result = $service->preview(123);
+    $warningCodes = array_map(static fn(array $row): string => (string) $row['code'], $result['full_payload_preview']['warnings']);
+    gpswiss_assert(in_array('placeholder_car_id_not_allowed_for_public_import', $warningCodes, true), 'Full/public payload preview must reject placeholder car_id.');
+    gpswiss_assert(($result['full_payload_preview']['payload']['_placeholder_car_id_not_allowed_for_public_import'] ?? false) === true, 'Full/public payload should mark placeholder as not allowed.');
+    gpswiss_assert($result['full_payload_preview']['payload']['car_id'] === null, 'Full/public payload should not carry placeholder car_id.');
+});
+
+gpswiss_run_preview_test('product explicit car_id takes priority over placeholder', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
+    $result = $service->preview(123);
+    gpswiss_assert($result['car_id'] === 9001, 'Explicit product car_id should win over placeholder.');
+    gpswiss_assert($result['car_id_source'] === '_ovoko_car_id', 'Explicit product car_id source should be preserved.');
+    gpswiss_assert($result['car_id_is_placeholder'] === false, 'Explicit product car_id must not be marked placeholder.');
+});
+
+gpswiss_run_preview_test('no hardcoded default car_id is used', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_ovoko_car_id', '');
+    $result = $service->preview(123);
+    gpswiss_assert($result['car_id'] === null, 'Missing configured placeholder must not fall back to a hardcoded car_id.');
+    gpswiss_assert($result['proposed_payload']['car_id'] === null, 'Payload must not contain a hardcoded car_id.');
+    gpswiss_assert(in_array('missing_required_car_id', gpswiss_codes($result), true), 'Missing car_id should remain blocked without configured placeholder.');
+});
+
 
 gpswiss_run_preview_test('CRM-only preview omits price fields and full preview warns with price plus photos', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();

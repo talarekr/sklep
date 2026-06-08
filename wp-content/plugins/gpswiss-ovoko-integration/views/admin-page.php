@@ -162,6 +162,24 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
     <h2>Ovoko ↔ Woo Automatic Sync</h2>
 
 
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #dba617;">
+        <h3>Woo → Ovoko CRM-only import settings</h3>
+        <p>Configure technical placeholder values used only for CRM-only <code>/crm/importPart</code> previews/imports where Woo/Gmail does not yet know the final Ovoko/RRR vehicle mapping.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:grid;gap:10px;max-width:860px;">
+            <?php wp_nonce_field('gpswiss_ovoko_save_crm_import_settings'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_save_crm_import_settings" />
+            <label for="gpswiss_ovoko_default_crm_import_car_id"><strong>Default placeholder Ovoko/RRR car_id for CRM-only import</strong></label>
+            <input id="gpswiss_ovoko_default_crm_import_car_id" type="number" min="1" step="1" name="gpswiss_ovoko_default_crm_import_car_id" value="<?php echo esc_attr((string) ($data['settings']['gpswiss_ovoko_default_crm_import_car_id'] ?? '')); ?>" class="regular-text" />
+            <p class="description">Used only as a technical placeholder required by /crm/importPart for CRM-only imports without price. Staff must review and assign the correct vehicle in Ovoko before publishing.</p>
+
+            <label for="gpswiss_ovoko_default_crm_import_car_note"><strong>Default placeholder car note</strong></label>
+            <textarea id="gpswiss_ovoko_default_crm_import_car_note" name="gpswiss_ovoko_default_crm_import_car_note" rows="2" class="large-text"><?php echo esc_textarea((string) ($data['settings']['gpswiss_ovoko_default_crm_import_car_note'] ?? 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.')); ?></textarea>
+            <p class="description">Example: “Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.”</p>
+            <?php submit_button('Save CRM-only import settings', 'primary', 'submit', false); ?>
+        </form>
+    </div>
+
+
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #00a32a;">
         <h3>Preview Woo → Ovoko CRM-only import payload</h3>
         <p><strong>Safe one-product dry-run only.</strong> This tool previews a CRM-only /crm/importPart payload from one WooCommerce product. It includes photo URLs for internal review, intentionally omits price fields for non-public initial import, and does not write to Ovoko, write to WooCommerce, enqueue work, or publish anything.</p>
