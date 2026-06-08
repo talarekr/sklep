@@ -1339,6 +1339,9 @@ JS;
         if (trim((string) ($analysis['message_id'] ?? '')) === '') {
             $blocking[] = 'missing_gmail_message_id';
         }
+        if ($this->gmail_staging_base_sku($analysis) === '') {
+            $blocking[] = 'missing_generated_sku';
+        }
         if (trim((string) ($analysis['detected_part_code'] ?? '')) === '') {
             $blocking[] = 'missing_detected_part_code';
         }
@@ -2196,6 +2199,14 @@ JS;
         if (!$this->product_cat_term_exists($suggested_category_id)) {
             return new WP_Error('gps_gmail_invalid_mapped_category', sprintf('Mapped Woo product_cat term %d does not exist.', $suggested_category_id));
         }
+        $base_sku = $this->gmail_staging_base_sku($analysis);
+        if ($base_sku === '') {
+            return new WP_Error('gps_gmail_missing_generated_sku', 'A staging item ID is required to generate a Woo SKU.');
+        }
+        $sku = $this->unique_gmail_staging_sku($base_sku);
+        if ($sku === '') {
+            return new WP_Error('gps_gmail_missing_generated_sku', 'A non-empty Woo SKU could not be generated.');
+        }
         $status = 'draft';
         $product_id = wp_insert_post(array(
             'post_type' => 'product',
@@ -2211,6 +2222,9 @@ JS;
         update_post_meta($product_id, '_stock', 1);
         update_post_meta($product_id, '_stock_status', 'instock');
         update_post_meta($product_id, '_manage_stock', 'yes');
+        update_post_meta($product_id, '_sku', $sku);
+        update_post_meta($product_id, '_gps_generated_sku', $base_sku);
+        update_post_meta($product_id, '_gps_sku_source', 'gmail_staging_item');
         update_post_meta($product_id, '_regular_price', $selected_price['price']);
         update_post_meta($product_id, '_price', $selected_price['price']);
         update_post_meta($product_id, '_gps_source_staging_item_id', absint($analysis['staging_item_id'] ?? 0));
@@ -2260,6 +2274,58 @@ JS;
     {
         $parts = array_filter(array($analysis['detected_vehicle_make'], $analysis['detected_vehicle_model'], $analysis['detected_oem_part_number']));
         return $parts ? implode(' ', $parts) : ($analysis['subject'] ?: 'Gmail product draft');
+    }
+
+    private function gmail_staging_base_sku($analysis)
+    {
+        $staging_item_id = absint($analysis['staging_item_id'] ?? 0);
+        if ($staging_item_id <= 0) {
+            return '';
+        }
+        return 'GPS-GMAIL-' . $staging_item_id;
+    }
+
+    private function unique_gmail_staging_sku($base_sku, $exclude_product_id = 0)
+    {
+        $base_sku = trim(sanitize_text_field((string) $base_sku));
+        if ($base_sku === '') {
+            return '';
+        }
+        if (!$this->woo_sku_exists($base_sku, $exclude_product_id)) {
+            return $base_sku;
+        }
+        for ($suffix = 2; $suffix <= 100; $suffix++) {
+            $candidate = $base_sku . '-' . $suffix;
+            if (!$this->woo_sku_exists($candidate, $exclude_product_id)) {
+                return $candidate;
+            }
+        }
+        return '';
+    }
+
+    private function woo_sku_exists($sku, $exclude_product_id = 0)
+    {
+        $sku = trim((string) $sku);
+        $exclude_product_id = absint($exclude_product_id);
+        if ($sku === '') {
+            return false;
+        }
+        if (function_exists('wc_get_product_id_by_sku')) {
+            $product_id = absint(wc_get_product_id_by_sku($sku));
+            return $product_id > 0 && $product_id !== $exclude_product_id;
+        }
+        if (function_exists('get_posts')) {
+            $ids = get_posts(array(
+                'post_type' => array('product', 'product_variation'),
+                'post_status' => 'any',
+                'fields' => 'ids',
+                'posts_per_page' => 1,
+                'post__not_in' => $exclude_product_id ? array($exclude_product_id) : array(),
+                'meta_query' => array(array('key' => '_sku', 'value' => $sku)),
+            ));
+            return !empty($ids);
+        }
+        return false;
     }
 
     private function import_images($product_id, $analysis, $message)
