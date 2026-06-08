@@ -197,6 +197,15 @@ gpswiss_run_live_test('image diagnostics are included in preview', function (): 
     gpswiss_assert(($preview['images']['photo_payload_modes']['multipart_file_upload']['status'] ?? '') === 'preview_only_not_live', 'Preview must list alternate image modes safely.');
 });
 
+gpswiss_run_live_test('missing image headers with jpg extension do not block live readiness', function (): void {
+    gpswiss_seed_valid_live_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/501.jpg'] = ['response' => ['code' => 200], 'headers' => []];
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/502.jpg'] = ['response' => ['code' => 200], 'headers' => []];
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === true, 'Missing content-type/content-length must not block live readiness for GET 200 JPG image URLs.');
+    gpswiss_assert(count($GLOBALS['gpswiss_test_import_payloads']) === 1, 'Importer should be called when JPG image URLs are accessible by GET 200.');
+});
+
 gpswiss_run_live_test('inaccessible image blocks live readiness', function (): void {
     gpswiss_seed_valid_live_product();
     $GLOBALS['gpswiss_test_http_overrides']['https://example.test/502.jpg'] = ['response' => ['code' => 403], 'headers' => ['content-type' => 'text/html']];

@@ -788,6 +788,8 @@ class WooToOvokoCreatePartPreviewService
                 'url' => $url,
                 'public_url' => $url,
                 'accessible' => !empty($diagnostics['accessible']),
+                'accessibility_basis' => (string) ($diagnostics['accessibility_basis'] ?? ''),
+                'warnings' => (array) ($diagnostics['warnings'] ?? []),
                 'binary_sent' => false,
                 'selected_as_main_photo' => $index === 0,
                 'candidate_encoding_method' => 'repeated_url_fields',
@@ -836,29 +838,30 @@ class WooToOvokoCreatePartPreviewService
             'redirect_chain' => [],
             'server_side_checked' => false,
             'accessible' => false,
+            'accessibility_basis' => '',
+            'warnings' => [],
         ];
         if (!$diagnostics['valid_public_http_url']) {
+            $diagnostics['accessibility_basis'] = 'invalid_public_http_url';
             return $diagnostics;
         }
 
         $head = $this->http_probe_image_url($url, 'HEAD');
+        $get = $this->http_probe_image_url($url, 'GET');
         $diagnostics['head'] = $head;
-        $diagnostics['server_side_checked'] = !empty($head['attempted']);
-        $effective = $head;
-        if (!$this->image_probe_accessible($head)) {
-            $get = $this->http_probe_image_url($url, 'GET');
-            $diagnostics['get'] = $get;
-            $diagnostics['server_side_checked'] = $diagnostics['server_side_checked'] || !empty($get['attempted']);
-            $effective = $this->image_probe_accessible($get) ? $get : $head;
-        }
+        $diagnostics['get'] = $get;
+        $diagnostics['server_side_checked'] = !empty($head['attempted']) || !empty($get['attempted']);
+        $diagnostics['redirect_chain'] = array_values(array_unique(array_merge((array) ($head['redirect_chain'] ?? []), (array) ($get['redirect_chain'] ?? []))));
 
-        $diagnostics['status_code'] = $effective['status_code'] ?? null;
-        $diagnostics['content_type'] = (string) ($effective['content_type'] ?? '');
-        $diagnostics['content_length'] = $effective['content_length'] ?? null;
-        $diagnostics['redirect_chain'] = array_values(array_unique(array_merge((array) ($head['redirect_chain'] ?? []), (array) ($diagnostics['get']['redirect_chain'] ?? []))));
-        $diagnostics['requires_cookies_or_auth'] = in_array((int) ($diagnostics['status_code'] ?? 0), [401, 403], true);
-        $diagnostics['hotlink_or_user_agent_block_suspected'] = in_array((int) ($diagnostics['status_code'] ?? 0), [403, 406, 429], true);
-        $diagnostics['accessible'] = $this->image_probe_accessible($effective);
+        $result = $this->image_probe_accessibility_result($get, $url, $diagnostics['redirect_chain']);
+        $diagnostics['status_code'] = $get['status_code'] ?? null;
+        $diagnostics['content_type'] = (string) ($get['content_type'] ?? '');
+        $diagnostics['content_length'] = $get['content_length'] ?? null;
+        $diagnostics['requires_cookies_or_auth'] = !empty($result['requires_cookies_or_auth']);
+        $diagnostics['hotlink_or_user_agent_block_suspected'] = !empty($result['hotlink_or_user_agent_block_suspected']);
+        $diagnostics['accessible'] = !empty($result['accessible']);
+        $diagnostics['accessibility_basis'] = (string) ($result['basis'] ?? '');
+        $diagnostics['warnings'] = (array) ($result['warnings'] ?? []);
         return $diagnostics;
     }
 
@@ -897,11 +900,59 @@ class WooToOvokoCreatePartPreviewService
         return '';
     }
 
-    private function image_probe_accessible(array $probe): bool
+    private function image_probe_accessibility_result(array $probe, string $url, array $redirectChain = []): array
     {
+        $warnings = [];
         $status = (int) ($probe['status_code'] ?? 0);
-        $contentType = strtolower((string) ($probe['content_type'] ?? ''));
-        return !empty($probe['attempted']) && $status >= 200 && $status < 300 && str_starts_with($contentType, 'image/');
+        $contentType = strtolower(trim((string) ($probe['content_type'] ?? '')));
+        $contentType = explode(';', $contentType)[0];
+        $hasImageExtension = $this->url_has_known_image_extension($url);
+        $requiresAuth = in_array($status, [401, 403], true) || $this->redirect_chain_suggests_auth($redirectChain);
+        $hotlinkBlocked = in_array($status, [403, 406, 429], true);
+
+        if (empty($probe['attempted'])) {
+            return ['accessible' => false, 'basis' => 'get_not_attempted', 'warnings' => [], 'requires_cookies_or_auth' => $requiresAuth, 'hotlink_or_user_agent_block_suspected' => $hotlinkBlocked];
+        }
+        if ($requiresAuth) {
+            return ['accessible' => false, 'basis' => 'auth_or_login_required', 'warnings' => [], 'requires_cookies_or_auth' => true, 'hotlink_or_user_agent_block_suspected' => $hotlinkBlocked];
+        }
+        if ($hotlinkBlocked) {
+            return ['accessible' => false, 'basis' => 'hotlink_or_user_agent_block_suspected', 'warnings' => [], 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => true];
+        }
+        if ($status !== 200) {
+            return ['accessible' => false, 'basis' => 'get_status_not_200', 'warnings' => [], 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => false];
+        }
+        if (($probe['content_length'] ?? null) === null) {
+            $warnings[] = ['code' => 'image_content_length_missing', 'message' => 'Image URL returned HTTP 200 but no Content-Length header.'];
+        }
+        if ($contentType !== '') {
+            if (str_starts_with($contentType, 'image/')) {
+                return ['accessible' => true, 'basis' => 'get_200_image_content_type', 'warnings' => $warnings, 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => false];
+            }
+            return ['accessible' => false, 'basis' => 'non_image_content_type', 'warnings' => $warnings, 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => false];
+        }
+        if ($hasImageExtension) {
+            array_unshift($warnings, ['code' => 'image_content_type_missing', 'message' => 'Image URL returned HTTP 200 but no image Content-Type header. Accepted based on image file extension.']);
+            return ['accessible' => true, 'basis' => 'get_200_image_extension', 'warnings' => $warnings, 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => false];
+        }
+        return ['accessible' => false, 'basis' => 'missing_content_type_and_image_extension', 'warnings' => $warnings, 'requires_cookies_or_auth' => false, 'hotlink_or_user_agent_block_suspected' => false];
+    }
+
+    private function url_has_known_image_extension(string $url): bool
+    {
+        $path = strtolower((string) (parse_url($url, PHP_URL_PATH) ?: ''));
+        return preg_match('/\.(?:jpe?g|png|webp)$/', $path) === 1;
+    }
+
+    private function redirect_chain_suggests_auth(array $redirectChain): bool
+    {
+        foreach ($redirectChain as $redirectUrl) {
+            $path = strtolower((string) (parse_url((string) $redirectUrl, PHP_URL_PATH) ?: (string) $redirectUrl));
+            if (preg_match('/(?:login|log-in|signin|sign-in|auth|account|my-account|wp-login)/', $path) === 1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function duplicate_checks(int $productId, string $sku, string $manufacturerCode, string $partNumber): array
