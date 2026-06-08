@@ -9,6 +9,7 @@ class WooToOvokoCreatePartPreviewService
     private const PROPOSED_ENDPOINT = 'DOCUMENTED_ENDPOINT_WRITE_BLOCKED';
     private const PROPOSED_ENDPOINT_PATH = '/crm/importPart';
     private const ALLOWED_STATUSES = ['draft'];
+    private const PHOTO_PAYLOAD_MODE_OPTION = 'gpswiss_ovoko_import_part_photo_payload_mode';
     private const PART_IDENTIFIER_META_KEYS = [
         '_part_number',
         '_mpn',
@@ -133,8 +134,11 @@ class WooToOvokoCreatePartPreviewService
         }
         foreach ((array) ($images['image_details'] ?? []) as $imageDetail) {
             if (empty($imageDetail['accessible'])) {
-                $this->add_validation($result, 'error', 'inaccessible_image_url', 'Product image URL is missing or not accessible for preview.', ['attachment_id' => (int) ($imageDetail['attachment_id'] ?? 0), 'url' => (string) ($imageDetail['url'] ?? '')]);
+                $this->add_validation($result, 'error', 'inaccessible_image_url', 'Product image URL is missing or not accessible for preview.', ['attachment_id' => (int) ($imageDetail['attachment_id'] ?? 0), 'url' => (string) ($imageDetail['url'] ?? ''), 'diagnostics' => (array) ($imageDetail['diagnostics'] ?? [])]);
             }
+        }
+        if (empty($images['photo_equals_first_photos'])) {
+            $this->add_validation($result, 'error', 'photo_must_equal_first_photos', 'The photo field must exactly equal the first photos[] value before live import.');
         }
         foreach ($duplicates['warnings'] as $warning) {
             $this->add_validation($result, 'warning', (string) $warning['code'], (string) $warning['message'], (array) ($warning['context'] ?? []));
@@ -157,6 +161,7 @@ class WooToOvokoCreatePartPreviewService
         $result['e_shop_available_after_import'] = false;
         $result['non_public_reason'] = 'missing_price';
         $result['photos_included'] = !empty($images['image_urls']);
+        $result['photo_payload_mode'] = (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields');
         $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency'];
         $result['live_create_still_requires_manual_confirmation'] = true;
         $result['car_id'] = $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null;
@@ -220,6 +225,7 @@ class WooToOvokoCreatePartPreviewService
             'e_shop_available_after_import' => false,
             'non_public_reason' => 'missing_price',
             'photos_included' => false,
+            'photo_payload_mode' => 'repeated_url_fields',
             'car_id' => null,
             'car_id_source' => '',
             'car_id_is_placeholder' => false,
@@ -312,11 +318,14 @@ class WooToOvokoCreatePartPreviewService
                 'stock_status' => ['field' => 'status', 'required' => true, 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'Values are numeric inventory/sales lifecycle IDs. The /get/part_status probe returned stock/sales states, not publication visibility states.'],
             ],
             'image_handling' => [
-                'mode' => 'url_form_fields',
+                'mode' => 'repeated_url_fields',
                 'main_image_field' => 'photo',
                 'gallery_field' => 'photos[]',
                 'binary_upload' => false,
+                'encoding' => 'application/x-www-form-urlencoded repeated fields: photo=url1&photos[]=url1&photos[]=url2; do not send photos[] as a nested array string.',
                 'ordering_rule' => 'photo must equal first photos[] value for main photo/thumbnail generation.',
+                'live_mode_confirmed' => false,
+                'available_preview_modes' => ['url_fields', 'repeated_url_fields', 'multipart_file_upload', 'local_file_path_not_allowed'],
             ],
             'draft_unpublished_visibility_support' => [
                 'explicit_draft_field_found' => false,
@@ -367,7 +376,7 @@ class WooToOvokoCreatePartPreviewService
                 ],
                 'photo_handling' => [
                     'status' => 'confirmed_by_documentation',
-                    'answer' => 'photo is a photo URL. photos[] must include the same first value as photo for correct main photo upload and thumbnail generation.',
+                    'answer' => 'photo is documented as a photo URL. photos[] must include the same first value as photo for correct main photo upload and thumbnail generation. The OpenAPI request content type for /crm/importPart is application/x-www-form-urlencoded, not multipart/form-data; multipart_file_upload remains preview-only until Ovoko confirms it.',
                 ],
                 'category_id' => [
                     'status' => 'confirmed_by_documentation',
@@ -474,6 +483,8 @@ class WooToOvokoCreatePartPreviewService
             'sku' => $sku,
             'photo' => $imageUrls[0] ?? '',
             'photos[]' => $imageUrls,
+            '_photo_payload_mode' => (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields'),
+            '_photo_equals_first_photos' => ($imageUrls[0] ?? '') !== '' && ($imageUrls[0] ?? '') === ((array) $imageUrls)[0],
             '_preview_only_not_sent' => true,
             '_auth_fields_omitted_from_preview' => ['username', 'password', 'user_token'],
             '_create_strategy' => 'crm_only_non_public_initial_import',
@@ -568,6 +579,8 @@ class WooToOvokoCreatePartPreviewService
         if ($sku === '') { $blockers[] = 'missing_sku'; }
         if ($categoryPayload['category_id'] === null) { $blockers[] = 'missing_ovoko_category_id'; }
         if (empty($images['image_urls'])) { $blockers[] = 'missing_image'; }
+        if (empty($images['all_images_accessible'])) { $blockers[] = 'image_url_accessibility_not_confirmed'; }
+        if (empty($images['photo_equals_first_photos'])) { $blockers[] = 'photo_must_equal_first_photos'; }
         if ($carId['value'] === '') { $blockers[] = 'missing_required_car_id'; }
         if ($usesPlaceholderCarId && !$crmOnlyNoPricePolicyAllowsPlaceholder) { $blockers[] = 'placeholder_car_id_not_allowed_for_selected_strategy'; }
         if ($qualityId['value'] === '') { $blockers[] = 'missing_required_quality'; }
@@ -581,6 +594,8 @@ class WooToOvokoCreatePartPreviewService
             'live_creation_enabled' => true,
             'crm_only_non_public_initial_import_omits_price' => true,
             'photos_included_for_internal_review' => !empty($images['image_urls']),
+            'image_url_accessibility_confirmed' => !empty($images['all_images_accessible']),
+            'photo_payload_mode' => (string) ($images['photo_payload_mode'] ?? 'repeated_url_fields'),
             'placeholder_car_id_allowed_for_crm_only_no_price_import' => $crmOnlyNoPricePolicyAllowsPlaceholder,
             'placeholder_car_id_requires_admin_confirmation' => $usesPlaceholderCarId,
             'placeholder_car_id_live_import_constraints' => [
@@ -761,22 +776,132 @@ class WooToOvokoCreatePartPreviewService
         $ids = array_values(array_unique(array_filter(array_merge([$featuredId], $galleryIds))));
         $urls = [];
         $details = [];
-        foreach ($ids as $id) {
+        foreach ($ids as $index => $id) {
             $url = function_exists('wp_get_attachment_url') ? (string) wp_get_attachment_url($id) : '';
-            $accessible = $url !== '' && (!function_exists('wp_http_validate_url') || (bool) wp_http_validate_url($url));
             if ($url !== '') {
                 $urls[] = $url;
             }
-            $details[] = ['attachment_id' => $id, 'url' => $url, 'accessible' => $accessible, 'binary_sent' => false];
+            $diagnostics = $this->diagnose_image_url($url);
+            $details[] = [
+                'attachment_id' => $id,
+                'local_file_path' => function_exists('get_attached_file') ? (string) get_attached_file($id) : '',
+                'url' => $url,
+                'public_url' => $url,
+                'accessible' => !empty($diagnostics['accessible']),
+                'binary_sent' => false,
+                'selected_as_main_photo' => $index === 0,
+                'candidate_encoding_method' => 'repeated_url_fields',
+                'diagnostics' => $diagnostics,
+            ];
         }
 
+        $photo = $urls[0] ?? '';
+        $photoPayloadMode = $this->photo_payload_mode();
         return [
             'featured_image_id' => $featuredId,
             'gallery_image_ids' => $galleryIds,
             'image_urls' => $urls,
+            'main_photo_url' => $photo,
+            'photo_equals_first_photos' => $photo !== '' && $photo === ($urls[0] ?? ''),
+            'all_images_accessible' => $details !== [] && count(array_filter($details, static fn(array $detail): bool => empty($detail['accessible']))) === 0,
             'image_details' => $details,
             'upload_policy' => 'preview_urls_only_no_upload',
+            'photo_payload_mode' => $photoPayloadMode,
+            'photo_payload_modes' => [
+                'url_fields' => ['status' => 'legacy_preview_only', 'description' => 'photo plus photos[] array in preview data only; do not use for live encoding if it nests arrays.'],
+                'repeated_url_fields' => ['status' => $photoPayloadMode === 'repeated_url_fields' ? 'configured_preview_candidate' : 'available_preview_candidate', 'description' => 'application/x-www-form-urlencoded repeated photos[] fields.'],
+                'multipart_file_upload' => ['status' => 'preview_only_not_live', 'description' => 'Not documented for /crm/importPart; do not use live until Ovoko confirms.'],
+                'local_file_path_not_allowed' => ['status' => 'not_allowed_unless_docs_change', 'description' => 'Local server paths are not public to Ovoko and are not documented as accepted.'],
+            ],
         ];
+    }
+
+    private function photo_payload_mode(): string
+    {
+        $mode = $this->option_value(self::PHOTO_PAYLOAD_MODE_OPTION, 'repeated_url_fields');
+        $allowed = ['url_fields', 'repeated_url_fields', 'multipart_file_upload', 'local_file_path_not_allowed'];
+        return in_array($mode, $allowed, true) ? $mode : 'repeated_url_fields';
+    }
+
+    private function diagnose_image_url(string $url): array
+    {
+        $diagnostics = [
+            'url' => $url,
+            'valid_public_http_url' => $url !== '' && (!function_exists('wp_http_validate_url') || (bool) wp_http_validate_url($url)),
+            'has_spaces_or_special_characters' => $url !== '' && preg_match('/\s|[<>"\']/', $url) === 1,
+            'requires_cookies_or_auth' => false,
+            'hotlink_or_user_agent_block_suspected' => false,
+            'head' => ['attempted' => false],
+            'get' => ['attempted' => false],
+            'redirect_chain' => [],
+            'server_side_checked' => false,
+            'accessible' => false,
+        ];
+        if (!$diagnostics['valid_public_http_url']) {
+            return $diagnostics;
+        }
+
+        $head = $this->http_probe_image_url($url, 'HEAD');
+        $diagnostics['head'] = $head;
+        $diagnostics['server_side_checked'] = !empty($head['attempted']);
+        $effective = $head;
+        if (!$this->image_probe_accessible($head)) {
+            $get = $this->http_probe_image_url($url, 'GET');
+            $diagnostics['get'] = $get;
+            $diagnostics['server_side_checked'] = $diagnostics['server_side_checked'] || !empty($get['attempted']);
+            $effective = $this->image_probe_accessible($get) ? $get : $head;
+        }
+
+        $diagnostics['status_code'] = $effective['status_code'] ?? null;
+        $diagnostics['content_type'] = (string) ($effective['content_type'] ?? '');
+        $diagnostics['content_length'] = $effective['content_length'] ?? null;
+        $diagnostics['redirect_chain'] = array_values(array_unique(array_merge((array) ($head['redirect_chain'] ?? []), (array) ($diagnostics['get']['redirect_chain'] ?? []))));
+        $diagnostics['requires_cookies_or_auth'] = in_array((int) ($diagnostics['status_code'] ?? 0), [401, 403], true);
+        $diagnostics['hotlink_or_user_agent_block_suspected'] = in_array((int) ($diagnostics['status_code'] ?? 0), [403, 406, 429], true);
+        $diagnostics['accessible'] = $this->image_probe_accessible($effective);
+        return $diagnostics;
+    }
+
+    private function http_probe_image_url(string $url, string $method): array
+    {
+        $probe = ['attempted' => false, 'method' => $method, 'status_code' => null, 'content_type' => '', 'content_length' => null, 'redirect_chain' => [], 'error' => 'wp_http_unavailable'];
+        if (!function_exists('wp_remote_head') || !function_exists('wp_remote_get') || !function_exists('wp_remote_retrieve_response_code')) {
+            return $probe;
+        }
+        $args = ['timeout' => 8, 'redirection' => 5, 'headers' => ['User-Agent' => 'GPSwiss-Ovoko-Image-Diagnostic/1.0']];
+        $response = $method === 'HEAD' ? wp_remote_head($url, $args) : wp_remote_get($url, $args);
+        $probe['attempted'] = true;
+        unset($probe['error']);
+        if (function_exists('is_wp_error') && is_wp_error($response)) {
+            $probe['error'] = method_exists($response, 'get_error_code') ? $response->get_error_code() : 'wp_error';
+            return $probe;
+        }
+        $headers = is_array($response) ? (array) ($response['headers'] ?? []) : [];
+        $probe['status_code'] = (int) wp_remote_retrieve_response_code($response);
+        $probe['content_type'] = $this->header_value($headers, 'content-type');
+        $length = $this->header_value($headers, 'content-length');
+        $probe['content_length'] = ctype_digit($length) ? (int) $length : null;
+        $location = $this->header_value($headers, 'location');
+        $probe['redirect_chain'] = $location !== '' ? [$location] : [];
+        return $probe;
+    }
+
+    private function header_value(array $headers, string $key): string
+    {
+        foreach ($headers as $name => $value) {
+            if (strtolower((string) $name) === strtolower($key)) {
+                if (is_array($value)) { $value = end($value); }
+                return trim((string) $value);
+            }
+        }
+        return '';
+    }
+
+    private function image_probe_accessible(array $probe): bool
+    {
+        $status = (int) ($probe['status_code'] ?? 0);
+        $contentType = strtolower((string) ($probe['content_type'] ?? ''));
+        return !empty($probe['attempted']) && $status >= 200 && $status < 300 && str_starts_with($contentType, 'image/');
     }
 
     private function duplicate_checks(int $productId, string $sku, string $manufacturerCode, string $partNumber): array

@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyImportService;
+use GPSwiss\Ovoko\Services\RrrApiClient;
 
 require_once dirname(__DIR__) . '/src/Services/WooToOvokoCreatePartPreviewService.php';
 require_once dirname(__DIR__) . '/src/Services/WooToOvokoCrmOnlyImportService.php';
+require_once dirname(__DIR__) . '/src/Services/RrrApiClient.php';
 
 $GLOBALS['gpswiss_test_posts'] = [];
 $GLOBALS['gpswiss_test_meta'] = [];
@@ -16,6 +18,7 @@ $GLOBALS['gpswiss_test_products'] = [];
 $GLOBALS['gpswiss_test_writes'] = [];
 $GLOBALS['gpswiss_test_options'] = [];
 $GLOBALS['gpswiss_test_import_payloads'] = [];
+$GLOBALS['gpswiss_test_http_overrides'] = [];
 
 class GPSwissCrmLiveTestProduct
 {
@@ -42,6 +45,8 @@ function gpswiss_reset_live_test_state(): void
     $GLOBALS['gpswiss_test_writes'] = [];
     $GLOBALS['gpswiss_test_options'] = [];
     $GLOBALS['gpswiss_test_import_payloads'] = [];
+    $GLOBALS['gpswiss_test_http_overrides'] = [];
+$GLOBALS['gpswiss_test_http_overrides'] = [];
 }
 
 function gpswiss_add_post(int $id, string $postType = 'product', string $status = 'draft', string $title = 'Test product'): void
@@ -74,6 +79,7 @@ function gpswiss_seed_valid_live_product(int $id = 60886): void
 function gpswiss_confirmations(): array { return ['confirm_placeholder_car_id' => true, 'confirm_live_one_product' => true, 'confirm_no_price_non_public' => true]; }
 function gpswiss_fake_success_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-999', 'raw_body' => '{"status_code":"R200","part_id":"RRR-999"}']; }
 function gpswiss_fake_fail_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R500', 'part_id' => '', 'raw_body' => '{"status_code":"R500"}']; }
+function gpswiss_fake_photo_fail_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R400', 'msg' => ['photo' => '[ERROR] file does not exist'], 'part_id' => '', 'raw_body' => '{"status_code":"R400","msg":{"photo":"[ERROR] file does not exist"}}']; }
 
 function get_post($id): object|false { return $GLOBALS['gpswiss_test_posts'][(int) $id] ?? false; }
 function get_post_type($id): string|false { $post = get_post((int) $id); return $post ? $post->post_type : false; }
@@ -87,7 +93,13 @@ function wp_get_post_terms(int $id, string $taxonomy): array { return $taxonomy 
 function get_term_meta(int $termId, string $key, bool $single = false): mixed { return $GLOBALS['gpswiss_test_term_meta'][$termId][$key] ?? ''; }
 function get_post_thumbnail_id(int $id): int { return (int) get_post_meta($id, '_thumbnail_id', true); }
 function wp_get_attachment_url(int $id): string { return (string) ($GLOBALS['gpswiss_test_attachments'][$id] ?? ''); }
+function get_attached_file(int $id): string { return '/tmp/gpswiss-test-' . $id . '.jpg'; }
 function wp_http_validate_url(string $url): bool { return str_starts_with($url, 'http://') || str_starts_with($url, 'https://'); }
+function is_wp_error(mixed $thing): bool { return false; }
+function gpswiss_http_response_for_url(string $url): array { $override = $GLOBALS['gpswiss_test_http_overrides'][$url] ?? null; if (is_array($override)) { return $override; } return ['response' => ['code' => 200], 'headers' => ['content-type' => 'image/jpeg', 'content-length' => '12345']]; }
+function wp_remote_head(string $url, array $args = []): array { return gpswiss_http_response_for_url($url); }
+function wp_remote_get(string $url, array $args = []): array { return gpswiss_http_response_for_url($url); }
+function wp_remote_retrieve_response_code(array $response): int { return (int) ($response['response']['code'] ?? 0); }
 function get_option(string $key, mixed $default = false): mixed { return $GLOBALS['gpswiss_test_options'][$key] ?? $default; }
 function wp_json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false { return json_encode($value, $flags, $depth); }
 function get_posts(array $args): array { return []; }
@@ -152,6 +164,52 @@ gpswiss_run_live_test('failed response does not store part_id and stores error',
     gpswiss_assert($result['ok'] === false, 'Failed API response must fail result.');
     gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '', 'Failed API response must not store part_id.');
     gpswiss_assert(get_post_meta(60886, '_gps_ovoko_crm_only_import_last_error', true) !== '', 'Failed API response must store last error.');
+});
+
+
+gpswiss_run_live_test('photo file does not exist response stores clear error and no part_id', function (): void {
+    gpswiss_seed_valid_live_product();
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_photo_fail_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === false && ($result['error_code'] ?? '') === 'ovoko_import_failed', 'Photo failure must fail safely.');
+    gpswiss_assert(($result['message'] ?? '') === 'Ovoko rejected photo field. Image payload format/accessibility must be fixed before retry.', 'Photo failure must show clear admin message.');
+    gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '', 'Photo failure must not store _ovoko_part_id.');
+    gpswiss_assert(str_contains((string) get_post_meta(60886, '_gps_ovoko_crm_only_import_last_error', true), 'Ovoko rejected photo field'), 'Photo failure must store clear last error.');
+});
+
+gpswiss_run_live_test('repeated photos encoding uses repeated form fields', function (): void {
+    $encoded = RrrApiClient::encode_repeated_form_fields(['photo' => 'https://example.test/501.jpg', 'photos[]' => ['https://example.test/501.jpg', 'https://example.test/502.jpg']]);
+    gpswiss_assert(substr_count($encoded, 'photos%5B%5D=') === 2, 'photos[] must be encoded as repeated form fields.');
+    gpswiss_assert(!str_contains($encoded, 'photos%5B%5D%5B0%5D'), 'photos[] must not be encoded as nested array fields.');
+});
+
+gpswiss_run_live_test('photo equals first photos safety is exposed', function (): void {
+    gpswiss_seed_valid_live_product();
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert(($result['payload_safety']['photo_equals_first_photos'] ?? false) === true, 'Payload safety must confirm photo equals first photos[].');
+});
+
+gpswiss_run_live_test('image diagnostics are included in preview', function (): void {
+    gpswiss_seed_valid_live_product();
+    $preview = (new GPSwiss\Ovoko\Services\WooToOvokoCreatePartPreviewService())->preview(60886);
+    $detail = $preview['images']['image_details'][0] ?? [];
+    gpswiss_assert(isset($detail['diagnostics']['head']['status_code']) && $detail['diagnostics']['content_type'] === 'image/jpeg', 'Preview must include HTTP diagnostics.');
+    gpswiss_assert(($detail['local_file_path'] ?? '') !== '' && ($detail['selected_as_main_photo'] ?? false) === true, 'Preview must include local file path and main photo marker.');
+    gpswiss_assert(($preview['images']['photo_payload_modes']['multipart_file_upload']['status'] ?? '') === 'preview_only_not_live', 'Preview must list alternate image modes safely.');
+});
+
+gpswiss_run_live_test('inaccessible image blocks live readiness', function (): void {
+    gpswiss_seed_valid_live_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/502.jpg'] = ['response' => ['code' => 403], 'headers' => ['content-type' => 'text/html']];
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === false && ($result['error_code'] ?? '') === 'preview_live_safety_failed', 'Inaccessible image must block live readiness.');
+    gpswiss_assert($GLOBALS['gpswiss_test_import_payloads'] === [], 'Inaccessible image must not call importer.');
+});
+
+gpswiss_run_live_test('preview remains no-write while adding diagnostics', function (): void {
+    gpswiss_seed_valid_live_product();
+    $preview = (new GPSwiss\Ovoko\Services\WooToOvokoCreatePartPreviewService())->preview(60886);
+    gpswiss_assert(($preview['no_ovoko_write'] ?? false) === true && ($preview['no_woo_write'] ?? false) === true && ($preview['would_send'] ?? true) === false, 'Preview must remain no-write.');
+    gpswiss_assert($GLOBALS['gpswiss_test_writes'] === [], 'Preview must not write Woo meta.');
 });
 
 gpswiss_run_live_test('no Woo price category stock mutation', function (): void {
