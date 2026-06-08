@@ -311,6 +311,9 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_set_meta(60886, '_gps_storage_location', '2KNS');
     gpswiss_set_meta(60886, '_ovoko_car_id', '9002');
     gpswiss_set_meta(60886, '_ovoko_quality_id', '2');
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '1000');
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'manual_override');
+    gpswiss_set_meta(60886, '_gps_manual_price_pln', '1000');
     gpswiss_set_meta(60886, '_thumbnail_id', '601');
     gpswiss_set_meta(60886, '_product_image_gallery', '602,603');
     $GLOBALS['gpswiss_test_posts'][60886]->post_content = 'Gmail description/body';
@@ -333,7 +336,10 @@ gpswiss_run_preview_test('60886-style payload includes required Woo fields', fun
     gpswiss_assert($payload['status'] === 0, '60886 status/default import status missing.');
     gpswiss_assert($payload['quality'] === 2, '60886 quality missing.');
     gpswiss_assert($payload['car_id'] === 9002, '60886 car_id missing.');
-    gpswiss_assert($payload['notes'] === 'Gmail description/body', '60886 Gmail notes/description missing.');
+    gpswiss_assert(!array_key_exists('notes', $payload), '60886 CRM-only preview must not send Gmail body in notes.');
+    gpswiss_assert(!array_key_exists('description', $payload), '60886 CRM-only preview must not send Gmail body in description.');
+    gpswiss_assert(($payload['internal_notes'] ?? '') === "Cena testowa/ręczna: 1000 PLN\nŹródło: manual_override", '60886 manual price guidance missing from internal_notes.');
+    gpswiss_assert(!array_key_exists('sticker_note', $payload), '60886 sticker_note must remain omitted.');
     gpswiss_assert($payload['photo'] === 'https://example.test/60886-1.jpg', '60886 first photo URL missing.');
     gpswiss_assert(count($payload['photos[]']) === 3, '60886 image URLs missing.');
     gpswiss_assert($result['non_public_reason'] === 'missing_price', '60886 non-public reason missing_price missing.');
@@ -373,15 +379,15 @@ gpswiss_run_preview_test('configured placeholder car_id fills missing product ca
     gpswiss_assert(($result['proposed_payload']['_source_summary']['car_id_source'] ?? '') === 'configured_placeholder_car_id', 'Payload source summary should identify placeholder source.');
 });
 
-gpswiss_run_preview_test('placeholder car_id adds warning and note fields', function (WooToOvokoCreatePartPreviewService $service): void {
+gpswiss_run_preview_test('placeholder car_id adds warning without note fields', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     gpswiss_set_meta(123, '_ovoko_car_id', '');
     $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_id'] = '494';
     $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_default_crm_import_car_note'] = 'Manual vehicle review required.';
     $result = $service->preview(123);
     gpswiss_assert(in_array('using_placeholder_car_id', gpswiss_codes($result), true), 'Placeholder warning missing.');
-    gpswiss_assert($result['proposed_payload']['internal_notes'] === 'Manual vehicle review required.', 'Placeholder internal note missing.');
-    gpswiss_assert($result['proposed_payload']['sticker_note'] === 'Manual vehicle review required.', 'Placeholder sticker note missing.');
+    gpswiss_assert(!array_key_exists('internal_notes', $result['proposed_payload']), 'Placeholder warning must not populate internal_notes.');
+    gpswiss_assert(!array_key_exists('sticker_note', $result['proposed_payload']), 'Placeholder warning must not populate sticker_note.');
     gpswiss_assert($result['future_live_readiness']['placeholder_car_id_requires_admin_confirmation'] === true, 'Placeholder admin confirmation flag missing.');
 });
 
