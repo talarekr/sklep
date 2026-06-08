@@ -183,14 +183,14 @@ class WooToOvokoCrmOnlyImportService
 
     private function live_payload_from_preview(array $previewPayload): array
     {
-        $allowed = ['category_id', 'car_id', 'quality', 'status', 'notes', 'place', 'manufacturer_code', 'visible_code', 'external_id', 'photo', 'photos[]', 'internal_notes', 'sticker_note'];
+        $allowed = ['category_id', 'car_id', 'quality', 'status', 'place', 'manufacturer_code', 'visible_code', 'external_id', 'photo', 'photos[]', 'internal_notes'];
         $payload = [];
         foreach ($allowed as $key) {
             if (array_key_exists($key, $previewPayload)) {
                 $payload[$key] = $previewPayload[$key];
             }
         }
-        unset($payload['price'], $payload['original_price'], $payload['currency'], $payload['original_currency']);
+        unset($payload['price'], $payload['original_price'], $payload['currency'], $payload['original_currency'], $payload['notes'], $payload['description'], $payload['listing_text'], $payload['sticker_note']);
         return $payload;
     }
 
@@ -298,6 +298,7 @@ class WooToOvokoCrmOnlyImportService
             'car_id' => $payload['car_id'] ?? null,
             'car_id_source' => (string) ($preview['car_id_source'] ?? ''),
             'car_id_is_placeholder' => !empty($preview['car_id_is_placeholder']),
+            'placeholder_car_id_warning' => !empty($preview['car_id_is_placeholder']) ? (string) ($preview['placeholder_car_id_warning'] ?? '') : '',
             'quality' => $payload['quality'] ?? null,
             'status' => $payload['status'] ?? null,
             'price_fields_omitted' => ['price', 'original_price', 'currency'],

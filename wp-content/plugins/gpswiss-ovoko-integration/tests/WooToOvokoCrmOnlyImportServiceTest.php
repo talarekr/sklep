@@ -135,6 +135,50 @@ gpswiss_run_live_test('live payload omits price fields and includes photo/photos
     gpswiss_assert(($payload['category_id'] ?? null) === 1407 && ($payload['car_id'] ?? null) === 494 && ($payload['quality'] ?? null) === 2 && ($payload['status'] ?? null) === 0, 'Required CRM fields missing.');
 });
 
+gpswiss_run_live_test('CRM-only payload leaves listing text fields empty and keeps placeholder warning out of notes', function (): void {
+    gpswiss_seed_valid_live_product();
+    $placeholderWarning = 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.';
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Valid product should import successfully.');
+    gpswiss_assert(!array_key_exists('notes', $payload) || trim((string) $payload['notes']) === '', 'CRM-only payload must not send Gmail/Woo body in notes.');
+    gpswiss_assert(!array_key_exists('description', $payload) || trim((string) $payload['description']) === '', 'CRM-only payload must not send Gmail/Woo body in description.');
+    gpswiss_assert(!array_key_exists('listing_text', $payload) || trim((string) $payload['listing_text']) === '', 'CRM-only payload must not send listing text.');
+    gpswiss_assert(!str_contains((string) ($payload['internal_notes'] ?? ''), $placeholderWarning), 'Placeholder car warning must not be sent in internal_notes.');
+    gpswiss_assert(!str_contains((string) ($payload['sticker_note'] ?? ''), $placeholderWarning), 'Placeholder car warning must not be sent in sticker_note.');
+    gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'sticker_note must be empty or omitted.');
+});
+
+gpswiss_run_live_test('CRM-only payload sends manual price guidance only in internal_notes', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '1000');
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'manual_override');
+    gpswiss_set_meta(60886, '_gps_manual_price_pln', '1000');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Valid product should import successfully.');
+    gpswiss_assert(($payload['internal_notes'] ?? '') === "Cena testowa/ręczna: 1000 PLN
+Źródło: manual_override", 'Manual override internal_notes must match staff guidance policy.');
+    gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'Manual override must not populate sticker_note.');
+    foreach (['price', 'original_price', 'currency', 'original_currency'] as $key) { gpswiss_assert(!array_key_exists($key, $payload), "{$key} must remain absent from manual guidance payload."); }
+    gpswiss_assert(($payload['photos[]'] ?? []) === ['https://example.test/501.jpg', 'https://example.test/502.jpg'], 'Manual guidance payload must still include photos[].');
+});
+
+gpswiss_run_live_test('CRM-only payload sends Allegro price guidance only in internal_notes', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '1234.00');
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'allegro_api');
+    gpswiss_set_meta(60886, '_gps_allegro_price_confidence', 'high');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Valid product should import successfully.');
+    gpswiss_assert(($payload['internal_notes'] ?? '') === "Sugerowana cena Allegro: 1234 PLN
+Źródło: Allegro API
+Confidence: high", 'Allegro internal_notes must include price, source, and confidence.');
+    gpswiss_assert(!array_key_exists('notes', $payload), 'Allegro guidance must not populate notes.');
+    gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'Allegro guidance must not populate sticker_note.');
+});
+
 gpswiss_run_live_test('placeholder car confirmation required when placeholder car_id used', function (): void {
     gpswiss_seed_valid_live_product();
     $confirmations = ['confirm_live_one_product' => true, 'confirm_no_price_non_public' => true];

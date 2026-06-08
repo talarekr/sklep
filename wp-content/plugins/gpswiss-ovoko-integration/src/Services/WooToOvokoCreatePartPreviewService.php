@@ -168,9 +168,10 @@ class WooToOvokoCreatePartPreviewService
         $result['car_id_source'] = (string) $carId['key'];
         $result['car_id_is_placeholder'] = !empty($carId['is_placeholder']);
         $result['car_id_review_required'] = !empty($carId['review_required']);
+        $result['placeholder_car_id_warning'] = !empty($carId['is_placeholder']) ? $this->default_placeholder_car_note() : '';
 
-        $result['proposed_payload'] = $this->build_crm_only_payload($title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
-        $result['full_payload_preview'] = $this->build_full_payload_preview($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId, $importStatus);
+        $result['proposed_payload'] = $this->build_crm_only_payload($productId, $title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
+        $result['full_payload_preview'] = $this->build_full_payload_preview($productId, $title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId, $importStatus);
 
         $result['future_live_readiness'] = $this->future_live_readiness($result, $categoryPayload, $images, $price, $sku, $carId, $qualityId);
 
@@ -466,16 +467,15 @@ class WooToOvokoCreatePartPreviewService
         ];
     }
 
-    private function build_crm_only_payload(string $title, string $sku, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
+    private function build_crm_only_payload(int $productId, string $title, string $sku, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
     {
         $imageUrls = (array) ($images['image_urls'] ?? []);
-        $placeholderNote = !empty($carId['is_placeholder']) ? $this->default_placeholder_car_note() : '';
+        $internalNotes = $this->crm_only_internal_notes($productId);
         $payload = [
             'category_id' => $categoryPayload['category_id'],
             'car_id' => $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null,
             'quality' => $qualityId['value'] !== '' && ctype_digit((string) $qualityId['value']) ? (int) $qualityId['value'] : null,
             'status' => $importStatus,
-            'notes' => $description,
             'place' => $storageLocation,
             'manufacturer_code' => $manufacturerCode !== '' ? $manufacturerCode : (string) $partIdentifier['value'],
             'visible_code' => (string) $partIdentifier['value'],
@@ -501,6 +501,7 @@ class WooToOvokoCreatePartPreviewService
                 'car_id_source' => $carId['key'],
                 'car_id_is_placeholder' => !empty($carId['is_placeholder']),
                 'car_id_review_required' => !empty($carId['review_required']),
+                'description_length' => mb_strlen($description),
             ],
             '_confirmation_required' => [
                 'endpoint' => false,
@@ -512,18 +513,91 @@ class WooToOvokoCreatePartPreviewService
             ],
         ];
 
-        if ($placeholderNote !== '') {
-            $payload['internal_notes'] = $placeholderNote;
-            $payload['sticker_note'] = $placeholderNote;
-            $payload['_placeholder_car_note'] = $placeholderNote;
+        if ($internalNotes !== '') {
+            $payload['internal_notes'] = $internalNotes;
         }
 
         return $payload;
     }
 
-    private function build_full_payload_preview(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
+    private function crm_only_internal_notes(int $productId): string
     {
-        $payload = $this->build_crm_only_payload($title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
+        $priceData = $this->crm_only_price_suggestion_data($productId);
+        $price = (string) ($priceData['price'] ?? '');
+        $source = (string) ($priceData['source'] ?? '');
+        if ($price === '' || $source === '') {
+            return '';
+        }
+
+        if ($source === 'manual_override') {
+            return 'Cena testowa/ręczna: ' . $price . ' PLN' . "\n" . 'Źródło: manual_override';
+        }
+
+        if (in_array($source, ['allegro_api', 'allegro_suggestion'], true)) {
+            $lines = ['Sugerowana cena Allegro: ' . $price . ' PLN', 'Źródło: Allegro API'];
+            $confidence = (string) ($priceData['confidence'] ?? '');
+            if ($confidence !== '') {
+                $lines[] = 'Confidence: ' . $confidence;
+            }
+            return implode("\n", $lines);
+        }
+
+        return 'Sugerowana cena z Woo/Gmail Importer: ' . $price . ' PLN';
+    }
+
+    private function crm_only_price_suggestion_data(int $productId): array
+    {
+        $stagingItemId = (int) get_post_meta($productId, '_gps_source_staging_item_id', true);
+        $metaProductIds = $stagingItemId > 0 ? [$productId, $stagingItemId] : [$productId];
+        $source = $this->first_non_empty_meta($metaProductIds, ['_gps_selected_price_source']);
+        $price = $this->first_non_empty_meta($metaProductIds, ['_gps_selected_price_pln']);
+
+        if ($source === 'manual_override') {
+            $manualPrice = $this->first_non_empty_meta($metaProductIds, ['_gps_manual_price_pln']);
+            return ['source' => $source, 'price' => $this->format_crm_only_price($price !== '' ? $price : $manualPrice)];
+        }
+
+        if (in_array($source, ['allegro_api', 'allegro_suggestion'], true)) {
+            $allegroPrice = $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_suggestion']);
+            return [
+                'source' => $source,
+                'price' => $this->format_crm_only_price($price !== '' ? $price : $allegroPrice),
+                'confidence' => $this->first_non_empty_meta($metaProductIds, ['_gps_allegro_price_confidence']),
+            ];
+        }
+
+        return ['source' => $source, 'price' => $this->format_crm_only_price($price)];
+    }
+
+    private function first_non_empty_meta(array $productIds, array $keys): string
+    {
+        foreach ($productIds as $productId) {
+            foreach ($keys as $key) {
+                $value = trim((string) get_post_meta((int) $productId, $key, true));
+                if ($value !== '') {
+                    return $value;
+                }
+            }
+        }
+        return '';
+    }
+
+    private function format_crm_only_price(string $price): string
+    {
+        $price = trim($price);
+        if ($price === '' || !is_numeric(str_replace(',', '.', $price))) {
+            return $price;
+        }
+        $normalized = str_replace(',', '.', $price);
+        if (str_contains($normalized, '.')) {
+            $normalized = rtrim(rtrim($normalized, '0'), '.');
+        }
+        return $normalized;
+    }
+
+    private function build_full_payload_preview(int $productId, string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
+    {
+        $payload = $this->build_crm_only_payload($productId, $title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
         $payload['price'] = is_numeric($price) ? (float) $price : $price;
         $payload['original_currency'] = function_exists('get_woocommerce_currency') ? (string) get_woocommerce_currency() : '';
         $payload['_source_summary']['regular_price'] = is_numeric($regularPrice) ? (float) $regularPrice : $regularPrice;
