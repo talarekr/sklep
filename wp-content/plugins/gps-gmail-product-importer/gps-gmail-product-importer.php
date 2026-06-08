@@ -116,6 +116,11 @@ final class GPS_Gmail_Product_Importer
             'allegro_min_filtered_offer_count' => 5,
             'allegro_price_statistic_method' => 'median',
             'allegro_readiness_min_confidence' => 'medium',
+            'fixed_ovoko_import_category_enabled' => 0,
+            'fixed_ovoko_import_category_id' => '',
+            'fixed_ovoko_import_category_name' => '',
+            'fixed_ovoko_import_category_review_warning_enabled' => 1,
+            'allow_empty_price_for_fixed_category_crm_only_import' => 1,
         );
     }
 
@@ -179,6 +184,11 @@ final class GPS_Gmail_Product_Importer
             'allegro_min_filtered_offer_count' => max(1, min(25, absint($input['allegro_min_filtered_offer_count'] ?? 5))),
             'allegro_price_statistic_method' => in_array(($input['allegro_price_statistic_method'] ?? 'median'), array('median', 'min', 'max'), true) ? sanitize_text_field($input['allegro_price_statistic_method']) : 'median',
             'allegro_readiness_min_confidence' => in_array(($input['allegro_readiness_min_confidence'] ?? 'medium'), array('high', 'medium', 'low'), true) ? sanitize_text_field($input['allegro_readiness_min_confidence']) : 'medium',
+            'fixed_ovoko_import_category_enabled' => empty($input['fixed_ovoko_import_category_enabled']) ? 0 : 1,
+            'fixed_ovoko_import_category_id' => absint($input['fixed_ovoko_import_category_id'] ?? 0) > 0 ? (string) absint($input['fixed_ovoko_import_category_id']) : '',
+            'fixed_ovoko_import_category_name' => sanitize_text_field($input['fixed_ovoko_import_category_name'] ?? ''),
+            'fixed_ovoko_import_category_review_warning_enabled' => empty($input['fixed_ovoko_import_category_review_warning_enabled']) ? 0 : 1,
+            'allow_empty_price_for_fixed_category_crm_only_import' => empty($input['allow_empty_price_for_fixed_category_crm_only_import']) ? 0 : 1,
         );
     }
 
@@ -291,6 +301,11 @@ JS;
                     <tr><th><?php esc_html_e('Enable Ovoko price suggestion', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_price_fallback_enabled]" value="1" <?php checked($settings['ovoko_price_fallback_enabled'], 1); ?>> <?php esc_html_e('Use selected Ovoko match price as the primary automatic price suggestion for Woo drafts', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-ovoko-eur-rate"><?php esc_html_e('EUR→PLN fallback rate', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-eur-rate" class="small-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_eur_to_pln_fallback_rate]" value="<?php echo esc_attr($settings['ovoko_eur_to_pln_fallback_rate']); ?>"><p class="description"><?php esc_html_e('Optional. Used only when selected Ovoko price is EUR and no PLN value exists.', 'gps-gmail-product-importer'); ?></p></td></tr>
                     <tr><th><?php esc_html_e('Prefer Ovoko internal_notes price', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_prefer_internal_notes_price]" value="1" <?php checked($settings['ovoko_prefer_internal_notes_price'], 1); ?>> <?php esc_html_e('Use numeric internal_notes before original_price PLN', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Enable fixed Ovoko import category for Gmail CRM-only flow', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[fixed_ovoko_import_category_enabled]" value="1" <?php checked($settings['fixed_ovoko_import_category_enabled'], 1); ?>> <?php esc_html_e('Use one technical Ovoko category for CRM-only imports pending staff review', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Fixed Ovoko category ID', 'gps-gmail-product-importer'); ?></th><td><input type="number" min="1" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[fixed_ovoko_import_category_id]" value="<?php echo esc_attr($settings['fixed_ovoko_import_category_id']); ?>" class="small-text" placeholder="278"></td></tr>
+                    <tr><th><?php esc_html_e('Fixed Ovoko category name', 'gps-gmail-product-importer'); ?></th><td><input type="text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[fixed_ovoko_import_category_name]" value="<?php echo esc_attr($settings['fixed_ovoko_import_category_name']); ?>" class="regular-text" placeholder="Turbina"></td></tr>
+                    <tr><th><?php esc_html_e('Add category review warning to internal notes', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[fixed_ovoko_import_category_review_warning_enabled]" value="1" <?php checked($settings['fixed_ovoko_import_category_review_warning_enabled'], 1); ?>> <?php esc_html_e('Warn staff to correct the temporary category in Ovoko before publishing', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Allow empty price for fixed-category CRM-only drafts/imports', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allow_empty_price_for_fixed_category_crm_only_import]" value="1" <?php checked($settings['allow_empty_price_for_fixed_category_crm_only_import'], 1); ?>> <?php esc_html_e('Do not block Woo draft creation or CRM-only import when price is missing', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-ovoko-enrichment-delay"><?php esc_html_e('Ovoko enrichment delay between batches', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-ovoko-enrichment-delay" type="number" min="1" max="60" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[ovoko_enrichment_delay_between_batches]" value="<?php echo esc_attr($settings['ovoko_enrichment_delay_between_batches']); ?>"> <?php esc_html_e('seconds', 'gps-gmail-product-importer'); ?></td></tr>
                     <tr><th><label for="gps-gmail-batch-size"><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-gmail-batch-size" type="number" min="1" max="25" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[batch_size]" value="<?php echo esc_attr($settings['batch_size']); ?>"></td></tr>
                     <tr><th><?php esc_html_e('Product status default', 'gps-gmail-product-importer'); ?></th><td><select name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[product_status]"><option value="draft" <?php selected($settings['product_status'], 'draft'); ?>><?php esc_html_e('Draft', 'gps-gmail-product-importer'); ?></option><option value="pending_review" <?php selected($settings['product_status'], 'pending_review'); ?>><?php esc_html_e('Pending review', 'gps-gmail-product-importer'); ?></option></select><p class="description"><?php esc_html_e('Default is draft. Products are never published automatically.', 'gps-gmail-product-importer'); ?></p></td></tr>
@@ -589,11 +604,11 @@ JS;
             __('Images metadata', 'gps-gmail-product-importer') => array('_gps_gmail_import_image_count', '_gps_gmail_import_attachment_set_hash', '_gps_gmail_images_metadata'),
             __('Duplicate status', 'gps-gmail-product-importer') => array('_gps_duplicate_status', '_gps_duplicate_existing_product_id'),
             __('Existing Ovoko part match', 'gps-gmail-product-importer') => array('_gps_ovoko_enrichment_status', '_gps_ovoko_enrichment_checked_at', '_gps_ovoko_lookup_oem', '_gps_ovoko_match_count', '_gps_ovoko_selected_match_id', '_gps_ovoko_confidence', '_gps_ovoko_vehicle_make', '_gps_ovoko_vehicle_model', '_gps_ovoko_vehicle_generation', '_gps_ovoko_vehicle_year', '_gps_ovoko_engine_code', '_gps_ovoko_engine_capacity', '_gps_ovoko_fuel_type', '_gps_ovoko_gearbox_type', '_gps_ovoko_power', '_gps_ovoko_mileage', '_gps_ovoko_part_name', '_gps_ovoko_category_id', '_gps_ovoko_category_name', '_gps_ovoko_category_path', '_gps_ovoko_part_category', '_gps_ovoko_raw_category_data', '_gps_ovoko_raw_selected_match', '_gps_ovoko_oem_numbers', '_gps_ovoko_raw_match_summary'),
-            __('Ovoko category-by-code suggestion unavailable / endpoint not confirmed', 'gps-gmail-product-importer') => array('_gps_ovoko_category_suggestion_status', '_gps_ovoko_category_suggestion_code', '_gps_ovoko_category_suggestion_confidence', '_gps_ovoko_category_suggestion_source_type', '_gps_ovoko_category_suggestion_category_id', '_gps_ovoko_category_suggestion_category_name', '_gps_ovoko_category_suggestion_source', '_gps_ovoko_category_suggestion_checked_at', '_gps_ovoko_category_suggestion_raw_response'),
+            __('Ovoko category-by-code suggestion unavailable / endpoint not confirmed', 'gps-gmail-product-importer') => array('_gps_ovoko_category_suggestion_status', '_gps_ovoko_category_suggestion_code', '_gps_ovoko_category_suggestion_confidence', '_gps_ovoko_category_suggestion_source_type', '_gps_ovoko_category_suggestion_category_id', '_gps_ovoko_category_suggestion_category_name', '_gps_ovoko_category_review_required', '_gps_ovoko_category_review_reason', '_gps_ovoko_category_suggestion_source', '_gps_ovoko_category_suggestion_checked_at', '_gps_ovoko_category_suggestion_raw_response'),
             __('Ovoko price suggestion fields', 'gps-gmail-product-importer') => array('_gps_ovoko_price_suggestion_status', '_gps_ovoko_price_suggestion_pln', '_gps_ovoko_price_suggestion_source', '_gps_ovoko_price_suggestion_currency', '_gps_ovoko_price_suggestion_raw_value', '_gps_ovoko_price_suggestion_checked_at', '_gps_ovoko_price_suggestion_notes'),
             __('Allegro price fields (optional legacy diagnostics, not production pricing)', 'gps-gmail-product-importer') => array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at'),
             __('Manual price override fields', 'gps-gmail-product-importer') => array('_gps_manual_price_override_enabled', '_gps_manual_price_pln', '_gps_manual_price_note', '_gps_manual_price_set_at', '_gps_manual_price_set_by'),
-            __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at'),
+            __('Selected price fields', 'gps-gmail-product-importer') => array('_gps_selected_price_pln', '_gps_selected_price_source', '_gps_selected_price_checked_at', '_gps_price_required_for_woo_draft', '_gps_price_required_for_crm_only_import', '_gps_empty_price_allowed_reason'),
             __('Category mapping fields', 'gps-gmail-product-importer') => array('_gps_category_mapping_status', '_gps_category_mapping_checked_at', '_gps_suggested_woo_category_id', '_gps_suggested_woo_category_path', '_gps_suggested_woo_category_confidence', '_gps_suggested_category_source'),
             __('Shipping group', 'gps-gmail-product-importer') => array('_gps_shipping_group'),
             __('Woo draft readiness status', 'gps-gmail-product-importer') => array('_gps_woo_draft_readiness_status', '_gps_woo_draft_readiness_checked_at'),
@@ -1308,6 +1323,61 @@ JS;
         return $ids ? (int) $ids[0] : 0;
     }
 
+    private function fixed_import_category_settings($settings = null)
+    {
+        $settings = $settings === null ? $this->settings() : (array) $settings;
+        $enabled = !empty($settings['fixed_ovoko_import_category_enabled']);
+        $id = absint($settings['fixed_ovoko_import_category_id'] ?? 0);
+        $name = trim((string) ($settings['fixed_ovoko_import_category_name'] ?? ''));
+        $empty_price_allowed = $enabled && !empty($settings['allow_empty_price_for_fixed_category_crm_only_import']);
+        return array(
+            'enabled' => $enabled,
+            'configured' => $enabled && $id > 0 && $name !== '',
+            'category_id' => $id,
+            'category_name' => $name,
+            'review_warning_enabled' => !empty($settings['fixed_ovoko_import_category_review_warning_enabled']),
+            'empty_price_allowed' => $empty_price_allowed,
+            'mode' => $enabled ? 'fixed_import_category_manual_review' : '',
+        );
+    }
+
+    private function fixed_import_category_empty_price_allowed($analysis = array())
+    {
+        $fixed = $this->fixed_import_category_settings();
+        return $fixed['configured'] && $fixed['empty_price_allowed'];
+    }
+
+    private function fixed_import_category_meta_values($settings = null)
+    {
+        $fixed = $this->fixed_import_category_settings($settings);
+        if (!$fixed['configured']) {
+            return array(
+                '_gps_price_required_for_woo_draft' => '1',
+                '_gps_price_required_for_crm_only_import' => '1',
+                '_gps_empty_price_allowed_reason' => '',
+            );
+        }
+        return array(
+            '_gps_ovoko_category_suggestion_status' => 'fixed_import_category_manual_review',
+            '_gps_ovoko_category_suggestion_category_id' => (string) $fixed['category_id'],
+            '_gps_ovoko_category_suggestion_category_name' => $fixed['category_name'],
+            '_gps_ovoko_category_suggestion_confidence' => 'placeholder',
+            '_gps_ovoko_category_suggestion_source_type' => 'fixed_import_category_manual_review',
+            '_gps_ovoko_category_review_required' => '1',
+            '_gps_ovoko_category_review_reason' => 'fixed import category used; staff must correct category in Ovoko before publishing',
+            '_gps_price_required_for_woo_draft' => $fixed['empty_price_allowed'] ? '0' : '1',
+            '_gps_price_required_for_crm_only_import' => $fixed['empty_price_allowed'] ? '0' : '1',
+            '_gps_empty_price_allowed_reason' => $fixed['empty_price_allowed'] ? 'fixed_category_crm_only_import_review_flow' : '',
+        );
+    }
+
+    private function persist_fixed_import_category_meta_for_staging_item($item_id)
+    {
+        foreach ($this->fixed_import_category_meta_values() as $key => $value) {
+            update_post_meta($item_id, $key, $value);
+        }
+    }
+
     private function staging_meta_from_analysis($analysis, $staging_status, $duplicate_status, $created_product_id)
     {
         $selected_price = $this->selected_price_for_analysis($analysis);
@@ -1315,7 +1385,7 @@ JS;
         $analysis['selected_price_source'] = $selected_price ? $selected_price['source'] : '';
         $woo_readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id);
         $marketplace_readiness = $this->marketplace_readiness_status($analysis, $staging_status, $created_product_id);
-        return array(
+        return array_merge($this->fixed_import_category_meta_values(), array(
             '_gps_gmail_message_id' => sanitize_text_field($analysis['message_id']),
             '_gps_gmail_thread_id' => sanitize_text_field($analysis['thread_id']),
             '_gps_gmail_date' => sanitize_text_field($analysis['date']),
@@ -1384,7 +1454,7 @@ JS;
             '_gps_gmail_created_product_id' => absint($created_product_id),
             '_gps_staging_status' => sanitize_text_field($staging_status),
             '_gps_staged_from_gmail_at' => current_time('mysql', true),
-        );
+        ));
     }
 
     private function readiness_status($analysis, $staging_status, $created_product_id)
@@ -1441,20 +1511,25 @@ JS;
             $blocking[] = 'missing_images_metadata';
         }
         // Ovoko status `suggested` is this plugin's successful high-confidence enrichment value.
-        if (!$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested', 'no_match', 'needs_review'))) {
+        $fixed_settings = $this->fixed_import_category_settings();
+        $fixed_import_category_allows_empty_price = $this->fixed_import_category_empty_price_allowed($analysis);
+        if (!empty($fixed_settings['enabled']) && empty($fixed_settings['configured'])) {
+            $blocking[] = 'fixed_import_category_not_configured';
+        }
+        if (!$fixed_import_category_allows_empty_price && !$this->status_indicates_success((string) ($analysis['ovoko_enrichment_status'] ?? ''), array('enriched', 'matched', 'ok', 'suggested', 'no_match', 'needs_review'))) {
             $blocking[] = 'missing_ovoko_enrichment';
         }
         // Production price can come only from manual override or a completed Ovoko price suggestion.
         $selected_price = $this->selected_price_for_analysis($analysis);
-        if (!$selected_price) {
+        if (!$selected_price && !$fixed_import_category_allows_empty_price) {
             $blocking[] = 'missing_selected_price';
         }
         $category_mapping_ready = $this->status_indicates_success((string) ($analysis['category_mapping_status'] ?? ''), array('success', 'ok', 'mapped', 'matched'));
-        if (!$category_mapping_ready) {
+        if (!$category_mapping_ready && !$fixed_import_category_allows_empty_price) {
             $blocking[] = (string) ($analysis['category_mapping_status'] ?? '') === 'missing_ovoko_category_resolution' ? 'missing_ovoko_category_resolution' : 'missing_category_mapping';
-        } elseif (absint($analysis['suggested_woo_category_id'] ?? 0) <= 0 || strtolower(trim((string) ($analysis['suggested_woo_category_confidence'] ?? ''))) === 'low' || trim((string) ($analysis['suggested_woo_category_confidence'] ?? '')) === '' || in_array(strtolower(trim((string) ($analysis['suggested_category_source'] ?? ''))), array('', 'none'), true)) {
+        } elseif (!$fixed_import_category_allows_empty_price && $category_mapping_ready && (absint($analysis['suggested_woo_category_id'] ?? 0) <= 0 || strtolower(trim((string) ($analysis['suggested_woo_category_confidence'] ?? ''))) === 'low' || trim((string) ($analysis['suggested_woo_category_confidence'] ?? '')) === '' || in_array(strtolower(trim((string) ($analysis['suggested_category_source'] ?? ''))), array('', 'none'), true))) {
             $blocking[] = 'invalid_category_mapping';
-        } elseif (!$this->product_cat_term_exists(absint($analysis['suggested_woo_category_id'] ?? 0))) {
+        } elseif (!$fixed_import_category_allows_empty_price && !$this->product_cat_term_exists(absint($analysis['suggested_woo_category_id'] ?? 0))) {
             $blocking[] = 'invalid_category_term';
         }
         return $blocking;
@@ -1689,6 +1764,7 @@ JS;
 
     private function run_ovoko_enrichment_for_staging_item($item_id)
     {
+        $this->persist_fixed_import_category_meta_for_staging_item($item_id);
         $analysis = $this->analysis_from_staging_item($item_id);
         $oem = $analysis['detected_oem_part_number'] ?: $analysis['normalized_oem_part_number'];
         if (!$oem) {
@@ -2282,8 +2358,9 @@ JS;
         if ($match_count === 0 || $enrichment_status === 'no_match') {
             $category_suggestion = $this->run_ovoko_category_suggestion_for_staging_item($item_id, '', false);
         }
+        $this->persist_fixed_import_category_meta_for_staging_item($item_id);
         $price = $this->run_ovoko_price_suggestion_for_staging_item($item_id, false);
-        $mapping = $this->run_category_mapping_for_staging_item($item_id);
+        $mapping = $this->fixed_import_category_empty_price_allowed() ? array('action' => 'category_mapping', 'result' => 'fixed_import_category_manual_review', 'writes' => 'staging_meta_only') : $this->run_category_mapping_for_staging_item($item_id);
         $readiness = $this->run_readiness_validation_for_staging_item($item_id);
         return array_merge(
             array('action' => 'full_preparation', 'result' => (string) ($readiness['result'] ?? 'needs_review'), 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_write' => true, 'no_allegro_call' => true),
@@ -2316,6 +2393,14 @@ JS;
             'suggested_woo_category_id' => absint(get_post_meta($item_id, '_gps_suggested_woo_category_id', true)),
             'woo_draft_readiness_status' => get_post_meta($item_id, '_gps_woo_draft_readiness_status', true),
             'woo_draft_blocking_reasons' => is_array($blocking) ? $blocking : array(),
+            'category_mode' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_source_type', true),
+            'category_review_required' => get_post_meta($item_id, '_gps_ovoko_category_review_required', true) === '1',
+            'fixed_category_id' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true),
+            'fixed_category_name' => get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', true),
+            'empty_price_allowed' => get_post_meta($item_id, '_gps_price_required_for_woo_draft', true) === '0',
+            'price_review_required' => get_post_meta($item_id, '_gps_price_required_for_woo_draft', true) === '0' && get_post_meta($item_id, '_gps_selected_price_pln', true) === '',
+            'public_import_allowed' => false,
+            'crm_only_no_price_strategy' => get_post_meta($item_id, '_gps_empty_price_allowed_reason', true) === 'fixed_category_crm_only_import_review_flow',
         );
     }
 
@@ -3152,6 +3237,7 @@ JS;
 
     private function run_readiness_validation_for_staging_item($item_id)
     {
+        $this->persist_fixed_import_category_meta_for_staging_item($item_id);
         $analysis = $this->analysis_from_staging_item($item_id);
         $staging_status = (string) get_post_meta($item_id, '_gps_staging_status', true);
         $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true));
@@ -3291,6 +3377,9 @@ JS;
             'manual_price_note' => get_post_meta($id, '_gps_manual_price_note', true),
             'selected_price_pln' => get_post_meta($id, '_gps_selected_price_pln', true),
             'selected_price_source' => get_post_meta($id, '_gps_selected_price_source', true),
+            'price_required_for_woo_draft' => get_post_meta($id, '_gps_price_required_for_woo_draft', true),
+            'price_required_for_crm_only_import' => get_post_meta($id, '_gps_price_required_for_crm_only_import', true),
+            'empty_price_allowed_reason' => get_post_meta($id, '_gps_empty_price_allowed_reason', true),
             'ovoko_category_id' => get_post_meta($id, '_gps_ovoko_category_id', true),
             'ovoko_category_name' => get_post_meta($id, '_gps_ovoko_category_name', true),
             'ovoko_category_path' => get_post_meta($id, '_gps_ovoko_category_path', true),
@@ -3322,14 +3411,16 @@ JS;
         }
         $settings = $this->settings();
         $selected_price = $this->selected_price_for_analysis($analysis);
-        if (!$selected_price) {
+        $empty_price_allowed = $this->fixed_import_category_empty_price_allowed($analysis);
+        if (!$selected_price && !$empty_price_allowed) {
             return new WP_Error('gps_gmail_missing_selected_price', 'A selected manual or Ovoko suggestion PLN price is required before creating a Woo draft.');
         }
+        $empty_price_allowed = $this->fixed_import_category_empty_price_allowed($analysis);
         $suggested_category_id = $this->mapped_suggested_product_cat_id($analysis);
-        if ($suggested_category_id <= 0) {
+        if ($suggested_category_id <= 0 && !$empty_price_allowed) {
             return new WP_Error('gps_gmail_missing_mapped_category', 'A mapped Woo product_cat category is required before creating a Woo draft.');
         }
-        if (!$this->product_cat_term_exists($suggested_category_id)) {
+        if ($suggested_category_id > 0 && !$this->product_cat_term_exists($suggested_category_id)) {
             return new WP_Error('gps_gmail_invalid_mapped_category', sprintf('Mapped Woo product_cat term %d does not exist.', $suggested_category_id));
         }
         $base_sku = $this->gmail_staging_base_sku($analysis);
@@ -3358,11 +3449,20 @@ JS;
         update_post_meta($product_id, '_sku', $sku);
         update_post_meta($product_id, '_gps_generated_sku', $base_sku);
         update_post_meta($product_id, '_gps_sku_source', 'gmail_staging_item');
-        update_post_meta($product_id, '_regular_price', $selected_price['price']);
-        update_post_meta($product_id, '_price', $selected_price['price']);
+        if ($selected_price) {
+            update_post_meta($product_id, '_regular_price', $selected_price['price']);
+            update_post_meta($product_id, '_price', $selected_price['price']);
+        } else {
+            update_post_meta($product_id, '_regular_price', '');
+            update_post_meta($product_id, '_price', '');
+            update_post_meta($product_id, '_sale_price', '');
+        }
         update_post_meta($product_id, '_gps_source_staging_item_id', absint($analysis['staging_item_id'] ?? 0));
-        update_post_meta($product_id, '_gps_selected_price_pln', $selected_price['price']);
-        update_post_meta($product_id, '_gps_selected_price_source', $selected_price['source']);
+        update_post_meta($product_id, '_gps_selected_price_pln', $selected_price ? $selected_price['price'] : '');
+        update_post_meta($product_id, '_gps_selected_price_source', $selected_price ? $selected_price['source'] : ($empty_price_allowed ? 'no_price_allowed' : ''));
+        update_post_meta($product_id, '_gps_price_required_for_woo_draft', $empty_price_allowed ? '0' : '1');
+        update_post_meta($product_id, '_gps_price_required_for_crm_only_import', $empty_price_allowed ? '0' : '1');
+        update_post_meta($product_id, '_gps_empty_price_allowed_reason', $empty_price_allowed ? 'fixed_category_crm_only_import_review_flow' : '');
         foreach (array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes', '_gps_allegro_price_error_http_status', '_gps_allegro_price_error_response', '_gps_allegro_price_error_code', '_gps_allegro_price_error_checked_at') as $allegro_meta_key) {
             if (array_key_exists(ltrim($allegro_meta_key, '_gps_'), $analysis)) {
                 update_post_meta($product_id, $allegro_meta_key, $analysis[ltrim($allegro_meta_key, '_gps_')]);
@@ -3406,7 +3506,10 @@ JS;
         update_post_meta($product_id, '_gps_ovoko_category_name', $analysis['ovoko_category_name'] ?? '');
         update_post_meta($product_id, '_gps_ovoko_category_path', $analysis['ovoko_category_path'] ?? '');
         update_post_meta($product_id, '_gps_ovoko_part_category', $analysis['ovoko_part_category'] ?? '');
-        $category_assignment = wp_set_object_terms($product_id, array($suggested_category_id), 'product_cat', false);
+        foreach ($this->fixed_import_category_meta_values() as $fixed_meta_key => $fixed_meta_value) {
+            update_post_meta($product_id, $fixed_meta_key, $fixed_meta_value);
+        }
+        $category_assignment = $suggested_category_id > 0 ? wp_set_object_terms($product_id, array($suggested_category_id), 'product_cat', false) : true;
         if (is_wp_error($category_assignment)) {
             wp_delete_post($product_id, true);
             return $category_assignment;

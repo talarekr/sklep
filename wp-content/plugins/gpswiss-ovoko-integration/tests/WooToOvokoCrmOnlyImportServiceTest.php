@@ -181,6 +181,39 @@ Confidence: high", 'Allegro internal_notes must include price, source, and confi
     gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'Allegro guidance must not populate sticker_note.');
 });
 
+
+gpswiss_run_live_test('fixed category CRM-only no-price payload uses category 278 and no internal notes', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_price', '');
+    gpswiss_set_meta(60886, '_regular_price', '');
+    gpswiss_set_meta(60886, '_sale_price', '');
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '999');
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'manual_override');
+    gpswiss_set_meta(60886, '_gps_manual_price_pln', '999');
+    gpswiss_set_meta(60886, '_gps_price_required_for_woo_draft', '0');
+    gpswiss_set_meta(60886, '_gps_price_required_for_crm_only_import', '0');
+    gpswiss_set_meta(60886, '_gps_empty_price_allowed_reason', 'fixed_category_crm_only_import_review_flow');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_status', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_id', '278');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_name', 'Turbina');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_confidence', 'placeholder');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_source_type', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_review_required', '1');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_review_reason', 'fixed import category used; staff must correct category in Ovoko before publishing');
+    $GLOBALS['gpswiss_test_terms'][60886] = [];
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Fixed category no-price product should import CRM-only successfully.', $result);
+    gpswiss_assert(($payload['category_id'] ?? null) === 278, 'CRM-only live payload must use fixed category 278.', $payload);
+    foreach (['price', 'original_price', 'currency', 'original_currency'] as $key) { gpswiss_assert(!array_key_exists($key, $payload), 'CRM-only live payload must omit ' . $key . '.', $payload); }
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', 'CRM-only live notes/listing text must remain storage location only.', $payload);
+    gpswiss_assert(!array_key_exists('internal_notes', $payload) || trim((string) $payload['internal_notes']) === '', 'Fixed category no-price live payload must not send internal_notes, even when a price suggestion exists.', $payload);
+    $textFields = implode("\n", array_map('strval', array_intersect_key($payload, array_flip(['notes', 'internal_notes', 'description', 'listing_text', 'sticker_note']))));
+    foreach (['KATEGORIA DO POPRAWY W OVOKO', 'CENA DO POPRAWY W OVOKO', 'Sugerowana cena', 'Cena testowa', 'Placeholder car_id', 'Turbina (278)', '999'] as $forbiddenText) {
+        gpswiss_assert(!str_contains($textFields, $forbiddenText), 'Fixed category no-price Ovoko text fields must not contain forbidden text: ' . $forbiddenText, $payload);
+    }
+});
+
 gpswiss_run_live_test('placeholder car confirmation required when placeholder car_id used', function (): void {
     gpswiss_seed_valid_live_product();
     $confirmations = ['confirm_live_one_product' => true, 'confirm_no_price_non_public' => true];

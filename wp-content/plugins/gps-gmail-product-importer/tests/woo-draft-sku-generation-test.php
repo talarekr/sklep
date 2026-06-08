@@ -176,6 +176,35 @@ gps_assert($duplicateCreated['result'] === 'created_product' && $duplicateProduc
 gps_assert(($GLOBALS['gps_test_meta'][$duplicateProductId]['_sku'] ?? '') === 'GPS-GMAIL-60850-2', 'Duplicate base SKU should receive a safe numeric suffix.', $GLOBALS['gps_test_meta'][$duplicateProductId] ?? array());
 gps_assert(($GLOBALS['gps_test_meta'][$duplicateProductId]['_gps_generated_sku'] ?? '') === 'GPS-GMAIL-60850', 'Duplicate SKU product should keep the base generated SKU meta.', $GLOBALS['gps_test_meta'][$duplicateProductId] ?? array());
 
+
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_enabled'] = 1;
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_id'] = '278';
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['fixed_ovoko_import_category_name'] = 'Turbina';
+$GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_SETTINGS]['allow_empty_price_for_fixed_category_crm_only_import'] = 1;
+gps_seed_ready_staging_item(60908);
+$GLOBALS['gps_test_meta'][60908]['_gps_manual_price_override_enabled'] = '0';
+$GLOBALS['gps_test_meta'][60908]['_gps_manual_price_pln'] = '';
+$GLOBALS['gps_test_meta'][60908]['_gps_ovoko_enrichment_status'] = '';
+$GLOBALS['gps_test_meta'][60908]['_gps_category_mapping_status'] = 'missing_ovoko_category_resolution';
+$GLOBALS['gps_test_meta'][60908]['_gps_suggested_woo_category_id'] = 0;
+$fixedCreated = $createDraft->invoke($plugin, 60908);
+$fixedProductId = (int) ($fixedCreated['created_product_id'] ?? 0);
+gps_assert($fixedCreated['result'] === 'created_product' && $fixedProductId > 0, 'Item 60908 should create a Woo draft with fixed category and no selected price.', $fixedCreated);
+gps_assert(($GLOBALS['gps_test_meta'][$fixedProductId]['_price'] ?? 'unexpected') === '' && ($GLOBALS['gps_test_meta'][$fixedProductId]['_regular_price'] ?? 'unexpected') === '' && ($GLOBALS['gps_test_meta'][$fixedProductId]['_sale_price'] ?? 'unexpected') === '', 'Fixed category empty-price Woo draft must leave price fields empty, not zero.', $GLOBALS['gps_test_meta'][$fixedProductId] ?? array());
+gps_assert(($GLOBALS['gps_test_meta'][$fixedProductId]['_gps_ovoko_category_suggestion_category_id'] ?? '') === '278' && ($GLOBALS['gps_test_meta'][$fixedProductId]['_gps_ovoko_category_suggestion_category_name'] ?? '') === 'Turbina', 'Fixed category meta must be copied to Woo draft.', $GLOBALS['gps_test_meta'][$fixedProductId] ?? array());
+update_post_meta($fixedProductId, '_thumbnail_id', 501);
+update_post_meta($fixedProductId, '_ovoko_car_id', 9002);
+$fixedPreview = (new WooToOvokoCreatePartPreviewService())->preview($fixedProductId);
+gps_assert(($fixedPreview['category_mode'] ?? '') === 'fixed_import_category_manual_review' && ($fixedPreview['category_review_required'] ?? false) === true, 'Preview should expose fixed category manual-review mode.', $fixedPreview);
+gps_assert(($fixedPreview['fixed_category_id'] ?? 0) === 278 && ($fixedPreview['fixed_category_name'] ?? '') === 'Turbina', 'Preview should expose configured fixed category 278 / Turbina.', $fixedPreview);
+gps_assert(($fixedPreview['empty_price_allowed'] ?? false) === true && ($fixedPreview['price_review_required'] ?? false) === true && ($fixedPreview['public_import_allowed'] ?? true) === false && ($fixedPreview['crm_only_no_price_strategy'] ?? false) === true, 'Preview should expose CRM-only no-price safety flags.', $fixedPreview);
+gps_assert(($fixedPreview['proposed_payload']['category_id'] ?? null) === 278, 'CRM-only preview payload must use fixed category_id 278.', $fixedPreview);
+foreach (array('price', 'original_price', 'currency', 'original_currency') as $priceKey) { gps_assert(!array_key_exists($priceKey, $fixedPreview['proposed_payload']), 'CRM-only preview payload must omit ' . $priceKey . '.', $fixedPreview['proposed_payload']); }
+gps_assert(($fixedPreview['proposed_payload']['notes'] ?? '') === 'A1', 'CRM-only notes/listing text should remain storage location only.', $fixedPreview['proposed_payload']);
+gps_assert(($fixedPreview['internal_notes_preview'] ?? '') === '', 'Fixed category no-price preview should show empty internal_notes_preview.', $fixedPreview);
+gps_assert(!array_key_exists('internal_notes', $fixedPreview['proposed_payload']) || trim((string) $fixedPreview['proposed_payload']['internal_notes']) === '', 'Fixed category no-price CRM-only payload must not send internal_notes.', $fixedPreview['proposed_payload']);
+gps_assert(!str_contains((string) ($fixedPreview['proposed_payload']['notes'] ?? ''), 'KATEGORIA') && !str_contains((string) ($fixedPreview['proposed_payload']['notes'] ?? ''), 'CENA'), 'Storage-only notes must not contain category/price warnings.', $fixedPreview['proposed_payload']);
+
 update_post_meta($productId, '_thumbnail_id', 501);
 update_post_meta($productId, '_ovoko_car_id', 9002);
 $preview = (new WooToOvokoCreatePartPreviewService())->preview($productId);
