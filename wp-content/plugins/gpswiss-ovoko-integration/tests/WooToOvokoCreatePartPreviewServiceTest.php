@@ -233,6 +233,65 @@ gpswiss_run_preview_test('image preview extraction', function (WooToOvokoCreateP
     gpswiss_assert($result['photos_included'] === true, 'CRM-only preview should mark photos included.');
 });
 
+gpswiss_run_preview_test('GET 200 image content-type is accessible', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    gpswiss_assert(($detail['accessible'] ?? false) === true, 'Image content-type should be accessible.');
+    gpswiss_assert(($detail['accessibility_basis'] ?? '') === 'get_200_image_content_type', 'Image content-type basis missing.');
+});
+
+gpswiss_run_preview_test('GET 200 empty content-type with jpg extension is accessible with warning', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/501.jpg'] = ['response' => ['code' => 200], 'headers' => []];
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    $warningCodes = array_map(static fn(array $row): string => (string) $row['code'], $detail['warnings'] ?? []);
+    gpswiss_assert(($detail['accessible'] ?? false) === true, 'JPG extension with GET 200 should be accessible.');
+    gpswiss_assert(($detail['accessibility_basis'] ?? '') === 'get_200_image_extension', 'JPG extension basis missing.');
+    gpswiss_assert(in_array('image_content_type_missing', $warningCodes, true), 'Missing content-type warning missing.');
+    gpswiss_assert(in_array('image_content_length_missing', $warningCodes, true), 'Missing content-length warning missing.');
+    gpswiss_assert($result['would_be_eligible'] === true, 'Missing image headers must not block readiness when GET 200 and JPG extension are present.');
+});
+
+gpswiss_run_preview_test('GET 200 text/html content-type is inaccessible', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/501.jpg'] = ['response' => ['code' => 200], 'headers' => ['content-type' => 'text/html', 'content-length' => '12345']];
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    gpswiss_assert(($detail['accessible'] ?? true) === false, 'HTML response should be inaccessible.');
+    gpswiss_assert(in_array('inaccessible_image_url', gpswiss_codes($result), true), 'HTML response should block image readiness.');
+});
+
+gpswiss_run_preview_test('GET 403 is inaccessible', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/501.jpg'] = ['response' => ['code' => 403], 'headers' => ['content-type' => 'image/jpeg']];
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    gpswiss_assert(($detail['accessible'] ?? true) === false, '403 response should be inaccessible.');
+    gpswiss_assert(($detail['diagnostics']['hotlink_or_user_agent_block_suspected'] ?? false) === true, '403 response should flag access blocking.');
+});
+
+gpswiss_run_preview_test('invalid image URL is inaccessible', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_attachments'][501] = 'ftp://example.test/501.jpg';
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    gpswiss_assert(($detail['accessible'] ?? true) === false, 'Invalid public URL should be inaccessible.');
+    gpswiss_assert(($detail['diagnostics']['valid_public_http_url'] ?? true) === false, 'Invalid URL should be reported.');
+});
+
+gpswiss_run_preview_test('missing content-length alone does not block image accessibility', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_http_overrides']['https://example.test/501.jpg'] = ['response' => ['code' => 200], 'headers' => ['content-type' => 'image/jpeg']];
+    $result = $service->preview(123);
+    $detail = $result['images']['image_details'][0] ?? [];
+    $warningCodes = array_map(static fn(array $row): string => (string) $row['code'], $detail['warnings'] ?? []);
+    gpswiss_assert(($detail['accessible'] ?? false) === true, 'Missing content-length must not block image accessibility.');
+    gpswiss_assert(in_array('image_content_length_missing', $warningCodes, true), 'Missing content-length warning missing.');
+    gpswiss_assert($result['would_be_eligible'] === true, 'Missing content-length alone must not block preview eligibility.');
+});
+
 gpswiss_run_preview_test('no write performed', function (WooToOvokoCreatePartPreviewService $service): void {
     gpswiss_seed_valid_product();
     $service->preview(123);
