@@ -277,7 +277,7 @@ JS;
                     <tr><th><?php esc_html_e('Product status default', 'gps-gmail-product-importer'); ?></th><td><select name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[product_status]"><option value="draft" <?php selected($settings['product_status'], 'draft'); ?>><?php esc_html_e('Draft', 'gps-gmail-product-importer'); ?></option><option value="pending_review" <?php selected($settings['product_status'], 'pending_review'); ?>><?php esc_html_e('Pending review', 'gps-gmail-product-importer'); ?></option></select><p class="description"><?php esc_html_e('Default is draft. Products are never published automatically.', 'gps-gmail-product-importer'); ?></p></td></tr>
                     <tr><th><?php esc_html_e('Import images', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[import_images]" value="1" <?php checked($settings['import_images'], 1); ?>> <?php esc_html_e('Import jpg/jpeg/png/webp attachments', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><?php esc_html_e('Duplicate protection', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[duplicate_protection]" value="1" <?php checked($settings['duplicate_protection'], 1); ?>> <?php esc_html_e('Skip existing Gmail message IDs and possible OEM duplicates', 'gps-gmail-product-importer'); ?></label></td></tr>
-                    <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Uses this plugin's own Allegro API credentials to search public offers and save staging-only price suggestions. It never writes prices to Woo products.", 'gps-gmail-product-importer'); ?></p></th></tr>
+                    <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Uses this plugin's own Allegro API credentials to search public offers and save staging-only price suggestions. Woo drafts may use the selected hint as draft price, but Ovoko CRM-only imports must receive it only in internal_notes, never as public price fields.", 'gps-gmail-product-importer'); ?></p></th></tr>
                     <tr><th><?php esc_html_e('Enable Allegro API', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_api_enabled]" value="1" <?php checked($settings['allegro_api_enabled'], 1); ?>> <?php esc_html_e('Allow item-scoped Allegro price research actions', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-allegro-client-id"><?php esc_html_e('Allegro client ID', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-id" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_id]" value="<?php echo esc_attr($settings['allegro_client_id']); ?>"></td></tr>
                     <tr><th><label for="gps-allegro-client-secret"><?php esc_html_e('Allegro client secret', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-client-secret" type="password" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_client_secret]" value="<?php echo esc_attr($settings['allegro_client_secret']); ?>" autocomplete="off"></td></tr>
@@ -288,7 +288,7 @@ JS;
                     <tr><th><label for="gps-allegro-search-limit"><?php esc_html_e('Allegro search limit', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-search-limit" type="number" min="1" max="60" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_search_limit]" value="<?php echo esc_attr($settings['allegro_search_limit']); ?>"></td></tr>
                     <tr><th><label for="gps-allegro-min-filtered"><?php esc_html_e('Minimum filtered offer count', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-allegro-min-filtered" type="number" min="1" max="25" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_min_filtered_offer_count]" value="<?php echo esc_attr($settings['allegro_min_filtered_offer_count']); ?>"></td></tr>
                     <tr><th><label for="gps-allegro-stat-method"><?php esc_html_e('Price statistic method', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-stat-method" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_price_statistic_method]"><option value="median" <?php selected($settings['allegro_price_statistic_method'], 'median'); ?>><?php esc_html_e('Median', 'gps-gmail-product-importer'); ?></option><option value="min" <?php selected($settings['allegro_price_statistic_method'], 'min'); ?>><?php esc_html_e('Minimum', 'gps-gmail-product-importer'); ?></option><option value="max" <?php selected($settings['allegro_price_statistic_method'], 'max'); ?>><?php esc_html_e('Maximum', 'gps-gmail-product-importer'); ?></option></select></td></tr>
-                    <tr><th><label for="gps-allegro-readiness-confidence"><?php esc_html_e('Readiness minimum confidence', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-readiness-confidence" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_readiness_min_confidence]"><option value="medium" <?php selected($settings['allegro_readiness_min_confidence'], 'medium'); ?>><?php esc_html_e('Medium or high', 'gps-gmail-product-importer'); ?></option><option value="high" <?php selected($settings['allegro_readiness_min_confidence'], 'high'); ?>><?php esc_html_e('High only', 'gps-gmail-product-importer'); ?></option><option value="low" <?php selected($settings['allegro_readiness_min_confidence'], 'low'); ?>><?php esc_html_e('Low, medium, or high', 'gps-gmail-product-importer'); ?></option></select></td></tr>
+                    <tr><th><label for="gps-allegro-readiness-confidence"><?php esc_html_e('Confidence threshold', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-readiness-confidence" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_readiness_min_confidence]"><option value="medium" <?php selected($settings['allegro_readiness_min_confidence'], 'medium'); ?>><?php esc_html_e('Medium or high', 'gps-gmail-product-importer'); ?></option><option value="high" <?php selected($settings['allegro_readiness_min_confidence'], 'high'); ?>><?php esc_html_e('High only', 'gps-gmail-product-importer'); ?></option><option value="low" <?php selected($settings['allegro_readiness_min_confidence'], 'low'); ?>><?php esc_html_e('Low, medium, or high', 'gps-gmail-product-importer'); ?></option></select></td></tr>
                     <tr><th><?php esc_html_e('Auto-assign category', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[auto_assign_high_confidence_category]" value="1" <?php checked($settings['auto_assign_high_confidence_category'], 1); ?>> <?php esc_html_e('Assign Woo category automatically only if confidence is high', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-google-client-id"><?php esc_html_e('Google client ID', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-google-client-id" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[google_client_id]" value="<?php echo esc_attr($settings['google_client_id']); ?>"></td></tr>
                     <tr><th><label for="gps-google-client-secret"><?php esc_html_e('Google client secret', 'gps-gmail-product-importer'); ?></label></th><td><input id="gps-google-client-secret" type="password" class="regular-text" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[google_client_secret]" value="<?php echo esc_attr($settings['google_client_secret']); ?>" autocomplete="off"></td></tr>
@@ -554,7 +554,7 @@ JS;
             __('Created product ID', 'gps-gmail-product-importer') => array('_gps_gmail_created_product_id', '_gps_gmail_created_product_at', '_gps_gmail_created_product_checked_at', '_gps_gmail_created_product_status'),
         );
         $selected_price_source = (string) ($normalized_meta['_gps_selected_price_source'] ?? '');
-        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_suggestion' ? __('Allegro price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
+        $price_readiness_label = $selected_price_source === 'manual_override' ? __('manual price override', 'gps-gmail-product-importer') : ($selected_price_source === 'allegro_api' ? __('Allegro API price suggestion', 'gps-gmail-product-importer') : __('no selected price yet', 'gps-gmail-product-importer'));
         ?>
         <div id="gps-import-queue-detail" style="margin-top:20px;">
             <h3><?php echo esc_html(sprintf(__('Import Queue Item #%d Details', 'gps-gmail-product-importer'), $item_id)); ?></h3>
@@ -1277,8 +1277,19 @@ JS;
             '_gps_gmail_warnings' => wp_json_encode(array_values((array) $analysis['warnings'])),
             '_gps_ovoko_enrichment_status' => sanitize_text_field($analysis['ovoko_enrichment_status'] ?? ''),
             '_gps_allegro_price_research_status' => sanitize_text_field($analysis['allegro_price_research_status'] ?? ''),
+            '_gps_allegro_price_research_checked_at' => sanitize_text_field($analysis['allegro_price_research_checked_at'] ?? ''),
+            '_gps_allegro_price_query' => sanitize_text_field($analysis['allegro_price_query'] ?? ''),
+            '_gps_allegro_price_raw_offer_count' => absint($analysis['allegro_price_raw_offer_count'] ?? 0),
+            '_gps_allegro_price_filtered_offer_count' => absint($analysis['allegro_price_filtered_offer_count'] ?? 0),
+            '_gps_allegro_price_median_pln' => sanitize_text_field($analysis['allegro_price_median_pln'] ?? ''),
+            '_gps_allegro_price_min_pln' => sanitize_text_field($analysis['allegro_price_min_pln'] ?? ''),
+            '_gps_allegro_price_max_pln' => sanitize_text_field($analysis['allegro_price_max_pln'] ?? ''),
+            '_gps_allegro_price_confidence' => sanitize_text_field($analysis['allegro_price_confidence'] ?? ''),
+            '_gps_allegro_price_sample_offer_urls' => is_string($analysis['allegro_price_sample_offer_urls'] ?? '') ? sanitize_text_field($analysis['allegro_price_sample_offer_urls']) : wp_json_encode(array_values((array) ($analysis['allegro_price_sample_offer_urls'] ?? array())), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            '_gps_allegro_price_source' => sanitize_text_field($analysis['allegro_price_source'] ?? ''),
             '_gps_allegro_price_suggestion' => sanitize_text_field($analysis['allegro_price_suggestion'] ?? ''),
             '_gps_allegro_price_currency' => sanitize_text_field($analysis['allegro_price_currency'] ?? ''),
+            '_gps_allegro_price_notes' => sanitize_textarea_field($analysis['allegro_price_notes'] ?? ''),
             '_gps_manual_price_override_enabled' => !empty($analysis['manual_price_override_enabled']) ? '1' : '0',
             '_gps_manual_price_pln' => sanitize_text_field($analysis['manual_price_pln'] ?? ''),
             '_gps_manual_price_note' => sanitize_textarea_field($analysis['manual_price_note'] ?? ''),
@@ -1442,7 +1453,7 @@ JS;
             return array('price' => $this->format_manual_price_number($analysis['manual_price_pln']), 'source' => 'manual_override');
         }
         if ($this->status_indicates_success((string) ($analysis['allegro_price_research_status'] ?? ''), array('completed', 'success', 'ok', 'researched')) && (float) ($analysis['allegro_price_suggestion'] ?? 0) > 0 && strtoupper(trim((string) ($analysis['allegro_price_currency'] ?? ''))) === 'PLN' && $this->allegro_readiness_quality_ok($analysis)) {
-            return array('price' => $this->format_price_number($analysis['allegro_price_suggestion']), 'source' => 'allegro_suggestion');
+            return array('price' => $this->format_price_number($analysis['allegro_price_suggestion']), 'source' => 'allegro_api');
         }
         return null;
     }
@@ -2156,10 +2167,19 @@ JS;
             'detected_vehicle_confidence' => get_post_meta($id, '_gps_detected_vehicle_confidence', true),
             'ovoko_enrichment_status' => get_post_meta($id, '_gps_ovoko_enrichment_status', true),
             'allegro_price_research_status' => get_post_meta($id, '_gps_allegro_price_research_status', true),
+            'allegro_price_research_checked_at' => get_post_meta($id, '_gps_allegro_price_research_checked_at', true),
+            'allegro_price_query' => get_post_meta($id, '_gps_allegro_price_query', true),
+            'allegro_price_raw_offer_count' => get_post_meta($id, '_gps_allegro_price_raw_offer_count', true),
+            'allegro_price_filtered_offer_count' => get_post_meta($id, '_gps_allegro_price_filtered_offer_count', true),
+            'allegro_price_median_pln' => get_post_meta($id, '_gps_allegro_price_median_pln', true),
+            'allegro_price_min_pln' => get_post_meta($id, '_gps_allegro_price_min_pln', true),
+            'allegro_price_max_pln' => get_post_meta($id, '_gps_allegro_price_max_pln', true),
+            'allegro_price_confidence' => get_post_meta($id, '_gps_allegro_price_confidence', true),
+            'allegro_price_sample_offer_urls' => get_post_meta($id, '_gps_allegro_price_sample_offer_urls', true),
+            'allegro_price_source' => get_post_meta($id, '_gps_allegro_price_source', true),
             'allegro_price_suggestion' => get_post_meta($id, '_gps_allegro_price_suggestion', true),
             'allegro_price_currency' => get_post_meta($id, '_gps_allegro_price_currency', true),
-            'allegro_price_filtered_offer_count' => get_post_meta($id, '_gps_allegro_price_filtered_offer_count', true),
-            'allegro_price_confidence' => get_post_meta($id, '_gps_allegro_price_confidence', true),
+            'allegro_price_notes' => get_post_meta($id, '_gps_allegro_price_notes', true),
             'manual_price_override_enabled' => get_post_meta($id, '_gps_manual_price_override_enabled', true) === '1',
             'manual_price_pln' => get_post_meta($id, '_gps_manual_price_pln', true),
             'manual_price_note' => get_post_meta($id, '_gps_manual_price_note', true),
@@ -2230,6 +2250,13 @@ JS;
         update_post_meta($product_id, '_gps_source_staging_item_id', absint($analysis['staging_item_id'] ?? 0));
         update_post_meta($product_id, '_gps_selected_price_pln', $selected_price['price']);
         update_post_meta($product_id, '_gps_selected_price_source', $selected_price['source']);
+        foreach (array('_gps_allegro_price_research_status', '_gps_allegro_price_research_checked_at', '_gps_allegro_price_query', '_gps_allegro_price_raw_offer_count', '_gps_allegro_price_filtered_offer_count', '_gps_allegro_price_median_pln', '_gps_allegro_price_min_pln', '_gps_allegro_price_max_pln', '_gps_allegro_price_confidence', '_gps_allegro_price_sample_offer_urls', '_gps_allegro_price_source', '_gps_allegro_price_suggestion', '_gps_allegro_price_currency', '_gps_allegro_price_notes') as $allegro_meta_key) {
+            if (array_key_exists(ltrim($allegro_meta_key, '_gps_'), $analysis)) {
+                update_post_meta($product_id, $allegro_meta_key, $analysis[ltrim($allegro_meta_key, '_gps_')]);
+            } elseif (isset($analysis[$allegro_meta_key])) {
+                update_post_meta($product_id, $allegro_meta_key, $analysis[$allegro_meta_key]);
+            }
+        }
         update_post_meta($product_id, '_gps_gmail_import_message_id', $analysis['message_id']);
         update_post_meta($product_id, '_gps_gmail_import_thread_id', $analysis['thread_id']);
         update_post_meta($product_id, '_gps_gmail_import_subject', $analysis['subject']);
