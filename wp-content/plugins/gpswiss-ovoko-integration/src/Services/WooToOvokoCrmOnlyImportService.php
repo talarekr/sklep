@@ -183,14 +183,14 @@ class WooToOvokoCrmOnlyImportService
 
     private function live_payload_from_preview(array $previewPayload): array
     {
-        $allowed = ['category_id', 'car_id', 'quality', 'status', 'place', 'manufacturer_code', 'visible_code', 'external_id', 'photo', 'photos[]', 'internal_notes'];
+        $allowed = ['category_id', 'car_id', 'quality', 'status', 'place', 'manufacturer_code', 'visible_code', 'external_id', 'photo', 'photos[]', 'notes', 'internal_notes'];
         $payload = [];
         foreach ($allowed as $key) {
             if (array_key_exists($key, $previewPayload)) {
                 $payload[$key] = $previewPayload[$key];
             }
         }
-        unset($payload['price'], $payload['original_price'], $payload['currency'], $payload['original_currency'], $payload['notes'], $payload['description'], $payload['listing_text'], $payload['sticker_note']);
+        unset($payload['price'], $payload['original_price'], $payload['currency'], $payload['original_currency'], $payload['description'], $payload['listing_text'], $payload['sticker_note']);
         return $payload;
     }
 
@@ -283,6 +283,10 @@ class WooToOvokoCrmOnlyImportService
             'car_id' => $preview['car_id'] ?? null,
             'car_id_source' => (string) ($preview['car_id_source'] ?? ''),
             'car_id_is_placeholder' => !empty($preview['car_id_is_placeholder']),
+            'internal_notes_preview' => (string) ($preview['internal_notes_preview'] ?? ''),
+            'listing_text_preview' => (string) ($preview['listing_text_preview'] ?? ''),
+            'listing_text_source' => (string) ($preview['listing_text_source'] ?? ''),
+            'price_fields_omitted' => true,
         ];
     }
 
@@ -301,7 +305,12 @@ class WooToOvokoCrmOnlyImportService
             'placeholder_car_id_warning' => !empty($preview['car_id_is_placeholder']) ? (string) ($preview['placeholder_car_id_warning'] ?? '') : '',
             'quality' => $payload['quality'] ?? null,
             'status' => $payload['status'] ?? null,
-            'price_fields_omitted' => ['price', 'original_price', 'currency'],
+            'internal_notes_preview' => (string) ($preview['internal_notes_preview'] ?? ''),
+            'listing_text_field' => 'notes',
+            'listing_text_preview' => (string) ($payload['notes'] ?? ''),
+            'listing_text_source' => (string) ($preview['listing_text_source'] ?? ''),
+            'price_fields_omitted' => true,
+            'price_fields_omitted_fields' => ['price', 'original_price', 'currency', 'original_currency'],
             'photo' => !empty($payload['photo']) ? '[included]' : '[missing]',
             'photos_count' => count((array) ($payload['photos[]'] ?? [])),
             'auth_fields' => ['username' => '[redacted]', 'password' => '[redacted]', 'user_token' => '[redacted]'],

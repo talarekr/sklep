@@ -135,16 +135,17 @@ gpswiss_run_live_test('live payload omits price fields and includes photo/photos
     gpswiss_assert(($payload['category_id'] ?? null) === 1407 && ($payload['car_id'] ?? null) === 494 && ($payload['quality'] ?? null) === 2 && ($payload['status'] ?? null) === 0, 'Required CRM fields missing.');
 });
 
-gpswiss_run_live_test('CRM-only payload leaves listing text fields empty and keeps placeholder warning out of notes', function (): void {
+gpswiss_run_live_test('CRM-only payload sends storage location as listing notes and keeps placeholder warning out of text fields', function (): void {
     gpswiss_seed_valid_live_product();
     $placeholderWarning = 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.';
     $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
     $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
     gpswiss_assert($result['ok'] === true, 'Valid product should import successfully.');
-    gpswiss_assert(!array_key_exists('notes', $payload) || trim((string) $payload['notes']) === '', 'CRM-only payload must not send Gmail/Woo body in notes.');
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', 'CRM-only payload must send Gmail storage location in Ovoko notes/listing text.');
     gpswiss_assert(!array_key_exists('description', $payload) || trim((string) $payload['description']) === '', 'CRM-only payload must not send Gmail/Woo body in description.');
-    gpswiss_assert(!array_key_exists('listing_text', $payload) || trim((string) $payload['listing_text']) === '', 'CRM-only payload must not send listing text.');
+    gpswiss_assert(!array_key_exists('listing_text', $payload) || trim((string) $payload['listing_text']) === '', 'CRM-only payload must not send unsupported listing_text.');
     gpswiss_assert(!str_contains((string) ($payload['internal_notes'] ?? ''), $placeholderWarning), 'Placeholder car warning must not be sent in internal_notes.');
+    gpswiss_assert(!str_contains((string) ($payload['notes'] ?? ''), $placeholderWarning), 'Placeholder car warning must not be sent in notes/listing text.');
     gpswiss_assert(!str_contains((string) ($payload['sticker_note'] ?? ''), $placeholderWarning), 'Placeholder car warning must not be sent in sticker_note.');
     gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'sticker_note must be empty or omitted.');
 });
@@ -175,7 +176,8 @@ gpswiss_run_live_test('CRM-only payload sends Allegro price guidance only in int
     gpswiss_assert(($payload['internal_notes'] ?? '') === "Sugerowana cena Allegro: 1234 PLN
 Źródło: Allegro API
 Confidence: high", 'Allegro internal_notes must include price, source, and confidence.');
-    gpswiss_assert(!array_key_exists('notes', $payload), 'Allegro guidance must not populate notes.');
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', 'Allegro guidance must leave notes/listing text as storage location only.');
+    gpswiss_assert(!str_contains((string) ($payload['notes'] ?? ''), '1234'), 'Allegro price must not appear in notes/listing text.');
     gpswiss_assert(!array_key_exists('sticker_note', $payload) || trim((string) $payload['sticker_note']) === '', 'Allegro guidance must not populate sticker_note.');
 });
 
@@ -281,6 +283,23 @@ gpswiss_run_live_test('CRM-only Ovoko payload omits price and includes Ovoko sug
     $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
     gpswiss_assert($result['ok'] === true, 'Ovoko suggestion CRM-only import should pass live safety.');
     gpswiss_assert(!array_key_exists('price', $payload) && !array_key_exists('original_price', $payload) && !array_key_exists('currency', $payload) && !array_key_exists('original_currency', $payload), 'CRM-only payload must omit all price fields.');
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', 'CRM-only payload must put storage location 2KNS in notes/listing text.');
+    gpswiss_assert(!str_contains((string) ($payload['notes'] ?? ''), '1800') && !str_contains((string) ($payload['notes'] ?? ''), 'PLN'), 'CRM-only notes/listing text must not contain suggested price.');
+    gpswiss_assert(($result['preview']['listing_text_preview'] ?? '') === '2KNS' && ($result['preview']['listing_text_source'] ?? '') === 'gmail_storage_location' && ($result['preview']['price_fields_omitted'] ?? false) === true, 'Preview summary must expose listing text and price omission flags.');
+    gpswiss_assert(($result['request_summary']['listing_text_preview'] ?? '') === '2KNS' && ($result['request_summary']['price_fields_omitted'] ?? false) === true, 'Request summary must expose listing text and price omission flags.');
     $notes = (string) ($payload['internal_notes'] ?? '');
     gpswiss_assert(str_contains($notes, 'Sugerowana cena Ovoko: 1800 PLN') && str_contains($notes, 'Źródło: ovoko_internal_notes') && str_contains($notes, 'Dane z dopasowanej części Ovoko'), 'CRM-only internal_notes must contain Ovoko suggestion context.');
+});
+
+
+gpswiss_run_live_test('CRM-only payload omits notes/listing text when storage location is empty', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_storage_location', '');
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'manual_override');
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '1000');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Empty storage location should not block CRM-only import.');
+    gpswiss_assert(!array_key_exists('notes', $payload) || trim((string) $payload['notes']) === '', 'Empty storage location must omit or empty notes/listing text.');
+    gpswiss_assert(($result['preview']['listing_text_preview'] ?? '') === '' && ($result['preview']['listing_text_source'] ?? '') === '', 'Preview listing text fields should be empty when storage location is empty.');
 });
