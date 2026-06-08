@@ -163,15 +163,15 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
 
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #00a32a;">
-        <h3>Preview Woo → Ovoko create-part payload</h3>
-        <p><strong>Safe one-product dry-run only.</strong> This tool previews an unconfirmed create-part payload from one WooCommerce product. It does not write to Ovoko, does not write to WooCommerce, does not upload images, does not enqueue work, and does not publish anything.</p>
+        <h3>Preview Woo → Ovoko CRM-only import payload</h3>
+        <p><strong>Safe one-product dry-run only.</strong> This tool previews a CRM-only /crm/importPart payload from one WooCommerce product. It includes photo URLs for internal review, intentionally omits price fields for non-public initial import, and does not write to Ovoko, write to WooCommerce, enqueue work, or publish anything.</p>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
             <?php wp_nonce_field('gpswiss_ovoko_preview_woo_to_ovoko_create_part'); ?>
             <input type="hidden" name="action" value="gpswiss_ovoko_preview_woo_to_ovoko_create_part" />
             <label>product_id: <input type="number" min="1" step="1" name="product_id" value="" style="width:140px;" required /></label>
-            <?php submit_button('Preview Woo → Ovoko create-part payload', 'secondary', 'submit', false); ?>
+            <?php submit_button('Preview Woo → Ovoko CRM-only import payload', 'secondary', 'submit', false); ?>
         </form>
-        <p><strong>Endpoint safety:</strong> create endpoint is documented as <code>/crm/importPart</code>, but remains write-blocked here because publication visibility behavior is not confirmed. This tool intentionally does not call <code>/crm/importPart</code>, <code>/crm/changePartStatus</code>, or <code>/crm/updatePart</code>.</p>
+        <p><strong>Endpoint safety:</strong> create endpoint is documented as <code>/crm/importPart</code>, but remains write-blocked here. CRM-only preview includes photos and omits price because the documented e-shop rule requires price &gt; 0.00 plus a photo URL. This tool intentionally does not call <code>/crm/importPart</code>, <code>/crm/changePartStatus</code>, or <code>/crm/updatePart</code>.</p>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">

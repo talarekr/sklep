@@ -4,7 +4,7 @@ namespace GPSwiss\Ovoko\Services;
 
 class WooToOvokoCreatePartPreviewService
 {
-    private const ACTION_NAME = 'Preview Woo product → Ovoko create-part payload';
+    private const ACTION_NAME = 'Preview Woo → Ovoko CRM-only import payload';
     private const MODE = 'dry_run_no_ovoko_write_no_woo_write';
     private const PROPOSED_ENDPOINT = 'DOCUMENTED_ENDPOINT_WRITE_BLOCKED';
     private const PROPOSED_ENDPOINT_PATH = '/crm/importPart';
@@ -81,7 +81,8 @@ class WooToOvokoCreatePartPreviewService
         $contract = $this->create_part_contract_report();
         $categoryPayload = $this->category_payload($categoryReadiness);
         $storageLocation = $this->storage_location($productId);
-        $qualityId = $this->first_meta_value($productId, ['_ovoko_quality_id', 'ovoko_quality_id', '_rrr_quality_id', 'rrr_quality_id']);
+        $qualityId = $this->resolved_quality_id($productId);
+        $importStatus = $this->resolved_import_status();
         $carId = $this->first_meta_value($productId, ['_ovoko_car_id', 'ovoko_car_id', '_rrr_car_id', 'rrr_car_id', '_gps_source_car_id']);
 
         $result['product_status'] = $status;
@@ -107,9 +108,6 @@ class WooToOvokoCreatePartPreviewService
         if ($sku === '') {
             $this->add_validation($result, 'error', 'missing_sku', 'SKU is required.');
         }
-        if ($price === '' || !is_numeric($price)) {
-            $this->add_validation($result, 'error', 'missing_or_non_numeric_price', 'Price is required and must be numeric.');
-        }
         if ($stockStatus === '' && $stockQuantity === null) {
             $this->add_validation($result, 'error', 'unknown_stock_status_quantity', 'Stock status or stock quantity must be known.');
         }
@@ -121,6 +119,12 @@ class WooToOvokoCreatePartPreviewService
         }
         if ($categoryReadiness['known'] && $categoryPayload['category_id'] === null) {
             $this->add_validation($result, 'error', 'missing_ovoko_category_id', 'Ovoko/RRR importPart requires category_id; no mapped Ovoko category ID was found.');
+        }
+        if ($carId['value'] === '') {
+            $this->add_validation($result, 'error', 'missing_required_car_id', 'CRM-only importPart preview requires a mapped Ovoko/RRR car_id before any future live import.');
+        }
+        if ($qualityId['value'] === '') {
+            $this->add_validation($result, 'error', 'missing_required_quality', 'CRM-only importPart preview requires a configured/default quality value before any future live import.');
         }
         if (empty($images['image_urls'])) {
             $this->add_validation($result, 'error', 'missing_images', 'At least one accessible product image URL is required for create-part readiness.');
@@ -142,12 +146,20 @@ class WooToOvokoCreatePartPreviewService
         $result['proposed_endpoint_path'] = self::PROPOSED_ENDPOINT_PATH;
         $result['authentication_style'] = $contract['authentication_style'];
         $result['image_handling'] = $contract['image_handling'];
-        $result['would_create_as_draft_or_unpublished'] = 'unknown';
-        $result['draft_visibility_field'] = null;
-        $result['draft_visibility_value'] = null;
-        $result['draft_visibility_confirmation_required'] = true;
+        $result['would_create_as_draft_or_unpublished'] = false;
+        $result['draft_visibility_field'] = 'price';
+        $result['draft_visibility_value'] = 'omitted';
+        $result['draft_visibility_confirmation_required'] = false;
+        $result['create_strategy'] = 'crm_only_non_public_initial_import';
+        $result['e_shop_visibility_rule_confirmed_by_documentation'] = true;
+        $result['e_shop_available_after_import'] = false;
+        $result['non_public_reason'] = 'missing_price';
+        $result['photos_included'] = !empty($images['image_urls']);
+        $result['omitted_for_non_public_import'] = ['price', 'original_price', 'currency'];
+        $result['live_create_still_requires_manual_confirmation'] = true;
 
-        $result['proposed_payload'] = $this->build_proposed_payload($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId);
+        $result['proposed_payload'] = $this->build_crm_only_payload($title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
+        $result['full_payload_preview'] = $this->build_full_payload_preview($title, $sku, $price, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $regularPrice, $salePrice, $storageLocation, $qualityId, $carId, $importStatus);
 
         $result['future_live_readiness'] = $this->future_live_readiness($result, $categoryPayload, $images, $price, $sku, $carId, $qualityId);
 
@@ -189,10 +201,17 @@ class WooToOvokoCreatePartPreviewService
             'proposed_endpoint_path' => self::PROPOSED_ENDPOINT_PATH,
             'endpoint_confirmation_required' => false,
             'payload_format_confirmation_required' => false,
-            'would_create_as_draft_or_unpublished' => 'unknown',
-            'draft_visibility_field' => null,
-            'draft_visibility_value' => null,
-            'draft_visibility_confirmation_required' => true,
+            'would_create_as_draft_or_unpublished' => false,
+            'draft_visibility_field' => 'price',
+            'draft_visibility_value' => 'omitted',
+            'draft_visibility_confirmation_required' => false,
+            'create_strategy' => 'crm_only_non_public_initial_import',
+            'e_shop_visibility_rule_confirmed_by_documentation' => true,
+            'e_shop_available_after_import' => false,
+            'non_public_reason' => 'missing_price',
+            'photos_included' => false,
+            'omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
+            'live_create_still_requires_manual_confirmation' => true,
             'create_part_contract_report' => [],
             'future_live_readiness' => [],
             'candidate_endpoints' => [],
@@ -204,6 +223,7 @@ class WooToOvokoCreatePartPreviewService
             'validation_warnings' => [],
             'source_woo_fields_meta_used' => [],
             'proposed_payload' => [],
+            'full_payload_preview' => [],
             'images' => ['featured_image_id' => 0, 'gallery_image_ids' => [], 'image_urls' => [], 'upload_policy' => 'preview_urls_only_no_upload'],
             'checked_at' => gmdate('c'),
         ];
@@ -271,7 +291,7 @@ class WooToOvokoCreatePartPreviewService
             'optional_fields' => ['position', 'notes', 'place', 'manufacturer_code', 'visible_code', 'other_code', 'optional_codes[]', 'id_bridge', 'external_id', 'sell_price', 'sell_vat_null', 'sell_date', 'internal_notes', 'tires', 'rims', 'rims_spacing', 'rims_fixing_points', 'tires_width', 'rims_central_diameter', 'rims_quantity', 'tires_height', 'tires_tread_depth', 'tires_quantity', 'price', 'original_currency', 'photo', 'photos[]', 'sticker_note', 'english'],
             'field_contract' => [
                 'category' => ['field' => 'category_id', 'notes' => 'Level 3 category required by OpenAPI.'],
-                'price' => ['field' => 'price', 'currency_field' => 'original_currency', 'currency_allowed_values' => ['EUR', 'PLN'], 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'OpenAPI says price must be filled to be shown in shop, but it does not explicitly confirm immediate public listing behavior.'],
+                'price' => ['field' => 'price', 'currency_field' => 'original_currency', 'currency_allowed_values' => ['EUR', 'PLN'], 'documentation_status' => 'confirmed_by_documentation', 'notes' => 'OpenAPI says price > 0.00 plus a photo URL are required for the part to be available in e-shop; CRM-only initial import intentionally omits price while keeping photos.'],
                 'part_code_oem' => ['primary_field' => 'manufacturer_code', 'visible_field' => 'visible_code', 'additional_fields' => ['other_code', 'optional_codes[]']],
                 'vehicle' => ['field' => 'car_id', 'required' => true, 'notes' => 'Woo-only products need a confirmed RRR car_id or confirmed alternative before live import.'],
                 'warehouse_location' => ['field' => 'place', 'required' => false],
@@ -289,11 +309,11 @@ class WooToOvokoCreatePartPreviewService
                 'visibility_fields_found' => [],
                 'status_values_confirmed' => false,
                 'status_field_is_operational_stock_sales_status' => true,
-                'draft_visibility_field' => null,
-                'draft_visibility_value' => null,
-                'would_create_as_draft_or_unpublished' => 'unknown',
-                'confirmation_required' => true,
-                'notes' => 'OpenAPI exposes required numeric status, but the read-only /get/part_status probe returned operational inventory/sales lifecycle values (0 In stock, 1 Reserved, 2 Sold out, 3 Returned, 4 Written off), not listing publication visibility values. Draft/unpublished/hidden behavior remains unconfirmed and must not be guessed.',
+                'draft_visibility_field' => 'price',
+                'draft_visibility_value' => 'omitted',
+                'would_create_as_draft_or_unpublished' => false,
+                'confirmation_required' => false,
+                'notes' => 'CRM-only initial import no longer relies on unconfirmed draft/unpublished status behavior. The documentation-backed e-shop availability guard is omitting price while still sending photo/photos for internal review.',
             ],
             'latest_part_status_probe_result' => $this->latest_part_status_probe_result(),
             'documentation_backed_findings' => [
@@ -314,8 +334,9 @@ class WooToOvokoCreatePartPreviewService
                     'answer' => 'The importPart schema describes status as the status ID assigned to the part. The documented status catalog endpoint is /get/part_status, whose observed values are operational stock/sales states, not publication visibility states.',
                 ],
                 'public_immediately_after_import' => [
-                    'status' => 'unknown',
-                    'answer' => 'The OpenAPI schema does not explicitly say whether /crm/importPart creates a public shop/marketplace listing immediately. It only documents that price must be filled to be shown in shop.',
+                    'status' => 'conditional_rule_confirmed_by_documentation',
+                    'answer' => 'The OpenAPI schema documents that price > 0.00 and a photo URL are required for e-shop availability. Therefore an import that includes photos but omits price is interpreted as not e-shop-available after import.',
+                    'e_shop_available_after_import_without_price' => false,
                 ],
                 'hidden_draft_unpublished_private_field' => [
                     'status' => 'not_found_in_documentation',
@@ -371,7 +392,7 @@ class WooToOvokoCreatePartPreviewService
                     'answer' => 'No documented draft/import queue mode for /crm/importPart was found.',
                 ],
                 'remaining_unknowns' => [
-                    'Whether /crm/importPart creates a public shop/marketplace listing immediately when required fields and price are present.',
+                    'Whether /crm/importPart creates a public shop/marketplace listing immediately when required fields, price > 0.00, and photo are present.',
                     'Whether business settings outside the API schema affect default imported-part visibility.',
                     'Exact semantics of shop_url versus show_url and whether missing shop_url proves internal-only state.',
                     'Whether external_id can safely enforce idempotency for part import without a public listing side effect.',
@@ -415,27 +436,27 @@ class WooToOvokoCreatePartPreviewService
         ];
     }
 
-    private function build_proposed_payload(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId): array
+    private function build_crm_only_payload(string $title, string $sku, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
     {
         $imageUrls = (array) ($images['image_urls'] ?? []);
-        $payload = [
+        return [
             'category_id' => $categoryPayload['category_id'],
             'car_id' => $carId['value'] !== '' && ctype_digit((string) $carId['value']) ? (int) $carId['value'] : null,
             'quality' => $qualityId['value'] !== '' && ctype_digit((string) $qualityId['value']) ? (int) $qualityId['value'] : null,
-            'status' => null,
+            'status' => $importStatus,
             'notes' => $description,
             'place' => $storageLocation,
             'manufacturer_code' => $manufacturerCode !== '' ? $manufacturerCode : (string) $partIdentifier['value'],
             'visible_code' => (string) $partIdentifier['value'],
-            'other_code' => $sku,
             'external_id' => $sku,
-            'internal_notes' => 'Woo product ID/SKU source; generated by dry-run preview only.',
-            'price' => is_numeric($price) ? (float) $price : $price,
-            'original_currency' => function_exists('get_woocommerce_currency') ? (string) get_woocommerce_currency() : '',
+            'sku' => $sku,
             'photo' => $imageUrls[0] ?? '',
             'photos[]' => $imageUrls,
             '_preview_only_not_sent' => true,
             '_auth_fields_omitted_from_preview' => ['username', 'password', 'user_token'],
+            '_create_strategy' => 'crm_only_non_public_initial_import',
+            '_non_public_reason' => 'missing_price',
+            '_omitted_for_non_public_import' => ['price', 'original_price', 'currency'],
             '_source_summary' => [
                 'title' => $title,
                 'sku' => $sku,
@@ -443,19 +464,36 @@ class WooToOvokoCreatePartPreviewService
                 'stock_quantity' => $stockQuantity,
                 'part_identifier_source' => $partIdentifier['key'],
                 'woo_category' => $categoryPayload['woo_category'],
-                'regular_price' => is_numeric($regularPrice) ? (float) $regularPrice : $regularPrice,
-                'sale_price' => is_numeric($salePrice) ? (float) $salePrice : $salePrice,
+                'quality_source' => $qualityId['key'],
+                'car_id_source' => $carId['key'],
             ],
             '_confirmation_required' => [
                 'endpoint' => false,
                 'payload_format' => false,
-                'publication_visibility_behavior' => true,
-                'status_draft_unpublished_value' => true,
+                'live_create_manual_confirmation' => true,
                 'car_id_source' => $carId['value'] === '',
                 'quality_value' => $qualityId['value'] === '',
             ],
         ];
-        return $payload;
+    }
+
+    private function build_full_payload_preview(string $title, string $sku, string $price, string $stockStatus, ?int $stockQuantity, array $partIdentifier, string $manufacturerCode, array $categoryPayload, array $images, string $description, string $regularPrice, string $salePrice, string $storageLocation, array $qualityId, array $carId, int $importStatus): array
+    {
+        $payload = $this->build_crm_only_payload($title, $sku, $stockStatus, $stockQuantity, $partIdentifier, $manufacturerCode, $categoryPayload, $images, $description, $storageLocation, $qualityId, $carId, $importStatus);
+        $payload['price'] = is_numeric($price) ? (float) $price : $price;
+        $payload['original_currency'] = function_exists('get_woocommerce_currency') ? (string) get_woocommerce_currency() : '';
+        $payload['_source_summary']['regular_price'] = is_numeric($regularPrice) ? (float) $regularPrice : $regularPrice;
+        $payload['_source_summary']['sale_price'] = is_numeric($salePrice) ? (float) $salePrice : $salePrice;
+
+        return [
+            'payload' => $payload,
+            'warnings' => is_numeric($price) && (float) $price > 0 && !empty($payload['photo'])
+                ? [[
+                    'code' => 'price_and_photos_may_enable_e_shop_availability',
+                    'message' => 'Including price > 0 and a photo URL may make the part available in e-shop.',
+                ]]
+                : [],
+        ];
     }
 
     private function category_payload(array $categoryReadiness): array
@@ -478,7 +516,6 @@ class WooToOvokoCreatePartPreviewService
         if ($result['product_status'] !== 'draft') { $blockers[] = 'product_status_must_be_draft_or_approved'; }
         if (!empty($result['duplicate_checks']['has_existing_ovoko_part_id'])) { $blockers[] = 'existing_ovoko_part_id'; }
         if ($sku === '') { $blockers[] = 'missing_sku'; }
-        if ($price === '' || !is_numeric($price)) { $blockers[] = 'missing_or_invalid_price'; }
         if ($categoryPayload['category_id'] === null) { $blockers[] = 'missing_ovoko_category_id'; }
         if (empty($images['image_urls'])) { $blockers[] = 'missing_image'; }
         if ($carId['value'] === '') { $blockers[] = 'missing_required_car_id'; }
@@ -486,15 +523,14 @@ class WooToOvokoCreatePartPreviewService
         $blockers[] = 'explicit_admin_confirmation_required';
         $blockers[] = 'single_product_only_required';
         $blockers[] = 'recent_dry_run_preview_required';
-        $blockers[] = 'publication_visibility_behavior_not_confirmed';
-        $blockers[] = 'business_approval_for_public_import_required';
-        $blockers[] = 'draft_unpublished_behavior_not_confirmed';
+        $blockers[] = 'live_create_not_implemented';
         return [
             'ready' => false,
             'blocked' => true,
             'blockers' => array_values(array_unique($blockers)),
             'live_creation_enabled' => false,
-            'must_default_to_draft_or_unpublished_if_supported' => true,
+            'crm_only_non_public_initial_import_omits_price' => true,
+            'photos_included_for_internal_review' => !empty($images['image_urls']),
         ];
     }
 
@@ -525,6 +561,24 @@ class WooToOvokoCreatePartPreviewService
         }
         $post = get_post($productId);
         return $post ? (string) ($post->post_content ?? '') : '';
+    }
+
+
+    private function resolved_quality_id(int $productId): array
+    {
+        $qualityId = $this->first_meta_value($productId, ['_ovoko_quality_id', 'ovoko_quality_id', '_rrr_quality_id', 'rrr_quality_id']);
+        if ($qualityId['value'] !== '') {
+            return $qualityId;
+        }
+
+        $default = function_exists('get_option') ? trim((string) get_option('gpswiss_ovoko_default_import_quality_id', '2')) : '2';
+        return $default === '' ? ['key' => '', 'value' => ''] : ['key' => 'gpswiss_ovoko_default_import_quality_id', 'value' => $default];
+    }
+
+    private function resolved_import_status(): int
+    {
+        $default = function_exists('get_option') ? trim((string) get_option('gpswiss_ovoko_crm_only_import_status', '0')) : '0';
+        return ctype_digit($default) ? (int) $default : 0;
     }
 
     private function first_meta_value(int $productId, array $keys): array

@@ -177,6 +177,7 @@ gps_assert(($GLOBALS['gps_test_meta'][$duplicateProductId]['_sku'] ?? '') === 'G
 gps_assert(($GLOBALS['gps_test_meta'][$duplicateProductId]['_gps_generated_sku'] ?? '') === 'GPS-GMAIL-60850', 'Duplicate SKU product should keep the base generated SKU meta.', $GLOBALS['gps_test_meta'][$duplicateProductId] ?? array());
 
 update_post_meta($productId, '_thumbnail_id', 501);
+update_post_meta($productId, '_ovoko_car_id', 9002);
 $preview = (new WooToOvokoCreatePartPreviewService())->preview($productId);
 $codes = array_map(static fn(array $row): string => (string) $row['code'], (array) $preview['validations']);
 gps_assert(!in_array('missing_sku', $codes, true), 'Ovoko preview should not report missing_sku for a Gmail-created draft.', $preview);
