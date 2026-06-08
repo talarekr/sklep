@@ -896,3 +896,62 @@ Official RRR API documentation identifies two relevant source types for Ovoko �
 3. **Order-date source:** `POST /v2/get/orders/{from_date}/{to_date}` with standard RRR form auth can return Ovoko orders and order `item_list` rows containing part IDs, but it is order-driven rather than a complete part-status-change feed.
 
 The admin action **Probe Ovoko event sources for part 4303** remains read-only. It now probes the documented logs date window and documented order date-window endpoints in addition to existing candidate `/v2/get/parts` filters. This is diagnostic only and does not change the automatic cron source logic.
+
+## Woo → Ovoko/RRR create-part contract audit (2026-06-08)
+
+Scope and safety outcome:
+- No live Woo → Ovoko create/publish path is implemented.
+- Existing production cron behavior remains unchanged.
+- The preview action remains dry-run only with `would_send=false`, `no_ovoko_write=true`, and `no_woo_write=true`.
+
+Findings from the current plugin and official RRR OpenAPI:
+- The existing `RrrApiClient` write methods only cover existing-part operations: `POST /crm/changePartStatus` and `POST /crm/updatePart`.
+- `POST /crm/changePartStatus` is for changing the numeric status of an existing part and requires `part_id`; it is not a create endpoint.
+- `POST /crm/updatePart` is for updating an existing part and requires `part_id`; it is not sufficient as a new-part create endpoint unless Ovoko/RRR explicitly documents create-on-update behavior.
+- The official RRR OpenAPI lists `POST /crm/importPart` with `application/x-www-form-urlencoded` body as the documented import/create candidate for parts. This endpoint is treated as likely but unverified for this shop until confirmed without creating a live listing.
+
+Likely create-part contract from the official OpenAPI:
+- Candidate endpoint: `POST /crm/importPart`.
+- Authentication: form fields `username`, `password`, and `user_token` in an `application/x-www-form-urlencoded` request.
+- Required fields: `username`, `password`, `user_token`, `category_id`, `car_id`, `quality`, and `status`.
+- Optional fields include `position`, `notes`, `place`, `manufacturer_code`, `visible_code`, `other_code`, `optional_codes[]`, `external_id`, `internal_notes`, `price`, `original_currency`, `photo`, `photos[]`, `sticker_note`, and `english`.
+- Category field: `category_id`; the OpenAPI notes that a level-3 category is required.
+- Price fields: `price` plus `original_currency` (`EUR` or `PLN`); the OpenAPI notes that price must be filled to show the part in the shop.
+- Part/OEM fields: `manufacturer_code`, `visible_code`, `other_code`, and `optional_codes[]`.
+- Vehicle field: `car_id` is required by the OpenAPI, so Woo-only products need a confirmed RRR vehicle/car ID source or a confirmed API alternative before live create.
+- Warehouse/storage field: `place` is optional and maps to the storage/location value when available.
+- Images are URL form fields, not binary upload in this endpoint: `photo` for the main image and `photos[]` for ordered gallery URLs. The first `photos[]` value must match `photo` for correct thumbnail generation.
+
+Draft/unpublished/hidden support findings:
+- The OpenAPI exposes a required numeric `status` field for `importPart`, `updatePart`, and `changePartStatus`.
+- No explicit `draft`, `published`, `visible`, `shop_visible`, `marketplace_visible`, `active`, `hidden`, or `disabled` field was found in the documented `importPartRequest` schema.
+- The safest non-public state cannot be selected yet because the numeric status values and marketplace visibility semantics are not documented in the schema.
+- Before live create is enabled, `/get/part_status` must be probed/read and Ovoko/RRR must confirm which `status` value, if any, creates a draft/unpublished/hidden/inactive listing. The plugin must not guess this value.
+
+Updated preview behavior:
+- `proposed_endpoint` is now the marker `LIKELY_UNVERIFIED_ENDPOINT`.
+- `proposed_endpoint_path` is `/crm/importPart`.
+- `endpoint_confirmation_required=true` and `payload_format_confirmation_required=true` remain set.
+- Draft fields are exposed as confirmation-required: `would_create_as_draft_or_unpublished="unknown"`, `draft_visibility_field="status"`, `draft_visibility_value=null`, and `draft_visibility_confirmation_required=true`.
+- Future live readiness remains blocked by design until explicit admin confirmation, single-product scope, recent dry-run preview, confirmed endpoint contract, confirmed payload contract, and confirmed draft/unpublished behavior are all present.
+
+### Read-only part status probe before any create-part live test
+
+A new admin diagnostic tool is available as **Read Ovoko/RRR part statuses**.
+
+Safety guarantees:
+- calls only the read endpoint candidate `POST /get/part_status` with standard RRR form auth fields,
+- does not call `/crm/importPart`, `/crm/updatePart`, `/crm/changePartStatus`, or any other write endpoint,
+- requires `manage_options` and a WordPress nonce,
+- does not require a Woo product ID,
+- writes no Woo product data and no Ovoko/RRR data,
+- does not touch automatic cron settings or behavior.
+
+The output records `endpoint_used`, HTTP status, parsed response, normalized statuses, raw response, `checked_at`, and interpretation buckets: `candidate_draft_statuses`, `candidate_hidden_statuses`, `candidate_inactive_statuses`, `candidate_public_statuses`, and `candidate_sold_statuses`.
+
+Interpretation rules are intentionally conservative:
+- explicit response flags such as `draft=true`, `visible=false`, `active=false`, `hidden=true`, `sold=true`, or similar are marked `confirmed_by_response`,
+- label/name/code matches such as “draft”, “hidden”, “inactive”, “sold”, or “reserved” are marked only `inferred_from_label`,
+- absent or ambiguous visibility data remains `unknown`/confirmation-required.
+
+The Woo → Ovoko create-part preview contract report now includes the latest saved part status probe summary, when available. Future live create remains blocked until the endpoint contract, payload contract, draft/unpublished behavior, and exact non-public create status value are all confirmed.

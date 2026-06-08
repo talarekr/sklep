@@ -13,6 +13,7 @@ $GLOBALS['gpswiss_test_term_meta'] = [];
 $GLOBALS['gpswiss_test_attachments'] = [];
 $GLOBALS['gpswiss_test_products'] = [];
 $GLOBALS['gpswiss_test_writes'] = [];
+$GLOBALS['gpswiss_test_options'] = [];
 
 class GPSwissPreviewTestProduct
 {
@@ -41,6 +42,7 @@ function gpswiss_reset_preview_test_state(): void
     $GLOBALS['gpswiss_test_attachments'] = [];
     $GLOBALS['gpswiss_test_products'] = [];
     $GLOBALS['gpswiss_test_writes'] = [];
+    $GLOBALS['gpswiss_test_options'] = [];
 }
 
 function gpswiss_add_post(int $id, string $postType = 'product', string $status = 'draft', string $title = 'Test product'): void
@@ -116,6 +118,7 @@ function get_posts(array $args): array
 }
 function update_post_meta(int $id, string $key, mixed $value): bool { $GLOBALS['gpswiss_test_writes'][] = ['update_post_meta', $id, $key, $value]; return true; }
 function wp_insert_post(array $postarr): int { $GLOBALS['gpswiss_test_writes'][] = ['wp_insert_post', $postarr]; return 999; }
+function get_option(string $key, mixed $default = false): mixed { return $GLOBALS['gpswiss_test_options'][$key] ?? $default; }
 
 function gpswiss_assert(bool $condition, string $message): void
 {
@@ -187,8 +190,13 @@ gpswiss_run_preview_test('valid draft product preview', function (WooToOvokoCrea
     gpswiss_assert($result['ok'] === true, 'Valid preview should be ok.');
     gpswiss_assert($result['would_be_eligible'] === true, 'Valid draft should be eligible.');
     gpswiss_assert($result['would_send'] === false, 'Dry-run must never send.');
-    gpswiss_assert($result['proposed_endpoint'] === 'UNCONFIRMED_CREATE_PART_ENDPOINT', 'Endpoint must remain unconfirmed placeholder.');
-    gpswiss_assert($result['proposed_payload']['sku'] === 'SKU-123', 'Payload SKU missing.');
+    gpswiss_assert($result['proposed_endpoint'] === 'LIKELY_UNVERIFIED_ENDPOINT', 'Endpoint must remain likely-but-unverified marker.');
+    gpswiss_assert($result['proposed_endpoint_path'] === '/crm/importPart', 'Likely endpoint path missing.');
+    gpswiss_assert($result['endpoint_confirmation_required'] === true, 'Endpoint must remain confirmation-required.');
+    gpswiss_assert($result['payload_format_confirmation_required'] === true, 'Payload format must remain confirmation-required.');
+    gpswiss_assert($result['proposed_payload']['external_id'] === 'SKU-123', 'Payload SKU/external_id missing.');
+    gpswiss_assert($result['proposed_payload']['manufacturer_code'] === 'ABC-123', 'Payload manufacturer/OEM code missing.');
+    gpswiss_assert($result['proposed_payload']['category_id'] === 777, 'Payload category_id missing.');
 });
 
 gpswiss_run_preview_test('image preview extraction', function (WooToOvokoCreatePartPreviewService $service): void {
@@ -209,4 +217,89 @@ gpswiss_run_preview_test('no write performed', function (WooToOvokoCreatePartPre
     gpswiss_seed_valid_product();
     $service->preview(123);
     gpswiss_assert($GLOBALS['gpswiss_test_writes'] === [], 'Preview must not perform Woo writes.');
+});
+
+
+gpswiss_run_preview_test('60886-style payload includes required Woo fields', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_add_post(60886, 'product', 'draft', 'AUDI A3 5Q0131701AN');
+    gpswiss_set_meta(60886, '_sku', 'GPS-GMAIL-60849');
+    gpswiss_set_meta(60886, '_price', '1000');
+    gpswiss_set_meta(60886, '_regular_price', '1000');
+    gpswiss_set_meta(60886, '_stock_status', 'instock');
+    gpswiss_set_meta(60886, '_stock', '1');
+    gpswiss_set_meta(60886, '_part_number', '5Q0131701AN');
+    gpswiss_set_meta(60886, '_manufacturer_code', '5Q0131701AN');
+    gpswiss_set_meta(60886, '_gps_storage_location', '2KNS');
+    gpswiss_set_meta(60886, '_thumbnail_id', '601');
+    gpswiss_set_meta(60886, '_product_image_gallery', '602,603');
+    $GLOBALS['gpswiss_test_posts'][60886]->post_content = 'Gmail description/body';
+    $GLOBALS['gpswiss_test_terms'][60886] = [(object) ['term_id' => 5802, 'name' => 'DPF', 'slug' => 'dpf']];
+    $GLOBALS['gpswiss_test_term_meta'][5802]['_ovoko_category_id'] = '1407';
+    $GLOBALS['gpswiss_test_attachments'][601] = 'https://example.test/60886-1.jpg';
+    $GLOBALS['gpswiss_test_attachments'][602] = 'https://example.test/60886-2.jpg';
+    $GLOBALS['gpswiss_test_attachments'][603] = 'https://example.test/60886-3.jpg';
+
+    $result = $service->preview(60886);
+    $payload = $result['proposed_payload'];
+    gpswiss_assert($result['would_send'] === false && $result['no_ovoko_write'] === true && $result['no_woo_write'] === true, 'Preview must be no-write.');
+    gpswiss_assert($payload['external_id'] === 'GPS-GMAIL-60849', '60886 SKU missing.');
+    gpswiss_assert($payload['manufacturer_code'] === '5Q0131701AN', '60886 OEM missing.');
+    gpswiss_assert($payload['price'] === 1000.0, '60886 price missing.');
+    gpswiss_assert($payload['original_currency'] === 'PLN', '60886 currency missing.');
+    gpswiss_assert($payload['category_id'] === 1407, '60886 Ovoko category ID missing.');
+    gpswiss_assert(count($payload['photos[]']) === 3, '60886 image URLs missing.');
+    gpswiss_assert($payload['_source_summary']['stock_quantity'] === 1, '60886 stock missing.');
+    gpswiss_assert($payload['place'] === '2KNS', '60886 storage location missing.');
+});
+
+gpswiss_run_preview_test('missing Ovoko category ID blocks preview readiness', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $GLOBALS['gpswiss_test_term_meta'][9]['_ovoko_category_id'] = '';
+    $result = $service->preview(123);
+    gpswiss_assert(in_array('missing_ovoko_category_id', gpswiss_codes($result), true), 'Missing Ovoko category ID validation missing.');
+    gpswiss_assert($result['would_be_eligible'] === false, 'Missing Ovoko category ID should block preview readiness.');
+});
+
+gpswiss_run_preview_test('missing image blocks future live readiness', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    gpswiss_set_meta(123, '_thumbnail_id', '');
+    $GLOBALS['gpswiss_test_attachments'] = [];
+    $result = $service->preview(123);
+    gpswiss_assert(in_array('missing_images', gpswiss_codes($result), true), 'Missing images validation missing.');
+    gpswiss_assert(in_array('missing_image', $result['future_live_readiness']['blockers'], true), 'Missing image future-live blocker missing.');
+});
+
+gpswiss_run_preview_test('draft visibility remains unknown and confirmation-required', function (WooToOvokoCreatePartPreviewService $service): void {
+    gpswiss_seed_valid_product();
+    $result = $service->preview(123);
+    gpswiss_assert($result['would_create_as_draft_or_unpublished'] === 'unknown', 'Draft/unpublished behavior should be unknown.');
+    gpswiss_assert($result['draft_visibility_field'] === 'status', 'Draft visibility field should identify status as candidate.');
+    gpswiss_assert($result['draft_visibility_value'] === null, 'Draft visibility value must not be guessed.');
+    gpswiss_assert($result['draft_visibility_confirmation_required'] === true, 'Draft visibility confirmation must be required.');
+    gpswiss_assert(in_array('draft_unpublished_behavior_not_confirmed', $result['future_live_readiness']['blockers'], true), 'Draft behavior blocker missing.');
+});
+
+gpswiss_run_preview_test('contract report identifies importPart without live publishing', function (WooToOvokoCreatePartPreviewService $service): void {
+    $report = $service->create_part_contract_report();
+    gpswiss_assert($report['candidate_endpoints'][0]['path'] === '/crm/importPart', 'importPart endpoint candidate missing.');
+    gpswiss_assert($report['candidate_endpoints'][0]['method'] === 'POST', 'importPart HTTP method missing.');
+    gpswiss_assert(in_array('status', $report['required_fields'], true), 'Required status field missing from contract.');
+    gpswiss_assert($report['draft_unpublished_visibility_support']['confirmation_required'] === true, 'Draft confirmation requirement missing.');
+    gpswiss_assert($report['write_safety']['live_create_implemented'] === false, 'Live create must not be implemented.');
+});
+
+
+gpswiss_run_preview_test('contract report includes latest part status probe summary when available', function (WooToOvokoCreatePartPreviewService $service): void {
+    $GLOBALS['gpswiss_test_options']['gpswiss_ovoko_part_status_probe_result'] = [
+        'ok' => true,
+        'checked_at' => '2026-06-08T00:00:00+00:00',
+        'endpoint_used' => '/get/part_status',
+        'status_count' => 2,
+        'candidate_draft_statuses' => [['id' => '3', 'name' => 'Draft', 'interpretation' => 'inferred_from_label']],
+        'interpretation_summary' => ['confirmation_required' => true, 'safe_non_public_status_value' => null],
+    ];
+    $report = $service->create_part_contract_report();
+    gpswiss_assert($report['latest_part_status_probe_result']['available'] === true, 'Latest status probe summary missing.');
+    gpswiss_assert($report['latest_part_status_probe_result']['endpoint_used'] === '/get/part_status', 'Latest status probe endpoint missing.');
+    gpswiss_assert($report['latest_part_status_probe_result']['interpretation_summary']['confirmation_required'] === true, 'Latest status probe confirmation requirement missing.');
 });

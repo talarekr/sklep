@@ -61,6 +61,7 @@ $hasApiMarkers = isset($noticePayload['status_label']) || isset($noticePayload['
 $hasProductId = !empty($noticePayload['product_id']) || !empty($noticePayload['sample_results'][0]['product_id']);
 $isApiTestResult = is_array($noticePayload) && $hasApiMarkers && !$hasProductId;
 $isKnownProductAction = in_array($noticeActionName, $productActionNames, true);
+$isPartStatusProbeResult = $noticeActionName === 'Read Ovoko/RRR part statuses';
 $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnownProductAction || $hasProductId);
 ?>
 <div class="wrap" style="max-width:1180px;">
@@ -97,6 +98,31 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                             <li><strong>Reason:</strong> <code><?php echo esc_html((string) ($noticePayload['reason'] ?? '')); ?></code></li>
                             <li><strong>Checked at:</strong> <code><?php echo esc_html((string) ($noticePayload['checked_at'] ?? $noticePayload['tested_at'] ?? $noticePayload['timestamp'] ?? '')); ?></code></li>
                         </ul>
+                    </div>
+                <?php elseif ($isPartStatusProbeResult): ?>
+                    <div class="postbox" style="padding:12px; margin:10px 0 0; max-width:960px;">
+                        <h3 style="margin-top:0;">Read Ovoko/RRR part statuses</h3>
+                        <ul style="margin:0 0 12px 18px;">
+                            <li><strong>Endpoint used:</strong> <code><?php echo esc_html((string) ($noticePayload['endpoint_used'] ?? $noticePayload['endpoint'] ?? '')); ?></code></li>
+                            <li><strong>HTTP status:</strong> <code><?php echo esc_html((string) ($noticePayload['http_status'] ?? '')); ?></code></li>
+                            <li><strong>Status count:</strong> <code><?php echo esc_html((string) ($noticePayload['status_count'] ?? 0)); ?></code></li>
+                            <li><strong>Checked at:</strong> <code><?php echo esc_html((string) ($noticePayload['checked_at'] ?? '')); ?></code></li>
+                            <li><strong>No writes:</strong> <code><?php echo !empty($noticePayload['no_ovoko_write']) && !empty($noticePayload['no_woo_write']) ? 'yes' : 'unknown'; ?></code></li>
+                        </ul>
+                        <?php $statusRows = array_values(array_filter((array) ($noticePayload['statuses'] ?? []), 'is_array')); ?>
+                        <?php if ($statusRows !== []): ?>
+                            <table class="widefat striped" style="max-width:900px;"><thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Visibility/status signal fields</th></tr></thead><tbody>
+                                <?php foreach ($statusRows as $statusRow): ?>
+                                    <tr>
+                                        <td><code><?php echo esc_html((string) ($statusRow['id'] ?? '')); ?></code></td>
+                                        <td><code><?php echo esc_html((string) ($statusRow['code'] ?? '')); ?></code></td>
+                                        <td><?php echo esc_html((string) ($statusRow['name'] ?? '')); ?></td>
+                                        <td><code><?php echo esc_html(implode(', ', array_map('strval', (array) ($statusRow['visibility_signal_fields'] ?? [])))); ?></code></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody></table>
+                        <?php endif; ?>
+                        <p><strong>Interpretation:</strong> candidates are diagnostic only and do not confirm safe create behavior for <code>/crm/importPart</code>.</p>
                     </div>
                 <?php elseif ($showProductSummary): ?>
                     <ul style="margin-left:18px;">
@@ -144,7 +170,17 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>product_id: <input type="number" min="1" step="1" name="product_id" value="" style="width:140px;" required /></label>
             <?php submit_button('Preview Woo → Ovoko create-part payload', 'secondary', 'submit', false); ?>
         </form>
-        <p><strong>Endpoint safety:</strong> create endpoint remains <code>UNCONFIRMED_CREATE_PART_ENDPOINT</code>. This tool intentionally does not use <code>/crm/changePartStatus</code> or <code>/crm/updatePart</code>.</p>
+        <p><strong>Endpoint safety:</strong> create endpoint remains <code>LIKELY_UNVERIFIED_ENDPOINT</code> (<code>/crm/importPart</code>) and is not called here. This tool intentionally does not use <code>/crm/changePartStatus</code> or <code>/crm/updatePart</code>.</p>
+    </div>
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">
+        <h3>Read Ovoko/RRR part statuses</h3>
+        <p><strong>Read-only diagnostic.</strong> Calls only the read endpoint <code>/get/part_status</code> using standard RRR auth form fields. It does not call <code>/crm/importPart</code>, does not call any write endpoint, does not require a product ID, does not write WooCommerce data, and does not touch cron.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_read_part_statuses'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_read_part_statuses" />
+            <?php submit_button('Read Ovoko/RRR part statuses', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
