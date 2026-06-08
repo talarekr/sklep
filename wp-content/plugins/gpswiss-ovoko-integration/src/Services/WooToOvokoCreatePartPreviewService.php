@@ -274,7 +274,7 @@ class WooToOvokoCreatePartPreviewService
                 'official_openapi_url' => 'https://api.rrr.lt/openapi/swagger.yaml',
                 'official_docs_url' => 'https://api.rrr.lt/docs/',
                 'checked_on' => '2026-06-08',
-                'repo_evidence' => ['RrrApiClient currently implements /crm/changePartStatus and /crm/updatePart writes only; no create/import call exists.'],
+                'repo_evidence' => ['RrrApiClient implements a manual, admin-only, single-product CRM-only /crm/importPart action gated by nonce, confirmations, draft-only preview eligibility, no existing part ID meta, no price fields, and required photos.'],
             ],
             'documentation_audit' => [
                 'status' => 'confirmed_by_documentation',
@@ -387,7 +387,7 @@ class WooToOvokoCreatePartPreviewService
                 ],
             ],
             'listing_visibility_audit' => [
-                'scope' => 'Documentation-backed audit of the official OpenAPI schema plus repository documentation references. No /crm/importPart or write endpoint call is made.',
+                'scope' => 'Documentation-backed audit of the official OpenAPI schema plus repository documentation references. The separate live action can call /crm/importPart only after strict one-product CRM-only no-price confirmations.' ,
                 'searched_terms' => ['importPart', '/crm/importPart', 'status', 'visible', 'visibility', 'active', 'enabled', 'publish', 'published', 'hidden', 'show', 'shop', 'marketplace', 'on_sale', 'display', 'listing', 'public', 'private', 'draft', 'disabled', 'external_id', 'shop_url', 'show_url', 'category_id', 'car_id', 'quality', 'photo', 'photos'],
                 'import_part_visibility_field_separate_from_status' => [
                     'status' => 'not_found_in_documentation',
@@ -413,9 +413,16 @@ class WooToOvokoCreatePartPreviewService
                 ],
             ],
             'write_safety' => [
-                'live_create_implemented' => false,
-                'no_ovoko_write' => true,
-                'no_woo_write' => true,
+                'live_create_implemented' => true,
+                'live_create_scope' => 'manual_admin_only_single_product_crm_only_no_price',
+                'requires_manage_options' => true,
+                'requires_nonce' => true,
+                'requires_all_confirmations' => true,
+                'no_bulk' => true,
+                'no_cron' => true,
+                'no_product_save_hook' => true,
+                'preview_no_ovoko_write' => true,
+                'preview_no_woo_write' => true,
             ],
         ];
     }
@@ -567,12 +574,11 @@ class WooToOvokoCreatePartPreviewService
         $blockers[] = 'explicit_admin_confirmation_required';
         $blockers[] = 'single_product_only_required';
         $blockers[] = 'recent_dry_run_preview_required';
-        $blockers[] = 'live_create_not_implemented';
         return [
             'ready' => false,
             'blocked' => true,
             'blockers' => array_values(array_unique($blockers)),
-            'live_creation_enabled' => false,
+            'live_creation_enabled' => true,
             'crm_only_non_public_initial_import_omits_price' => true,
             'photos_included_for_internal_review' => !empty($images['image_urls']),
             'placeholder_car_id_allowed_for_crm_only_no_price_import' => $crmOnlyNoPricePolicyAllowsPlaceholder,

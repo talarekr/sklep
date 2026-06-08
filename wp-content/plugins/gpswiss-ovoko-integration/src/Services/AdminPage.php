@@ -44,6 +44,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_analyze_internal_notes_backfill_api', [$this, 'handle_analyze_internal_notes_backfill_api']);
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
+        add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
         add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
@@ -234,6 +235,38 @@ class AdminPage
         }
 
         wp_send_json($result);
+    }
+
+
+    public function handle_create_crm_only_part_from_woo(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_create_crm_only_part_from_woo');
+
+        $rawProductId = $_POST['product_id'] ?? null;
+        $productId = ($rawProductId === null || is_array($rawProductId)) ? 0 : (int) (string) wp_unslash((string) $rawProductId);
+        $confirmations = [
+            'confirm_placeholder_car_id' => !empty($_POST['confirm_placeholder_car_id']),
+            'confirm_live_one_product' => !empty($_POST['confirm_live_one_product']),
+            'confirm_no_price_non_public' => !empty($_POST['confirm_no_price_non_public']),
+        ];
+
+        $result = (new WooToOvokoCrmOnlyImportService($this->service->get_settings()))->create($productId, $confirmations);
+        if ($rawProductId === null || is_array($rawProductId)) {
+            $result['ok'] = false;
+            $result['status'] = 'blocked';
+            $result['error_code'] = 'exactly_one_product_id_required';
+            $result['message'] = 'Exactly one product_id field is required.';
+        }
+
+        set_transient('gpswiss_ovoko_notice', [
+            'type' => !empty($result['ok']) ? 'success' : 'error',
+            'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ], 300);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
     }
 
 

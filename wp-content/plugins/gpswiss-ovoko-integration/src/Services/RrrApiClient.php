@@ -3348,6 +3348,64 @@ class RrrApiClient
         ];
     }
 
+
+    public function import_crm_only_part(array $payload): array
+    {
+        foreach (['price', 'original_price', 'currency', 'original_currency'] as $forbidden) {
+            unset($payload[$forbidden]);
+        }
+
+        $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
+        if ($baseUrl === '') {
+            return ['ok' => false, 'http_code' => null, 'status_code' => null, 'message' => 'Missing RRR base URL', 'part_id' => '', 'raw_body' => ''];
+        }
+
+        $body = $payload + $this->get_auth_form_fields();
+        $response = wp_remote_post($baseUrl . '/crm/importPart', [
+            'timeout' => 20,
+            'body' => $body,
+            'headers' => [
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['ok' => false, 'http_code' => null, 'status_code' => null, 'message' => 'RRR importPart failed: ' . $response->get_error_code(), 'part_id' => '', 'raw_body' => ''];
+        }
+
+        $httpCode = (int) wp_remote_retrieve_response_code($response);
+        $rawBody = (string) wp_remote_retrieve_body($response);
+        $decoded = json_decode($rawBody, true);
+        $statusCode = is_array($decoded) ? sanitize_text_field((string) ($decoded['status_code'] ?? '')) : '';
+        $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
+        $partId = '';
+        if (is_array($decoded)) {
+            $candidates = [
+                $decoded['part_id'] ?? null,
+                $decoded['id'] ?? null,
+                $decoded['data']['part_id'] ?? null,
+                $decoded['data']['id'] ?? null,
+            ];
+            foreach ($candidates as $candidate) {
+                $candidate = trim((string) $candidate);
+                if ($candidate !== '') {
+                    $partId = sanitize_text_field($candidate);
+                    break;
+                }
+            }
+        }
+
+        return [
+            'ok' => $httpCode === 200 && $statusCode === 'R200' && $partId !== '',
+            'executed' => true,
+            'http_code' => $httpCode,
+            'status_code' => $statusCode,
+            'msg' => $message,
+            'part_id' => $partId,
+            'raw_body' => $rawBody,
+        ];
+    }
+
     private function post_form(string $path, array $payload, bool $includeRawPayload = false): array
     {
         $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));

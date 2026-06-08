@@ -383,7 +383,7 @@ gpswiss_run_preview_test('CRM-only visibility relies on omitted price and live a
     gpswiss_assert($result['would_create_as_draft_or_unpublished'] === false, 'CRM-only strategy should not rely on unconfirmed draft status.');
     gpswiss_assert($result['draft_visibility_field'] === 'price', 'CRM-only visibility guard should be price omission.');
     gpswiss_assert($result['draft_visibility_value'] === 'omitted', 'CRM-only visibility guard should omit price.');
-    gpswiss_assert($result['future_live_readiness']['live_creation_enabled'] === false, 'Live creation must remain disabled/not implemented.');
+    gpswiss_assert($result['future_live_readiness']['live_creation_enabled'] === true, 'Live creation should now be implemented but still confirmation-gated.');
     gpswiss_assert(in_array('explicit_admin_confirmation_required', $result['future_live_readiness']['blockers'], true), 'Manual confirmation blocker missing.');
 });
 
@@ -400,7 +400,8 @@ gpswiss_run_preview_test('contract report identifies importPart without live pub
     gpswiss_assert($report['documentation_backed_findings']['public_immediately_after_import']['status'] === 'conditional_rule_confirmed_by_documentation', 'Public import rule should be conditionally documentation-confirmed.');
     gpswiss_assert($report['listing_visibility_audit']['import_part_visibility_field_separate_from_status']['status'] === 'not_found_in_documentation', 'Listing visibility audit missing importPart finding.');
     gpswiss_assert($report['listing_visibility_audit']['status_0_public_effect']['status'] === 'unknown', 'status=0 public effect must remain unknown.');
-    gpswiss_assert($report['write_safety']['live_create_implemented'] === false, 'Live create must not be implemented.');
+    gpswiss_assert($report['write_safety']['live_create_implemented'] === true, 'Live create should be implemented as a strict manual CRM-only action.');
+    gpswiss_assert($report['write_safety']['no_bulk'] === true && $report['write_safety']['no_cron'] === true && $report['write_safety']['no_product_save_hook'] === true, 'Live create must remain no-bulk/no-cron/no-product-save.');
 });
 
 
