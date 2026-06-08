@@ -73,6 +73,9 @@ class OvokoIntegrationService
             'ovoko_csv_mapping_status' => [],
             'gpswiss_ovoko_default_crm_import_car_id' => '',
             'gpswiss_ovoko_default_crm_import_car_note' => 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.',
+            'ovoko_marketplace_category_suggestions_base_url' => '',
+            'ovoko_marketplace_category_suggestions_auth_mode' => 'none',
+            'ovoko_marketplace_category_suggestions_bearer_token' => '',
         ];
     }
 
@@ -127,12 +130,33 @@ class OvokoIntegrationService
             $clean['ovoko_original_image_bearer_token'] = $newOriginalImageToken;
         }
         $clean['ovoko_exclude_gearbox_products'] = !isset($settings['ovoko_exclude_gearbox_products']) || !empty($settings['ovoko_exclude_gearbox_products']);
+        $clean['ovoko_marketplace_category_suggestions_base_url'] = esc_url_raw((string) ($settings['ovoko_marketplace_category_suggestions_base_url'] ?? $clean['ovoko_marketplace_category_suggestions_base_url'] ?? ''));
+        $marketplaceAuthMode = sanitize_key((string) ($settings['ovoko_marketplace_category_suggestions_auth_mode'] ?? $clean['ovoko_marketplace_category_suggestions_auth_mode'] ?? 'none'));
+        $clean['ovoko_marketplace_category_suggestions_auth_mode'] = in_array($marketplaceAuthMode, ['none', 'crm_credentials', 'bearer_token_manual_diagnostic_only'], true) ? $marketplaceAuthMode : 'none';
+        $newMarketplaceBearerToken = sanitize_text_field((string) ($settings['ovoko_marketplace_category_suggestions_bearer_token'] ?? ''));
+        if ($newMarketplaceBearerToken !== '') {
+            $clean['ovoko_marketplace_category_suggestions_bearer_token'] = $newMarketplaceBearerToken;
+        }
         $defaultCrmCarId = preg_replace('/\D+/', '', (string) ($settings['gpswiss_ovoko_default_crm_import_car_id'] ?? ''));
         $clean['gpswiss_ovoko_default_crm_import_car_id'] = (string) $defaultCrmCarId;
         $clean['gpswiss_ovoko_default_crm_import_car_note'] = sanitize_text_field((string) ($settings['gpswiss_ovoko_default_crm_import_car_note'] ?? 'Placeholder car_id used for CRM-only import. Vehicle must be corrected manually in Ovoko.'));
         update_option(self::OPTION_KEY, $clean, false);
         update_option('gpswiss_ovoko_default_crm_import_car_id', $clean['gpswiss_ovoko_default_crm_import_car_id'], false);
         update_option('gpswiss_ovoko_default_crm_import_car_note', $clean['gpswiss_ovoko_default_crm_import_car_note'], false);
+    }
+
+
+    public function save_marketplace_category_suggestion_settings(array $settings): void
+    {
+        $clean = $this->get_settings();
+        $clean['ovoko_marketplace_category_suggestions_base_url'] = esc_url_raw((string) ($settings['ovoko_marketplace_category_suggestions_base_url'] ?? $clean['ovoko_marketplace_category_suggestions_base_url'] ?? ''));
+        $marketplaceAuthMode = sanitize_key((string) ($settings['ovoko_marketplace_category_suggestions_auth_mode'] ?? $clean['ovoko_marketplace_category_suggestions_auth_mode'] ?? 'none'));
+        $clean['ovoko_marketplace_category_suggestions_auth_mode'] = in_array($marketplaceAuthMode, ['none', 'crm_credentials', 'bearer_token_manual_diagnostic_only'], true) ? $marketplaceAuthMode : 'none';
+        $newMarketplaceBearerToken = sanitize_text_field((string) ($settings['ovoko_marketplace_category_suggestions_bearer_token'] ?? ''));
+        if ($newMarketplaceBearerToken !== '') {
+            $clean['ovoko_marketplace_category_suggestions_bearer_token'] = $newMarketplaceBearerToken;
+        }
+        update_option(self::OPTION_KEY, $clean, false);
     }
 
     public function register_routes(): void
@@ -2696,6 +2720,36 @@ class OvokoIntegrationService
     {
         $client = new RrrApiClient($this->get_settings());
         return $client->probe_part_search_by_code($partNumber);
+    }
+
+    public function test_ovoko_category_prediction_by_code(string $partCode): array
+    {
+        $settings = $this->get_settings();
+        $client = new OvokoMarketplaceCategorySuggestionsClient($settings);
+        $result = $client->predict_by_part_code($partCode);
+        $result['action_name'] = 'Test Ovoko category prediction by code';
+        $result['safe_to_call_from_wordpress'] = !empty($result['safe_to_call_from_wordpress']);
+        $result['production_automation_allowed'] = !empty($result['production_automation_allowed']) && ($result['status'] ?? '') === 'completed';
+        return $result;
+    }
+
+
+    public function persist_ovoko_marketplace_category_suggestion(int $productId, string $partCode, array $prediction): array
+    {
+        $selected = is_array($prediction['selected_suggestion'] ?? null) ? $prediction['selected_suggestion'] : [];
+        if ($productId <= 0 || ($prediction['status'] ?? '') !== 'completed' || $selected === []) {
+            return ['ok' => false, 'status' => (string) ($prediction['status'] ?? 'unavailable'), 'reason' => 'prediction_not_completed'];
+        }
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_status', 'completed');
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_code', $partCode);
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_category_id', (string) ($selected['category_id'] ?? ''));
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_category_name', (string) ($selected['category_name'] ?? ''));
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_category_path', (string) ($selected['category_path'] ?? ''));
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_confidence', 'high');
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_source_type', OvokoMarketplaceCategorySuggestionsClient::SOURCE_TYPE);
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_raw_response', wp_json_encode($prediction['raw_response'] ?? null, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        update_post_meta($productId, '_gps_ovoko_category_suggestion_dimensions', wp_json_encode($selected['dimensions'] ?? null, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return ['ok' => true, 'product_id' => $productId, 'category_id' => (int) ($selected['category_id'] ?? 0), 'category_name' => (string) ($selected['category_name'] ?? '')];
     }
 
     public function preview_paginated_rrr_part_code_lookup(string $partNumber, int $maxPages = 3, int $limit = 100): array

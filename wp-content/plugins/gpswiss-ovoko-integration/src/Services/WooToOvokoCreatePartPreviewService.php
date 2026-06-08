@@ -121,6 +121,9 @@ class WooToOvokoCreatePartPreviewService
         if ($categoryReadiness['known'] && $categoryPayload['category_id'] === null) {
             $this->add_validation($result, 'error', 'missing_ovoko_category_id', 'Ovoko/RRR importPart requires category_id; no mapped Ovoko category ID was found.');
         }
+        if (!empty($categoryPayload['missing_woo_category_mapping'])) {
+            $this->add_validation($result, 'warning', 'missing_woo_category_mapping_for_ovoko_category_' . (string) $categoryPayload['category_id'], 'Ovoko category detected but Woo category mapping missing');
+        }
         if ($carId['value'] === '') {
             $this->add_validation($result, 'error', 'missing_required_car_id', 'CRM-only importPart preview requires either a product Ovoko/RRR car_id or a configured CRM-only placeholder car_id before any future live import.');
         } elseif (!empty($carId['is_placeholder'])) {
@@ -691,7 +694,15 @@ class WooToOvokoCreatePartPreviewService
         $mapped = (array) ($categoryReadiness['mapped_terms'] ?? []);
         $first = $mapped[0] ?? [];
         $id = isset($first['ovoko_category_id']) && ctype_digit((string) $first['ovoko_category_id']) ? (int) $first['ovoko_category_id'] : null;
-        return ['category_id' => $id, 'woo_category' => ['term_id' => $first['term_id'] ?? null, 'name' => $first['name'] ?? '', 'slug' => $first['slug'] ?? '']];
+        $payload = ['category_id' => $id, 'woo_category' => ['term_id' => $first['term_id'] ?? null, 'name' => $first['name'] ?? '', 'slug' => $first['slug'] ?? '']];
+        if ($id === null && !empty($categoryReadiness['trusted_panel_suggestion']['category_id'])) {
+            $suggestion = (array) $categoryReadiness['trusted_panel_suggestion'];
+            $payload['category_id'] = (int) $suggestion['category_id'];
+            $payload['ovoko_category_suggestion'] = $suggestion;
+            $payload['missing_woo_category_mapping'] = true;
+            $payload['mapping_message'] = 'Ovoko category detected but Woo category mapping missing';
+        }
+        return $payload;
     }
 
     private function storage_location(int $productId): string
@@ -713,6 +724,7 @@ class WooToOvokoCreatePartPreviewService
         if (!empty($result['duplicate_checks']['has_existing_ovoko_part_id'])) { $blockers[] = 'existing_ovoko_part_id'; }
         if ($sku === '') { $blockers[] = 'missing_sku'; }
         if ($categoryPayload['category_id'] === null) { $blockers[] = 'missing_ovoko_category_id'; }
+        if (!empty($categoryPayload['missing_woo_category_mapping'])) { $blockers[] = 'missing_woo_category_mapping_for_ovoko_category_' . (string) $categoryPayload['category_id']; }
         if (empty($images['image_urls'])) { $blockers[] = 'missing_image'; }
         if (empty($images['all_images_accessible'])) { $blockers[] = 'image_url_accessibility_not_confirmed'; }
         if (empty($images['photo_equals_first_photos'])) { $blockers[] = 'photo_must_equal_first_photos'; }
@@ -884,7 +896,29 @@ class WooToOvokoCreatePartPreviewService
                 $unmapped[] = $row;
             }
         }
-        return ['known' => true, 'terms' => array_merge($mapped, $unmapped), 'mapped_terms' => $mapped, 'unmapped_terms' => $unmapped, 'ready' => $terms !== [] && $unmapped === [], 'mapping_meta_keys_checked' => $keys];
+        $trustedSuggestion = $this->trusted_panel_category_suggestion($productId);
+        return ['known' => true, 'terms' => array_merge($mapped, $unmapped), 'mapped_terms' => $mapped, 'unmapped_terms' => $unmapped, 'ready' => ($terms !== [] && $unmapped === []) || $trustedSuggestion !== [], 'mapping_meta_keys_checked' => $keys, 'trusted_panel_suggestion' => $trustedSuggestion, 'mapping_message' => ($trustedSuggestion !== [] && $mapped === []) ? 'Ovoko category detected but Woo category mapping missing' : ''];
+    }
+
+
+    private function trusted_panel_category_suggestion(int $productId): array
+    {
+        $status = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_status', true));
+        $confidence = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_confidence', true));
+        $sourceType = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_source_type', true));
+        $categoryId = trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_category_id', true));
+        if ($status !== 'completed' || $confidence !== 'high' || $sourceType !== 'panel_marketplace_category_suggestions' || !ctype_digit($categoryId)) {
+            return [];
+        }
+        return [
+            'category_id' => (int) $categoryId,
+            'category_name' => trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_category_name', true)),
+            'category_path' => trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_category_path', true)),
+            'confidence' => $confidence,
+            'source_type' => $sourceType,
+            'status' => $status,
+            'dimensions' => trim((string) get_post_meta($productId, '_gps_ovoko_category_suggestion_dimensions', true)),
+        ];
     }
 
     private function image_preview($product, int $productId): array
