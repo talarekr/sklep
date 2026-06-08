@@ -271,3 +271,16 @@ gpswiss_run_live_test('no Woo price category stock mutation', function (): void 
     $mutatedForbiddenMeta = array_filter($GLOBALS['gpswiss_test_writes'], static fn(array $write): bool => in_array($write[2] ?? '', ['_price', '_regular_price', '_sale_price', '_stock', '_stock_status', '_product_image_gallery', '_thumbnail_id'], true));
     gpswiss_assert($mutatedForbiddenMeta === [], 'Live import must not mutate Woo price/category/stock/image meta.');
 });
+
+gpswiss_run_live_test('CRM-only Ovoko payload omits price and includes Ovoko suggestion note', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_selected_price_source', 'ovoko_price_suggestion');
+    gpswiss_set_meta(60886, '_gps_selected_price_pln', '1800');
+    gpswiss_set_meta(60886, '_gps_ovoko_price_suggestion_source', 'ovoko_internal_notes');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert($result['ok'] === true, 'Ovoko suggestion CRM-only import should pass live safety.');
+    gpswiss_assert(!array_key_exists('price', $payload) && !array_key_exists('original_price', $payload) && !array_key_exists('currency', $payload) && !array_key_exists('original_currency', $payload), 'CRM-only payload must omit all price fields.');
+    $notes = (string) ($payload['internal_notes'] ?? '');
+    gpswiss_assert(str_contains($notes, 'Sugerowana cena Ovoko: 1800 PLN') && str_contains($notes, 'Źródło: ovoko_internal_notes') && str_contains($notes, 'Dane z dopasowanej części Ovoko'), 'CRM-only internal_notes must contain Ovoko suggestion context.');
+});
