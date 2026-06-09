@@ -286,9 +286,9 @@ class WooToOvokoCrmOnlyImportService
     {
         $message = strtolower($message);
         return $statusCode === 'R202'
-            && str_contains($message, 'price')
-            && (str_contains($message, 'shown in shop') || str_contains($message, 'visible in shop') || str_contains($message, 'available in shop'))
-            && (str_contains($message, 'won') || str_contains($message, 'not'));
+            && str_contains($message, 'part won')
+            && str_contains($message, 'shown in shop')
+            && str_contains($message, 'price');
     }
 
     private function extract_part_id_from_decoded_response(array $decoded): string

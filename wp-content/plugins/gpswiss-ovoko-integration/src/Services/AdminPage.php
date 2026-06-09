@@ -46,9 +46,6 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
         add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
-        add_action('admin_post_gpswiss_ovoko_batch_crm_only_preview', [$this, 'handle_batch_crm_only_preview']);
-        add_action('admin_post_gpswiss_ovoko_batch_crm_only_import', [$this, 'handle_batch_crm_only_import']);
-        add_action('admin_post_gpswiss_ovoko_batch_crm_only_csv', [$this, 'handle_batch_crm_only_csv']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
         add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
@@ -165,12 +162,9 @@ class AdminPage
             $data['bidirectional_sync_status'] = $bidirectionalOrchestrator->dashboard_status();
             $data['bidirectional_sync_recent_runs'] = $bidirectionalOrchestrator->recent_runs();
             $data['manual_single_part_stock_sync_logs'] = $this->service->get_manual_single_part_stock_sync_logs();
-            $batchCrmOnlyService = new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings());
-            $data['crm_only_batch_preview'] = $batchCrmOnlyService->latest_preview();
-            $data['crm_only_batch_import_result'] = $batchCrmOnlyService->latest_import_result();
         } catch (\Throwable $e) {
             $bidirectionalOrchestrator = new \GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator($this->service);
-            $data = ['settings' => $this->service->get_settings(), 'bidirectional_sync_status' => $bidirectionalOrchestrator->dashboard_status(), 'bidirectional_sync_recent_runs' => $bidirectionalOrchestrator->recent_runs(), 'manual_single_part_stock_sync_logs' => $this->service->get_manual_single_part_stock_sync_logs(), 'crm_only_batch_preview' => [], 'crm_only_batch_import_result' => []];
+            $data = ['settings' => $this->service->get_settings(), 'bidirectional_sync_status' => $bidirectionalOrchestrator->dashboard_status(), 'bidirectional_sync_recent_runs' => $bidirectionalOrchestrator->recent_runs(), 'manual_single_part_stock_sync_logs' => $this->service->get_manual_single_part_stock_sync_logs()];
             $notice = ['type' => 'error', 'text' => 'Dashboard diagnostics temporarily unavailable: ' . $e->getMessage()];
             include dirname(__DIR__, 2) . '/views/admin-page.php';
             return;
@@ -301,78 +295,6 @@ class AdminPage
         exit;
     }
 
-
-
-    public function handle_batch_crm_only_preview(): void
-    {
-        if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
-        }
-        check_admin_referer('gpswiss_ovoko_batch_crm_only_preview');
-
-        $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->preview($this->batch_crm_only_filters_from_request());
-        set_transient('gpswiss_ovoko_notice', [
-            'type' => 'success',
-            'text' => wp_json_encode(['action_name' => $result['action_name'], 'checked_at' => $result['checked_at'], 'summary' => $result['summary']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        ], 300);
-        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration#batch-crm-only-import'));
-        exit;
-    }
-
-    public function handle_batch_crm_only_import(): void
-    {
-        if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
-        }
-        check_admin_referer('gpswiss_ovoko_batch_crm_only_import');
-
-        $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->import($this->batch_crm_only_filters_from_request(), [
-            'confirm_batch_crm_only_no_price' => !empty($_POST['confirm_batch_crm_only_no_price']),
-        ]);
-        $type = !empty($result['ok']) && (int) ($result['summary']['failed_count'] ?? 0) === 0 ? 'success' : 'warning';
-        set_transient('gpswiss_ovoko_notice', [
-            'type' => $type,
-            'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        ], 300);
-        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration#batch-crm-only-import'));
-        exit;
-    }
-
-    public function handle_batch_crm_only_csv(): void
-    {
-        if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
-        }
-        check_admin_referer('gpswiss_ovoko_batch_crm_only_csv');
-
-        $service = new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings());
-        $preview = $service->latest_preview();
-        $errorsOnly = isset($_GET['errors_only']) ? (string) $_GET['errors_only'] === '1' : (!empty($_POST['errors_only']));
-        nocache_headers();
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="ovoko-crm-only-batch-preview-' . ($errorsOnly ? 'errors-' : 'full-') . gmdate('Ymd-His') . '.csv"');
-        $out = fopen('php://output', 'w');
-        if (!is_resource($out)) {
-            wp_die('Unable to open CSV output stream.');
-        }
-        foreach ($service->csv_rows($preview, $errorsOnly) as $row) {
-            fputcsv($out, $row);
-        }
-        fclose($out);
-        exit;
-    }
-
-    private function batch_crm_only_filters_from_request(): array
-    {
-        return [
-            'only_gmail_imported' => !empty($_POST['only_gmail_imported']),
-            'product_id_from' => isset($_POST['product_id_from']) ? (int) $_POST['product_id_from'] : 0,
-            'product_id_to' => isset($_POST['product_id_to']) ? (int) $_POST['product_id_to'] : 0,
-            'created_after' => isset($_POST['created_after']) ? sanitize_text_field((string) wp_unslash($_POST['created_after'])) : '',
-            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : WooToOvokoCrmOnlyBatchImportService::DEFAULT_BATCH_SIZE,
-            'stop_on_error' => !empty($_POST['stop_on_error']),
-        ];
-    }
 
     public function handle_read_part_statuses(): void
     {
