@@ -4,6 +4,7 @@ namespace GPSwiss\Ovoko\Services;
 
 class WooToOvokoCrmOnlyBatchImportService
 {
+    private const GMAIL_SKU_PREFIX = 'GPS-GMAIL-';
     private array $settings;
     private WooToOvokoCreatePartPreviewService $previewService;
     private WooToOvokoCrmOnlyImportService $importService;
@@ -59,6 +60,7 @@ class WooToOvokoCrmOnlyBatchImportService
 
         $this->log_marker('CRM_ONLY_BATCH_BEFORE_QUERY', [
             'cursor' => $cursor,
+            'sku_like' => self::GMAIL_SKU_PREFIX . '%',
             'lookahead_limit' => $this->candidate_lookahead_limit($batchSize),
         ]);
         $candidateScanStartedAt = microtime(true);
@@ -80,6 +82,8 @@ class WooToOvokoCrmOnlyBatchImportService
         ]);
 
         if ($mode === 'find_candidate') {
+            $candidateScan = $this->evaluate_candidate_eligibility($candidateScan, 1);
+            $productIds = $candidateScan['ids'];
             $firstCandidate = isset($productIds[0]) ? (int) $productIds[0] : 0;
             $result = [
                 'ok' => true,
@@ -88,17 +92,19 @@ class WooToOvokoCrmOnlyBatchImportService
                 'first_candidate_product_id' => $firstCandidate,
                 'checked_count' => (int) $candidateScan['checked_count'],
                 'next_cursor' => $firstCandidate > 0 ? $firstCandidate : (int) $candidateScan['last_checked_product_id'],
-                'stop_reason' => $firstCandidate > 0 ? '' : 'no_candidate_in_lookahead',
+                'stop_reason' => $firstCandidate > 0 ? '' : $this->find_candidate_stop_reason($candidateScan),
+                'skipped_counts' => $candidateScan['skipped_counts'],
                 'query_ms' => $queryMs,
-                'candidate_scan_ms' => $candidateScanMs,
+                'candidate_scan_ms' => $this->elapsed_ms($candidateScanStartedAt),
                 'total_ms' => $this->elapsed_ms($startedAt),
             ];
             $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', [
                 'mode' => 'find_candidate',
                 'candidate_found' => $result['candidate_found'],
                 'checked_count' => $result['checked_count'],
+                'stop_reason' => $result['stop_reason'],
                 'query_ms' => $queryMs,
-                'candidate_scan_ms' => $candidateScanMs,
+                'candidate_scan_ms' => $result['candidate_scan_ms'],
                 'total_ms' => $result['total_ms'],
             ]);
             return $result;
@@ -108,8 +114,11 @@ class WooToOvokoCrmOnlyBatchImportService
         $result['query_ms'] = $queryMs;
         $result['candidate_scan_ms'] = $candidateScanMs;
         $result['candidate_checked_count'] = (int) $candidateScan['checked_count'];
+        $result['skipped_counts'] = $candidateScan['skipped_counts'];
+        $result['already_imported_count'] = (int) $candidateScan['skipped_counts']['skipped_already_imported'];
         $lastProductId = $cursor;
         $lastCheckedProductId = (int) $candidateScan['last_checked_product_id'];
+        $stoppedBeforeScanExhausted = false;
 
         foreach ($productIds as $productId) {
             $productId = (int) $productId;
@@ -140,8 +149,13 @@ class WooToOvokoCrmOnlyBatchImportService
                     $result['eligible_count']++;
                 } else {
                     $result['blocked_count']++;
+                    $result['skipped_counts'][$this->preview_blocker_bucket($previewCodes)]++;
                 }
                 $result['items'][] = $this->preview_item($productId, $preview, $previewCodes);
+                if ($result['eligible_count'] >= $batchSize) {
+                    $stoppedBeforeScanExhausted = true;
+                    break;
+                }
                 continue;
             }
 
@@ -154,12 +168,20 @@ class WooToOvokoCrmOnlyBatchImportService
                     'validation_codes' => $previewCodes,
                 ];
                 $result['errors'][] = $error;
+                $result['skipped_counts'][$this->preview_blocker_bucket($previewCodes)]++;
                 $result['items'][] = ['product_id' => $productId, 'status' => 'blocked', 'validation_codes' => $previewCodes];
                 if ($stopOnFirstError) {
                     $result['stop_reason'] = 'preview_ineligible_stop_on_first_error';
+                    $stoppedBeforeScanExhausted = true;
                     break;
                 }
                 continue;
+            }
+
+            $result['eligible_count']++;
+            if ($result['eligible_count'] > $batchSize) {
+                $stoppedBeforeScanExhausted = true;
+                break;
             }
 
             $importStartedAt = microtime(true);
@@ -185,13 +207,18 @@ class WooToOvokoCrmOnlyBatchImportService
                 ];
                 if ($stopOnFirstError) {
                     $result['stop_reason'] = 'import_error_stop_on_first_error';
+                    $stoppedBeforeScanExhausted = true;
                     break;
                 }
+            }
+            if ($result['eligible_count'] >= $batchSize) {
+                $stoppedBeforeScanExhausted = true;
+                break;
             }
         }
 
         $result['last_product_id_processed'] = $lastProductId > $cursor ? $lastProductId : 0;
-        $result['next_cursor'] = max($lastProductId, $lastCheckedProductId);
+        $result['next_cursor'] = $stoppedBeforeScanExhausted ? $lastProductId : max($lastProductId, $lastCheckedProductId);
         $result['next_product_id'] = $result['next_cursor'];
         $hasMoreStartedAt = microtime(true);
         $result['has_more'] = $this->has_more_candidates((int) $result['next_cursor'], $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
@@ -381,6 +408,9 @@ class WooToOvokoCrmOnlyBatchImportService
         $ids = [];
         $checkedCount = 0;
         $lastCheckedProductId = $afterProductId;
+        $skippedCounts = $this->empty_skipped_counts();
+        $skippedCounts['found_gps_gmail_drafts'] = count($rawIds);
+
         foreach ($rawIds as $rawId) {
             $productId = (int) $rawId;
             $checkedCount++;
@@ -388,18 +418,12 @@ class WooToOvokoCrmOnlyBatchImportService
             $validationStartedAt = microtime(true);
             $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_START', ['product_id' => $productId]);
             if ($this->has_imported_meta($productId)) {
+                $skippedCounts['skipped_already_imported']++;
                 $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'already_imported', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
                 continue;
             }
-            if ($onlyGmailImported && !$this->matches_gmail_imported_filter($productId)) {
-                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'not_gmail_imported', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
-                continue;
-            }
-            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'gps_gmail_candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
             $ids[] = $productId;
-            if (count($ids) >= $limit) {
-                break;
-            }
         }
 
         return [
@@ -408,7 +432,66 @@ class WooToOvokoCrmOnlyBatchImportService
             'checked_count' => $checkedCount,
             'last_checked_product_id' => $lastCheckedProductId,
             'query_ms' => $queryMs,
+            'skipped_counts' => $skippedCounts,
         ];
+    }
+
+    private function evaluate_candidate_eligibility(array $candidateScan, int $eligibleLimit): array
+    {
+        $eligibleIds = [];
+        foreach ((array) ($candidateScan['ids'] ?? []) as $productId) {
+            $productId = (int) $productId;
+            $previewStartedAt = microtime(true);
+            $this->log_marker('CRM_ONLY_BATCH_PREVIEW_START', ['product_id' => $productId, 'phase' => 'find_candidate']);
+            $preview = $this->previewService->preview($productId);
+            $previewMs = $this->elapsed_ms($previewStartedAt);
+            $codes = $this->validation_codes($preview);
+            $this->log_marker('CRM_ONLY_BATCH_PREVIEW_DONE', ['product_id' => $productId, 'phase' => 'find_candidate', 'preview_ms' => $previewMs, 'would_be_eligible' => !empty($preview['would_be_eligible']), 'validation_error_count' => count((array) ($preview['validation_errors'] ?? []))]);
+            if (!empty($preview['would_be_eligible']) && empty($preview['validation_errors'])) {
+                $eligibleIds[] = $productId;
+                if (count($eligibleIds) >= $eligibleLimit) {
+                    break;
+                }
+                continue;
+            }
+            $bucket = $this->preview_blocker_bucket($codes);
+            $candidateScan['skipped_counts'][$bucket]++;
+        }
+        $candidateScan['ids'] = $eligibleIds;
+        return $candidateScan;
+    }
+
+    private function empty_skipped_counts(): array
+    {
+        return [
+            'found_gps_gmail_drafts' => 0,
+            'skipped_already_imported' => 0,
+            'skipped_missing_images' => 0,
+            'skipped_missing_part_code' => 0,
+            'skipped_other_blocked' => 0,
+        ];
+    }
+
+    private function find_candidate_stop_reason(array $candidateScan): string
+    {
+        $counts = (array) ($candidateScan['skipped_counts'] ?? []);
+        $found = (int) ($counts['found_gps_gmail_drafts'] ?? 0);
+        if ($found <= 0) {
+            return 'no_gps_gmail_drafts_found';
+        }
+        if ((int) ($counts['skipped_already_imported'] ?? 0) >= $found) {
+            return 'all_gps_gmail_already_imported';
+        }
+        if ((int) ($counts['skipped_missing_images'] ?? 0) > 0) {
+            return 'gps_gmail_blocked_missing_images';
+        }
+        if ((int) ($counts['skipped_missing_part_code'] ?? 0) > 0) {
+            return 'gps_gmail_blocked_missing_part_code';
+        }
+        if ((int) ($counts['skipped_other_blocked'] ?? 0) > 0) {
+            return 'gps_gmail_blocked_other';
+        }
+        return 'no_gps_gmail_eligible_candidate_in_lookahead';
     }
 
     private function candidate_lookahead_limit(int $batchSize): int
@@ -420,18 +503,18 @@ class WooToOvokoCrmOnlyBatchImportService
     {
         global $wpdb;
         $min = max($afterProductId, $productIdFrom > 0 ? $productIdFrom - 1 : 0);
-        $where = ["post_type = 'product'", "post_status = 'draft'", 'ID > %d'];
-        $params = [$min];
+        $where = ["p.post_type = 'product'", "p.post_status = 'draft'", 'p.ID > %d', 'sku.meta_key = %s', 'sku.meta_value LIKE %s'];
+        $params = [$min, '_sku', $wpdb->esc_like(self::GMAIL_SKU_PREFIX) . '%'];
         if ($productIdTo > 0) {
-            $where[] = 'ID <= %d';
+            $where[] = 'p.ID <= %d';
             $params[] = $productIdTo;
         }
         if ($createdAfter !== '') {
-            $where[] = 'post_date >= %s';
+            $where[] = 'p.post_date >= %s';
             $params[] = $createdAfter . ' 00:00:00';
         }
         $params[] = max(1, min(50, $limit));
-        $sql = "SELECT ID FROM {$wpdb->posts} WHERE " . implode(' AND ', $where) . ' ORDER BY ID ASC LIMIT %d';
+        $sql = "SELECT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} sku ON sku.post_id = p.ID WHERE " . implode(' AND ', $where) . ' ORDER BY p.ID ASC LIMIT %d';
         $prepared = $wpdb->prepare($sql, $params);
         $ids = $wpdb->get_col($prepared);
         return array_values(array_map('intval', is_array($ids) ? $ids : []));
@@ -451,7 +534,7 @@ class WooToOvokoCrmOnlyBatchImportService
         if (trim((string) get_post_meta($productId, '_gps_source_staging_item_id', true)) !== '') {
             return true;
         }
-        return str_contains((string) get_post_meta($productId, '_sku', true), 'GPS-GMAIL-');
+        return str_starts_with((string) get_post_meta($productId, '_sku', true), self::GMAIL_SKU_PREFIX);
     }
 
     private function elapsed_ms(float $startedAt): int
@@ -541,6 +624,18 @@ class WooToOvokoCrmOnlyBatchImportService
         if (array_intersect($codes, ['recoverable_part_id_blocks_retry', 'existing_ovoko_part_id']) !== []) {
             $result['repair_needed_count']++;
         }
+    }
+
+
+    private function preview_blocker_bucket(array $codes): string
+    {
+        if (array_intersect($codes, ['missing_images', 'inaccessible_image_url', 'photo_must_equal_first_photos']) !== []) {
+            return 'skipped_missing_images';
+        }
+        if (in_array('missing_part_identifier', $codes, true)) {
+            return 'skipped_missing_part_code';
+        }
+        return 'skipped_other_blocked';
     }
 
     private function preview_item(int $productId, array $preview, array $codes): array
