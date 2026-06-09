@@ -42,6 +42,11 @@ class WooToOvokoCrmOnlyImportService
         if ($this->has_existing_part_id_meta($productId)) {
             return $this->fail_and_store($result, $productId, 'existing_part_id_meta_blocks_import', 'Product already has Ovoko/RRR part ID meta.');
         }
+        $recoverablePartId = $this->recoverable_part_id_from_last_response($productId);
+        if ($recoverablePartId !== '') {
+            $result['recoverable_part_id'] = $recoverablePartId;
+            return $this->fail_and_store($result, $productId, 'recoverable_part_id_blocks_retry', 'Last Ovoko import response already contains part_id ' . $recoverablePartId . '. Do not retry live import; use repair/link to attach this product to the existing CRM part.');
+        }
 
         $preview = (new WooToOvokoCreatePartPreviewService())->preview($productId);
         $result['preview_checked_at'] = (string) ($preview['checked_at'] ?? $startedAt);
@@ -68,15 +73,20 @@ class WooToOvokoCrmOnlyImportService
 
         $response = $this->call_import($payload);
         $result['response'] = $this->redact_response_for_result($response);
-        $partId = trim((string) ($response['part_id'] ?? ''));
-        if (empty($response['ok']) || $partId === '') {
+        $classification = $this->classify_import_response($response);
+        $partId = (string) ($classification['part_id'] ?? '');
+        $result['response_classification'] = $classification;
+        if (empty($classification['success'])) {
             $result['ok'] = false;
             $result['status'] = 'failed';
             $result['error_code'] = 'ovoko_import_failed';
             $result['message'] = $this->response_has_photo_file_missing_error($response)
                 ? 'Ovoko rejected photo field. Image payload format/accessibility must be fixed before retry.'
-                : 'Ovoko /crm/importPart did not return HTTP 200 + status_code R200 + part_id.';
-            $result['part_id'] = '';
+                : 'Ovoko /crm/importPart did not return HTTP 200 + status_code R200/R202 + part_id for CRM-only no-price import.';
+            $result['part_id'] = $partId;
+            if ($partId !== '') {
+                $result['recoverable_part_id'] = $partId;
+            }
             $this->store_failure($productId, $result, $response);
             return $result;
         }
@@ -84,7 +94,12 @@ class WooToOvokoCrmOnlyImportService
         $result['ok'] = true;
         $result['status'] = 'success';
         $result['part_id'] = $partId;
-        $result['message'] = 'Created CRM-only Ovoko/RRR part from one Woo draft product.';
+        $result['message'] = !empty($classification['crm_only_missing_price_warning'])
+            ? 'Created CRM-only Ovoko/RRR part from one Woo draft product. R202 missing price warning confirms the part was created in CRM and is not visible in shop until price is filled.'
+            : 'Created CRM-only Ovoko/RRR part from one Woo draft product.';
+        if (!empty($classification['crm_only_missing_price_warning'])) {
+            $result['crm_only_confirmation'] = 'created_in_crm_not_visible_in_shop_missing_price';
+        }
         $this->store_success($productId, $partId, $result, $response, $preview);
         return $result;
     }
@@ -99,6 +114,32 @@ class WooToOvokoCrmOnlyImportService
             $labels = ['confirm_placeholder_car_id' => 'I understand this uses a placeholder car_id and staff must correct vehicle mapping in Ovoko before publishing.'] + $labels;
         }
         return $labels;
+    }
+
+
+
+    public function repair_product_part_id(int $productId, string $partId, array $response = []): array
+    {
+        $partId = trim($partId);
+        if ($productId <= 0 || !$this->product_exists($productId)) {
+            return ['ok' => false, 'status' => 'blocked', 'error_code' => 'product_not_found', 'product_id' => $productId, 'part_id' => $partId];
+        }
+        if ($partId === '') {
+            $partId = $this->recoverable_part_id_from_last_response($productId);
+        }
+        if ($partId === '') {
+            return ['ok' => false, 'status' => 'blocked', 'error_code' => 'missing_recoverable_part_id', 'product_id' => $productId, 'part_id' => ''];
+        }
+        $result = $this->base_result($productId, gmdate('c'));
+        $result['ok'] = true;
+        $result['status'] = 'success';
+        $result['part_id'] = $partId;
+        $result['message'] = 'Linked Woo product to existing Ovoko/RRR CRM part without re-importing.';
+        $result['repair_action'] = 'linked_existing_part_id_without_reimport';
+        $this->store_success($productId, $partId, $result, $response, []);
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_repaired_at', gmdate('c'));
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_repair_source', 'recoverable_failed_response_part_id');
+        return $result;
     }
 
     public static function all_part_id_meta_keys(): array
@@ -208,6 +249,78 @@ class WooToOvokoCrmOnlyImportService
         ];
     }
 
+
+
+    private function classify_import_response(array $response): array
+    {
+        $httpCode = (int) ($response['http_code'] ?? $response['http_status'] ?? 0);
+        $statusCode = trim((string) ($response['status_code'] ?? ''));
+        $rawMessage = $response['msg'] ?? $response['message'] ?? '';
+        $message = is_array($rawMessage) ? wp_json_encode($rawMessage, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : trim((string) $rawMessage);
+        $partId = trim((string) ($response['part_id'] ?? ''));
+        if ($partId === '' && is_array($response['parsed_json'] ?? null)) {
+            $partId = $this->extract_part_id_from_decoded_response((array) $response['parsed_json']);
+        }
+        if ($partId === '' && trim((string) ($response['raw_body'] ?? '')) !== '') {
+            $decoded = json_decode((string) $response['raw_body'], true);
+            if (is_array($decoded)) {
+                $partId = $this->extract_part_id_from_decoded_response($decoded);
+                $statusCode = $statusCode !== '' ? $statusCode : trim((string) ($decoded['status_code'] ?? ''));
+                $message = $message !== '' ? $message : trim((string) ($decoded['msg'] ?? $decoded['message'] ?? ''));
+            }
+        }
+        $missingPriceWarning = $this->is_missing_price_r202_warning($statusCode, $message);
+        $success = $httpCode === 200 && $partId !== '' && ($statusCode === 'R200' || $missingPriceWarning);
+        return [
+            'success' => $success,
+            'http_code' => $httpCode,
+            'status_code' => $statusCode,
+            'part_id' => $partId,
+            'message' => $message,
+            'crm_only_missing_price_warning' => $missingPriceWarning,
+            'success_rule' => $success ? ($missingPriceWarning ? 'http_200_r202_part_id_missing_price_warning' : 'http_200_r200_part_id') : 'not_success',
+        ];
+    }
+
+    private function is_missing_price_r202_warning(string $statusCode, string $message): bool
+    {
+        $message = strtolower($message);
+        return $statusCode === 'R202'
+            && str_contains($message, 'part won')
+            && str_contains($message, 'shown in shop')
+            && str_contains($message, 'price');
+    }
+
+    private function extract_part_id_from_decoded_response(array $decoded): string
+    {
+        $candidates = [
+            $decoded['part_id'] ?? null,
+            $decoded['id'] ?? null,
+            $decoded['data']['part_id'] ?? null,
+            $decoded['data']['id'] ?? null,
+        ];
+        foreach ($candidates as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate !== '') {
+                return function_exists('sanitize_text_field') ? sanitize_text_field($candidate) : $candidate;
+            }
+        }
+        return '';
+    }
+
+    private function recoverable_part_id_from_last_response(int $productId): string
+    {
+        $raw = trim((string) get_post_meta($productId, '_gps_ovoko_crm_only_import_last_response_raw', true));
+        if ($raw === '') {
+            return '';
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return '';
+        }
+        return $this->extract_part_id_from_decoded_response($decoded);
+    }
+
     private function response_has_photo_file_missing_error(array $response): bool
     {
         $haystack = strtolower(wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
@@ -237,6 +350,8 @@ class WooToOvokoCrmOnlyImportService
         update_post_meta($productId, '_gps_ovoko_crm_only_import_car_id_source', (string) ($preview['car_id_source'] ?? ''));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_response_raw', (string) ($response['raw_body'] ?? ''));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_request_summary', wp_json_encode($result['request_summary'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_response_summary', wp_json_encode($this->redact_response_for_result($response), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_result_summary', wp_json_encode(['status' => $result['status'] ?? '', 'part_id' => $partId, 'message' => $result['message'] ?? '', 'crm_only_confirmation' => $result['crm_only_confirmation'] ?? ''], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     private function store_failure(int $productId, array $result, array $response): void
@@ -244,6 +359,10 @@ class WooToOvokoCrmOnlyImportService
         update_post_meta($productId, '_gps_ovoko_crm_only_import_last_error', wp_json_encode(['code' => $result['error_code'] ?? 'unknown', 'message' => $result['message'] ?? ''], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_last_error_at', gmdate('c'));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_last_response_raw', (string) ($response['raw_body'] ?? wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+        if (trim((string) ($result['part_id'] ?? '')) !== '') {
+            update_post_meta($productId, '_gps_ovoko_crm_only_import_recoverable_part_id', trim((string) $result['part_id']));
+            update_post_meta($productId, '_gps_ovoko_crm_only_import_repair_available', '1');
+        }
     }
 
     private function store_error(int $productId, array $result): void
