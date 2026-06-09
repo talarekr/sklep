@@ -3395,14 +3395,20 @@ class RrrApiClient
             }
         }
 
+        $crmOnlyMissingPriceWarning = $statusCode === 'R202'
+            && str_contains(strtolower($message), 'part won')
+            && str_contains(strtolower($message), 'shown in shop')
+            && str_contains(strtolower($message), 'price');
+
         return [
-            'ok' => $httpCode === 200 && $statusCode === 'R200' && $partId !== '',
+            'ok' => $httpCode === 200 && $partId !== '' && ($statusCode === 'R200' || $crmOnlyMissingPriceWarning),
             'executed' => true,
             'http_code' => $httpCode,
             'status_code' => $statusCode,
             'msg' => $message,
             'part_id' => $partId,
             'raw_body' => $rawBody,
+            'crm_only_missing_price_warning' => $crmOnlyMissingPriceWarning,
         ];
     }
 

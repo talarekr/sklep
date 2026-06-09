@@ -79,6 +79,8 @@ function gpswiss_seed_valid_live_product(int $id = 60886): void
 function gpswiss_confirmations(): array { return ['confirm_placeholder_car_id' => true, 'confirm_live_one_product' => true, 'confirm_no_price_non_public' => true]; }
 function gpswiss_fake_success_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-999', 'raw_body' => '{"status_code":"R200","part_id":"RRR-999"}']; }
 function gpswiss_fake_fail_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R500', 'part_id' => '', 'raw_body' => '{"status_code":"R500"}']; }
+function gpswiss_fake_r202_missing_price_success_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R202', 'msg' => "OK [WARNING] Part won't be shown in shop unless you fill out price field", 'part_id' => '11055', 'raw_body' => '{"status_code":"R202","msg":"OK [WARNING] Part won\'t be shown in shop unless you fill out price field","part_id":"11055"}']; }
+function gpswiss_fake_r202_missing_price_no_part_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R202', 'msg' => "OK [WARNING] Part won't be shown in shop unless you fill out price field", 'part_id' => '', 'raw_body' => '{"status_code":"R202","msg":"OK [WARNING] Part won\'t be shown in shop unless you fill out price field"}']; }
 function gpswiss_fake_photo_fail_importer(array $payload): array { $GLOBALS['gpswiss_test_import_payloads'][] = $payload; return ['ok' => false, 'http_code' => 200, 'status_code' => 'R400', 'msg' => ['photo' => '[ERROR] file does not exist'], 'part_id' => '', 'raw_body' => '{"status_code":"R400","msg":{"photo":"[ERROR] file does not exist"}}']; }
 
 function get_post($id): object|false { return $GLOBALS['gpswiss_test_posts'][(int) $id] ?? false; }
@@ -235,6 +237,43 @@ gpswiss_run_live_test('successful R200 response stores part_id and import meta',
     gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === 'RRR-999', '_ovoko_part_id must be stored.');
     gpswiss_assert(get_post_meta(60886, '_gps_ovoko_crm_only_import_strategy', true) === 'crm_only_non_public_initial_import', 'Import strategy meta missing.');
     gpswiss_assert(get_post_meta(60886, '_gps_ovoko_crm_only_import_price_omitted', true) === '1', 'Price omitted meta missing.');
+});
+
+
+gpswiss_run_live_test('R202 with part_id and missing price warning is CRM-only success', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_price', '');
+    gpswiss_set_meta(60886, '_regular_price', '');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_r202_missing_price_success_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === true && ($result['status'] ?? '') === 'success', 'R202 missing-price response with part_id must be success.', $result);
+    gpswiss_assert(($result['part_id'] ?? '') === '11055', 'R202 success must expose part_id.');
+    gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '11055', 'R202 success must store _ovoko_part_id.');
+    gpswiss_assert(str_contains((string) ($result['message'] ?? ''), 'not visible in shop'), 'R202 warning must be confirmation copy, not failure.');
+});
+
+gpswiss_run_live_test('R202 missing price warning without part_id fails', function (): void {
+    gpswiss_seed_valid_live_product();
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_r202_missing_price_no_part_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === false && ($result['status'] ?? '') === 'failed', 'R202 without part_id must fail.', $result);
+    gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '', 'R202 without part_id must not store _ovoko_part_id.');
+});
+
+gpswiss_run_live_test('failed-classified last response with part_id blocks retry and offers repair', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_ovoko_crm_only_import_last_response_raw', '{"status_code":"R202","msg":"OK [WARNING] Part won\'t be shown in shop unless you fill out price field","part_id":"11056"}');
+    $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_success_importer'))->create(60886, gpswiss_confirmations());
+    gpswiss_assert($result['ok'] === false && ($result['error_code'] ?? '') === 'recoverable_part_id_blocks_retry', 'Recoverable part_id must block retry.', $result);
+    gpswiss_assert(($result['recoverable_part_id'] ?? '') === '11056', 'Recoverable part_id must be surfaced.');
+    gpswiss_assert($GLOBALS['gpswiss_test_import_payloads'] === [], 'Blocked retry must not call importer.');
+});
+
+gpswiss_run_live_test('repair link attaches recoverable part_id without re-import', function (): void {
+    gpswiss_seed_valid_live_product();
+    gpswiss_set_meta(60886, '_gps_ovoko_crm_only_import_last_response_raw', '{"status_code":"R202","msg":"OK [WARNING] Part won\'t be shown in shop unless you fill out price field","part_id":"11055"}');
+    $result = (new WooToOvokoCrmOnlyImportService())->repair_product_part_id(60886, '');
+    gpswiss_assert($result['ok'] === true && ($result['part_id'] ?? '') === '11055', 'Repair should link recoverable part_id.');
+    gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '11055', 'Repair must store _ovoko_part_id.');
+    gpswiss_assert($GLOBALS['gpswiss_test_import_payloads'] === [], 'Repair must not call importer.');
 });
 
 gpswiss_run_live_test('failed response does not store part_id and stores error', function (): void {

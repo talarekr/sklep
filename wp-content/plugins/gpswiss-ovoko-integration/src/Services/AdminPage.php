@@ -45,6 +45,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
         add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
+        add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
         add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
@@ -239,6 +240,29 @@ class AdminPage
         wp_send_json($result);
     }
 
+
+
+
+    public function handle_repair_crm_only_part_link(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_repair_crm_only_part_link');
+
+        $rawProductId = $_POST['product_id'] ?? null;
+        $rawPartId = $_POST['part_id'] ?? '';
+        $productId = ($rawProductId === null || is_array($rawProductId)) ? 0 : (int) (string) wp_unslash((string) $rawProductId);
+        $partId = is_array($rawPartId) ? '' : sanitize_text_field(wp_unslash((string) $rawPartId));
+        $result = (new WooToOvokoCrmOnlyImportService($this->service->get_settings()))->repair_product_part_id($productId, $partId);
+
+        set_transient('gpswiss_ovoko_notice', [
+            'type' => !empty($result['ok']) ? 'success' : 'error',
+            'text' => wp_json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ], 300);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
 
     public function handle_create_crm_only_part_from_woo(): void
     {

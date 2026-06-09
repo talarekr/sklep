@@ -47,6 +47,7 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_post_gps_gmail_product_importer_import', array($this, 'handle_import'));
         add_action('admin_post_gps_gmail_product_importer_create_woo_drafts', array($this, 'handle_create_woo_drafts'));
         add_action('admin_post_gps_gmail_product_importer_full_preparation_batch', array($this, 'handle_full_preparation_batch'));
+        add_action('admin_post_gps_gmail_product_importer_download_audit_csv', array($this, 'handle_download_audit_csv'));
         add_action('admin_post_gps_gmail_product_importer_queue_item_action', array($this, 'handle_import_queue_item_action'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_test', array($this, 'handle_ovoko_test'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_category_prediction_test', array($this, 'handle_ovoko_category_prediction_test'));
@@ -285,6 +286,11 @@ JS;
                 </div>
             <?php endif; ?>
 
+            <?php $this->render_bulk_import_dashboard($settings, $last_result); ?>
+
+            <h2><?php echo esc_html__('Advanced diagnostics and settings', 'gps-gmail-product-importer'); ?></h2>
+            <p class="description"><?php esc_html_e('Advanced diagnostics are below. Day-to-day Gmail → staging → audit → Woo draft work should use the Bulk Import Dashboard above.', 'gps-gmail-product-importer'); ?></p>
+
             <h2><?php echo esc_html__('1. Settings', 'gps-gmail-product-importer'); ?></h2>
             <form method="post" action="options.php">
                 <?php settings_fields('gps_gmail_product_importer_settings'); ?>
@@ -447,6 +453,167 @@ JS;
             return (string) $result['error'];
         }
         return __('Import queue action completed.', 'gps-gmail-product-importer');
+    }
+
+
+
+    private function render_bulk_import_dashboard($settings, $last_result = array())
+    {
+        $audit = $this->bulk_dashboard_audit_data();
+        $settings_summary = $this->bulk_dashboard_settings_summary($settings);
+        ?>
+        <style>
+            .gps-bulk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:16px 0}.gps-card{background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:14px}.gps-card h3{margin-top:0}.gps-count{font-size:24px;font-weight:600}.gps-badge{display:inline-block;border-radius:10px;padding:2px 8px;font-size:12px;background:#f0f0f1}.gps-badge-ready{background:#d1e7dd;color:#0f5132}.gps-badge-review{background:#fff3cd;color:#664d03}.gps-badge-created{background:#cfe2ff;color:#084298}.gps-badge-error{background:#f8d7da;color:#842029}.gps-danger{border-left:4px solid #d63638}.gps-primary-flow{border-left:4px solid #2271b1}
+        </style>
+        <h2><?php esc_html_e('Bulk Import Dashboard', 'gps-gmail-product-importer'); ?></h2>
+        <p><?php esc_html_e('One safe workflow for Gmail unread scan → staging queue → full preparation audit → Woo draft product creation. This dashboard does not call Ovoko live import or Allegro.', 'gps-gmail-product-importer'); ?></p>
+        <div class="gps-bulk-grid">
+            <div class="gps-card gps-primary-flow"><h3><?php esc_html_e('Import settings summary', 'gps-gmail-product-importer'); ?></h3>
+                <ul>
+                    <?php foreach ($settings_summary['rows'] as $row) : ?><li><strong><?php echo esc_html($row['label']); ?>:</strong> <?php echo esc_html($row['value']); ?></li><?php endforeach; ?>
+                </ul>
+                <?php if ($settings_summary['warnings']) : ?><div class="notice notice-warning inline"><p><strong><?php esc_html_e('Warnings', 'gps-gmail-product-importer'); ?></strong></p><ul><?php foreach ($settings_summary['warnings'] as $warning) : ?><li><?php echo esc_html($warning); ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+            </div>
+            <div class="gps-card"><h3><?php esc_html_e('Audit summary', 'gps-gmail-product-importer'); ?></h3>
+                <div class="gps-bulk-grid" style="grid-template-columns:repeat(2,minmax(110px,1fr));margin:0;">
+                    <?php foreach ($audit['summary_cards'] as $card) : ?><div><div class="gps-count"><?php echo esc_html((string) $card['count']); ?></div><div><?php echo esc_html($card['label']); ?></div></div><?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+        <div class="gps-bulk-grid">
+            <div class="gps-card"><h3><?php esc_html_e('Step 1 — Scan Gmail', 'gps-gmail-product-importer'); ?></h3>
+                <p><?php esc_html_e('Scan unread Gmail messages and stage them into the Import Queue. Scan/stage never creates Woo products, never calls Allegro, and never writes to Ovoko.', 'gps-gmail-product-importer'); ?></p>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_dry_run"><label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="<?php echo esc_attr($settings['batch_size']); ?>"></label> <?php submit_button(__('Dry-run scan', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_import"><label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="<?php echo esc_attr($settings['batch_size']); ?>"></label> <?php submit_button(__('Stage unread Gmail messages', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?></form>
+                <?php $this->render_last_batch_summary($last_result); ?>
+            </div>
+            <div class="gps-card"><h3><?php esc_html_e('Step 2 — Prepare / Audit staged items', 'gps-gmail-product-importer'); ?></h3>
+                <p><?php esc_html_e('Runs full preparation and readiness validation only. No Woo product creation, no Ovoko write, no Allegro call.', 'gps-gmail-product-importer'); ?></p>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_full_preparation_batch"><label><?php esc_html_e('Limit', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="25"></label> <label><input type="checkbox" name="only_unprepared" value="1" checked> <?php esc_html_e('Only unprepared', 'gps-gmail-product-importer'); ?></label> <label><input type="checkbox" name="include_needs_review" value="1" checked> <?php esc_html_e('Include needs review', 'gps-gmail-product-importer'); ?></label> <?php submit_button(__('Run full preparation audit', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?></form>
+                <?php if ($audit['blockers_grouped']) : ?><p><strong><?php esc_html_e('Blockers grouped by reason:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($this->format_blocker_counts($audit['blockers_grouped'])); ?></p><?php endif; ?>
+            </div>
+            <div class="gps-card"><h3><?php esc_html_e('Step 3 — Create Woo draft products', 'gps-gmail-product-importer'); ?></h3>
+                <p><?php esc_html_e('Creates only items whose Woo draft readiness is ready_to_create_product. Needs-review and duplicate/already-created items are skipped.', 'gps-gmail-product-importer'); ?></p>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_create_woo_drafts"><label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="10"></label> <?php submit_button(__('Create Woo drafts for ready items', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?></form>
+            </div>
+            <div class="gps-card"><h3><?php esc_html_e('Audit CSV exports', 'gps-gmail-product-importer'); ?></h3>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="errors"><?php submit_button(__('Download audit errors CSV', 'gps-gmail-product-importer'), $audit['summary']['blocked'] > 0 ? 'secondary' : 'secondary disabled', 'submit', false); ?></form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="full"><?php submit_button(__('Download full audit CSV', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
+            </div>
+        </div>
+        <div class="gps-card"><h3><?php esc_html_e('Audit table', 'gps-gmail-product-importer'); ?></h3>
+            <table class="widefat striped"><thead><tr><th><?php esc_html_e('Staging item ID', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Gmail date', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Gmail subject', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Storage location', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Part code/OEM', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Images', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Fixed category', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Price status', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Woo readiness', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Blockers', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Created product ID', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Actions', 'gps-gmail-product-importer'); ?></th></tr></thead><tbody>
+            <?php foreach ($audit['rows'] as $row) : ?><tr><td><?php echo esc_html((string) $row['staging_item_id']); ?></td><td><?php echo esc_html($row['gmail_date']); ?></td><td><?php echo esc_html($row['gmail_subject']); ?></td><td><?php echo esc_html($row['storage_location']); ?></td><td><?php echo esc_html(trim($row['part_code'] . ' / ' . $row['oem'], ' /')); ?></td><td><?php echo esc_html((string) $row['image_count']); ?></td><td><?php echo esc_html($row['fixed_category_label']); ?></td><td><?php echo esc_html($row['price_status']); ?></td><td><?php echo $this->status_badge($row['status_badge'], $row['readiness_status']); ?></td><td><?php echo esc_html(implode(', ', $row['blocking_reasons'])); ?></td><td><?php echo esc_html((string) $row['created_product_id']); ?></td><td><?php $this->render_import_queue_item_actions((int) $row['staging_item_id'], $row['readiness_status'] === 'ready_to_create_product' && empty($row['blocking_reasons'])); ?></td></tr><?php endforeach; ?>
+            </tbody></table>
+        </div>
+        <?php if ($audit['created_rows']) : ?><div class="gps-card"><h3><?php esc_html_e('Step 4 — Post-create summary', 'gps-gmail-product-importer'); ?></h3><table class="widefat striped"><thead><tr><th><?php esc_html_e('Staging → product', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Title / SKU', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Images', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Fixed category / price empty', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Links', 'gps-gmail-product-importer'); ?></th></tr></thead><tbody><?php foreach ($audit['created_rows'] as $row) : ?><tr><td><?php echo esc_html($row['staging_item_id'] . ' → ' . $row['created_product_id']); ?></td><td><?php echo esc_html($row['gmail_subject']); ?><br><code><?php echo esc_html($this->product_sku((int) $row['created_product_id'])); ?></code></td><td><?php echo esc_html((string) $row['image_count']); ?></td><td><?php echo esc_html($row['fixed_category_label'] . ' / ' . ($row['price_empty'] ? 'empty price' : 'priced')); ?></td><td><a href="<?php echo esc_url(get_edit_post_link((int) $row['created_product_id'])); ?>"><?php esc_html_e('Edit Woo product', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(admin_url('admin.php?page=gpswiss-ovoko-integration&product_id=' . absint($row['created_product_id']))); ?>"><?php esc_html_e('Preview Woo → Ovoko CRM-only import payload', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => (int) $row['staging_item_id']), admin_url('admin.php'))); ?>"><?php esc_html_e('View Import Queue item', 'gps-gmail-product-importer'); ?></a></td></tr><?php endforeach; ?></tbody></table><p class="description"><?php esc_html_e('No automatic live Ovoko import is run from this dashboard.', 'gps-gmail-product-importer'); ?></p></div><?php endif; ?>
+        <hr>
+        <?php
+    }
+
+    private function bulk_dashboard_settings_summary($settings)
+    {
+        $fixed = $this->fixed_import_category_settings();
+        $rows = array(
+            array('label' => 'Gmail label', 'value' => (string) ($settings['gmail_label'] ?? '')),
+            array('label' => 'Gmail status filter', 'value' => (string) ($settings['message_status_filter'] ?? '')),
+            array('label' => 'Fixed Ovoko category enabled', 'value' => !empty($fixed['enabled']) ? 'yes' : 'no'),
+            array('label' => 'Fixed category ID/name', 'value' => trim((string) ($fixed['category_id'] ?? '') . ' / ' . (string) ($fixed['category_name'] ?? ''), ' /')),
+            array('label' => 'Empty price allowed', 'value' => !empty($settings['allow_empty_price_for_fixed_category_crm_only_import']) ? 'yes' : 'no'),
+            array('label' => 'Product status default', 'value' => 'draft'),
+            array('label' => 'Image import enabled', 'value' => !empty($settings['import_images']) ? 'yes' : 'no'),
+            array('label' => 'Duplicate protection enabled', 'value' => !empty($settings['duplicate_protection']) ? 'yes' : 'no'),
+        );
+        $warnings = array();
+        if (!empty($fixed['enabled']) && empty($fixed['configured'])) { $warnings[] = 'Fixed category is enabled but category ID is empty.'; }
+        if (empty($settings['allow_empty_price_for_fixed_category_crm_only_import'])) { $warnings[] = 'Empty price is not allowed; CRM-only fixed-category no-price drafts will be blocked.'; }
+        if ((string) ($settings['message_status_filter'] ?? '') !== 'unread') { $warnings[] = 'Gmail filter is not set to unread.'; }
+        if (empty($settings['import_images'])) { $warnings[] = 'Image import is disabled.'; }
+        if (empty($settings['duplicate_protection'])) { $warnings[] = 'Duplicate protection is disabled.'; }
+        return array('rows' => $rows, 'warnings' => $warnings);
+    }
+
+    private function bulk_dashboard_audit_data($limit = 1000)
+    {
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => $limit, 'orderby' => 'modified', 'order' => 'DESC'));
+        $rows = array(); $summary = array('total_staged' => 0, 'ready' => 0, 'blocked' => 0, 'already_created' => 0, 'duplicates' => 0, 'missing_images' => 0, 'missing_part_code' => 0, 'readiness_errors' => 0); $blockers = array();
+        foreach ($ids as $id) {
+            $row = $this->bulk_dashboard_audit_row((int) $id);
+            $rows[] = $row; $summary['total_staged']++;
+            if ($row['readiness_status'] === 'ready_to_create_product' && empty($row['blocking_reasons'])) { $summary['ready']++; } else { $summary['blocked']++; }
+            if ($row['created_product_id']) { $summary['already_created']++; }
+            if (in_array('duplicate_gmail_message', $row['blocking_reasons'], true) || in_array('duplicate_oem', $row['blocking_reasons'], true)) { $summary['duplicates']++; }
+            if (in_array('missing_images', $row['blocking_reasons'], true)) { $summary['missing_images']++; }
+            if (in_array('missing_part_code', $row['blocking_reasons'], true)) { $summary['missing_part_code']++; }
+            if ($row['readiness_status'] === 'needs_review' || $row['readiness_status'] === 'blocked') { $summary['readiness_errors']++; }
+            foreach ($row['blocking_reasons'] as $reason) { $blockers[$reason] = ($blockers[$reason] ?? 0) + 1; }
+        }
+        return array('rows' => $rows, 'created_rows' => array_values(array_filter($rows, function ($row) { return !empty($row['created_product_id']); })), 'summary' => $summary, 'blockers_grouped' => $blockers, 'summary_cards' => array(array('label' => 'Total staged', 'count' => $summary['total_staged']), array('label' => 'Ready for Woo draft', 'count' => $summary['ready']), array('label' => 'Blocked', 'count' => $summary['blocked']), array('label' => 'Already created', 'count' => $summary['already_created']), array('label' => 'Duplicates', 'count' => $summary['duplicates']), array('label' => 'Missing images', 'count' => $summary['missing_images']), array('label' => 'Missing part code', 'count' => $summary['missing_part_code']), array('label' => 'Readiness errors', 'count' => $summary['readiness_errors'])));
+    }
+
+    private function bulk_dashboard_audit_row($item_id)
+    {
+        $post = get_post($item_id); $analysis = $this->analysis_from_staging_item($item_id); $created_product_id = absint(get_post_meta($item_id, '_gps_gmail_created_product_id', true)); $staging_status = (string) get_post_meta($item_id, '_gps_staging_status', true); $readiness = $this->woo_draft_readiness_status($analysis, $staging_status, $created_product_id); $reasons = $this->normalize_dashboard_blockers((array) ($readiness['blocking_reasons'] ?? array()), $analysis, $staging_status);
+        $fixed_id = (string) get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_id', true); $fixed_name = (string) get_post_meta($item_id, '_gps_ovoko_category_suggestion_category_name', true); $price = $this->selected_price_for_analysis($analysis); $empty_allowed = $this->fixed_import_category_empty_price_allowed($analysis);
+        return array('staging_item_id' => (int) $item_id, 'gmail_message_id' => (string) ($analysis['message_id'] ?? ''), 'gmail_date' => (string) ($analysis['date'] ?? ''), 'gmail_subject' => (string) (($analysis['subject'] ?? '') ?: ($post->post_title ?? '')), 'storage_location' => (string) ($analysis['storage_location'] ?? ''), 'part_code' => (string) (($analysis['detected_part_code'] ?? '') ?: ($analysis['normalized_part_code'] ?? '')), 'oem' => (string) (($analysis['detected_oem_part_number'] ?? '') ?: ($analysis['normalized_oem_part_number'] ?? '')), 'image_count' => absint($analysis['image_attachments_found'] ?? 0), 'fixed_category_label' => trim($fixed_id . ' / ' . $fixed_name, ' /') ?: 'not configured', 'price_status' => $empty_allowed ? ($price ? 'selected price ' . $price['price'] : 'empty price allowed') : ($price ? 'selected price ' . $price['price'] : 'no price allowed'), 'readiness_status' => (string) ($readiness['status'] ?? 'needs_review'), 'blocking_reasons' => $reasons, 'created_product_id' => $created_product_id, 'status_badge' => $created_product_id ? 'created' : ($staging_status === 'duplicate' ? 'duplicate' : ((string) ($readiness['status'] ?? '') === 'ready_to_create_product' && empty($reasons) ? 'ready' : 'needs_review')), 'suggested_action' => $this->suggested_action_for_blockers($reasons), 'notes' => (string) get_post_meta($item_id, '_gps_gmail_warnings', true), 'price_empty' => !$price);
+    }
+
+    private function normalize_dashboard_blockers($reasons, $analysis = array(), $staging_status = '')
+    {
+        $map = array('missing_detected_part_code' => 'missing_part_code', 'missing_normalized_part_code' => 'missing_part_code', 'missing_detected_oem_part_number' => 'missing_part_code', 'missing_normalized_oem_part_number' => 'missing_part_code', 'missing_images_metadata' => 'missing_images', 'fixed_import_category_not_configured' => 'fixed_category_not_configured', 'duplicate' => 'duplicate_gmail_message');
+        $out = array(); foreach ($reasons as $reason) { $out[] = $map[(string) $reason] ?? (string) $reason; }
+        if ($staging_status === 'duplicate') { $out[] = 'duplicate_gmail_message'; }
+        if (trim((string) ($analysis['duplicate_status'] ?? '')) !== '') { $out[] = (string) ($analysis['duplicate_status'] ?? ''); }
+        return array_values(array_unique(array_filter($out)));
+    }
+
+    private function suggested_action_for_blockers($reasons)
+    {
+        if (!$reasons) { return 'ready'; }
+        $actions = array(); foreach ($reasons as $reason) { if ($reason === 'missing_part_code') { $actions[] = 'add/fix part code'; } elseif ($reason === 'missing_images') { $actions[] = 'add images'; } elseif (str_contains($reason, 'duplicate')) { $actions[] = 'check duplicate'; } elseif ($reason === 'fixed_category_not_configured') { $actions[] = 'configure fixed category'; } elseif ($reason === 'product_already_created') { $actions[] = 'already created'; } else { $actions[] = 'manual review'; } }
+        return implode('; ', array_values(array_unique($actions)));
+    }
+
+    private function status_badge($type, $label)
+    {
+        $class = $type === 'ready' ? 'gps-badge-ready' : ($type === 'created' ? 'gps-badge-created' : ($type === 'error' ? 'gps-badge-error' : 'gps-badge-review'));
+        return '<span class="gps-badge ' . esc_attr($class) . '">' . esc_html($label) . '</span>';
+    }
+
+    private function format_blocker_counts($counts)
+    {
+        $parts = array(); foreach ($counts as $reason => $count) { $parts[] = $reason . ': ' . $count; } return implode(', ', $parts);
+    }
+
+    private function render_last_batch_summary($last_result)
+    {
+        if (!is_array($last_result) || empty($last_result)) { return; }
+        $keys = array('total_checked', 'total_staged', 'total_stage_updated', 'total_skipped', 'total_duplicates', 'remaining_messages');
+        echo '<p><strong>' . esc_html__('Last batch summary:', 'gps-gmail-product-importer') . '</strong> ';
+        $parts = array(); foreach ($keys as $key) { if (isset($last_result[$key])) { $parts[] = $key . '=' . (string) $last_result[$key]; } }
+        echo esc_html(implode(', ', $parts) ?: (string) ($last_result['result'] ?? 'completed')) . '</p>';
+    }
+
+    private function product_sku($product_id)
+    {
+        return (string) get_post_meta($product_id, '_sku', true);
+    }
+
+    public function handle_download_audit_csv()
+    {
+        $this->verify_admin_action();
+        $type = sanitize_key($_POST['csv_type'] ?? 'full');
+        $audit = $this->bulk_dashboard_audit_data();
+        $rows = $type === 'errors' ? array_values(array_filter($audit['rows'], function ($row) { return !empty($row['blocking_reasons']); })) : $audit['rows'];
+        $filename = 'gps-gmail-import-audit-' . ($type === 'errors' ? 'errors' : 'full') . '-' . gmdate('Ymd-His') . '.csv';
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=' . $filename);
+        $out = fopen('php://output', 'w');
+        fputcsv($out, array('staging_item_id', 'gmail_message_id', 'gmail_subject', 'storage_location', 'part_code', 'image_count', 'readiness_status', 'blocking_reasons', 'suggested_action', 'created_product_id', 'notes'));
+        foreach ($rows as $row) { fputcsv($out, array($row['staging_item_id'], $row['gmail_message_id'], $row['gmail_subject'], $row['storage_location'], $row['part_code'], $row['image_count'], $row['readiness_status'], implode('|', $row['blocking_reasons']), $row['suggested_action'], $row['created_product_id'], $row['notes'])); }
+        fclose($out);
+        exit;
     }
 
     private function render_import_queue_admin_view()
@@ -3037,7 +3204,7 @@ JS;
         if ($currency !== 'PLN') {
             return 0;
         }
-        return (float) str_replace(',', '.', (string) ($price['amount'] ?? 0));
+        return (float) str_replace(',', '.', (string) ($price['price'] ?? 0));
     }
 
     private function allegro_offer_text_matches_queries($text, $queries)
@@ -3309,7 +3476,7 @@ JS;
 
     private function create_woo_drafts_from_ready_staging($batch_size)
     {
-        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max($batch_size, 100), 'meta_query' => array(array('key' => '_gps_gmail_created_product_id', 'value' => '0'))));
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max($batch_size, 100), 'meta_query' => array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'))));
         $created = array();
         foreach ($ids as $id) {
             if (count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); })) >= $batch_size) {
@@ -3322,7 +3489,8 @@ JS;
             }
             $created[] = array('staging_item_id' => (int) $id, 'created_product_id' => absint($result['created_product_id']), 'product_status' => 'draft');
         }
-        return array('total_checked' => count($ids), 'total_products_created' => count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); })), 'items' => $created);
+        $created_count = count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); }));
+        return array('action' => 'create_woo_drafts_for_ready_items', 'total_attempted' => min((int) $batch_size, count($ids)), 'total_checked' => count($ids), 'created_count' => $created_count, 'skipped_count' => count($created) - $created_count, 'errors' => array_values(array_filter($created, function ($item) { return !empty($item['error']); })), 'created_product_ids' => array_values(array_map(function ($item) { return (int) ($item['created_product_id'] ?? 0); }, array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); }))), 'total_products_created' => $created_count, 'items' => $created, 'no_ovoko_write' => true, 'no_allegro_call' => true);
     }
 
     private function analysis_from_staging_item($id)
@@ -3397,6 +3565,8 @@ JS;
             'suggested_woo_category_confidence' => get_post_meta($id, '_gps_suggested_woo_category_confidence', true),
             'suggested_category_source' => get_post_meta($id, '_gps_suggested_category_source', true),
             'shipping_group' => get_post_meta($id, '_gps_shipping_group', true),
+            'duplicate_status' => get_post_meta($id, '_gps_duplicate_status', true),
+            'duplicate_existing_product_id' => get_post_meta($id, '_gps_duplicate_existing_product_id', true),
             'image_attachments_found' => absint(get_post_meta($id, '_gps_gmail_import_image_count', true)),
             'image_attachment_set_hash' => get_post_meta($id, '_gps_gmail_import_attachment_set_hash', true),
             'images' => json_decode((string) get_post_meta($id, '_gps_gmail_images_metadata', true), true) ?: array(),

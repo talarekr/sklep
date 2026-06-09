@@ -238,7 +238,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                     <div><strong>photo/photos count:</strong> validated from preview; <code>photo</code> and <code>photos[]</code> are required</div>
                 </div>
                 <p style="color:#b32d2e;"><strong>Placeholder car warning:</strong> if the preview uses configured placeholder <code>car_id</code>, it is allowed only for this CRM-only no-price import. Staff must correct vehicle mapping in Ovoko before publishing.</p>
-                <p><strong>Idempotency:</strong> this action blocks existing <code>_ovoko_part_id</code>, <code>ovoko_part_id</code>, <code>part_id</code>, <code>source_part_id</code>, and <code>external_part_id</code>. external_id duplicate behavior is not fully documented for importPart.</p>
+                <p><strong>Idempotency:</strong> this action blocks existing <code>_ovoko_part_id</code>, <code>ovoko_part_id</code>, <code>part_id</code>, <code>source_part_id</code>, and <code>external_part_id</code>. It also blocks retry when the last failed-classified CRM-only response contains <code>part_id</code>; use the repair/link form below instead. R202 missing price warning means “created in CRM, not visible in shop” and is not a failure for CRM-only no-price imports.</p>
                 <label><input type="checkbox" name="confirm_placeholder_car_id" value="1" required /> I understand this uses a placeholder car_id and staff must correct vehicle mapping in Ovoko before publishing.</label>
                 <label><input type="checkbox" name="confirm_live_one_product" value="1" required /> I understand this will call /crm/importPart live for one product only.</label>
                 <label><input type="checkbox" name="confirm_no_price_non_public" value="1" required /> I understand no price will be sent, so the part should not be available in e-shop according to documentation.</label>
@@ -253,6 +253,19 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 if (button) { button.disabled = !boxes.every(function (box) { return box.checked; }); }
             });
             </script>
+
+            <div style="margin-top:14px;border:1px solid #ccd0d4;padding:12px;background:#fff;">
+                <h4>Repair/link CRM-only import with existing Ovoko part_id</h4>
+                <p>Use this only when an earlier response was classified as failed but the Ovoko response contains a <code>part_id</code>. This stores the Ovoko part ID on the Woo product and does not call <code>/crm/importPart</code> again.</p>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                    <?php wp_nonce_field('gpswiss_ovoko_repair_crm_only_part_link'); ?>
+                    <input type="hidden" name="action" value="gpswiss_ovoko_repair_crm_only_part_link" />
+                    <label>product_id: <input type="number" min="1" step="1" name="product_id" value="60886" style="width:140px;" required /></label>
+                    <label>part_id: <input type="text" name="part_id" value="11055" style="width:140px;" /></label>
+                    <?php submit_button('Repair/link existing CRM part without re-import', 'secondary', 'submit', false); ?>
+                </form>
+                <p class="description">Known repairs: product 60886 → part_id 11055, product 60909 → part_id 11056. Leave part_id empty to use a recoverable part_id saved from the last response.</p>
+            </div>
         </details>
     </div>
 
