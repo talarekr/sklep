@@ -7,6 +7,7 @@ use GPSwiss\Ovoko\Services\RrrApiClient;
 
 require_once dirname(__DIR__) . '/src/Services/WooToOvokoCreatePartPreviewService.php';
 require_once dirname(__DIR__) . '/src/Services/WooToOvokoCrmOnlyImportService.php';
+require_once dirname(__DIR__) . '/src/Services/WooToOvokoCrmOnlyBatchImportService.php';
 require_once dirname(__DIR__) . '/src/Services/RrrApiClient.php';
 
 $GLOBALS['gpswiss_test_posts'] = [];
@@ -103,8 +104,33 @@ function wp_remote_head(string $url, array $args = []): array { return gpswiss_h
 function wp_remote_get(string $url, array $args = []): array { return gpswiss_http_response_for_url($url); }
 function wp_remote_retrieve_response_code(array $response): int { return (int) ($response['response']['code'] ?? 0); }
 function get_option(string $key, mixed $default = false): mixed { return $GLOBALS['gpswiss_test_options'][$key] ?? $default; }
+function update_option(string $key, mixed $value, bool $autoload = true): bool { $GLOBALS['gpswiss_test_options'][$key] = $value; return true; }
 function wp_json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false { return json_encode($value, $flags, $depth); }
-function get_posts(array $args): array { return []; }
+function get_posts(array $args): array {
+    $ids = [];
+    foreach ($GLOBALS['gpswiss_test_posts'] as $id => $post) {
+        if (($args['post_type'] ?? '') !== '' && (string) $post->post_type !== (string) $args['post_type']) { continue; }
+        $status = (string) ($args['post_status'] ?? 'any');
+        if ($status !== 'any' && (string) $post->post_status !== $status) { continue; }
+        if (isset($args['meta_key'], $args['meta_value'])) {
+            if ((string) get_post_meta((int) $id, (string) $args['meta_key'], true) !== (string) $args['meta_value']) { continue; }
+        }
+        if (isset($args['meta_query']) && is_array($args['meta_query'])) {
+            $matched = false;
+            foreach ($args['meta_query'] as $clause) {
+                if (!is_array($clause) || empty($clause['key'])) { continue; }
+                $value = (string) get_post_meta((int) $id, (string) $clause['key'], true);
+                $compare = (string) ($clause['compare'] ?? '=');
+                if ($compare === 'EXISTS' && $value !== '') { $matched = true; }
+                if ($compare === 'LIKE' && str_contains($value, (string) ($clause['value'] ?? ''))) { $matched = true; }
+            }
+            if (!$matched) { continue; }
+        }
+        $ids[] = (int) $id;
+    }
+    sort($ids);
+    return $ids;
+}
 
 function gpswiss_assert(bool $condition, string $message): void { if (!$condition) { throw new RuntimeException($message); } }
 function gpswiss_run_live_test(string $name, callable $test): void { gpswiss_reset_live_test_state(); $test(); echo "PASS {$name}\n"; }
@@ -374,4 +400,98 @@ gpswiss_run_live_test('CRM-only payload omits notes/listing text when storage lo
     gpswiss_assert($result['ok'] === true, 'Empty storage location should not block CRM-only import.');
     gpswiss_assert(!array_key_exists('notes', $payload) || trim((string) $payload['notes']) === '', 'Empty storage location must omit or empty notes/listing text.');
     gpswiss_assert(($result['preview']['listing_text_preview'] ?? '') === '' && ($result['preview']['listing_text_source'] ?? '') === '', 'Preview listing text fields should be empty when storage location is empty.');
+});
+
+gpswiss_run_live_test('batch preview finds eligible Gmail draft products', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    gpswiss_set_meta(60886, '_price', '');
+    gpswiss_set_meta(60886, '_gps_price_required_for_woo_draft', '0');
+    gpswiss_set_meta(60886, '_gps_price_required_for_crm_only_import', '0');
+    gpswiss_set_meta(60886, '_gps_empty_price_allowed_reason', 'fixed_category_crm_only_import_review_flow');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_status', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_id', '278');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_name', 'Turbina');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_source_type', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_review_required', '1');
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true]);
+    gpswiss_assert(($result['summary']['eligible'] ?? 0) === 1, 'Batch preview should find one eligible Gmail draft.', $result);
+    gpswiss_assert(($result['rows'][0]['sku'] ?? '') === 'GPS-GMAIL-60849', 'Batch row should include Gmail SKU.');
+    gpswiss_assert(($result['rows'][0]['category_id'] ?? null) === 278, 'Batch row should expose fixed category 278.');
+});
+
+gpswiss_run_live_test('batch preview excludes already imported products', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    gpswiss_set_meta(60886, '_ovoko_part_id', '11055');
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true]);
+    gpswiss_assert(($result['summary']['already_imported'] ?? 0) === 1, 'Already imported draft must be counted separately.');
+    gpswiss_assert(($result['summary']['eligible'] ?? 0) === 0, 'Already imported draft must not be eligible.');
+});
+
+gpswiss_run_live_test('batch preview reports blockers', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    gpswiss_set_meta(60886, '_thumbnail_id', '');
+    gpswiss_set_meta(60886, '_product_image_gallery', '');
+    gpswiss_set_meta(60886, '_part_number', '');
+    gpswiss_set_meta(60886, '_manufacturer_code', '');
+    gpswiss_set_meta(60886, '_mpn', '');
+    gpswiss_set_meta(60886, 'mpn', '');
+    gpswiss_set_meta(60886, '_gps_detected_part_code', '');
+    $GLOBALS['gpswiss_test_attachments'] = [];
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true]);
+    gpswiss_assert(($result['summary']['blocked'] ?? 0) === 1, 'Blocked draft should be counted.');
+    gpswiss_assert(($result['summary']['missing_images'] ?? 0) === 1, 'Missing images blocker should be counted.');
+    gpswiss_assert(($result['summary']['missing_part_code'] ?? 0) === 1, 'Missing part code blocker should be counted.');
+});
+
+gpswiss_run_live_test('batch import requires recent preview', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService([], 'gpswiss_fake_success_importer'))->import(['only_gmail_imported' => true], ['confirm_batch_crm_only_no_price' => true]);
+    gpswiss_assert($result['ok'] === false && ($result['error_code'] ?? '') === 'recent_batch_preview_required', 'Batch import must require a recent preview.');
+    gpswiss_assert($GLOBALS['gpswiss_test_import_payloads'] === [], 'Import must not call API without preview.');
+});
+
+gpswiss_run_live_test('batch import processes only eligible products', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    gpswiss_seed_valid_live_product(60909);
+    gpswiss_set_meta(60909, '_sku', 'GPS-GMAIL-60909');
+    gpswiss_set_meta(60909, '_thumbnail_id', '');
+    gpswiss_set_meta(60909, '_product_image_gallery', '');
+    (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true, 'batch_size' => 10]);
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService([], 'gpswiss_fake_success_importer'))->import(['only_gmail_imported' => true, 'batch_size' => 10], ['confirm_batch_crm_only_no_price' => true]);
+    gpswiss_assert(($result['summary']['total_attempted'] ?? 0) === 1, 'Batch import should attempt only latest-preview eligible rows.', $result);
+    gpswiss_assert(count($GLOBALS['gpswiss_test_import_payloads']) === 1, 'Only one eligible product should call importer.');
+});
+
+gpswiss_run_live_test('batch import stores R202 part_id and omits CRM-only forbidden fields', function (): void {
+    gpswiss_seed_valid_live_product(60886);
+    gpswiss_set_meta(60886, '_price', '');
+    gpswiss_set_meta(60886, '_gps_price_required_for_woo_draft', '0');
+    gpswiss_set_meta(60886, '_gps_price_required_for_crm_only_import', '0');
+    gpswiss_set_meta(60886, '_gps_empty_price_allowed_reason', 'fixed_category_crm_only_import_review_flow');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_status', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_id', '278');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_category_name', 'Turbina');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_suggestion_source_type', 'fixed_import_category_manual_review');
+    gpswiss_set_meta(60886, '_gps_ovoko_category_review_required', '1');
+    (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true, 'batch_size' => 10]);
+    $result = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService([], 'gpswiss_fake_r202_missing_price_success_importer'))->import(['only_gmail_imported' => true, 'batch_size' => 10], ['confirm_batch_crm_only_no_price' => true]);
+    $payload = $GLOBALS['gpswiss_test_import_payloads'][0] ?? [];
+    gpswiss_assert(($result['summary']['success_count'] ?? 0) === 1, 'R202 plus part_id plus missing price warning must be batch success.', $result);
+    gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '11055', 'Batch R202 success must store part_id.');
+    foreach (['price', 'original_price', 'currency', 'original_currency'] as $key) { gpswiss_assert(!array_key_exists($key, $payload), 'Batch CRM-only payload must omit ' . $key . '.'); }
+    gpswiss_assert(($payload['notes'] ?? '') === '2KNS', 'Batch CRM-only notes must contain storage location only.');
+    gpswiss_assert(!array_key_exists('internal_notes', $payload) || trim((string) $payload['internal_notes']) === '', 'Batch fixed-category CRM-only payload must omit internal_notes.');
+    gpswiss_assert(($result['endpoint_path'] ?? '') === '/crm/importPart', 'Batch import must use CRM import endpoint only.');
+});
+
+gpswiss_run_live_test('batch preview marks failed-classified part_id response as repair-needed and blocks retry', function (): void {
+    gpswiss_seed_valid_live_product(60909);
+    gpswiss_set_meta(60909, '_sku', 'GPS-GMAIL-60909');
+    gpswiss_set_meta(60909, '_gps_ovoko_crm_only_import_last_response_raw', '{"status_code":"R202","msg":"OK [WARNING] Part won\'t be shown in shop unless you fill out price field","part_id":"11056"}');
+    $preview = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService())->preview(['only_gmail_imported' => true, 'batch_size' => 10]);
+    $import = (new GPSwiss\Ovoko\Services\WooToOvokoCrmOnlyBatchImportService([], 'gpswiss_fake_success_importer'))->import(['only_gmail_imported' => true, 'batch_size' => 10], ['confirm_batch_crm_only_no_price' => true]);
+    gpswiss_assert(($preview['summary']['last_failed_import_with_part_id_repair_needed'] ?? 0) === 1, 'Recoverable part_id should be repair-needed in preview.');
+    gpswiss_assert(($preview['rows'][0]['repair_part_id'] ?? '') === '11056', 'Repair part_id should be shown in row.');
+    gpswiss_assert(($import['summary']['total_attempted'] ?? 0) === 0, 'Repair-needed rows must not be retried.');
+    gpswiss_assert($GLOBALS['gpswiss_test_import_payloads'] === [], 'Repair-needed batch row must not call importer.');
 });
