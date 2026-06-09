@@ -290,6 +290,17 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <button type="button" class="button" id="gpswiss_crm_auto_stop" disabled="disabled">Stop</button>
                 <span id="gpswiss_crm_auto_state" style="font-weight:600;">Idle</span>
             </div>
+            <div style="margin-top:12px;border:1px solid #c3c4c7;background:#fff;padding:10px;">
+                <h4 style="margin-top:0;">Diagnostics</h4>
+                <p style="margin-top:0;">Use these one-step AJAX diagnostics in order: preflight, find candidate, preview one, live import one, then batch size 1 / max batches 1.</p>
+                <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                    <button type="button" class="button" id="gpswiss_crm_diag_find_candidate">Find first eligible candidate</button>
+                    <label>Product ID for Preview one <input id="gpswiss_crm_diag_preview_product_id" type="number" min="1" value="" style="width:140px;" /></label>
+                    <button type="button" class="button" id="gpswiss_crm_diag_preview_one">Preview one product</button>
+                    <label>Product ID for Live one <input id="gpswiss_crm_diag_live_product_id" type="number" min="1" value="" style="width:140px;" /></label>
+                    <button type="button" class="button" id="gpswiss_crm_diag_live_one">Live import one product</button>
+                </div>
+            </div>
             <div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
                 <div>Current batch number: <strong data-crm-k="current_batch_number">0</strong></div>
                 <div>Last batch attempted: <strong data-crm-k="last_batch_attempted">0</strong></div>

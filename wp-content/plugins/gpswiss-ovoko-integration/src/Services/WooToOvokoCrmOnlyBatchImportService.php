@@ -17,36 +17,121 @@ class WooToOvokoCrmOnlyBatchImportService
 
     public function run_one_batch(array $args): array
     {
+        $startedAt = microtime(true);
         $mode = (string) ($args['mode'] ?? 'live');
+        $allowedModes = ['live', 'preview', 'find_candidate', 'preview_one', 'live_one'];
+        if (!in_array($mode, $allowedModes, true)) {
+            $mode = 'live';
+        }
         $batchSize = max(1, min(50, (int) ($args['batch_size'] ?? 10)));
         $stopOnFirstError = !empty($args['stop_on_first_error']);
         $onlyGmailImported = !array_key_exists('only_gmail_imported', $args) || !empty($args['only_gmail_imported']);
         $cursor = max(0, (int) ($args['cursor'] ?? $args['after_product_id'] ?? 0));
+        $productId = max(0, (int) ($args['product_id'] ?? 0));
         $productIdFrom = max(0, (int) ($args['product_id_from'] ?? 0));
         $productIdTo = max(0, (int) ($args['product_id_to'] ?? 0));
         $createdAfter = $this->sanitize_created_after((string) ($args['created_after'] ?? ''));
         $batchNumber = max(1, (int) ($args['batch_number'] ?? 1));
 
+        $this->log_marker('CRM_ONLY_BATCH_START', [
+            'mode' => $mode,
+            'batch_number' => $batchNumber,
+        ]);
+        $this->log_marker('CRM_ONLY_BATCH_PARAMS', [
+            'mode' => $mode,
+            'batch_size' => $batchSize,
+            'cursor' => $cursor,
+            'product_id' => $productId,
+            'product_id_from' => $productIdFrom,
+            'product_id_to' => $productIdTo,
+            'created_after_present' => $createdAfter !== '',
+            'only_gmail_imported' => $onlyGmailImported,
+            'stop_on_first_error' => $stopOnFirstError,
+        ]);
+
         if ($productIdFrom > 0 && $cursor < ($productIdFrom - 1)) {
             $cursor = $productIdFrom - 1;
         }
 
-        $productIds = $this->query_candidate_product_ids($batchSize, $cursor, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        if ($mode === 'preview_one' || $mode === 'live_one') {
+            return $this->run_single_product_mode($mode, $productId, $batchNumber, $batchSize, $cursor, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter, $startedAt);
+        }
+
+        $this->log_marker('CRM_ONLY_BATCH_BEFORE_QUERY', [
+            'cursor' => $cursor,
+            'lookahead_limit' => $this->candidate_lookahead_limit($batchSize),
+        ]);
+        $candidateScanStartedAt = microtime(true);
+        $candidateScan = $this->find_candidate_product_ids($batchSize, $cursor, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        $queryMs = (int) $candidateScan['query_ms'];
+        $candidateScanMs = $this->elapsed_ms($candidateScanStartedAt);
+        $productIds = $candidateScan['ids'];
+        $this->log_marker('CRM_ONLY_BATCH_AFTER_QUERY', [
+            'query_ms' => $queryMs,
+            'raw_id_count' => count($candidateScan['raw_ids']),
+            'checked_count' => $candidateScan['checked_count'],
+            'candidate_count' => count($productIds),
+            'last_checked_product_id' => $candidateScan['last_checked_product_id'],
+            'candidate_scan_ms' => $candidateScanMs,
+        ]);
+        $this->log_marker('CRM_ONLY_BATCH_CANDIDATE_IDS', [
+            'candidate_ids' => implode(',', array_map('strval', $productIds)),
+            'checked_count' => $candidateScan['checked_count'],
+        ]);
+
+        if ($mode === 'find_candidate') {
+            $firstCandidate = isset($productIds[0]) ? (int) $productIds[0] : 0;
+            $result = [
+                'ok' => true,
+                'mode' => 'find_candidate',
+                'candidate_found' => $firstCandidate > 0,
+                'first_candidate_product_id' => $firstCandidate,
+                'checked_count' => (int) $candidateScan['checked_count'],
+                'next_cursor' => $firstCandidate > 0 ? $firstCandidate : (int) $candidateScan['last_checked_product_id'],
+                'stop_reason' => $firstCandidate > 0 ? '' : 'no_candidate_in_lookahead',
+                'query_ms' => $queryMs,
+                'candidate_scan_ms' => $candidateScanMs,
+                'total_ms' => $this->elapsed_ms($startedAt),
+            ];
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', [
+                'mode' => 'find_candidate',
+                'candidate_found' => $result['candidate_found'],
+                'checked_count' => $result['checked_count'],
+                'query_ms' => $queryMs,
+                'candidate_scan_ms' => $candidateScanMs,
+                'total_ms' => $result['total_ms'],
+            ]);
+            return $result;
+        }
+
         $result = $this->base_result($mode, $batchNumber, $batchSize, $cursor, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        $result['query_ms'] = $queryMs;
+        $result['candidate_scan_ms'] = $candidateScanMs;
+        $result['candidate_checked_count'] = (int) $candidateScan['checked_count'];
         $lastProductId = $cursor;
+        $lastCheckedProductId = (int) $candidateScan['last_checked_product_id'];
 
         foreach ($productIds as $productId) {
             $productId = (int) $productId;
             $lastProductId = max($lastProductId, $productId);
             $result['attempted']++;
 
+            $validationStartedAt = microtime(true);
+            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_START', ['product_id' => $productId]);
             if ($this->has_imported_meta($productId)) {
+                $validationMs = $this->elapsed_ms($validationStartedAt);
+                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'already_imported', 'validation_ms' => $validationMs]);
                 $result['already_imported_count']++;
                 $result['items'][] = ['product_id' => $productId, 'status' => 'already_imported'];
                 continue;
             }
+            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
 
+            $previewStartedAt = microtime(true);
+            $this->log_marker('CRM_ONLY_BATCH_PREVIEW_START', ['product_id' => $productId]);
             $preview = $this->previewService->preview($productId);
+            $previewMs = $this->elapsed_ms($previewStartedAt);
+            $this->log_marker('CRM_ONLY_BATCH_PREVIEW_DONE', ['product_id' => $productId, 'preview_ms' => $previewMs, 'would_be_eligible' => !empty($preview['would_be_eligible']), 'validation_error_count' => count((array) ($preview['validation_errors'] ?? []))]);
             $previewCodes = $this->validation_codes($preview);
             $this->add_preview_blocker_counts($result, $previewCodes);
 
@@ -77,7 +162,11 @@ class WooToOvokoCrmOnlyBatchImportService
                 continue;
             }
 
+            $importStartedAt = microtime(true);
+            $this->log_marker('CRM_ONLY_BATCH_IMPORT_START', ['product_id' => $productId]);
             $import = $this->importService->create($productId, $this->live_confirmations($preview));
+            $importMs = $this->elapsed_ms($importStartedAt);
+            $this->log_marker('CRM_ONLY_BATCH_IMPORT_DONE', ['product_id' => $productId, 'import_ms' => $importMs, 'ok' => !empty($import['ok']), 'status' => (string) ($import['status'] ?? ''), 'error_code' => (string) ($import['error_code'] ?? '')]);
             $result['imported_items'][] = $import;
             $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => !empty($import['ok']), 'part_id' => (string) ($import['part_id'] ?? '')];
 
@@ -102,22 +191,146 @@ class WooToOvokoCrmOnlyBatchImportService
         }
 
         $result['last_product_id_processed'] = $lastProductId > $cursor ? $lastProductId : 0;
-        $result['next_cursor'] = $lastProductId;
-        $result['next_product_id'] = $lastProductId;
-        $result['has_more'] = $this->has_more_candidates($lastProductId, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
-        $result['should_continue'] = $result['has_more'] && $result['attempted'] > 0 && $result['stop_reason'] === '';
+        $result['next_cursor'] = max($lastProductId, $lastCheckedProductId);
+        $result['next_product_id'] = $result['next_cursor'];
+        $hasMoreStartedAt = microtime(true);
+        $result['has_more'] = $this->has_more_candidates((int) $result['next_cursor'], $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        $result['has_more_query_ms'] = $this->elapsed_ms($hasMoreStartedAt);
+        $result['should_continue'] = $result['has_more'] && ($result['attempted'] > 0 || $lastCheckedProductId > $cursor) && $result['stop_reason'] === '';
         if ($result['attempted'] === 0) {
-            $result['stop_reason'] = 'no_eligible_products';
-            $result['should_continue'] = false;
+            $result['stop_reason'] = $result['has_more'] ? 'no_eligible_products_in_lookahead' : 'no_eligible_products';
+            $result['should_continue'] = $result['has_more'];
         } elseif (!$result['has_more'] && $result['stop_reason'] === '') {
             $result['stop_reason'] = 'no_more_candidates';
         }
         $result['ok'] = $result['failed_count'] === 0 && ($stopOnFirstError ? $result['stop_reason'] !== 'import_error_stop_on_first_error' : true);
         $result['eligible'] = $result['eligible_count'];
         $result['total_attempted'] = $result['attempted'];
+        $result['total_ms'] = $this->elapsed_ms($startedAt);
         $result['summary'] = $this->raw_summary($result);
         $result['raw_summary'] = $result['summary'];
 
+        $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', [
+            'mode' => $mode,
+            'attempted' => $result['attempted'],
+            'success_count' => $result['success_count'],
+            'failed_count' => $result['failed_count'],
+            'blocked_count' => $result['blocked_count'],
+            'query_ms' => $result['query_ms'],
+            'total_ms' => $result['total_ms'],
+            'stop_reason' => $result['stop_reason'],
+        ]);
+
+        return $result;
+    }
+
+    private function run_single_product_mode(string $mode, int $productId, int $batchNumber, int $batchSize, int $cursor, bool $onlyGmailImported, int $productIdFrom, int $productIdTo, string $createdAfter, float $startedAt): array
+    {
+        $result = $this->base_result($mode, $batchNumber, 1, $cursor, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        $result['product_id'] = $productId;
+        $result['has_more'] = false;
+        $result['should_continue'] = false;
+
+        if ($productId <= 0) {
+            $result['ok'] = false;
+            $result['failed_count'] = 1;
+            $result['stop_reason'] = 'missing_product_id';
+            $result['errors'][] = ['code' => 'missing_product_id', 'message' => 'product_id is required for ' . $mode . '.'];
+            $result['total_ms'] = $this->elapsed_ms($startedAt);
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => false, 'stop_reason' => $result['stop_reason'], 'total_ms' => $result['total_ms']]);
+            return $result;
+        }
+
+        $validationStartedAt = microtime(true);
+        $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_START', ['product_id' => $productId]);
+        $alreadyImported = $this->has_imported_meta($productId);
+        $validationMs = $this->elapsed_ms($validationStartedAt);
+        $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => $alreadyImported ? 'already_imported' : 'candidate', 'validation_ms' => $validationMs]);
+        if ($alreadyImported) {
+            $result['attempted'] = 1;
+            $result['already_imported_count'] = 1;
+            $result['items'][] = ['product_id' => $productId, 'status' => 'already_imported'];
+            $result['stop_reason'] = 'already_imported';
+            $result['total_attempted'] = 1;
+            $result['total_ms'] = $this->elapsed_ms($startedAt);
+            $result['summary'] = $this->raw_summary($result);
+            $result['raw_summary'] = $result['summary'];
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => true, 'stop_reason' => $result['stop_reason'], 'total_ms' => $result['total_ms']]);
+            return $result;
+        }
+
+        $previewStartedAt = microtime(true);
+        $this->log_marker('CRM_ONLY_BATCH_PREVIEW_START', ['product_id' => $productId]);
+        $preview = $this->previewService->preview($productId);
+        $previewMs = $this->elapsed_ms($previewStartedAt);
+        $this->log_marker('CRM_ONLY_BATCH_PREVIEW_DONE', ['product_id' => $productId, 'preview_ms' => $previewMs, 'would_be_eligible' => !empty($preview['would_be_eligible']), 'validation_error_count' => count((array) ($preview['validation_errors'] ?? []))]);
+        $previewCodes = $this->validation_codes($preview);
+        $this->add_preview_blocker_counts($result, $previewCodes);
+        $result['attempted'] = 1;
+        $result['last_product_id_processed'] = $productId;
+        $result['next_cursor'] = $productId;
+        $result['next_product_id'] = $productId;
+
+        if ($mode === 'preview_one') {
+            if (!empty($preview['would_be_eligible']) && empty($preview['validation_errors'])) {
+                $result['eligible_count'] = 1;
+            } else {
+                $result['blocked_count'] = 1;
+            }
+            $result['items'][] = $this->preview_item($productId, $preview, $previewCodes);
+            $result['preview'] = $this->preview_item($productId, $preview, $previewCodes);
+            $result['eligible'] = $result['eligible_count'];
+            $result['total_attempted'] = 1;
+            $result['preview_ms'] = $previewMs;
+            $result['total_ms'] = $this->elapsed_ms($startedAt);
+            $result['summary'] = $this->raw_summary($result);
+            $result['raw_summary'] = $result['summary'];
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'preview_ms' => $previewMs, 'total_ms' => $result['total_ms']]);
+            return $result;
+        }
+
+        if (empty($preview['would_be_eligible']) || !empty($preview['validation_errors'])) {
+            $result['ok'] = false;
+            $result['blocked_count'] = 1;
+            $result['stop_reason'] = 'preview_ineligible';
+            $result['errors'][] = ['product_id' => $productId, 'code' => 'preview_ineligible', 'message' => 'CRM-only preview is not eligible for live import.', 'validation_codes' => $previewCodes];
+            $result['items'][] = ['product_id' => $productId, 'status' => 'blocked', 'validation_codes' => $previewCodes];
+            $result['eligible'] = 0;
+            $result['total_attempted'] = 1;
+            $result['preview_ms'] = $previewMs;
+            $result['total_ms'] = $this->elapsed_ms($startedAt);
+            $result['summary'] = $this->raw_summary($result);
+            $result['raw_summary'] = $result['summary'];
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => false, 'stop_reason' => $result['stop_reason'], 'preview_ms' => $previewMs, 'total_ms' => $result['total_ms']]);
+            return $result;
+        }
+
+        $importStartedAt = microtime(true);
+        $this->log_marker('CRM_ONLY_BATCH_IMPORT_START', ['product_id' => $productId]);
+        $import = $this->importService->create($productId, $this->live_confirmations($preview));
+        $importMs = $this->elapsed_ms($importStartedAt);
+        $this->log_marker('CRM_ONLY_BATCH_IMPORT_DONE', ['product_id' => $productId, 'import_ms' => $importMs, 'ok' => !empty($import['ok']), 'status' => (string) ($import['status'] ?? ''), 'error_code' => (string) ($import['error_code'] ?? '')]);
+        $result['imported_items'][] = $import;
+        $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => !empty($import['ok']), 'part_id' => (string) ($import['part_id'] ?? '')];
+        if (!empty($import['ok'])) {
+            $result['success_count'] = 1;
+        } else {
+            $result['ok'] = false;
+            $result['failed_count'] = 1;
+            if ((string) ($import['error_code'] ?? '') === 'recoverable_part_id_blocks_retry') {
+                $result['repair_needed_count'] = 1;
+            }
+            $result['errors'][] = ['product_id' => $productId, 'code' => (string) ($import['error_code'] ?? 'import_failed'), 'message' => (string) ($import['message'] ?? 'Import failed.'), 'result' => $import];
+            $result['stop_reason'] = 'import_failed';
+        }
+        $result['eligible'] = $result['eligible_count'];
+        $result['total_attempted'] = 1;
+        $result['preview_ms'] = $previewMs;
+        $result['import_ms'] = $importMs;
+        $result['total_ms'] = $this->elapsed_ms($startedAt);
+        $result['summary'] = $this->raw_summary($result);
+        $result['raw_summary'] = $result['summary'];
+        $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => !empty($result['ok']), 'import_ms' => $importMs, 'total_ms' => $result['total_ms'], 'stop_reason' => $result['stop_reason']]);
         return $result;
     }
 
@@ -125,7 +338,7 @@ class WooToOvokoCrmOnlyBatchImportService
     {
         return [
             'ok' => true,
-            'mode' => $mode === 'preview' ? 'preview' : 'live',
+            'mode' => $mode,
             'batch_number' => $batchNumber,
             'batch_size' => $batchSize,
             'cursor' => $cursor,
@@ -160,69 +373,115 @@ class WooToOvokoCrmOnlyBatchImportService
         ];
     }
 
-    private function query_candidate_product_ids(int $limit, int $afterProductId, bool $onlyGmailImported, int $productIdFrom, int $productIdTo, string $createdAfter): array
+    private function find_candidate_product_ids(int $limit, int $afterProductId, bool $onlyGmailImported, int $productIdFrom, int $productIdTo, string $createdAfter): array
     {
-        $args = $this->query_args($limit, $afterProductId, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
-        $filter = $this->id_range_filter($afterProductId, $productIdFrom, $productIdTo);
-        add_filter('posts_where', $filter, 10, 2);
-        $ids = get_posts($args);
-        remove_filter('posts_where', $filter, 10);
+        $queryStartedAt = microtime(true);
+        $rawIds = $this->query_candidate_product_ids($this->candidate_lookahead_limit($limit), $afterProductId, $productIdFrom, $productIdTo, $createdAfter);
+        $queryMs = $this->elapsed_ms($queryStartedAt);
+        $ids = [];
+        $checkedCount = 0;
+        $lastCheckedProductId = $afterProductId;
+        foreach ($rawIds as $rawId) {
+            $productId = (int) $rawId;
+            $checkedCount++;
+            $lastCheckedProductId = max($lastCheckedProductId, $productId);
+            $validationStartedAt = microtime(true);
+            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_START', ['product_id' => $productId]);
+            if ($this->has_imported_meta($productId)) {
+                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'already_imported', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+                continue;
+            }
+            if ($onlyGmailImported && !$this->matches_gmail_imported_filter($productId)) {
+                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'not_gmail_imported', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+                continue;
+            }
+            $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+            $ids[] = $productId;
+            if (count($ids) >= $limit) {
+                break;
+            }
+        }
+
+        return [
+            'ids' => $ids,
+            'raw_ids' => $rawIds,
+            'checked_count' => $checkedCount,
+            'last_checked_product_id' => $lastCheckedProductId,
+            'query_ms' => $queryMs,
+        ];
+    }
+
+    private function candidate_lookahead_limit(int $batchSize): int
+    {
+        return max(20, min(50, max(1, $batchSize) * 10));
+    }
+
+    private function query_candidate_product_ids(int $limit, int $afterProductId, int $productIdFrom, int $productIdTo, string $createdAfter): array
+    {
+        global $wpdb;
+        $min = max($afterProductId, $productIdFrom > 0 ? $productIdFrom - 1 : 0);
+        $where = ["post_type = 'product'", "post_status = 'draft'", 'ID > %d'];
+        $params = [$min];
+        if ($productIdTo > 0) {
+            $where[] = 'ID <= %d';
+            $params[] = $productIdTo;
+        }
+        if ($createdAfter !== '') {
+            $where[] = 'post_date >= %s';
+            $params[] = $createdAfter . ' 00:00:00';
+        }
+        $params[] = max(1, min(50, $limit));
+        $sql = "SELECT ID FROM {$wpdb->posts} WHERE " . implode(' AND ', $where) . ' ORDER BY ID ASC LIMIT %d';
+        $prepared = $wpdb->prepare($sql, $params);
+        $ids = $wpdb->get_col($prepared);
         return array_values(array_map('intval', is_array($ids) ? $ids : []));
     }
 
     private function has_more_candidates(int $afterProductId, bool $onlyGmailImported, int $productIdFrom, int $productIdTo, string $createdAfter): bool
     {
-        return $this->query_candidate_product_ids(1, $afterProductId, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter) !== [];
+        $scan = $this->find_candidate_product_ids(1, $afterProductId, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
+        return $scan['ids'] !== [];
     }
 
-    private function query_args(int $limit, int $afterProductId, bool $onlyGmailImported, int $productIdFrom, int $productIdTo, string $createdAfter): array
+    private function matches_gmail_imported_filter(int $productId): bool
     {
-        $metaQuery = ['relation' => 'AND'];
-        foreach (array_merge(WooToOvokoCrmOnlyImportService::all_part_id_meta_keys(), ['_gps_ovoko_crm_only_imported_at']) as $key) {
-            $metaQuery[] = ['relation' => 'OR', ['key' => $key, 'compare' => 'NOT EXISTS'], ['key' => $key, 'value' => '', 'compare' => '=']];
+        if (trim((string) get_post_meta($productId, '_gps_gmail_import_source', true)) === 'gmail') {
+            return true;
         }
-        if ($onlyGmailImported) {
-            $metaQuery[] = [
-                'relation' => 'OR',
-                ['key' => '_gps_gmail_import_source', 'value' => 'gmail', 'compare' => '='],
-                ['key' => '_gps_source_staging_item_id', 'compare' => 'EXISTS'],
-                ['key' => '_sku', 'value' => 'GPS-GMAIL-', 'compare' => 'LIKE'],
-            ];
+        if (trim((string) get_post_meta($productId, '_gps_source_staging_item_id', true)) !== '') {
+            return true;
         }
-        $dateQuery = [];
-        if ($createdAfter !== '') {
-            $dateQuery[] = ['after' => $createdAfter . ' 00:00:00', 'inclusive' => true, 'column' => 'post_date'];
-        }
-        return [
-            'post_type' => 'product',
-            'post_status' => 'draft',
-            'fields' => 'ids',
-            'posts_per_page' => $limit,
-            'orderby' => 'ID',
-            'order' => 'ASC',
-            'no_found_rows' => true,
-            'meta_query' => $metaQuery,
-            'date_query' => $dateQuery,
-            'suppress_filters' => false,
-        ];
+        return str_contains((string) get_post_meta($productId, '_sku', true), 'GPS-GMAIL-');
     }
 
-    private function id_range_filter(int $afterProductId, int $productIdFrom, int $productIdTo): callable
+    private function elapsed_ms(float $startedAt): int
     {
-        return static function (string $where, \WP_Query $query) use ($afterProductId, $productIdFrom, $productIdTo): string {
-            global $wpdb;
-            if ($query->get('post_type') !== 'product' || $query->get('fields') !== 'ids') {
-                return $where;
+        return (int) round((microtime(true) - $startedAt) * 1000);
+    }
+
+    private function log_marker(string $marker, array $context = []): void
+    {
+        $safeContext = [];
+        foreach ($context as $key => $value) {
+            if (is_bool($value)) {
+                $safeContext[$key] = $value ? 'true' : 'false';
+            } elseif (is_int($value) || is_float($value) || $value === null) {
+                $safeContext[$key] = $value === null ? 'null' : (string) $value;
+            } elseif (is_array($value)) {
+                $safeContext[$key] = implode(',', array_map(static fn($item): string => (string) $item, $value));
+            } else {
+                $safeContext[$key] = sanitize_text_field((string) $value);
             }
-            $min = max($afterProductId, $productIdFrom > 0 ? $productIdFrom - 1 : 0);
-            if ($min > 0) {
-                $where .= $wpdb->prepare(" AND {$wpdb->posts}.ID > %d", $min);
-            }
-            if ($productIdTo > 0) {
-                $where .= $wpdb->prepare(" AND {$wpdb->posts}.ID <= %d", $productIdTo);
-            }
-            return $where;
-        };
+        }
+        if ($safeContext === []) {
+            error_log($marker);
+            return;
+        }
+        $pairs = [];
+        foreach ($safeContext as $key => $value) {
+            $pairs[] = sanitize_key((string) $key) . '=' . (string) $value;
+        }
+        error_log($marker . ' ' . implode(' ', $pairs));
     }
 
     private function sanitize_created_after(string $value): string

@@ -274,6 +274,7 @@ class AdminPage
                 'product_id_to' => isset($_POST['product_id_to']) ? (int) $_POST['product_id_to'] : 0,
                 'created_after' => isset($_POST['created_after']) ? sanitize_text_field((string) wp_unslash($_POST['created_after'])) : '',
                 'cursor' => isset($_POST['cursor']) ? (int) $_POST['cursor'] : 0,
+                'product_id' => isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0,
             ];
 
             $logMarker('CRM_ONLY_AUTORUN_REQUEST_PARAMS_SANITIZED', [
@@ -286,6 +287,7 @@ class AdminPage
                 'product_id_to' => $args['product_id_to'],
                 'created_after_present' => $args['created_after'] !== '',
                 'cursor' => $args['cursor'],
+                'product_id' => $args['product_id'],
             ]);
 
             if (check_ajax_referer('gpswiss_ovoko_crm_only_batch_import', false, false) === false) {
