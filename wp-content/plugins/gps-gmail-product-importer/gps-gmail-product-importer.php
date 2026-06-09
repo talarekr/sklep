@@ -271,6 +271,7 @@ final class GPS_Gmail_Product_Importer
             nonce: GPSGmailImporter.nonce,
             mode: $('#gps-gmail-auto-mode').val(),
             batch_size: $('#gps-gmail-auto-batch-size').val(),
+            re_audit_prepared: $('#gps-gmail-auto-reaudit-prepared').is(':checked') ? 1 : 0,
             reset: reset ? 1 : 0
         }).done(function(resp){
             var data = resp && resp.data ? resp.data : resp;
@@ -574,12 +575,13 @@ JS;
                 </label>
                 <label><strong><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></strong><br><input id="gps-gmail-auto-batch-size" type="number" min="1" max="25" value="10"></label>
                 <label><strong><?php esc_html_e('Delay between batches', 'gps-gmail-product-importer'); ?></strong><br><input id="gps-gmail-auto-delay" type="number" min="1" max="60" value="5"> <?php esc_html_e('seconds', 'gps-gmail-product-importer'); ?></label>
+                <label><input id="gps-gmail-auto-reaudit-prepared" type="checkbox" value="1"> <strong><?php esc_html_e('Re-audit already prepared items', 'gps-gmail-product-importer'); ?></strong><br><span class="description"><?php esc_html_e('Off by default: preparation audit skips staging items that already have a readiness/audit result.', 'gps-gmail-product-importer'); ?></span></label>
                 <button id="gps-gmail-auto-start" class="button button-primary"><?php esc_html_e('Start', 'gps-gmail-product-importer'); ?></button>
                 <button id="gps-gmail-auto-stop" class="button" disabled><?php esc_html_e('Stop', 'gps-gmail-product-importer'); ?></button>
             </div>
             <table class="widefat striped" style="max-width:1100px;">
                 <tbody>
-                <?php foreach (array('batches_completed', 'total_checked', 'total_staged', 'total_prepared', 'total_created', 'total_skipped', 'total_blocked', 'total_errors', 'remaining_candidates', 'state', 'stopped_reason') as $counter_key) : ?>
+                <?php foreach (array('batches_completed', 'total_checked', 'total_staged', 'total_prepared', 'total_created', 'total_skipped', 'total_blocked', 'total_errors', 'remaining_candidates', 'last_seen_staging_item_id', 'next_cursor', 'skipped_already_prepared', 'state', 'stopped_reason') as $counter_key) : ?>
                     <tr><th style="width:240px;"><?php echo esc_html($counter_key); ?></th><td><code data-gps-auto-counter="<?php echo esc_attr($counter_key); ?>"><?php echo $counter_key === 'stopped_reason' ? '-' : ($counter_key === 'state' ? 'idle' : '0'); ?></code></td></tr>
                 <?php endforeach; ?>
                     <tr><th><?php esc_html_e('last_batch_result', 'gps-gmail-product-importer'); ?></th><td><pre id="gps-gmail-auto-output" style="white-space:pre-wrap;max-height:360px;overflow:auto;margin:0;">{}</pre></td></tr>
@@ -1090,10 +1092,12 @@ JS;
         $mode = $this->sanitize_auto_runner_mode($_POST['mode'] ?? 'scan_gmail_stage');
         $batch_size = max(1, min(25, absint($_POST['batch_size'] ?? 10)));
         $reset = !empty($_POST['reset']);
+        $re_audit_prepared = !empty($_POST['re_audit_prepared']);
         $state = $reset ? $this->fresh_auto_runner_state($mode) : $this->auto_runner_state();
         if (($state['mode'] ?? '') !== $mode || !in_array((string) ($state['state'] ?? ''), array('running', 'stopping'), true)) {
             $state = $this->fresh_auto_runner_state($mode);
         }
+        $state['re_audit_prepared'] = $re_audit_prepared ? 1 : 0;
         if (($state['state'] ?? '') === 'stopping') {
             $state['state'] = 'stopped';
             $state['stopped_reason'] = $state['stopped_reason'] ?: 'admin_requested';
@@ -1134,6 +1138,10 @@ JS;
             'total_created' => 0,
             'total_blocked' => 0,
             'remaining_candidates' => 0,
+            'last_seen_staging_item_id' => 0,
+            'next_cursor' => 0,
+            'skipped_already_prepared' => 0,
+            're_audit_prepared' => 0,
             'processed_staging_item_ids' => array(),
             'processed_gmail_message_ids' => array(),
             'last_batch_result' => array(),
@@ -1237,30 +1245,56 @@ JS;
     private function run_auto_prepare_audit_batch($state, $batch_size)
     {
         $exclude = array_map('absint', (array) ($state['processed_staging_item_ids'] ?? array()));
-        $ids = $this->auto_runner_staging_candidate_ids($batch_size, $exclude, false);
+        $last_seen = absint($state['last_seen_staging_item_id'] ?? 0);
+        $re_audit_prepared = !empty($state['re_audit_prepared']);
+        $ids = $this->auto_runner_staging_candidate_ids($batch_size, $exclude, false, $last_seen, $re_audit_prepared);
+        $skipped_already_prepared = $re_audit_prepared ? 0 : $this->auto_runner_prepared_staging_count($exclude, $last_seen);
         if (!$ids) {
             $state['state'] = 'completed';
-            $state['stopped_reason'] = 'no_staging_items_remaining';
+            $state['stopped_reason'] = 'no_candidates_returned';
             $state['remaining_candidates'] = 0;
-            $state['last_batch_result'] = array('mode' => 'prepare_audit', 'items' => array(), 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
+            $state['next_cursor'] = $last_seen;
+            $state['skipped_already_prepared'] = $skipped_already_prepared;
+            $state['last_batch_result'] = array(
+                'mode' => 'prepare_audit',
+                'items' => array(),
+                'last_seen_staging_item_id' => $last_seen,
+                'next_cursor' => $last_seen,
+                'processed_this_batch_ids' => array(),
+                'skipped_already_prepared' => $skipped_already_prepared,
+                'remaining_candidates' => 0,
+                're_audit_prepared' => $re_audit_prepared,
+                'no_woo_product_created' => true,
+                'no_ovoko_live_import' => true,
+                'no_allegro_call' => true,
+                'no_ebay_call' => true,
+            );
             return $state;
         }
         $items = array();
         foreach ($ids as $id) {
             $items[] = $this->run_full_preparation_for_staging_item((int) $id);
         }
+        $processed_this_batch_ids = array_values(array_unique(array_map('absint', $ids)));
+        $next_cursor = $processed_this_batch_ids ? max($processed_this_batch_ids) : $last_seen;
+        $ready = count(array_filter($items, function ($item) { return (($item['result'] ?? '') === 'ready_to_create_product'); }));
         $blocked = count(array_filter($items, function ($item) { return (($item['result'] ?? '') !== 'ready_to_create_product'); }));
         $errors = count(array_filter($items, function ($item) { return (($item['result'] ?? '') === 'error') || !empty($item['fatal_error']); }));
-        $state['processed_staging_item_ids'] = array_values(array_unique(array_merge($exclude, array_map('absint', $ids))));
+        $state['processed_staging_item_ids'] = array_values(array_unique(array_merge($exclude, $processed_this_batch_ids)));
+        $state['last_seen_staging_item_id'] = $next_cursor;
+        $state['next_cursor'] = $next_cursor;
+        $state['skipped_already_prepared'] = $skipped_already_prepared;
         $state['batches_completed'] = absint($state['batches_completed'] ?? 0) + 1;
-        $state['total_checked'] = absint($state['total_checked'] ?? 0) + count($ids);
-        $state['total_prepared'] = absint($state['total_prepared'] ?? 0) + count($items);
+        $state['total_checked'] = absint($state['total_checked'] ?? 0) + count($processed_this_batch_ids);
+        $state['total_prepared'] = absint($state['total_prepared'] ?? 0) + $ready;
         $state['total_blocked'] = absint($state['total_blocked'] ?? 0) + $blocked;
         $state['total_errors'] = absint($state['total_errors'] ?? 0) + $errors;
-        $state['remaining_candidates'] = $this->auto_runner_staging_candidate_count($state['processed_staging_item_ids'], false);
-        $state['last_batch_result'] = array('action' => 'full_preparation_batch', 'mode' => 'prepare_audit', 'result' => 'completed', 'batch_size' => $batch_size, 'total_processed' => count($items), 'items' => $items, 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
+        $state['total_created'] = 0;
+        $state['total_products_created'] = 0;
+        $state['remaining_candidates'] = $this->auto_runner_staging_candidate_count($state['processed_staging_item_ids'], false, $next_cursor, $re_audit_prepared);
+        $state['last_batch_result'] = array('action' => 'full_preparation_batch', 'mode' => 'prepare_audit', 'result' => 'completed', 'batch_size' => $batch_size, 'total_processed' => count($items), 'items' => $items, 'last_seen_staging_item_id' => $next_cursor, 'next_cursor' => $next_cursor, 'processed_this_batch_ids' => $processed_this_batch_ids, 'skipped_already_prepared' => $skipped_already_prepared, 'remaining_candidates' => $state['remaining_candidates'], 're_audit_prepared' => $re_audit_prepared, 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
         $state['state'] = $state['remaining_candidates'] > 0 ? 'running' : 'completed';
-        $state['stopped_reason'] = $state['state'] === 'completed' ? 'no_staging_items_remaining' : '';
+        $state['stopped_reason'] = $state['state'] === 'completed' ? 'no_candidates_returned' : '';
         return $state;
     }
 
@@ -1290,22 +1324,106 @@ JS;
         return $state;
     }
 
-    private function auto_runner_staging_candidate_ids($limit, $exclude_ids = array(), $only_uncreated = false)
+    private function auto_runner_staging_candidate_ids($limit, $exclude_ids = array(), $only_uncreated = false, $after_id = 0, $include_prepared = true)
     {
-        $args = array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max(1, min(100, absint($limit))), 'orderby' => 'ID', 'order' => 'ASC');
+        $args = array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max(1, min(1000, absint($limit))), 'orderby' => 'ID', 'order' => 'ASC', 'suppress_filters' => false);
         $exclude_ids = array_values(array_filter(array_map('absint', (array) $exclude_ids)));
         if ($exclude_ids) {
             $args['post__not_in'] = $exclude_ids;
         }
+        $meta_query = array();
         if ($only_uncreated) {
-            $args['meta_query'] = array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'));
+            $meta_query[] = array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'));
         }
-        return array_map('absint', get_posts($args));
+        if (!$include_prepared) {
+            $meta_query[] = array('relation' => 'OR', array('key' => '_gps_woo_draft_readiness_checked_at', 'compare' => 'NOT EXISTS'), array('key' => '_gps_woo_draft_readiness_checked_at', 'value' => '', 'compare' => '='), array('key' => '_gps_woo_draft_readiness_status', 'compare' => 'NOT EXISTS'), array('key' => '_gps_woo_draft_readiness_status', 'value' => '', 'compare' => '='));
+        }
+        if ($meta_query) {
+            $args['meta_query'] = count($meta_query) === 1 ? $meta_query[0] : array_merge(array('relation' => 'AND'), $meta_query);
+        }
+        return array_map('absint', $this->auto_runner_staging_posts_query($args, $after_id));
     }
 
-    private function auto_runner_staging_candidate_count($exclude_ids = array(), $only_uncreated = false)
+    private function auto_runner_staging_candidate_count($exclude_ids = array(), $only_uncreated = false, $after_id = 0, $include_prepared = true)
     {
-        return count($this->auto_runner_staging_candidate_ids(1000, $exclude_ids, $only_uncreated));
+        $args = array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 1, 'orderby' => 'ID', 'order' => 'ASC', 'no_found_rows' => false, 'suppress_filters' => false);
+        $exclude_ids = array_values(array_filter(array_map('absint', (array) $exclude_ids)));
+        if ($exclude_ids) {
+            $args['post__not_in'] = $exclude_ids;
+        }
+        $meta_query = array();
+        if ($only_uncreated) {
+            $meta_query[] = array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'));
+        }
+        if (!$include_prepared) {
+            $meta_query[] = array('relation' => 'OR', array('key' => '_gps_woo_draft_readiness_checked_at', 'compare' => 'NOT EXISTS'), array('key' => '_gps_woo_draft_readiness_checked_at', 'value' => '', 'compare' => '='), array('key' => '_gps_woo_draft_readiness_status', 'compare' => 'NOT EXISTS'), array('key' => '_gps_woo_draft_readiness_status', 'value' => '', 'compare' => '='));
+        }
+        if ($meta_query) {
+            $args['meta_query'] = count($meta_query) === 1 ? $meta_query[0] : array_merge(array('relation' => 'AND'), $meta_query);
+        }
+        return $this->auto_runner_staging_posts_count($args, $after_id);
+    }
+
+    private function auto_runner_prepared_staging_count($exclude_ids = array(), $after_id = 0)
+    {
+        $args = array(
+            'post_type' => self::STAGING_POST_TYPE,
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'no_found_rows' => false,
+            'suppress_filters' => false,
+            'meta_query' => array(
+                'relation' => 'AND',
+                array('key' => '_gps_woo_draft_readiness_checked_at', 'value' => '', 'compare' => '!='),
+                array('key' => '_gps_woo_draft_readiness_status', 'value' => '', 'compare' => '!='),
+            ),
+        );
+        $exclude_ids = array_values(array_filter(array_map('absint', (array) $exclude_ids)));
+        if ($exclude_ids) {
+            $args['post__not_in'] = $exclude_ids;
+        }
+        return $this->auto_runner_staging_posts_count($args, $after_id);
+    }
+
+    private function auto_runner_staging_posts_query($args, $after_id = 0)
+    {
+        $after_id = absint($after_id);
+        $filter = function ($where) use ($after_id) {
+            global $wpdb;
+            if ($after_id > 0) {
+                $where .= $wpdb->prepare(" AND {$wpdb->posts}.ID > %d", $after_id);
+            }
+            return $where;
+        };
+        add_filter('posts_where', $filter);
+        try {
+            return get_posts($args);
+        } finally {
+            remove_filter('posts_where', $filter);
+        }
+    }
+
+    private function auto_runner_staging_posts_count($args, $after_id = 0)
+    {
+        $after_id = absint($after_id);
+        $filter = function ($where) use ($after_id) {
+            global $wpdb;
+            if ($after_id > 0) {
+                $where .= $wpdb->prepare(" AND {$wpdb->posts}.ID > %d", $after_id);
+            }
+            return $where;
+        };
+        add_filter('posts_where', $filter);
+        try {
+            $query = new WP_Query($args);
+            return absint($query->found_posts);
+        } finally {
+            remove_filter('posts_where', $filter);
+            wp_reset_postdata();
+        }
     }
 
     private function verify_admin_action()
