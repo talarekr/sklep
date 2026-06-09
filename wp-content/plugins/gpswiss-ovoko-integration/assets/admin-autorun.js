@@ -551,7 +551,8 @@ document.addEventListener('DOMContentLoaded', function () {
       repairNeeded: 0
     },
     lastProductId: 0,
-    raw: []
+    logRows: [],
+    technical: {}
   };
   function fieldNumber(id, fallback) {
     const el = document.getElementById(id);
@@ -566,17 +567,73 @@ document.addEventListener('DOMContentLoaded', function () {
     const el = document.getElementById(id);
     return !!(el && el.checked);
   }
+  function nowIso() { return new Date().toISOString(); }
   function setStatus(text) { if (stateEl) { stateEl.textContent = text; } }
   function setK(key, value) {
     root.querySelectorAll('[data-crm-k="' + key + '"]').forEach(function (el) { el.textContent = String(value); });
   }
-  function nowIso() { return new Date().toISOString(); }
-  function addLog(row) {
-    if (!logEl) { return; }
-    const div = document.createElement('div');
-    div.textContent = '[' + row.timestamp + '] batch=' + row.batch_number + ' attempted=' + row.attempted + ' success=' + row.success_count + ' failed=' + row.failed_count + ' blocked=' + row.blocked_count + ' already=' + row.already_imported_count + ' stop=' + (row.stop_reason || '') + ' errors=' + (row.error_summary || '');
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
+  function toInt(value) {
+    const n = parseInt(value === undefined || value === null || value === '' ? '0' : String(value), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function firstNumber(obj, keys) {
+    for (let i = 0; i < keys.length; i++) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, keys[i])) { return toInt(obj[keys[i]]); }
+    }
+    return 0;
+  }
+  function firstValue(obj, keys, fallback) {
+    for (let i = 0; i < keys.length; i++) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, keys[i]) && obj[keys[i]] !== undefined && obj[keys[i]] !== null && obj[keys[i]] !== '') { return obj[keys[i]]; }
+    }
+    return fallback;
+  }
+  function toBool(value) {
+    if (value === true || value === 1 || value === '1') { return true; }
+    if (value === false || value === 0 || value === '0' || value === 'false' || value === 'no') { return false; }
+    return !!value;
+  }
+  function settingsSnapshot() {
+    return {
+      batch_size: Math.max(1, Math.min(50, fieldNumber('gpswiss_crm_auto_batch_size', 10))),
+      delay: Math.max(0, fieldNumber('gpswiss_crm_auto_delay', 4000)),
+      max_batches: Math.max(0, fieldNumber('gpswiss_crm_auto_max_batches', 50)),
+      dry_run: checked('gpswiss_crm_auto_preview_only'),
+      only_gmail_imported: checked('gpswiss_crm_auto_only_gmail'),
+      stop_on_first_error: checked('gpswiss_crm_auto_stop_on_first_error')
+    };
+  }
+  function detailsBase(settings) {
+    return {
+      started_at: nowIso(),
+      settings: settings || {},
+      last_request_payload: {},
+      last_http_status: null,
+      last_raw_response_excerpt: null,
+      last_parsed_response: null,
+      last_normalized_batch: null,
+      last_error: null
+    };
+  }
+  function renderDetails() {
+    if (rawEl) { rawEl.textContent = JSON.stringify(state.technical, null, 2); }
+  }
+  function addLog(message, extra) {
+    const text = '[' + nowIso() + '] ' + message;
+    state.logRows.push(extra ? { message: message, details: extra, timestamp: nowIso() } : { message: message, timestamp: nowIso() });
+    if (logEl) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+  function setError(stopReason, message, extra) {
+    state.technical.stop_reason = stopReason;
+    state.technical.last_error = Object.assign({ stop_reason: stopReason, message: message }, extra || {});
+    renderDetails();
+    addLog('Runner stopped because of error: ' + message);
+    stop(stopReason, true);
   }
   function updateSummary(last) {
     setK('current_batch_number', state.batchNumber);
@@ -592,9 +649,10 @@ document.addEventListener('DOMContentLoaded', function () {
     setK('total_repair_needed', state.totals.repairNeeded);
     setK('last_product_id_processed', state.lastProductId || 0);
     setK('remaining_estimate', last && last.has_more ? 'has more' : 'none/unknown');
-    if (rawEl) { rawEl.textContent = JSON.stringify(state.raw, null, 2); }
+    renderDetails();
   }
   function reset() {
+    const settings = settingsSnapshot();
     state.running = true;
     state.stopped = false;
     state.inFlight = false;
@@ -602,10 +660,18 @@ document.addEventListener('DOMContentLoaded', function () {
     state.cursor = Math.max(0, fieldNumber('gpswiss_crm_auto_product_id_from', 0) - 1);
     state.totals = { attempted: 0, success: 0, failed: 0, alreadyImported: 0, blocked: 0, missingImages: 0, missingPartCode: 0, missingCategory: 0, repairNeeded: 0 };
     state.lastProductId = 0;
-    state.raw = [];
+    state.logRows = [];
+    state.technical = detailsBase(settings);
     if (logEl) { logEl.innerHTML = ''; }
-    if (rawEl) { rawEl.textContent = ''; }
+    renderDetails();
     updateSummary(null);
+    addLog('Auto-runner started');
+    addLog('Settings: batch_size=' + settings.batch_size + ', delay=' + settings.delay + ', max_batches=' + settings.max_batches + ', dry_run=' + (settings.dry_run ? 'true' : 'false') + ', only_gmail_imported=' + (settings.only_gmail_imported ? 'true' : 'false') + ', stop_on_first_error=' + (settings.stop_on_first_error ? 'true' : 'false'));
+  }
+  function payloadObject(fd) {
+    const out = {};
+    fd.forEach(function (value, key) { out[key] = value; });
+    return out;
   }
   function bodyForNextBatch() {
     const fd = new URLSearchParams();
@@ -622,59 +688,150 @@ document.addEventListener('DOMContentLoaded', function () {
     fd.set('cursor', String(state.cursor || 0));
     return fd;
   }
-  function stop(reason) {
+  function stop(reason, alreadyLogged) {
     state.running = false;
     state.stopped = true;
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
+    state.inFlight = false;
+    if (startBtn) { startBtn.disabled = false; }
+    if (stopBtn) { stopBtn.disabled = true; }
+    state.technical.stop_reason = reason;
+    renderDetails();
     setStatus('Stopped: ' + reason);
+    if (!alreadyLogged) { addLog('Runner stopped: stop_reason=' + reason); }
+  }
+  function friendlyHttpMessage(status) {
+    if (status === 503) { return 'Server returned 503 Service Unavailable. Reduce batch size or increase delay and try again.'; }
+    if (status === 500 || status === 502 || status === 504) { return 'Server returned HTTP ' + status + '. Reduce batch size or increase delay and try again.'; }
+    return 'AJAX request failed with HTTP ' + status + '.';
+  }
+  function normalizeBatch(res) {
+    const normalized = {
+      ok: res && Object.prototype.hasOwnProperty.call(res, 'ok') ? !!res.ok : true,
+      batch_number: firstNumber(res, ['batch_number']) || (state.batchNumber + 1),
+      attempted: firstNumber(res, ['attempted', 'total_attempted']),
+      success_count: firstNumber(res, ['success_count', 'success', 'total_success']),
+      failed_count: firstNumber(res, ['failed_count', 'failed', 'total_failed']),
+      blocked_count: firstNumber(res, ['blocked_count', 'blocked', 'total_blocked']),
+      already_imported_count: firstNumber(res, ['already_imported_count', 'already_imported', 'total_already_imported']),
+      missing_images_count: firstNumber(res, ['missing_images_count']),
+      missing_part_code_count: firstNumber(res, ['missing_part_code_count']),
+      missing_category_count: firstNumber(res, ['missing_category_count']),
+      repair_needed_count: firstNumber(res, ['repair_needed_count']),
+      next_cursor: firstNumber(res, ['next_cursor', 'next_product_id']),
+      next_product_id: firstNumber(res, ['next_product_id', 'next_cursor']),
+      last_product_id_processed: firstNumber(res, ['last_product_id_processed', 'next_product_id', 'next_cursor']),
+      has_more: toBool(firstValue(res, ['has_more'], false)),
+      should_continue: toBool(firstValue(res, ['should_continue'], false)),
+      stop_reason: String(firstValue(res, ['stop_reason', 'stopped_reason'], '')),
+      errors: Array.isArray(res && res.errors) ? res.errors : [],
+      items: Array.isArray(res && res.items) ? res.items : []
+    };
+    return normalized;
+  }
+  async function requestBatch(fd, batchNumber) {
+    state.technical.last_request_payload = payloadObject(fd);
+    state.technical.last_http_status = null;
+    state.technical.last_raw_response_excerpt = null;
+    state.technical.last_parsed_response = null;
+    state.technical.last_normalized_batch = null;
+    state.technical.last_error = null;
+    renderDetails();
+    addLog('Sending AJAX request to admin-ajax.php');
+    const response = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fd.toString() });
+    state.technical.last_http_status = response.status;
+    if (response.ok) { addLog('AJAX response received: HTTP ' + response.status); } else { addLog('AJAX error: HTTP ' + response.status); }
+    const text = await response.text();
+    state.technical.last_raw_response_excerpt = text.slice(0, 1000);
+    addLog('AJAX response text received: ' + text.length + ' chars');
+    renderDetails();
+    if (text === '') {
+      setError(response.ok ? 'empty_response' : 'ajax_http_error', response.ok ? 'Empty AJAX response body.' : friendlyHttpMessage(response.status), { http_status: response.status });
+      return null;
+    }
+    addLog('Before JSON.parse');
+    let json = null;
+    let parseError = null;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      parseError = e;
+    }
+    if (json !== null) {
+      state.technical.last_parsed_response = json;
+      addLog('JSON parsed successfully');
+    }
+    const hasWpWrapper = !!(json && Object.prototype.hasOwnProperty.call(json, 'success') && Object.prototype.hasOwnProperty.call(json, 'data'));
+    if (json !== null) { addLog('WordPress success wrapper detected: ' + (hasWpWrapper ? 'true' : 'false')); }
+    let unwrapped = json;
+    if (hasWpWrapper) {
+      unwrapped = json.data || {};
+      addLog('WordPress response.data unwrapped');
+    }
+    if (!response.ok) {
+      setError('ajax_http_error', friendlyHttpMessage(response.status), { http_status: response.status, parsed_response: json, raw_response_excerpt: text.slice(0, 1000) });
+      return null;
+    }
+    if (parseError) {
+      setError('non_json_response', 'AJAX response was not JSON. First 1000 characters are shown in Technical details.', { http_status: response.status, raw_response_excerpt: text.slice(0, 1000) });
+      return null;
+    }
+    if (hasWpWrapper && json.success === false) {
+      const msg = String((unwrapped && (unwrapped.message || unwrapped.error)) || 'WordPress AJAX endpoint returned success=false.');
+      setError(String((unwrapped && unwrapped.stop_reason) || 'wordpress_ajax_error'), msg, { http_status: response.status, parsed_response: json });
+      return null;
+    }
+    const normalized = normalizeBatch(unwrapped || {});
+    state.technical.last_normalized_batch = normalized;
+    renderDetails();
+    addLog('Batch #' + batchNumber + ' result: attempted=' + normalized.attempted + ', success=' + normalized.success_count + ', failed=' + normalized.failed_count + ', blocked=' + normalized.blocked_count + ', already_imported=' + normalized.already_imported_count);
+    return normalized;
   }
   async function runNext() {
     if (!state.running || state.stopped || state.inFlight) { return; }
     const maxBatches = fieldNumber('gpswiss_crm_auto_max_batches', 50);
     if (maxBatches > 0 && state.batchNumber >= maxBatches) { stop('max_batches_reached'); return; }
+    const nextBatch = state.batchNumber + 1;
     state.inFlight = true;
-    setStatus('Running batch ' + (state.batchNumber + 1) + '...');
+    setStatus('Running batch ' + nextBatch + '...');
+    addLog('Preparing AJAX request for batch #' + nextBatch);
+    const fd = bodyForNextBatch();
     let res;
     try {
-      const response = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: bodyForNextBatch().toString() });
-      res = await response.json().catch(function () { return { ok: false, error: 'invalid_json' }; });
-      if (!response.ok) { throw new Error('HTTP ' + response.status); }
-      if (res && res.success === false) { throw new Error((res.data && res.data.message) || 'ajax_error'); }
+      res = await requestBatch(fd, nextBatch);
     } catch (e) {
-      state.inFlight = false;
-      addLog({ timestamp: nowIso(), batch_number: state.batchNumber + 1, attempted: 0, success_count: 0, failed_count: 1, blocked_count: 0, already_imported_count: 0, stop_reason: 'ajax_error', error_summary: String(e && e.message ? e.message : e) });
-      stop('ajax_error');
+      setError('ajax_fetch_error', String(e && e.message ? e.message : e), { batch_number: nextBatch });
       return;
+    } finally {
+      state.inFlight = false;
     }
-    state.inFlight = false;
+    if (!res) { return; }
     state.batchNumber += 1;
-    state.cursor = parseInt(res.next_cursor || res.next_product_id || state.cursor || 0, 10) || state.cursor;
-    state.lastProductId = parseInt(res.last_product_id_processed || state.cursor || 0, 10) || state.lastProductId;
-    state.totals.attempted += parseInt(res.attempted || 0, 10);
-    state.totals.success += parseInt(res.success_count || 0, 10);
-    state.totals.failed += parseInt(res.failed_count || 0, 10);
-    state.totals.alreadyImported += parseInt(res.already_imported_count || 0, 10);
-    state.totals.blocked += parseInt(res.blocked_count || 0, 10);
-    state.totals.missingImages += parseInt(res.missing_images_count || 0, 10);
-    state.totals.missingPartCode += parseInt(res.missing_part_code_count || 0, 10);
-    state.totals.missingCategory += parseInt(res.missing_category_count || 0, 10);
-    state.totals.repairNeeded += parseInt(res.repair_needed_count || 0, 10);
-    state.raw.push(res);
-    const errorSummary = (res.errors || []).slice(0, 3).map(function (e) { return (e.product_id || '') + ':' + (e.code || e.message || 'error'); }).join('; ');
-    addLog({ timestamp: nowIso(), batch_number: state.batchNumber, attempted: res.attempted || 0, success_count: res.success_count || 0, failed_count: res.failed_count || 0, blocked_count: res.blocked_count || 0, already_imported_count: res.already_imported_count || 0, stop_reason: res.stop_reason || '', error_summary: errorSummary });
+    state.cursor = res.next_cursor || res.next_product_id || state.cursor || 0;
+    state.lastProductId = res.last_product_id_processed || state.cursor || state.lastProductId;
+    state.totals.attempted += res.attempted;
+    state.totals.success += res.success_count;
+    state.totals.failed += res.failed_count;
+    state.totals.alreadyImported += res.already_imported_count;
+    state.totals.blocked += res.blocked_count;
+    state.totals.missingImages += res.missing_images_count;
+    state.totals.missingPartCode += res.missing_part_code_count;
+    state.totals.missingCategory += res.missing_category_count;
+    state.totals.repairNeeded += res.repair_needed_count;
     updateSummary(res);
-    if (!res.should_continue || !res.has_more || parseInt(res.attempted || 0, 10) === 0) { stop(res.stop_reason || 'complete'); return; }
-    if (checked('gpswiss_crm_auto_stop_on_first_error') && ((res.failed_count || 0) > 0 || (res.errors || []).length > 0)) { stop('stop_on_first_error'); return; }
-    setStatus('Waiting ' + fieldNumber('gpswiss_crm_auto_delay', 4000) + ' ms...');
-    window.setTimeout(runNext, Math.max(0, fieldNumber('gpswiss_crm_auto_delay', 4000)));
+    if (!res.ok && res.stop_reason) { setError(res.stop_reason, 'Batch returned ok=false.', { normalized_batch: res }); return; }
+    if (!res.should_continue || !res.has_more || res.attempted === 0) { stop(res.stop_reason || 'complete'); return; }
+    if (checked('gpswiss_crm_auto_stop_on_first_error') && (res.failed_count > 0 || res.errors.length > 0)) { stop('stop_on_first_error'); return; }
+    const delay = Math.max(0, fieldNumber('gpswiss_crm_auto_delay', 4000));
+    setStatus('Waiting ' + delay + ' ms...');
+    window.setTimeout(runNext, delay);
   }
   startBtn && startBtn.addEventListener('click', function () {
     reset();
     startBtn.disabled = true;
-    stopBtn.disabled = false;
+    if (stopBtn) { stopBtn.disabled = false; }
     runNext();
   });
   stopBtn && stopBtn.addEventListener('click', function () { stop('user_stop'); });
+  state.technical = detailsBase(settingsSnapshot());
   updateSummary(null);
 }());
