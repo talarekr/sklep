@@ -116,6 +116,10 @@ class WooToOvokoCrmOnlyBatchImportService
         $result['candidate_checked_count'] = (int) $candidateScan['checked_count'];
         $result['skipped_counts'] = $candidateScan['skipped_counts'];
         $result['already_imported_count'] = (int) $candidateScan['skipped_counts']['skipped_already_imported'];
+        foreach ((array) ($candidateScan['skipped_recoverable_items'] ?? []) as $skippedItem) {
+            $result['items'][] = $skippedItem;
+            $result['repair_needed_count']++;
+        }
         $lastProductId = $cursor;
         $lastCheckedProductId = (int) $candidateScan['last_checked_product_id'];
         $stoppedBeforeScanExhausted = false;
@@ -132,6 +136,15 @@ class WooToOvokoCrmOnlyBatchImportService
                 $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'already_imported', 'validation_ms' => $validationMs]);
                 $result['already_imported_count']++;
                 $result['items'][] = ['product_id' => $productId, 'status' => 'already_imported'];
+                continue;
+            }
+            $recoverableState = $this->recoverable_retry_blocked_state($productId);
+            if (!empty($recoverableState['blocked'])) {
+                $validationMs = $this->elapsed_ms($validationStartedAt);
+                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_recoverable', 'recoverable_part_id' => (string) ($recoverableState['recoverable_part_id'] ?? ''), 'validation_ms' => $validationMs]);
+                $result['repair_needed_count']++;
+                $result['skipped_counts']['skipped_recoverable_retry_blocked']++;
+                $result['items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
                 continue;
             }
             $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
@@ -286,6 +299,21 @@ class WooToOvokoCrmOnlyBatchImportService
             return $result;
         }
 
+        $recoverableState = $this->recoverable_retry_blocked_state($productId);
+        if (!empty($recoverableState['blocked'])) {
+            $result['attempted'] = 1;
+            $result['repair_needed_count'] = 1;
+            $result['skipped_counts']['skipped_recoverable_retry_blocked'] = 1;
+            $result['items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
+            $result['stop_reason'] = 'recoverable_retry_blocked';
+            $result['total_attempted'] = 1;
+            $result['total_ms'] = $this->elapsed_ms($startedAt);
+            $result['summary'] = $this->raw_summary($result);
+            $result['raw_summary'] = $result['summary'];
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => true, 'stop_reason' => $result['stop_reason'], 'total_ms' => $result['total_ms']]);
+            return $result;
+        }
+
         $previewStartedAt = microtime(true);
         $this->log_marker('CRM_ONLY_BATCH_PREVIEW_START', ['product_id' => $productId]);
         $preview = $this->previewService->preview($productId);
@@ -408,6 +436,7 @@ class WooToOvokoCrmOnlyBatchImportService
         $ids = [];
         $checkedCount = 0;
         $lastCheckedProductId = $afterProductId;
+        $skippedRecoverableItems = [];
         $skippedCounts = $this->empty_skipped_counts();
         $skippedCounts['found_gps_gmail_drafts'] = count($rawIds);
 
@@ -422,6 +451,13 @@ class WooToOvokoCrmOnlyBatchImportService
                 $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'already_imported', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
                 continue;
             }
+            $recoverableState = $this->recoverable_retry_blocked_state($productId);
+            if (!empty($recoverableState['blocked'])) {
+                $skippedCounts['skipped_recoverable_retry_blocked']++;
+                $skippedRecoverableItems[] = $this->recoverable_skipped_item($productId, $recoverableState);
+                $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_recoverable', 'recoverable_part_id' => (string) ($recoverableState['recoverable_part_id'] ?? ''), 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+                continue;
+            }
             $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'gps_gmail_candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
             $ids[] = $productId;
         }
@@ -433,6 +469,7 @@ class WooToOvokoCrmOnlyBatchImportService
             'last_checked_product_id' => $lastCheckedProductId,
             'query_ms' => $queryMs,
             'skipped_counts' => $skippedCounts,
+            'skipped_recoverable_items' => $skippedRecoverableItems,
         ];
     }
 
@@ -441,6 +478,12 @@ class WooToOvokoCrmOnlyBatchImportService
         $eligibleIds = [];
         foreach ((array) ($candidateScan['ids'] ?? []) as $productId) {
             $productId = (int) $productId;
+            $recoverableState = $this->recoverable_retry_blocked_state($productId);
+            if (!empty($recoverableState['blocked'])) {
+                $candidateScan['skipped_counts']['skipped_recoverable_retry_blocked']++;
+                $candidateScan['skipped_recoverable_items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
+                continue;
+            }
             $previewStartedAt = microtime(true);
             $this->log_marker('CRM_ONLY_BATCH_PREVIEW_START', ['product_id' => $productId, 'phase' => 'find_candidate']);
             $preview = $this->previewService->preview($productId);
@@ -466,6 +509,7 @@ class WooToOvokoCrmOnlyBatchImportService
         return [
             'found_gps_gmail_drafts' => 0,
             'skipped_already_imported' => 0,
+            'skipped_recoverable_retry_blocked' => 0,
             'skipped_missing_images' => 0,
             'skipped_missing_part_code' => 0,
             'skipped_other_blocked' => 0,
@@ -482,6 +526,10 @@ class WooToOvokoCrmOnlyBatchImportService
         if ((int) ($counts['skipped_already_imported'] ?? 0) >= $found) {
             return 'all_gps_gmail_already_imported';
         }
+        if ((int) ($counts['skipped_recoverable_retry_blocked'] ?? 0) > 0
+            && ((int) ($counts['skipped_already_imported'] ?? 0) + (int) ($counts['skipped_recoverable_retry_blocked'] ?? 0)) >= $found) {
+            return 'only_recoverable_or_blocked_candidates_found';
+        }
         if ((int) ($counts['skipped_missing_images'] ?? 0) > 0) {
             return 'gps_gmail_blocked_missing_images';
         }
@@ -496,7 +544,7 @@ class WooToOvokoCrmOnlyBatchImportService
 
     private function candidate_lookahead_limit(int $batchSize): int
     {
-        return max(20, min(50, max(1, $batchSize) * 10));
+        return 50;
     }
 
     private function query_candidate_product_ids(int $limit, int $afterProductId, int $productIdFrom, int $productIdTo, string $createdAfter): array
@@ -624,6 +672,107 @@ class WooToOvokoCrmOnlyBatchImportService
         if (array_intersect($codes, ['recoverable_part_id_blocks_retry', 'existing_ovoko_part_id']) !== []) {
             $result['repair_needed_count']++;
         }
+    }
+
+
+    private function recoverable_retry_blocked_state(int $productId): array
+    {
+        $state = [
+            'blocked' => false,
+            'error_code' => '',
+            'recoverable_part_id' => '',
+            'message' => '',
+            'source' => '',
+        ];
+
+        $lastError = $this->decode_json_meta($productId, '_gps_ovoko_crm_only_import_last_error');
+        $lastErrorCode = trim((string) ($lastError['code'] ?? $lastError['error_code'] ?? ''));
+        $lastErrorMessage = trim((string) ($lastError['message'] ?? ''));
+        if ($lastErrorCode === 'recoverable_part_id_blocks_retry') {
+            $state['blocked'] = true;
+            $state['error_code'] = $lastErrorCode;
+            $state['message'] = $lastErrorMessage;
+            $state['source'] = '_gps_ovoko_crm_only_import_last_error';
+        }
+        $lastErrorRecoverablePartId = trim((string) ($lastError['recoverable_part_id'] ?? ''));
+        if ($lastErrorRecoverablePartId !== '') {
+            $state['blocked'] = true;
+            $state['recoverable_part_id'] = $lastErrorRecoverablePartId;
+            $state['source'] = $state['source'] !== '' ? $state['source'] : '_gps_ovoko_crm_only_import_last_error';
+        }
+
+        $storedRecoverablePartId = trim((string) get_post_meta($productId, '_gps_ovoko_crm_only_import_recoverable_part_id', true));
+        if ($storedRecoverablePartId !== '') {
+            $state['blocked'] = true;
+            $state['recoverable_part_id'] = $storedRecoverablePartId;
+            $state['source'] = $state['source'] !== '' ? $state['source'] : '_gps_ovoko_crm_only_import_recoverable_part_id';
+        }
+
+        $lastResponse = $this->decode_json_meta($productId, '_gps_ovoko_crm_only_import_last_response_raw');
+        if ($lastResponse !== []) {
+            $responsePartId = $this->extract_part_id_from_decoded_response($lastResponse);
+            if ($responsePartId !== '') {
+                $state['blocked'] = true;
+                $state['recoverable_part_id'] = $state['recoverable_part_id'] !== '' ? $state['recoverable_part_id'] : $responsePartId;
+                $state['source'] = $state['source'] !== '' ? $state['source'] : '_gps_ovoko_crm_only_import_last_response_raw';
+            }
+        }
+
+        $haystack = strtolower($lastErrorMessage . ' ' . wp_json_encode($lastResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if ($haystack !== ' ' && str_contains($haystack, 'already contains part_id')) {
+            $state['blocked'] = true;
+            $state['source'] = $state['source'] !== '' ? $state['source'] : 'already_contains_part_id_message';
+        }
+
+        if (!empty($state['blocked']) && $state['message'] === '') {
+            $state['message'] = 'needs manual repair/link or stale recoverable clear';
+        }
+        if (!empty($state['blocked']) && $state['error_code'] === '') {
+            $state['error_code'] = 'recoverable_part_id_blocks_retry';
+        }
+
+        return $state;
+    }
+
+    private function decode_json_meta(int $productId, string $metaKey): array
+    {
+        $raw = trim((string) get_post_meta($productId, $metaKey, true));
+        if ($raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function extract_part_id_from_decoded_response(array $decoded): string
+    {
+        $candidates = [
+            $decoded['recoverable_part_id'] ?? null,
+            $decoded['part_id'] ?? null,
+            $decoded['id'] ?? null,
+            $decoded['data']['recoverable_part_id'] ?? null,
+            $decoded['data']['part_id'] ?? null,
+            $decoded['data']['id'] ?? null,
+        ];
+        foreach ($candidates as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate !== '') {
+                return function_exists('sanitize_text_field') ? sanitize_text_field($candidate) : $candidate;
+            }
+        }
+        return '';
+    }
+
+    private function recoverable_skipped_item(int $productId, array $state): array
+    {
+        return [
+            'product_id' => $productId,
+            'status' => 'repair_needed',
+            'skip_reason' => 'skipped_recoverable_retry_blocked',
+            'error_code' => (string) ($state['error_code'] ?? 'recoverable_part_id_blocks_retry'),
+            'recoverable_part_id' => (string) ($state['recoverable_part_id'] ?? ''),
+            'message' => 'needs manual repair/link or stale recoverable clear',
+        ];
     }
 
 
