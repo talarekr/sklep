@@ -272,6 +272,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <h3>Batch CRM-only import from Woo drafts</h3>
             <h4>Auto-runner: Import Woo drafts to Ovoko CRM-only</h4>
             <p><strong>Browser-based only:</strong> one AJAX request imports at most one batch, then this browser waits before requesting the next batch. No cron, no background worker, no Action Scheduler, no eBay calls.</p>
+            <p><strong>Recommended safe start:</strong> batch size <code>1–2</code>, delay <code>8000–10000 ms</code>, max batches <code>10</code>, and <strong>Stop on first error</strong> enabled.</p>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;max-width:1100px;">
                 <label>Batch size <input id="gpswiss_crm_auto_batch_size" type="number" min="1" max="50" value="10" style="width:100%;" /></label>
                 <label>Delay between batches (ms) <input id="gpswiss_crm_auto_delay" type="number" min="0" step="250" value="4000" style="width:100%;" /></label>

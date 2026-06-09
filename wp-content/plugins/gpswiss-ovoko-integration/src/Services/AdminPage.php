@@ -250,9 +250,20 @@ class AdminPage
     public function handle_crm_only_batch_import_ajax(): void
     {
         if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Unauthorized'], 403);
+            wp_send_json_error([
+                'ok' => false,
+                'message' => 'Unauthorized: current user cannot manage options.',
+                'stop_reason' => 'unauthorized',
+            ], 403);
         }
-        check_ajax_referer('gpswiss_ovoko_crm_only_batch_import');
+
+        if (check_ajax_referer('gpswiss_ovoko_crm_only_batch_import', false, false) === false) {
+            wp_send_json_error([
+                'ok' => false,
+                'message' => 'Security check failed: invalid or expired CRM-only batch import nonce.',
+                'stop_reason' => 'nonce_mismatch',
+            ], 403);
+        }
 
         $args = [
             'mode' => isset($_POST['mode']) ? sanitize_text_field((string) wp_unslash($_POST['mode'])) : 'live',
@@ -266,8 +277,17 @@ class AdminPage
             'cursor' => isset($_POST['cursor']) ? (int) $_POST['cursor'] : 0,
         ];
 
-        $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->run_one_batch($args);
-        wp_send_json($result);
+        try {
+            $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->run_one_batch($args);
+            wp_send_json_success($result);
+        } catch (\Throwable $e) {
+            wp_send_json_error([
+                'ok' => false,
+                'message' => 'CRM-only batch import failed: ' . $e->getMessage(),
+                'stop_reason' => 'server_exception',
+                'exception_class' => get_class($e),
+            ], 500);
+        }
     }
 
     public function handle_repair_crm_only_part_link(): void

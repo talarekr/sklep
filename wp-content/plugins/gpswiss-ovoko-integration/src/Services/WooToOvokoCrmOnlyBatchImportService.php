@@ -107,13 +107,16 @@ class WooToOvokoCrmOnlyBatchImportService
         $result['has_more'] = $this->has_more_candidates($lastProductId, $onlyGmailImported, $productIdFrom, $productIdTo, $createdAfter);
         $result['should_continue'] = $result['has_more'] && $result['attempted'] > 0 && $result['stop_reason'] === '';
         if ($result['attempted'] === 0) {
-            $result['stop_reason'] = 'no_candidates';
+            $result['stop_reason'] = 'no_eligible_products';
             $result['should_continue'] = false;
         } elseif (!$result['has_more'] && $result['stop_reason'] === '') {
             $result['stop_reason'] = 'no_more_candidates';
         }
         $result['ok'] = $result['failed_count'] === 0 && ($stopOnFirstError ? $result['stop_reason'] !== 'import_error_stop_on_first_error' : true);
-        $result['raw_summary'] = $this->raw_summary($result);
+        $result['eligible'] = $result['eligible_count'];
+        $result['total_attempted'] = $result['attempted'];
+        $result['summary'] = $this->raw_summary($result);
+        $result['raw_summary'] = $result['summary'];
 
         return $result;
     }
@@ -152,6 +155,8 @@ class WooToOvokoCrmOnlyBatchImportService
             'items' => [],
             'no_ebay_write' => true,
             'uses_existing_crm_only_import_service' => true,
+            'dry_run_supported' => true,
+            'summary' => [],
         ];
     }
 
@@ -295,6 +300,7 @@ class WooToOvokoCrmOnlyBatchImportService
         return [
             'attempted' => $result['attempted'],
             'eligible' => $result['eligible_count'],
+            'eligible_count' => $result['eligible_count'],
             'success_count' => $result['success_count'],
             'failed_count' => $result['failed_count'],
             'blocked_count' => $result['blocked_count'],
