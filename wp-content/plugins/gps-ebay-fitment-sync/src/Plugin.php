@@ -13,7 +13,6 @@ use GPSEbayFitmentSync\Services\FitmentPreparationService;
 use GPSEbayFitmentSync\Services\MarketplaceRegistry;
 use GPSEbayFitmentSync\Services\NullTecDocLookupService;
 use GPSEbayFitmentSync\Services\OemPartNumberResolver;
-use GPSEbayFitmentSync\Services\ProductDiagnosticContextResolver;
 
 final class Plugin
 {
@@ -36,9 +35,8 @@ final class Plugin
         $repository = new FitmentSyncRepository();
         $ktypeRepository = new KTypeRepository();
         $resolver = new OemPartNumberResolver();
-        $diagnosticResolver = new ProductDiagnosticContextResolver();
         $tecdoc = new NullTecDocLookupService();
-        $preparation = new FitmentPreparationService($registry, $adapter, $repository, $resolver, $diagnosticResolver, $ktypeRepository, $tecdoc);
+        $preparation = new FitmentPreparationService($registry, $adapter, $repository, $resolver, $ktypeRepository, $tecdoc);
         $syncStub = new EbayCompatibilitySyncService($registry);
 
         (new AdminPage($registry, $repository, $adapter, $preparation, $syncStub))->hooks();
