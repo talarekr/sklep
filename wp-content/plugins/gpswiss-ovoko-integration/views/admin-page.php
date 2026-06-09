@@ -38,6 +38,12 @@ $autoSyncCounts = (array) ($autoSyncStatus['counts'] ?? []);
 $autoSyncDashboardCounters = (array) ($autoSyncStatus['dashboard_counters'] ?? []);
 $buildMarker = defined('GPSWISS_OVOKO_BUILD_MARKER') ? (string) GPSWISS_OVOKO_BUILD_MARKER : 'dev';
 $bidirectionalStatus = (array) ($data['bidirectional_sync_status'] ?? []);
+$crmOnlyBatchPreview = (array) ($data['crm_only_batch_preview'] ?? []);
+$crmOnlyBatchSummary = (array) ($crmOnlyBatchPreview['summary'] ?? []);
+$crmOnlyBatchRows = array_slice((array) ($crmOnlyBatchPreview['rows'] ?? []), 0, 50);
+$crmOnlyBatchImportResult = (array) ($data['crm_only_batch_import_result'] ?? []);
+$crmOnlyBatchImportRows = array_slice((array) ($crmOnlyBatchImportResult['rows'] ?? []), 0, 50);
+$crmOnlyBatchPreviewRecent = !empty($crmOnlyBatchPreview['checked_at']) && (time() - (strtotime((string) $crmOnlyBatchPreview['checked_at']) ?: 0)) <= 1800;
 $bidirectionalRecentRuns = array_values(array_filter((array) ($data['bidirectional_sync_recent_runs'] ?? []), 'is_array'));
 $manualSinglePartStockSyncLogs = array_values(array_filter((array) ($data['manual_single_part_stock_sync_logs'] ?? []), 'is_array'));
 
@@ -268,6 +274,66 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             </div>
         </details>
     </div>
+
+    <div id="batch-crm-only-import" class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #8c54ff;">
+        <h3>Batch CRM-only import from Woo drafts</h3>
+        <p><strong>Gmail bulk flow:</strong> this module finds Woo draft products created by the GPS Gmail Importer, previews them with the same Woo → Ovoko CRM-only <code>/crm/importPart</code> logic, and imports only products whose latest preview is eligible. No public/full import path is used, no price fields are sent, and there is no cron or product-save hook.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+            <?php wp_nonce_field('gpswiss_ovoko_batch_crm_only_preview'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_batch_crm_only_preview" />
+            <label><input type="checkbox" name="only_gmail_imported" value="1" checked /> Only Gmail-imported drafts</label>
+            <label>Product ID from <input type="number" min="1" step="1" name="product_id_from" value="" style="width:120px;" /></label>
+            <label>to <input type="number" min="1" step="1" name="product_id_to" value="" style="width:120px;" /></label>
+            <label>Created after <input type="date" name="created_after" value="" /></label>
+            <label>Batch size <input type="number" min="1" max="100" step="1" name="batch_size" value="10" style="width:80px;" /></label>
+            <label><input type="checkbox" name="stop_on_error" value="1" /> Stop on first error</label>
+            <?php submit_button('Run batch CRM-only preview', 'secondary', 'submit', false); ?>
+        </form>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0;">
+            <?php foreach (['total_checked' => 'total checked', 'eligible' => 'eligible drafts', 'blocked' => 'blocked drafts', 'already_imported' => 'already imported', 'missing_images' => 'missing images', 'missing_part_code' => 'missing part code', 'missing_category' => 'missing category', 'last_failed_import_with_part_id_repair_needed' => 'repair needed'] as $key => $label): ?>
+                <div style="background:#f6f7f7;padding:9px;"><strong><?php echo esc_html($label); ?></strong><br><code><?php echo esc_html((string) ($crmOnlyBatchSummary[$key] ?? 0)); ?></code></div>
+            <?php endforeach; ?>
+        </div>
+        <p><strong>Latest preview:</strong> <code><?php echo esc_html((string) ($crmOnlyBatchPreview['checked_at'] ?? 'not run yet')); ?></code> <?php echo $crmOnlyBatchPreviewRecent ? '<span style="color:#008a20;">recent</span>' : '<span style="color:#b32d2e;">not recent / required before import</span>'; ?></p>
+        <p>
+            <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=gpswiss_ovoko_batch_crm_only_csv&errors_only=1'), 'gpswiss_ovoko_batch_crm_only_csv')); ?>">Download batch preview errors CSV</a>
+            <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=gpswiss_ovoko_batch_crm_only_csv&errors_only=0'), 'gpswiss_ovoko_batch_crm_only_csv')); ?>">Download full batch preview CSV</a>
+        </p>
+
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:grid;gap:10px;max-width:980px;border:1px solid #ccd0d4;padding:12px;background:#fff;">
+            <?php wp_nonce_field('gpswiss_ovoko_batch_crm_only_import'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_batch_crm_only_import" />
+            <label><input type="checkbox" name="only_gmail_imported" value="1" <?php checked(!array_key_exists('only_gmail_imported', (array) ($crmOnlyBatchPreview['filters'] ?? [])) || !empty($crmOnlyBatchPreview['filters']['only_gmail_imported'])); ?> /> Only Gmail-imported drafts</label>
+            <label>Product ID from <input type="number" min="1" step="1" name="product_id_from" value="<?php echo esc_attr((string) (($crmOnlyBatchPreview['filters']['product_id_from'] ?? 0) ?: '')); ?>" style="width:120px;" /></label>
+            <label>Product ID to <input type="number" min="1" step="1" name="product_id_to" value="<?php echo esc_attr((string) (($crmOnlyBatchPreview['filters']['product_id_to'] ?? 0) ?: '')); ?>" style="width:120px;" /></label>
+            <label>Created after <input type="date" name="created_after" value="<?php echo esc_attr((string) ($crmOnlyBatchPreview['filters']['created_after'] ?? '')); ?>" /></label>
+            <label>Batch size <input type="number" min="1" max="100" step="1" name="batch_size" value="<?php echo esc_attr((string) ($crmOnlyBatchPreview['filters']['batch_size'] ?? 10)); ?>" style="width:80px;" /></label>
+            <label><input type="checkbox" name="stop_on_error" value="1" <?php checked(!empty($crmOnlyBatchPreview['filters']['stop_on_error'])); ?> /> Stop on first error</label>
+            <label><input type="checkbox" name="confirm_batch_crm_only_no_price" value="1" required /> I confirm this will create CRM-only no-price parts in Ovoko for eligible Woo draft products.</label>
+            <?php submit_button('Import eligible Woo drafts to Ovoko CRM-only', $crmOnlyBatchPreviewRecent ? 'delete' : 'secondary', 'submit', false, $crmOnlyBatchPreviewRecent ? [] : ['disabled' => 'disabled']); ?>
+        </form>
+
+        <?php if ($crmOnlyBatchRows !== []): ?>
+            <h4>Batch preview audit (first 50 rows)</h4>
+            <table class="widefat striped"><thead><tr><th>Product ID</th><th>SKU</th><th>Title</th><th>Storage</th><th>Part code</th><th>Images</th><th>category_id</th><th>Price empty</th><th>Status</th><th>Blockers/warnings</th><th>Actions</th></tr></thead><tbody>
+            <?php foreach ($crmOnlyBatchRows as $row): $pid = (int) ($row['product_id'] ?? 0); ?>
+                <tr><td><?php echo esc_html((string) $pid); ?></td><td><?php echo esc_html((string) ($row['sku'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['title'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['storage_location'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['part_code'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['image_count'] ?? 0)); ?></td><td><?php echo esc_html((string) ($row['category_id'] ?? '')); ?></td><td><?php echo !empty($row['price_empty']) ? 'yes' : 'no'; ?></td><td><?php echo esc_html((string) ($row['preview_status'] ?? '')); ?></td><td><?php echo esc_html(implode('; ', (array) ($row['blockers_warnings'] ?? []))); ?></td><td><a href="<?php echo esc_url(get_edit_post_link($pid)); ?>">Edit Woo product</a> | <a href="#" onclick="document.querySelector('[name=product_id]').value='<?php echo esc_js((string) $pid); ?>';return false;">Preview single</a><?php if (!empty($row['repair_part_id'])): ?> | <span>Repair/link part ID <?php echo esc_html((string) $row['repair_part_id']); ?></span><?php endif; ?></td></tr>
+            <?php endforeach; ?>
+            </tbody></table>
+        <?php endif; ?>
+
+        <?php if ($crmOnlyBatchImportRows !== []): ?>
+            <h4>Last batch import result</h4>
+            <p><strong>Summary:</strong> <code><?php echo esc_html(wp_json_encode($crmOnlyBatchImportResult['summary'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></code></p>
+            <table class="widefat striped"><thead><tr><th>Product ID</th><th>SKU</th><th>external_id</th><th>Status</th><th>Ovoko part ID</th><th>response status_code</th><th>Message</th><th>Action needed</th></tr></thead><tbody>
+            <?php foreach ($crmOnlyBatchImportRows as $row): ?>
+                <tr><td><?php echo esc_html((string) ($row['product_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['sku'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['external_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['status'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['ovoko_part_id'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['response_status_code'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['message'] ?? '')); ?></td><td><?php echo esc_html((string) ($row['action_needed'] ?? '')); ?></td></tr>
+            <?php endforeach; ?>
+            </tbody></table>
+        <?php endif; ?>
+    </div>
+
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">
         <h3>Read Ovoko/RRR part statuses</h3>
