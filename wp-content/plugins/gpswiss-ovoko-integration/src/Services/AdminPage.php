@@ -45,6 +45,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
         add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
+        add_action('wp_ajax_gpswiss_ovoko_crm_only_batch_import', [$this, 'handle_crm_only_batch_import_ajax']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
@@ -135,6 +136,8 @@ class AdminPage
             'adminAutorunJsVersion' => $this->autorunScriptVersion,
             'categoryRebuildAutorunNonce' => wp_create_nonce('gpswiss_ovoko_category_rebuild_autorun'),
             'categoryRebuildAutorunAction' => 'gpswiss_ovoko_category_rebuild_autorun',
+            'crmOnlyBatchNonce' => wp_create_nonce('gpswiss_ovoko_crm_only_batch_import'),
+            'crmOnlyBatchAction' => 'gpswiss_ovoko_crm_only_batch_import',
         ]);
     }
 
@@ -242,6 +245,30 @@ class AdminPage
 
 
 
+
+
+    public function handle_crm_only_batch_import_ajax(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Unauthorized'], 403);
+        }
+        check_ajax_referer('gpswiss_ovoko_crm_only_batch_import');
+
+        $args = [
+            'mode' => isset($_POST['mode']) ? sanitize_text_field((string) wp_unslash($_POST['mode'])) : 'live',
+            'batch_number' => isset($_POST['batch_number']) ? (int) $_POST['batch_number'] : 1,
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
+            'stop_on_first_error' => !empty($_POST['stop_on_first_error']),
+            'only_gmail_imported' => !array_key_exists('only_gmail_imported', $_POST) || !empty($_POST['only_gmail_imported']),
+            'product_id_from' => isset($_POST['product_id_from']) ? (int) $_POST['product_id_from'] : 0,
+            'product_id_to' => isset($_POST['product_id_to']) ? (int) $_POST['product_id_to'] : 0,
+            'created_after' => isset($_POST['created_after']) ? sanitize_text_field((string) wp_unslash($_POST['created_after'])) : '',
+            'cursor' => isset($_POST['cursor']) ? (int) $_POST['cursor'] : 0,
+        ];
+
+        $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->run_one_batch($args);
+        wp_send_json($result);
+    }
 
     public function handle_repair_crm_only_part_link(): void
     {
