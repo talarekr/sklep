@@ -122,6 +122,7 @@ final class GPS_Gmail_Product_Importer
             'fixed_ovoko_import_category_name' => '',
             'fixed_ovoko_import_category_review_warning_enabled' => 1,
             'allow_empty_price_for_fixed_category_crm_only_import' => 1,
+            'mark_gmail_read_after_staging' => 1,
         );
     }
 
@@ -190,6 +191,7 @@ final class GPS_Gmail_Product_Importer
             'fixed_ovoko_import_category_name' => sanitize_text_field($input['fixed_ovoko_import_category_name'] ?? ''),
             'fixed_ovoko_import_category_review_warning_enabled' => empty($input['fixed_ovoko_import_category_review_warning_enabled']) ? 0 : 1,
             'allow_empty_price_for_fixed_category_crm_only_import' => empty($input['allow_empty_price_for_fixed_category_crm_only_import']) ? 0 : 1,
+            'mark_gmail_read_after_staging' => empty($input['mark_gmail_read_after_staging']) ? 0 : 1,
         );
     }
 
@@ -317,6 +319,7 @@ JS;
                     <tr><th><?php esc_html_e('Product status default', 'gps-gmail-product-importer'); ?></th><td><select name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[product_status]"><option value="draft" <?php selected($settings['product_status'], 'draft'); ?>><?php esc_html_e('Draft', 'gps-gmail-product-importer'); ?></option><option value="pending_review" <?php selected($settings['product_status'], 'pending_review'); ?>><?php esc_html_e('Pending review', 'gps-gmail-product-importer'); ?></option></select><p class="description"><?php esc_html_e('Default is draft. Products are never published automatically.', 'gps-gmail-product-importer'); ?></p></td></tr>
                     <tr><th><?php esc_html_e('Import images', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[import_images]" value="1" <?php checked($settings['import_images'], 1); ?>> <?php esc_html_e('Import jpg/jpeg/png/webp attachments', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><?php esc_html_e('Duplicate protection', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[duplicate_protection]" value="1" <?php checked($settings['duplicate_protection'], 1); ?>> <?php esc_html_e('Skip existing Gmail message IDs and possible OEM duplicates', 'gps-gmail-product-importer'); ?></label></td></tr>
+                    <tr><th><?php esc_html_e('Mark Gmail messages as read after successful staging', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[mark_gmail_read_after_staging]" value="1" <?php checked($settings['mark_gmail_read_after_staging'], 1); ?>> <?php esc_html_e('Remove the UNREAD label only after a non-dry-run staging, update, or duplicate-safe staging decision succeeds.', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th colspan="2"><h3><?php esc_html_e('Product Enrichment → Allegro API price research', 'gps-gmail-product-importer'); ?></h3><p class="description"><?php esc_html_e("Optional legacy diagnostics only. Uses this plugin's own Allegro API credentials to search public offers and save staging-only _gps_allegro_* data; results are not used for production selected price, Woo draft readiness, or Ovoko CRM-only price fields.", 'gps-gmail-product-importer'); ?></p></th></tr>
                     <tr><th><?php esc_html_e('Enable Allegro API', 'gps-gmail-product-importer'); ?></th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_api_enabled]" value="1" <?php checked($settings['allegro_api_enabled'], 1); ?>> <?php esc_html_e('Allow optional item-scoped Allegro diagnostic actions', 'gps-gmail-product-importer'); ?></label></td></tr>
                     <tr><th><label for="gps-allegro-environment"><?php esc_html_e('Allegro environment', 'gps-gmail-product-importer'); ?></label></th><td><select id="gps-allegro-environment" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[allegro_environment]"><option value="production" <?php selected($settings['allegro_environment'], 'production'); ?>><?php esc_html_e('Production', 'gps-gmail-product-importer'); ?></option><option value="sandbox" <?php selected($settings['allegro_environment'], 'sandbox'); ?>><?php esc_html_e('Sandbox', 'gps-gmail-product-importer'); ?></option></select></td></tr>
@@ -523,6 +526,7 @@ JS;
             array('label' => 'Product status default', 'value' => 'draft'),
             array('label' => 'Image import enabled', 'value' => !empty($settings['import_images']) ? 'yes' : 'no'),
             array('label' => 'Duplicate protection enabled', 'value' => !empty($settings['duplicate_protection']) ? 'yes' : 'no'),
+            array('label' => 'Mark Gmail as read after staging', 'value' => !empty($settings['mark_gmail_read_after_staging']) ? 'yes' : 'no'),
         );
         $warnings = array();
         if (!empty($fixed['enabled']) && empty($fixed['configured'])) { $warnings[] = 'Fixed category is enabled but category ID is empty.'; }
@@ -588,9 +592,10 @@ JS;
     private function render_last_batch_summary($last_result)
     {
         if (!is_array($last_result) || empty($last_result)) { return; }
-        $keys = array('total_checked', 'total_staged', 'total_stage_updated', 'total_skipped', 'total_duplicates', 'remaining_messages');
+        $keys = array('total_checked', 'total_staged', 'total_stage_updated', 'total_skipped', 'total_duplicates', 'total_marked_read', 'total_mark_read_failed', 'messages_marked_read', 'messages_left_unread_due_to_errors', 'remaining_messages');
         echo '<p><strong>' . esc_html__('Last batch summary:', 'gps-gmail-product-importer') . '</strong> ';
         $parts = array(); foreach ($keys as $key) { if (isset($last_result[$key])) { $parts[] = $key . '=' . (string) $last_result[$key]; } }
+        if (!empty($last_result['warnings'])) { $parts[] = 'warnings=' . implode('|', array_map('strval', (array) $last_result['warnings'])); }
         echo esc_html(implode(', ', $parts) ?: (string) ($last_result['result'] ?? 'completed')) . '</p>';
     }
 
@@ -1049,6 +1054,11 @@ JS;
                 $staged = $this->stage_message_analysis($analysis);
                 if (is_wp_error($staged)) {
                     $state['total_errors']++;
+                    if (($analysis['gmail_was_unread'] ?? $analysis['gmail_is_unread'] ?? '') === 'yes') {
+                        $state['messages_left_unread_due_to_errors']++;
+                    }
+                    $analysis['gmail_mark_read_status'] = 'not_attempted_staging_error';
+                    $row['gmail_mark_read_status'] = $analysis['gmail_mark_read_status'];
                     $row['action'] = 'stage_message';
                     $row['result'] = 'error';
                     $row['error_message'] = $staged->get_error_message();
@@ -1061,6 +1071,7 @@ JS;
                     $row['duplicate_status'] = $analysis['duplicate_status'];
                     $row['action'] = $staged['stage_action'];
                     $row['result'] = $staged['staging_status'];
+                    $this->maybe_mark_staged_gmail_message_read($analysis, $settings, $state, $row);
                     if ($staged['stage_action'] === 'created_staging_item') {
                         $state['total_staged']++;
                     } elseif ($staged['stage_action'] === 'updated_staging_item') {
@@ -1099,12 +1110,44 @@ JS;
 
     private function fresh_run_state()
     {
-        return array('batches_completed' => 0, 'total_checked' => 0, 'total_staged' => 0, 'total_stage_updated' => 0, 'total_duplicates' => 0, 'total_skipped' => 0, 'total_products_created' => 0, 'total_errors' => 0, 'remaining_messages' => 0, 'gmail_query_used' => '', 'gmail_label_used' => '', 'message_status_filter' => $this->sanitize_message_status_filter($this->settings()['message_status_filter'] ?? 'read'), 'state' => 'idle', 'stopped_reason' => '', 'last_batch_result' => array());
+        return array('batches_completed' => 0, 'total_checked' => 0, 'total_staged' => 0, 'total_stage_updated' => 0, 'total_duplicates' => 0, 'total_skipped' => 0, 'total_products_created' => 0, 'total_errors' => 0, 'total_marked_read' => 0, 'total_mark_read_failed' => 0, 'messages_marked_read' => 0, 'messages_left_unread_due_to_errors' => 0, 'warnings' => array(), 'remaining_messages' => 0, 'gmail_query_used' => '', 'gmail_label_used' => '', 'message_status_filter' => $this->sanitize_message_status_filter($this->settings()['message_status_filter'] ?? 'read'), 'state' => 'idle', 'stopped_reason' => '', 'last_batch_result' => array());
     }
 
     private function run_state()
     {
         return wp_parse_args((array) get_option(self::OPTION_RUN_STATE, array()), $this->fresh_run_state());
+    }
+
+    private function maybe_mark_staged_gmail_message_read(&$analysis, $settings, &$state, &$row)
+    {
+        $analysis['gmail_marked_read'] = 'no';
+        $analysis['gmail_mark_read_error'] = '';
+        if (empty($settings['mark_gmail_read_after_staging'])) {
+            $analysis['gmail_mark_read_status'] = 'disabled';
+        } elseif (($analysis['gmail_was_unread'] ?? $analysis['gmail_is_unread'] ?? '') !== 'yes') {
+            $analysis['gmail_mark_read_status'] = 'not_unread';
+        } else {
+            $marked = $this->mark_gmail_message_read($analysis['message_id'] ?? '');
+            if (is_wp_error($marked)) {
+                $analysis['gmail_mark_read_status'] = 'gmail_mark_read_failed';
+                $analysis['gmail_mark_read_error'] = $marked->get_error_message();
+                $analysis['warnings'] = array_values(array_unique(array_merge((array) ($analysis['warnings'] ?? array()), array('gmail_mark_read_failed'))));
+                $state['total_mark_read_failed']++;
+                $state['messages_left_unread_due_to_errors']++;
+                $state['warnings'] = array_values(array_unique(array_merge((array) ($state['warnings'] ?? array()), array('gmail_mark_read_failed'))));
+            } else {
+                $analysis['gmail_marked_read'] = 'yes';
+                $analysis['gmail_mark_read_status'] = 'marked_read';
+                $state['total_marked_read']++;
+                $state['messages_marked_read']++;
+            }
+        }
+        $row['gmail_marked_read'] = $analysis['gmail_marked_read'];
+        $row['gmail_mark_read_status'] = $analysis['gmail_mark_read_status'];
+        $row['gmail_mark_read_error'] = $analysis['gmail_mark_read_error'];
+        if ($analysis['gmail_mark_read_status'] === 'gmail_mark_read_failed') {
+            $row['error_message'] = trim((string) ($row['error_message'] ?? '') . ' gmail_mark_read_failed: ' . $analysis['gmail_mark_read_error']);
+        }
     }
 
     private function find_label_id($name)
@@ -1187,6 +1230,19 @@ JS;
         return $this->gmail_request(add_query_arg(array('format' => 'full'), 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' . rawurlencode($message_id)));
     }
 
+    private function mark_gmail_message_read($message_id)
+    {
+        $message_id = sanitize_text_field($message_id);
+        if ($message_id === '') {
+            return new WP_Error('gps_gmail_message_id_missing', 'Gmail message ID is missing.');
+        }
+        return $this->gmail_request('https://gmail.googleapis.com/gmail/v1/users/me/messages/' . rawurlencode($message_id) . '/modify', array(
+            'method' => 'POST',
+            'headers' => array('Content-Type' => 'application/json'),
+            'body' => wp_json_encode(array('removeLabelIds' => array('UNREAD'))),
+        ));
+    }
+
     private function analyze_message($message, $label, $message_list_request = array())
     {
         $headers = $this->headers($message);
@@ -1208,6 +1264,10 @@ JS;
             'subject' => sanitize_text_field($subject),
             'gmail_is_unread' => $is_unread ? 'yes' : 'no',
             'gmail_read_status' => $is_unread ? 'unread' : 'read',
+            'gmail_was_unread' => $is_unread ? 'yes' : 'no',
+            'gmail_marked_read' => 'no',
+            'gmail_mark_read_status' => 'not_attempted',
+            'gmail_mark_read_error' => '',
             'gmail_query_used' => sanitize_text_field($message_list_request['gmail_query_used'] ?? ''),
             'gmail_label_used' => sanitize_text_field($message_list_request['gmail_label_used'] ?? $label),
             'message_status_filter' => sanitize_text_field($message_list_request['message_status_filter'] ?? 'read'),
@@ -1587,7 +1647,7 @@ JS;
             '_gps_allegro_price_min_pln' => sanitize_text_field($analysis['allegro_price_min_pln'] ?? ''),
             '_gps_allegro_price_max_pln' => sanitize_text_field($analysis['allegro_price_max_pln'] ?? ''),
             '_gps_allegro_price_confidence' => sanitize_text_field($analysis['allegro_price_confidence'] ?? ''),
-            '_gps_allegro_price_sample_offer_urls' => is_string($analysis['allegro_price_sample_offer_urls'] ?? '') ? sanitize_text_field($analysis['allegro_price_sample_offer_urls']) : wp_json_encode(array_values((array) ($analysis['allegro_price_sample_offer_urls'] ?? array())), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            '_gps_allegro_price_sample_offer_urls' => is_string($analysis['allegro_price_sample_offer_urls'] ?? '') ? sanitize_text_field($analysis['allegro_price_sample_offer_urls'] ?? '') : wp_json_encode(array_values((array) ($analysis['allegro_price_sample_offer_urls'] ?? array())), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             '_gps_allegro_price_source' => sanitize_text_field($analysis['allegro_price_source'] ?? ''),
             '_gps_allegro_price_suggestion' => sanitize_text_field($analysis['allegro_price_suggestion'] ?? ''),
             '_gps_allegro_price_currency' => sanitize_text_field($analysis['allegro_price_currency'] ?? ''),
@@ -4691,7 +4751,7 @@ JS;
 
     private function report_row_from_analysis($run_id, $dry_run, $a)
     {
-        return $this->empty_report_row($run_id, $dry_run, array('gmail_message_id' => $a['message_id'], 'gmail_thread_id' => $a['thread_id'], 'gmail_date' => $a['date'], 'gmail_from' => $a['from'], 'gmail_subject' => $a['subject'], 'gmail_is_unread' => $a['gmail_is_unread'], 'gmail_read_status' => $a['gmail_read_status'], 'gmail_query_used' => $a['gmail_query_used'], 'gmail_label_used' => $a['gmail_label_used'], 'message_status_filter' => $a['message_status_filter'], 'storage_location' => $a['storage_location'], 'detected_part_code' => $a['detected_part_code'], 'normalized_part_code' => $a['normalized_part_code'], 'detected_oem_part_number' => $a['detected_oem_part_number'], 'normalized_oem_part_number' => $a['normalized_oem_part_number'], 'detected_vehicle_make' => $a['detected_vehicle_make'], 'detected_vehicle_model' => $a['detected_vehicle_model'], 'detected_vehicle_confidence' => $a['detected_vehicle_confidence'], 'suggested_woo_category_id' => $a['suggested_woo_category_id'], 'suggested_woo_category_path' => $a['suggested_woo_category_path'], 'suggested_woo_category_confidence' => $a['suggested_woo_category_confidence'], 'image_attachments_found' => $a['image_attachments_found'], 'staging_item_id' => $a['staging_item_id'] ?? '', 'staging_status' => $a['staging_status'] ?? '', 'created_product_id' => $a['created_product_id'] ?? 0, 'duplicate_status' => $a['duplicate_status'], 'duplicate_existing_product_id' => $a['duplicate_existing_product_id']));
+        return $this->empty_report_row($run_id, $dry_run, array('gmail_message_id' => $a['message_id'], 'gmail_thread_id' => $a['thread_id'], 'gmail_date' => $a['date'], 'gmail_from' => $a['from'], 'gmail_subject' => $a['subject'], 'gmail_is_unread' => $a['gmail_is_unread'], 'gmail_read_status' => $a['gmail_read_status'], 'gmail_was_unread' => $a['gmail_was_unread'] ?? $a['gmail_is_unread'], 'gmail_marked_read' => $a['gmail_marked_read'] ?? 'no', 'gmail_mark_read_status' => $a['gmail_mark_read_status'] ?? '', 'gmail_mark_read_error' => $a['gmail_mark_read_error'] ?? '', 'gmail_query_used' => $a['gmail_query_used'], 'gmail_label_used' => $a['gmail_label_used'], 'message_status_filter' => $a['message_status_filter'], 'storage_location' => $a['storage_location'], 'detected_part_code' => $a['detected_part_code'], 'normalized_part_code' => $a['normalized_part_code'], 'detected_oem_part_number' => $a['detected_oem_part_number'], 'normalized_oem_part_number' => $a['normalized_oem_part_number'], 'detected_vehicle_make' => $a['detected_vehicle_make'], 'detected_vehicle_model' => $a['detected_vehicle_model'], 'detected_vehicle_confidence' => $a['detected_vehicle_confidence'], 'suggested_woo_category_id' => $a['suggested_woo_category_id'], 'suggested_woo_category_path' => $a['suggested_woo_category_path'], 'suggested_woo_category_confidence' => $a['suggested_woo_category_confidence'], 'image_attachments_found' => $a['image_attachments_found'], 'staging_item_id' => $a['staging_item_id'] ?? '', 'staging_status' => $a['staging_status'] ?? '', 'created_product_id' => $a['created_product_id'] ?? 0, 'duplicate_status' => $a['duplicate_status'], 'duplicate_existing_product_id' => $a['duplicate_existing_product_id']));
     }
 
     private function empty_report_row($run_id, $dry_run, $overrides = array())
@@ -4701,7 +4761,7 @@ JS;
 
     private function csv_columns()
     {
-        return array('timestamp', 'run_id', 'dry_run', 'gmail_message_id', 'gmail_thread_id', 'gmail_date', 'gmail_from', 'gmail_subject', 'gmail_is_unread', 'gmail_read_status', 'gmail_query_used', 'gmail_label_used', 'message_status_filter', 'storage_location', 'detected_part_code', 'normalized_part_code', 'detected_oem_part_number', 'normalized_oem_part_number', 'detected_vehicle_make', 'detected_vehicle_model', 'detected_vehicle_confidence', 'suggested_woo_category_id', 'suggested_woo_category_path', 'suggested_woo_category_confidence', 'image_attachments_found', 'images_imported', 'product_id', 'product_status', 'staging_item_id', 'staging_status', 'created_product_id', 'duplicate_status', 'duplicate_existing_product_id', 'action', 'result', 'error_message');
+        return array('timestamp', 'run_id', 'dry_run', 'gmail_message_id', 'gmail_thread_id', 'gmail_date', 'gmail_from', 'gmail_subject', 'gmail_is_unread', 'gmail_read_status', 'gmail_was_unread', 'gmail_marked_read', 'gmail_mark_read_status', 'gmail_mark_read_error', 'gmail_query_used', 'gmail_label_used', 'message_status_filter', 'storage_location', 'detected_part_code', 'normalized_part_code', 'detected_oem_part_number', 'normalized_oem_part_number', 'detected_vehicle_make', 'detected_vehicle_model', 'detected_vehicle_confidence', 'suggested_woo_category_id', 'suggested_woo_category_path', 'suggested_woo_category_confidence', 'image_attachments_found', 'images_imported', 'product_id', 'product_status', 'staging_item_id', 'staging_status', 'created_product_id', 'duplicate_status', 'duplicate_existing_product_id', 'action', 'result', 'error_message');
     }
 
     private function write_report_row($type, $row)
