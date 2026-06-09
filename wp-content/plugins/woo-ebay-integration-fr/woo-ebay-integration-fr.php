@@ -42,6 +42,16 @@ if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
      */
     function wei_fr_handle_shared_oauth_callback(array $request = []): void
     {
+        if (!class_exists('\WEI_FR\Services\EbayAuth')) {
+            error_log('Woo eBay Integration FR: WEI_FR\Services\EbayAuth not available, skipping OAuth bootstrap.');
+            return;
+        }
+
+        if (!class_exists('\WEI_FR\Services\Logger')) {
+            error_log('Woo eBay Integration FR: WEI_FR\Services\Logger not available, skipping OAuth bootstrap.');
+            return;
+        }
+
         $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
         $auth->handle_shared_callback($request);
     }
@@ -50,12 +60,27 @@ if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
 add_action('wei_fr_handle_shared_oauth_callback', 'wei_fr_handle_shared_oauth_callback', 10, 1);
 
 add_action('plugins_loaded', static function (): void {
+    if (!class_exists('\WEI_FR\Services\EbayAuth')) {
+        error_log('Woo eBay Integration FR: WEI_FR\Services\EbayAuth not available, skipping OAuth bootstrap.');
+        return;
+    }
+
+    if (!class_exists('\WEI_FR\Services\Logger')) {
+        error_log('Woo eBay Integration FR: WEI_FR\Services\Logger not available, skipping OAuth bootstrap.');
+        return;
+    }
+
     $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
     $auth->handle_admin_bootstrap_oauth_callback();
 }, 0);
 
 add_action('plugins_loaded', static function (): void {
     if (!class_exists('WooCommerce')) {
+        return;
+    }
+
+    if (!class_exists('\WEI_FR\Plugin')) {
+        error_log('Woo eBay Integration FR: WEI_FR\Plugin not available, skipping plugin boot.');
         return;
     }
 
