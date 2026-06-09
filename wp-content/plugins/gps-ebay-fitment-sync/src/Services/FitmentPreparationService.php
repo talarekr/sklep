@@ -14,15 +14,17 @@ final class FitmentPreparationService
     private $adapter;
     private $repository;
     private $resolver;
+    private $diagnosticResolver;
     private $ktypeRepository;
     private $tecdoc;
 
-    public function __construct(MarketplaceRegistry $registry, WeiMarketplaceMappingAdapter $adapter, FitmentSyncRepository $repository, OemPartNumberResolver $resolver, KTypeRepository $ktypeRepository, TecDocLookupServiceInterface $tecdoc)
+    public function __construct(MarketplaceRegistry $registry, WeiMarketplaceMappingAdapter $adapter, FitmentSyncRepository $repository, OemPartNumberResolver $resolver, ProductDiagnosticContextResolver $diagnosticResolver, KTypeRepository $ktypeRepository, TecDocLookupServiceInterface $tecdoc)
     {
         $this->registry = $registry;
         $this->adapter = $adapter;
         $this->repository = $repository;
         $this->resolver = $resolver;
+        $this->diagnosticResolver = $diagnosticResolver;
         $this->ktypeRepository = $ktypeRepository;
         $this->tecdoc = $tecdoc;
     }
@@ -45,13 +47,14 @@ final class FitmentPreparationService
         $marketplace = (string) ($args['marketplace'] ?? 'all');
         $dryRun = !empty($args['dry_run']);
         $contexts = $this->adapter->contexts_for_product($productId, $marketplace);
-        $oem = $this->resolver->resolve($productId);
+        $partNumber = $this->resolver->resolve($productId);
+        $diagnosticContext = $this->diagnosticResolver->resolve($productId, $partNumber);
         $ktype = $this->ktypeRepository->read_for_product($productId);
         $rows = [];
 
         foreach ($contexts as $context) {
             try {
-                $status = $this->determine_status($context, $oem, $ktype);
+                $status = $this->determine_status($context, $partNumber, $ktype);
                 $hash = '';
                 if ((int) ($ktype['ktype_count'] ?? 0) > 0 && trim((string) $context->inventory_item_sku) !== '') {
                     $hash = hash('sha256', wp_json_encode([$context->marketplace, $context->inventory_item_sku, $ktype['ktype_list']]));
@@ -67,19 +70,27 @@ final class FitmentPreparationService
                     'ebay_category_id' => (string) $context->ebay_category_id,
                     'compatibility_mode' => 'ktype',
                     'fitment_status' => $status,
-                    'oem_value' => (string) ($oem['value'] ?: ($ktype['oem_value'] ?? '')),
-                    'oem_source' => (string) ($oem['source'] ?: ($ktype['oem_source'] ?? '')),
+                    'oem_value' => (string) ($partNumber['primary_part_number'] ?? ''),
+                    'oem_source' => (string) ($partNumber['primary_part_number_source'] ?? ''),
                     'ktype_count' => (int) ($ktype['ktype_count'] ?? 0),
                     'request_hash' => $hash,
                     'last_lookup_at' => $ktype['last_checked_at'] ?: null,
                     'last_checked_at' => current_time('mysql'),
                     'last_error' => (string) ($ktype['last_error'] ?? ''),
                     'raw_response_excerpt' => wp_json_encode([
-                        'listing_context' => $context->raw,
-                        'oem_candidates' => $oem['candidates'] ?? [],
+                        'primary_part_number' => (string) ($partNumber['primary_part_number'] ?? ''),
+                        'primary_part_number_source' => (string) ($partNumber['primary_part_number_source'] ?? ''),
+                        'primary_part_number_confidence' => (string) ($partNumber['primary_part_number_confidence'] ?? ''),
+                        'part_number_candidates' => $partNumber['part_number_candidates'] ?? [],
+                        'diagnostic_context' => $diagnosticContext,
                         'ktype_status' => $ktype['status'] ?? '',
                         'ktype_confidence' => $ktype['confidence'] ?? '',
-                        'tecdoc_service' => 'stubbed_not_called_for_live_api',
+                        'tecdoc_service' => [
+                            'status' => 'stubbed_not_called_for_live_api',
+                            'future_lookup_input' => ['primary_part_number'],
+                            'diagnostic_context_used_as_lookup_input' => false,
+                            'planned_diagnostic_statuses' => ['ready', 'needs_review', 'context_mismatch', 'too_many_matches', 'no_tecdoc_match'],
+                        ],
                     ]),
                 ];
                 if (!$dryRun) {
@@ -107,14 +118,14 @@ final class FitmentPreparationService
         return $rows;
     }
 
-    private function determine_status(ListingContext $context, array $oem, array $ktype): string
+    private function determine_status(ListingContext $context, array $partNumber, array $ktype): string
     {
         $config = $this->registry->get((string) $context->marketplace);
         if (!$config || empty($config['enabled'])) {
             return 'skipped';
         }
-        if (empty($oem['found']) && trim((string) ($ktype['oem_value'] ?? '')) === '') {
-            return 'missing_oem';
+        if (empty($partNumber['found'])) {
+            return 'missing_part_number';
         }
         $count = (int) ($ktype['ktype_count'] ?? 0);
         $confidence = (string) ($ktype['confidence'] ?? '');

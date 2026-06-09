@@ -105,8 +105,9 @@ final class FitmentSyncRepository
         $where = '1=1';
         $params = [];
         if ($type === 'missing_oem') {
-            $where = 'fitment_status=%s';
+            $where = 'fitment_status IN (%s,%s)';
             $params[] = 'missing_oem';
+            $params[] = 'missing_part_number';
         } elseif ($type === 'missing_ktype') {
             $where = 'fitment_status=%s';
             $params[] = 'missing_ktype';
