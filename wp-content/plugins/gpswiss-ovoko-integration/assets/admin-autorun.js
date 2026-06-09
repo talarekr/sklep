@@ -531,6 +531,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const preflightBtn = document.getElementById('gpswiss_crm_auto_preflight');
   const startBtn = document.getElementById('gpswiss_crm_auto_start');
   const stopBtn = document.getElementById('gpswiss_crm_auto_stop');
+  const findCandidateBtn = document.getElementById('gpswiss_crm_diag_find_candidate');
+  const previewOneBtn = document.getElementById('gpswiss_crm_diag_preview_one');
+  const liveOneBtn = document.getElementById('gpswiss_crm_diag_live_one');
   const stateEl = document.getElementById('gpswiss_crm_auto_state');
   const logEl = document.getElementById('gpswiss_crm_auto_log');
   const rawEl = document.getElementById('gpswiss_crm_auto_raw');
@@ -705,6 +708,14 @@ document.addEventListener('DOMContentLoaded', function () {
     fd.set('batch_number', '1');
     return fd;
   }
+  function bodyForDiagnostic(mode, productId) {
+    const fd = bodyForNextBatch();
+    fd.set('mode', mode);
+    fd.set('batch_number', '1');
+    fd.set('batch_size', '1');
+    if (productId) { fd.set('product_id', String(productId)); }
+    return fd;
+  }
   function stop(reason, alreadyLogged) {
     state.running = false;
     state.stopped = true;
@@ -875,6 +886,46 @@ document.addEventListener('DOMContentLoaded', function () {
     if (preflightBtn) { preflightBtn.disabled = false; }
     if (startBtn) { startBtn.disabled = false; }
   }
+  async function runDiagnostic(mode, productId) {
+    if (state.inFlight) { return; }
+    const settings = settingsSnapshot();
+    state.running = false;
+    state.stopped = false;
+    state.inFlight = true;
+    state.batchNumber = 0;
+    state.cursor = Math.max(0, fieldNumber('gpswiss_crm_auto_product_id_from', 0) - 1);
+    state.logRows = [];
+    state.technical = detailsBase(settings);
+    if (logEl) { logEl.innerHTML = ''; }
+    renderDetails();
+    setStatus('Diagnostic running: ' + mode + '...');
+    addLog('Diagnostic request started: mode=' + mode + (productId ? ', product_id=' + productId : ''));
+    const result = await ajaxRequest(bodyForDiagnostic(mode, productId), { timeoutMs: 60000, context: 'diagnostic' });
+    state.inFlight = false;
+    if (!result) { return; }
+    state.technical.diagnostic_response = result.data || result.json || null;
+    renderDetails();
+    if (!result.data || result.data.ok !== true) {
+      setError('diagnostic_failed', 'Diagnostic ' + mode + ' did not return ok=true.', { parsed_response: result.json });
+      return;
+    }
+    if (mode === 'find_candidate') {
+      const foundId = firstNumber(result.data, ['first_candidate_product_id']);
+      if (foundId > 0) {
+        const previewInput = document.getElementById('gpswiss_crm_diag_preview_product_id');
+        const liveInput = document.getElementById('gpswiss_crm_diag_live_product_id');
+        if (previewInput) { previewInput.value = String(foundId); }
+        if (liveInput) { liveInput.value = String(foundId); }
+      }
+      addLog('Find candidate result: found=' + (result.data.candidate_found ? 'true' : 'false') + ', first_candidate_product_id=' + foundId + ', checked_count=' + firstNumber(result.data, ['checked_count']));
+    } else {
+      const normalized = normalizeBatch(result.data || {});
+      state.technical.last_normalized_batch = normalized;
+      addLog('Diagnostic ' + mode + ' result: attempted=' + normalized.attempted + ', success=' + normalized.success_count + ', failed=' + normalized.failed_count + ', blocked=' + normalized.blocked_count + ', stop_reason=' + normalized.stop_reason);
+    }
+    renderDetails();
+    setStatus('Diagnostic OK: ' + mode);
+  }
   async function runNext() {
     if (!state.running || state.stopped || state.inFlight) { return; }
     const maxBatches = fieldNumber('gpswiss_crm_auto_max_batches', 50);
@@ -908,6 +959,9 @@ document.addEventListener('DOMContentLoaded', function () {
     window.setTimeout(runNext, delay);
   }
   preflightBtn && preflightBtn.addEventListener('click', function () { runPreflight(); });
+  findCandidateBtn && findCandidateBtn.addEventListener('click', function () { runDiagnostic('find_candidate', 0); });
+  previewOneBtn && previewOneBtn.addEventListener('click', function () { runDiagnostic('preview_one', fieldNumber('gpswiss_crm_diag_preview_product_id', 0)); });
+  liveOneBtn && liveOneBtn.addEventListener('click', function () { runDiagnostic('live_one', fieldNumber('gpswiss_crm_diag_live_product_id', 0)); });
   startBtn && startBtn.addEventListener('click', function () {
     reset();
     startBtn.disabled = true;
