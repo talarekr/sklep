@@ -267,6 +267,50 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <p class="description">Known repairs: product 60886 → part_id 11055, product 60909 → part_id 11056. Leave part_id empty to use a recoverable part_id saved from the last response.</p>
             </div>
         </details>
+
+        <div id="gpswiss-crm-only-auto-runner" style="margin-top:16px;border:2px solid #2271b1;padding:14px;background:#f6fbff;">
+            <h3>Batch CRM-only import from Woo drafts</h3>
+            <h4>Auto-runner: Import Woo drafts to Ovoko CRM-only</h4>
+            <p><strong>Browser-based only:</strong> one AJAX request imports at most one batch, then this browser waits before requesting the next batch. No cron, no background worker, no Action Scheduler, no eBay calls.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;max-width:1100px;">
+                <label>Batch size <input id="gpswiss_crm_auto_batch_size" type="number" min="1" max="50" value="10" style="width:100%;" /></label>
+                <label>Delay between batches (ms) <input id="gpswiss_crm_auto_delay" type="number" min="0" step="250" value="4000" style="width:100%;" /></label>
+                <label>Product ID from <input id="gpswiss_crm_auto_product_id_from" type="number" min="1" value="" style="width:100%;" /></label>
+                <label>Product ID to <input id="gpswiss_crm_auto_product_id_to" type="number" min="1" value="" style="width:100%;" /></label>
+                <label>Created after <input id="gpswiss_crm_auto_created_after" type="date" value="" style="width:100%;" /></label>
+                <label>Max batches / safety limit <input id="gpswiss_crm_auto_max_batches" type="number" min="0" value="50" style="width:100%;" /></label>
+                <label><input id="gpswiss_crm_auto_stop_on_first_error" type="checkbox" checked="checked" /> Stop on first error</label>
+                <label><input id="gpswiss_crm_auto_only_gmail" type="checkbox" checked="checked" /> Only Gmail-imported drafts</label>
+                <label><input id="gpswiss_crm_auto_preview_only" type="checkbox" /> Dry-run / preview only</label>
+            </div>
+            <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="button button-primary" id="gpswiss_crm_auto_start">Start auto import</button>
+                <button type="button" class="button" id="gpswiss_crm_auto_stop" disabled="disabled">Stop</button>
+                <span id="gpswiss_crm_auto_state" style="font-weight:600;">Idle</span>
+            </div>
+            <div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
+                <div>Current batch number: <strong data-crm-k="current_batch_number">0</strong></div>
+                <div>Last batch attempted: <strong data-crm-k="last_batch_attempted">0</strong></div>
+                <div>Total attempted: <strong data-crm-k="total_attempted">0</strong></div>
+                <div>Total success: <strong data-crm-k="total_success">0</strong></div>
+                <div>Total failed: <strong data-crm-k="total_failed">0</strong></div>
+                <div>Total already imported: <strong data-crm-k="total_already_imported">0</strong></div>
+                <div>Total blocked: <strong data-crm-k="total_blocked">0</strong></div>
+                <div>Total missing images: <strong data-crm-k="total_missing_images">0</strong></div>
+                <div>Total missing part code: <strong data-crm-k="total_missing_part_code">0</strong></div>
+                <div>Total missing category: <strong data-crm-k="total_missing_category">0</strong></div>
+                <div>Total repair needed: <strong data-crm-k="total_repair_needed">0</strong></div>
+                <div>Last product ID processed: <strong data-crm-k="last_product_id_processed">0</strong></div>
+                <div>Remaining/eligible estimate: <strong data-crm-k="remaining_estimate">unknown</strong></div>
+            </div>
+            <h4 style="margin-top:14px;">Live log</h4>
+            <div id="gpswiss_crm_auto_log" style="max-height:260px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;font-family:monospace;font-size:12px;"></div>
+            <details style="margin-top:12px;">
+                <summary>Show technical details</summary>
+                <pre id="gpswiss_crm_auto_raw" style="white-space:pre-wrap;max-height:320px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
+            </details>
+        </div>
+
     </div>
 
     <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #72aee6;">

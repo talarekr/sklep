@@ -522,3 +522,159 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
 });
+
+(function () {
+  'use strict';
+  const root = document.getElementById('gpswiss-crm-only-auto-runner');
+  if (!root) { return; }
+  const config = window.gpswissOvokoAutorunConfig || {};
+  const startBtn = document.getElementById('gpswiss_crm_auto_start');
+  const stopBtn = document.getElementById('gpswiss_crm_auto_stop');
+  const stateEl = document.getElementById('gpswiss_crm_auto_state');
+  const logEl = document.getElementById('gpswiss_crm_auto_log');
+  const rawEl = document.getElementById('gpswiss_crm_auto_raw');
+  const state = {
+    running: false,
+    stopped: false,
+    inFlight: false,
+    batchNumber: 0,
+    cursor: 0,
+    totals: {
+      attempted: 0,
+      success: 0,
+      failed: 0,
+      alreadyImported: 0,
+      blocked: 0,
+      missingImages: 0,
+      missingPartCode: 0,
+      missingCategory: 0,
+      repairNeeded: 0
+    },
+    lastProductId: 0,
+    raw: []
+  };
+  function fieldNumber(id, fallback) {
+    const el = document.getElementById(id);
+    const n = parseInt(el && el.value ? el.value : String(fallback), 10);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  function fieldValue(id) {
+    const el = document.getElementById(id);
+    return el && el.value ? el.value : '';
+  }
+  function checked(id) {
+    const el = document.getElementById(id);
+    return !!(el && el.checked);
+  }
+  function setStatus(text) { if (stateEl) { stateEl.textContent = text; } }
+  function setK(key, value) {
+    root.querySelectorAll('[data-crm-k="' + key + '"]').forEach(function (el) { el.textContent = String(value); });
+  }
+  function nowIso() { return new Date().toISOString(); }
+  function addLog(row) {
+    if (!logEl) { return; }
+    const div = document.createElement('div');
+    div.textContent = '[' + row.timestamp + '] batch=' + row.batch_number + ' attempted=' + row.attempted + ' success=' + row.success_count + ' failed=' + row.failed_count + ' blocked=' + row.blocked_count + ' already=' + row.already_imported_count + ' stop=' + (row.stop_reason || '') + ' errors=' + (row.error_summary || '');
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function updateSummary(last) {
+    setK('current_batch_number', state.batchNumber);
+    setK('last_batch_attempted', last ? (last.attempted || 0) : 0);
+    setK('total_attempted', state.totals.attempted);
+    setK('total_success', state.totals.success);
+    setK('total_failed', state.totals.failed);
+    setK('total_already_imported', state.totals.alreadyImported);
+    setK('total_blocked', state.totals.blocked);
+    setK('total_missing_images', state.totals.missingImages);
+    setK('total_missing_part_code', state.totals.missingPartCode);
+    setK('total_missing_category', state.totals.missingCategory);
+    setK('total_repair_needed', state.totals.repairNeeded);
+    setK('last_product_id_processed', state.lastProductId || 0);
+    setK('remaining_estimate', last && last.has_more ? 'has more' : 'none/unknown');
+    if (rawEl) { rawEl.textContent = JSON.stringify(state.raw, null, 2); }
+  }
+  function reset() {
+    state.running = true;
+    state.stopped = false;
+    state.inFlight = false;
+    state.batchNumber = 0;
+    state.cursor = Math.max(0, fieldNumber('gpswiss_crm_auto_product_id_from', 0) - 1);
+    state.totals = { attempted: 0, success: 0, failed: 0, alreadyImported: 0, blocked: 0, missingImages: 0, missingPartCode: 0, missingCategory: 0, repairNeeded: 0 };
+    state.lastProductId = 0;
+    state.raw = [];
+    if (logEl) { logEl.innerHTML = ''; }
+    if (rawEl) { rawEl.textContent = ''; }
+    updateSummary(null);
+  }
+  function bodyForNextBatch() {
+    const fd = new URLSearchParams();
+    fd.set('action', config.crmOnlyBatchAction || 'gpswiss_ovoko_crm_only_batch_import');
+    fd.set('_ajax_nonce', config.crmOnlyBatchNonce || '');
+    fd.set('mode', checked('gpswiss_crm_auto_preview_only') ? 'preview' : 'live');
+    fd.set('batch_number', String(state.batchNumber + 1));
+    fd.set('batch_size', String(Math.max(1, Math.min(50, fieldNumber('gpswiss_crm_auto_batch_size', 10)))));
+    fd.set('stop_on_first_error', checked('gpswiss_crm_auto_stop_on_first_error') ? '1' : '0');
+    fd.set('only_gmail_imported', checked('gpswiss_crm_auto_only_gmail') ? '1' : '0');
+    fd.set('product_id_from', fieldValue('gpswiss_crm_auto_product_id_from'));
+    fd.set('product_id_to', fieldValue('gpswiss_crm_auto_product_id_to'));
+    fd.set('created_after', fieldValue('gpswiss_crm_auto_created_after'));
+    fd.set('cursor', String(state.cursor || 0));
+    return fd;
+  }
+  function stop(reason) {
+    state.running = false;
+    state.stopped = true;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus('Stopped: ' + reason);
+  }
+  async function runNext() {
+    if (!state.running || state.stopped || state.inFlight) { return; }
+    const maxBatches = fieldNumber('gpswiss_crm_auto_max_batches', 50);
+    if (maxBatches > 0 && state.batchNumber >= maxBatches) { stop('max_batches_reached'); return; }
+    state.inFlight = true;
+    setStatus('Running batch ' + (state.batchNumber + 1) + '...');
+    let res;
+    try {
+      const response = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: bodyForNextBatch().toString() });
+      res = await response.json().catch(function () { return { ok: false, error: 'invalid_json' }; });
+      if (!response.ok) { throw new Error('HTTP ' + response.status); }
+      if (res && res.success === false) { throw new Error((res.data && res.data.message) || 'ajax_error'); }
+    } catch (e) {
+      state.inFlight = false;
+      addLog({ timestamp: nowIso(), batch_number: state.batchNumber + 1, attempted: 0, success_count: 0, failed_count: 1, blocked_count: 0, already_imported_count: 0, stop_reason: 'ajax_error', error_summary: String(e && e.message ? e.message : e) });
+      stop('ajax_error');
+      return;
+    }
+    state.inFlight = false;
+    state.batchNumber += 1;
+    state.cursor = parseInt(res.next_cursor || res.next_product_id || state.cursor || 0, 10) || state.cursor;
+    state.lastProductId = parseInt(res.last_product_id_processed || state.cursor || 0, 10) || state.lastProductId;
+    state.totals.attempted += parseInt(res.attempted || 0, 10);
+    state.totals.success += parseInt(res.success_count || 0, 10);
+    state.totals.failed += parseInt(res.failed_count || 0, 10);
+    state.totals.alreadyImported += parseInt(res.already_imported_count || 0, 10);
+    state.totals.blocked += parseInt(res.blocked_count || 0, 10);
+    state.totals.missingImages += parseInt(res.missing_images_count || 0, 10);
+    state.totals.missingPartCode += parseInt(res.missing_part_code_count || 0, 10);
+    state.totals.missingCategory += parseInt(res.missing_category_count || 0, 10);
+    state.totals.repairNeeded += parseInt(res.repair_needed_count || 0, 10);
+    state.raw.push(res);
+    const errorSummary = (res.errors || []).slice(0, 3).map(function (e) { return (e.product_id || '') + ':' + (e.code || e.message || 'error'); }).join('; ');
+    addLog({ timestamp: nowIso(), batch_number: state.batchNumber, attempted: res.attempted || 0, success_count: res.success_count || 0, failed_count: res.failed_count || 0, blocked_count: res.blocked_count || 0, already_imported_count: res.already_imported_count || 0, stop_reason: res.stop_reason || '', error_summary: errorSummary });
+    updateSummary(res);
+    if (!res.should_continue || !res.has_more || parseInt(res.attempted || 0, 10) === 0) { stop(res.stop_reason || 'complete'); return; }
+    if (checked('gpswiss_crm_auto_stop_on_first_error') && ((res.failed_count || 0) > 0 || (res.errors || []).length > 0)) { stop('stop_on_first_error'); return; }
+    setStatus('Waiting ' + fieldNumber('gpswiss_crm_auto_delay', 4000) + ' ms...');
+    window.setTimeout(runNext, Math.max(0, fieldNumber('gpswiss_crm_auto_delay', 4000)));
+  }
+  startBtn && startBtn.addEventListener('click', function () {
+    reset();
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    runNext();
+  });
+  stopBtn && stopBtn.addEventListener('click', function () { stop('user_stop'); });
+  updateSummary(null);
+}());
