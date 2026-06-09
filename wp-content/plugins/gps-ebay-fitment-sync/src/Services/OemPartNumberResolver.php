@@ -4,63 +4,66 @@ namespace GPSEbayFitmentSync\Services;
 
 final class OemPartNumberResolver
 {
-    /**
-     * TecDoc lookup input must be resolved only from the Woo/TecDoc part-number field.
-     * Diagnostic identifiers (SKU, Ovoko IDs, EAN/GTIN, title words, make/model, MPN, etc.)
-     * intentionally live outside this resolver's part_number_candidates output.
-     */
     private $metaKeys = [
-        '_part_number' => 'high',
-        'part_number' => 'high',
-        '_gps_normalized_part_code' => 'medium',
-        '_gps_detected_part_code' => 'medium',
+        '_gps_normalized_oem_part_number', '_gps_detected_oem_part_number', '_gps_normalized_part_code', '_gps_detected_part_code',
+        '_mpn', 'mpn', '_manufacturer_code', 'manufacturer_code', '_oem_number', 'oem_number', '_oem', 'oem',
+        '_part_number', 'part_number', '_part_code', 'part_code', '_catalog_number', 'catalog_number', '_sku', '_ean', 'ean', '_gtin', 'gtin',
+        '_ovoko_part_id', 'ovoko_part_id',
     ];
 
-    private $attributeSlugs = [
-        'pa_numer-czesci',
-        'pa_numer_czesci',
-        'numer-czesci',
-        'numer_czesci',
+    private $attributeKeys = [
+        'pa_oem', 'pa_nr-oem', 'pa_nr_oem', 'pa_mpn', 'pa_numer-czesci', 'pa_numer_czesci',
+        'pa_kod-producenta', 'pa_kod_producenta', 'pa_producent', 'pa_marka', 'pa_model',
     ];
 
     public function resolve(int $productId): array
     {
         $candidates = [];
 
-        foreach ($this->metaKeys as $key => $confidence) {
+        foreach ($this->metaKeys as $key) {
             $value = $this->normalize_candidate(get_post_meta($productId, $key, true));
             if ($value !== '') {
-                $candidates[] = ['value' => $value, 'source' => 'meta:' . $key, 'confidence' => $confidence];
+                $candidates[] = ['value' => $value, 'source' => 'meta:' . $key, 'confidence' => $this->confidence_for_meta_key($key)];
             }
         }
 
-        foreach ($this->part_number_attribute_taxonomies() as $taxonomy) {
-            $value = $this->taxonomy_attribute_value($productId, $taxonomy);
+        foreach ($this->attributeKeys as $taxonomy) {
+            $value = $this->attribute_value($productId, $taxonomy);
             if ($value !== '') {
-                $candidates[] = ['value' => $value, 'source' => 'attribute:' . $taxonomy, 'confidence' => 'high'];
+                $candidates[] = ['value' => $value, 'source' => 'attribute:' . $taxonomy, 'confidence' => $this->confidence_for_attribute($taxonomy)];
             }
         }
 
-        foreach ($this->custom_product_attribute_values($productId) as $attribute) {
-            $value = $this->normalize_candidate($attribute['value'] ?? '');
-            if ($value !== '') {
-                $candidates[] = ['value' => $value, 'source' => 'attribute:' . ($attribute['name'] ?? 'Numer części'), 'confidence' => 'high'];
+        $titleCandidate = $this->title_candidate($productId);
+        if ($titleCandidate !== '') {
+            $candidates[] = ['value' => $titleCandidate, 'source' => 'candidate_from_title', 'confidence' => 'low'];
+        }
+
+        $seen = [];
+        $unique = [];
+        foreach ($candidates as $candidate) {
+            $key = strtoupper((string) $candidate['value']);
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $unique[] = $candidate;
             }
         }
 
-        $unique = $this->unique_candidates($candidates);
-        $primary = $unique[0] ?? null;
+        $primary = null;
+        foreach ($unique as $candidate) {
+            if (($candidate['confidence'] ?? '') !== 'low' || ($candidate['source'] ?? '') !== 'candidate_from_title') {
+                $primary = $candidate;
+                break;
+            }
+        }
 
         return [
             'found' => $primary !== null,
             'value' => $primary['value'] ?? '',
             'source' => $primary['source'] ?? '',
-            'confidence' => $primary['confidence'] ?? '',
+            'confidence' => $primary['confidence'] ?? 'low',
             'candidates' => $unique,
-            'primary_part_number' => $primary['value'] ?? '',
-            'primary_part_number_source' => $primary['source'] ?? '',
-            'primary_part_number_confidence' => $primary['confidence'] ?? '',
-            'part_number_candidates' => $unique,
+            'candidate_from_title' => $titleCandidate,
         ];
     }
 
@@ -80,32 +83,11 @@ final class OemPartNumberResolver
         return $value;
     }
 
-    /** @return string[] */
-    private function part_number_attribute_taxonomies(): array
+    private function attribute_value(int $productId, string $taxonomy): string
     {
-        $taxonomies = [];
-        foreach ($this->attributeSlugs as $slug) {
-            $taxonomy = strpos($slug, 'pa_') === 0 ? $slug : 'pa_' . $slug;
-            if (taxonomy_exists($taxonomy)) {
-                $taxonomies[$taxonomy] = $taxonomy;
-            }
+        if (!taxonomy_exists($taxonomy)) {
+            return '';
         }
-
-        foreach (get_taxonomies([], 'objects') as $taxonomy => $object) {
-            if (strpos((string) $taxonomy, 'pa_') !== 0) {
-                continue;
-            }
-            $label = isset($object->labels->singular_name) ? (string) $object->labels->singular_name : (string) ($object->label ?? '');
-            if ($this->is_part_number_attribute_name($taxonomy) || $this->is_part_number_attribute_name($label)) {
-                $taxonomies[$taxonomy] = (string) $taxonomy;
-            }
-        }
-
-        return array_values($taxonomies);
-    }
-
-    private function taxonomy_attribute_value(int $productId, string $taxonomy): string
-    {
         $terms = wp_get_post_terms($productId, $taxonomy, ['fields' => 'names']);
         if (is_wp_error($terms) || empty($terms)) {
             return '';
@@ -113,64 +95,28 @@ final class OemPartNumberResolver
         return $this->normalize_candidate((string) reset($terms));
     }
 
-    /** @return array<int,array{name:string,value:string}> */
-    private function custom_product_attribute_values(int $productId): array
+    private function title_candidate(int $productId): string
     {
-        $attributes = get_post_meta($productId, '_product_attributes', true);
-        if (!is_array($attributes)) {
-            return [];
+        $title = get_the_title($productId);
+        if (!is_string($title) || trim($title) === '') {
+            return '';
         }
-
-        $values = [];
-        foreach ($attributes as $attribute) {
-            if (!is_array($attribute)) {
-                continue;
-            }
-            $name = (string) ($attribute['name'] ?? '');
-            if ($name === '' || !$this->is_part_number_attribute_name($name)) {
-                continue;
-            }
-            if (!empty($attribute['is_taxonomy'])) {
-                $taxonomyValue = $this->taxonomy_attribute_value($productId, $name);
-                if ($taxonomyValue !== '') {
-                    $values[] = ['name' => $name, 'value' => $taxonomyValue];
-                }
-                continue;
-            }
-            $values[] = ['name' => $name, 'value' => (string) ($attribute['value'] ?? '')];
+        if (preg_match('/\b([A-Z0-9][A-Z0-9\-\.\/]{4,24})\b/i', $title, $matches)) {
+            return $this->normalize_candidate($matches[1]);
         }
-
-        return $values;
+        return '';
     }
 
-    private function is_part_number_attribute_name(string $name): bool
+    private function confidence_for_meta_key(string $key): string
     {
-        $normalized = $this->normalize_attribute_name($name);
-        return in_array($normalized, ['numer_czesci', 'pa_numer_czesci'], true);
-    }
-
-    private function normalize_attribute_name(string $name): string
-    {
-        $name = strtolower(trim(wp_strip_all_tags($name)));
-        $name = strtr($name, [
-            'ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ż' => 'z', 'ź' => 'z',
-        ]);
-        $name = preg_replace('/[^a-z0-9]+/', '_', $name);
-        return trim((string) $name, '_');
-    }
-
-    private function unique_candidates(array $candidates): array
-    {
-        $seen = [];
-        $unique = [];
-        foreach ($candidates as $candidate) {
-            $key = strtoupper((string) ($candidate['value'] ?? ''));
-            if ($key === '' || isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
-            $unique[] = $candidate;
+        if (strpos($key, 'ean') !== false || strpos($key, 'gtin') !== false || strpos($key, 'ovoko') !== false || $key === '_sku') {
+            return 'medium';
         }
-        return $unique;
+        return 'high';
+    }
+
+    private function confidence_for_attribute(string $taxonomy): string
+    {
+        return in_array($taxonomy, ['pa_producent', 'pa_marka', 'pa_model'], true) ? 'low' : 'medium';
     }
 }
