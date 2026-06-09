@@ -22,8 +22,6 @@ final class GPS_Gmail_Product_Importer
     const UPLOAD_DIR = 'gps-gmail-product-importer';
     const LOCK_KEY = 'gps_gmail_product_importer_batch_lock';
     const STAGING_POST_TYPE = 'gps_gmail_stage';
-    const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
-    const GMAIL_USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
     private const OVOKO_CATEGORY_SUGGESTION_HIGH_TRUST_SOURCE_TYPES = array('official_code_prediction', 'panel_network_capture', 'api_candidate_code_lookup', 'public_ovoko_code_page', 'woo_term_exact_ovoko_id');
 
 
@@ -45,7 +43,6 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_init', array($this, 'maybe_handle_oauth_callback'));
         add_action('admin_post_gps_gmail_product_importer_disconnect', array($this, 'handle_disconnect'));
         add_action('admin_post_gps_gmail_product_importer_test', array($this, 'handle_test'));
-        add_action('admin_post_gps_gmail_product_importer_test_mark_read_permission', array($this, 'handle_test_mark_read_permission'));
         add_action('admin_post_gps_gmail_product_importer_dry_run', array($this, 'handle_dry_run'));
         add_action('admin_post_gps_gmail_product_importer_import', array($this, 'handle_import'));
         add_action('admin_post_gps_gmail_product_importer_create_woo_drafts', array($this, 'handle_create_woo_drafts'));
@@ -346,15 +343,10 @@ JS;
 
             <h2><?php echo esc_html__('2. Gmail Connection', 'gps-gmail-product-importer'); ?></h2>
             <p><?php echo $connected ? esc_html(sprintf(__('Connected account: %s', 'gps-gmail-product-importer'), $connected)) : esc_html__('No Gmail account connected.', 'gps-gmail-product-importer'); ?></p>
-            <?php $gmail_permission = $this->gmail_permission_state(); ?>
-            <?php if ($connected && !$gmail_permission['has_gmail_modify_scope']) : ?><div class="notice notice-warning inline"><p><strong><?php esc_html_e('Gmail permissions changed. Please reconnect/reauthorize Gmail account.', 'gps-gmail-product-importer'); ?></strong></p><p><?php esc_html_e('Gmail account is connected without gmail.modify permission. Reconnect Gmail to allow marking messages as read.', 'gps-gmail-product-importer'); ?></p></div><?php endif; ?>
             <p><?php esc_html_e('Tokens are stored in WordPress options and are never displayed in this admin screen.', 'gps-gmail-product-importer'); ?></p>
-            <p><strong><?php esc_html_e('Current Gmail scopes:', 'gps-gmail-product-importer'); ?></strong> <code><?php echo esc_html($gmail_permission['scope_display']); ?></code></p>
-            <p><strong><?php esc_html_e('Mark-as-read permission:', 'gps-gmail-product-importer'); ?></strong> <?php echo esc_html($gmail_permission['permission_label']); ?></p>
-            <p><a class="button button-primary" href="<?php echo esc_url($this->oauth_url()); ?>"><?php esc_html_e('Connect / Reauthorize Gmail', 'gps-gmail-product-importer'); ?></a></p>
+            <p><a class="button button-primary" href="<?php echo esc_url($this->oauth_url()); ?>"><?php esc_html_e('Connect Gmail', 'gps-gmail-product-importer'); ?></a></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_disconnect"><?php submit_button(__('Disconnect Gmail', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_test"><?php submit_button(__('Test Gmail API', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_test_mark_read_permission"><?php submit_button(__('Test Gmail mark-as-read permission', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_test"><?php submit_button(__('Test Gmail API', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
 
             <h2><?php echo esc_html__('3. Import Queue', 'gps-gmail-product-importer'); ?></h2>
             <p><?php esc_html_e('Gmail Scan writes parsed messages into staging/import queue records first. Woo, eBay, and Ovoko publishing are not performed by the scan.', 'gps-gmail-product-importer'); ?></p>
@@ -542,8 +534,6 @@ JS;
         if ((string) ($settings['message_status_filter'] ?? '') !== 'unread') { $warnings[] = 'Gmail filter is not set to unread.'; }
         if (empty($settings['import_images'])) { $warnings[] = 'Image import is disabled.'; }
         if (empty($settings['duplicate_protection'])) { $warnings[] = 'Duplicate protection is disabled.'; }
-        $gmail_permission = $this->gmail_permission_state();
-        if (!empty($settings['mark_gmail_read_after_staging']) && !$gmail_permission['has_gmail_modify_scope']) { $warnings[] = 'Messages are staged but cannot be marked as read. They may appear again in unread scans.'; }
         return array('rows' => $rows, 'warnings' => $warnings);
     }
 
@@ -858,7 +848,7 @@ JS;
             'client_id' => $settings['google_client_id'],
             'redirect_uri' => $this->redirect_uri(),
             'response_type' => 'code',
-            'scope' => implode(' ', $this->gmail_oauth_scopes()),
+            'scope' => 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email',
             'access_type' => 'offline',
             'prompt' => 'consent',
             'state' => $state,
@@ -889,7 +879,7 @@ JS;
                 'grant_type' => 'authorization_code',
             ),
         ));
-        $body = $this->json_response($response, 'https://oauth2.googleapis.com/token');
+        $body = $this->json_response($response);
         if (is_wp_error($body)) {
             set_transient('gps_gmail_product_importer_last_admin_result', array('error' => $body->get_error_message()), 60);
             wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
@@ -920,15 +910,6 @@ JS;
         $this->verify_admin_action();
         $result = $this->test_connection();
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 60);
-        wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
-        exit;
-    }
-
-    public function handle_test_mark_read_permission()
-    {
-        $this->verify_admin_action();
-        $result = $this->test_gmail_mark_read_permission();
-        set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
         exit;
     }
@@ -1015,35 +996,10 @@ JS;
     private function test_connection()
     {
         $labels = $this->gmail_request('https://gmail.googleapis.com/gmail/v1/users/me/labels');
-        $permission = $this->gmail_permission_state();
         if (is_wp_error($labels)) {
-            return array('ok' => false, 'error' => $labels->get_error_message(), 'gmail_permission_state' => $permission);
+            return array('ok' => false, 'error' => $labels->get_error_message());
         }
-        return array('ok' => true, 'connected_account' => get_option(self::OPTION_CONNECTED_EMAIL, ''), 'labels_found' => count($labels['labels'] ?? array()), 'gmail_permission_state' => $permission);
-    }
-
-    private function test_gmail_mark_read_permission()
-    {
-        $permission = $this->gmail_permission_state(true);
-        $result = array(
-            'action' => 'test_gmail_mark_read_permission',
-            'safe_check_only' => true,
-            'message_modified' => false,
-            'required_scope' => self::GMAIL_MODIFY_SCOPE,
-            'permission_state' => $permission,
-        );
-        if (empty($permission['has_gmail_modify_scope'])) {
-            $result['ok'] = false;
-            $result['result'] = 'missing_gmail_modify_scope';
-            $result['error'] = 'Gmail account is connected without gmail.modify permission. Reconnect Gmail to allow marking messages as read.';
-            $result['admin_notice'] = 'Gmail permissions changed. Please reconnect/reauthorize Gmail account.';
-            return $result;
-        }
-        $labels = $this->gmail_request('https://gmail.googleapis.com/gmail/v1/users/me/labels');
-        if (is_wp_error($labels)) {
-            return $result + array('ok' => false, 'result' => 'gmail_api_error', 'error' => $labels->get_error_message());
-        }
-        return $result + array('ok' => true, 'result' => 'gmail_modify_scope_present', 'message' => 'gmail.modify scope is present. No real Gmail message was modified by this test.', 'labels_found' => count($labels['labels'] ?? array()));
+        return array('ok' => true, 'connected_account' => get_option(self::OPTION_CONNECTED_EMAIL, ''), 'labels_found' => count($labels['labels'] ?? array()));
     }
 
     private function process_batch($dry_run, $batch_size, $auto = false)
@@ -1063,7 +1019,7 @@ JS;
             if (is_wp_error($label_id)) {
                 throw new Exception($label_id->get_error_message());
             }
-            $message_list_request = $this->message_list_request($label_id, $label, $batch_size, $message_status_filter, !$dry_run);
+            $message_list_request = $this->message_list_request($label_id, $label, $batch_size, $message_status_filter);
             $messages = $this->list_messages($message_list_request);
             if (is_wp_error($messages)) {
                 throw new Exception($messages->get_error_message());
@@ -1075,7 +1031,6 @@ JS;
             $state['message_status_filter'] = $message_list_request['message_status_filter'];
             $state['remaining_messages'] = max(0, absint($messages['resultSizeEstimate'] ?? 0) - count($messages['messages'] ?? array()));
             $items = array();
-            $processable_count = 0;
             foreach (($messages['messages'] ?? array()) as $message_ref) {
                 $state['total_checked']++;
                 $message = $this->get_message($message_ref['id']);
@@ -1127,14 +1082,8 @@ JS;
                         $state['total_skipped']++;
                     }
                     $this->write_report_row('actions', $row);
-                    if (empty($analysis['duplicate_status'])) {
-                        $processable_count++;
-                    }
                 }
                 $items[] = $analysis;
-                if (!$dry_run && $processable_count >= $batch_size) {
-                    break;
-                }
             }
             $state['batches_completed']++;
             $state['last_batch_result'] = $items;
@@ -1180,14 +1129,12 @@ JS;
         } else {
             $marked = $this->mark_gmail_message_read($analysis['message_id'] ?? '');
             if (is_wp_error($marked)) {
-                $missing_scope = $this->wp_error_code($marked) === 'missing_gmail_modify_scope';
-                $analysis['gmail_mark_read_status'] = $missing_scope ? 'missing_gmail_modify_scope' : 'gmail_mark_read_failed';
+                $analysis['gmail_mark_read_status'] = 'gmail_mark_read_failed';
                 $analysis['gmail_mark_read_error'] = $marked->get_error_message();
-                $warning_code = $missing_scope ? 'missing_gmail_modify_scope' : 'gmail_mark_read_failed';
-                $analysis['warnings'] = array_values(array_unique(array_merge((array) ($analysis['warnings'] ?? array()), array($warning_code))));
+                $analysis['warnings'] = array_values(array_unique(array_merge((array) ($analysis['warnings'] ?? array()), array('gmail_mark_read_failed'))));
                 $state['total_mark_read_failed']++;
                 $state['messages_left_unread_due_to_errors']++;
-                $state['warnings'] = array_values(array_unique(array_merge((array) ($state['warnings'] ?? array()), array($warning_code, 'Messages are staged but cannot be marked as read. They may appear again in unread scans.'))));
+                $state['warnings'] = array_values(array_unique(array_merge((array) ($state['warnings'] ?? array()), array('gmail_mark_read_failed'))));
             } else {
                 $analysis['gmail_marked_read'] = 'yes';
                 $analysis['gmail_mark_read_status'] = 'marked_read';
@@ -1198,7 +1145,7 @@ JS;
         $row['gmail_marked_read'] = $analysis['gmail_marked_read'];
         $row['gmail_mark_read_status'] = $analysis['gmail_mark_read_status'];
         $row['gmail_mark_read_error'] = $analysis['gmail_mark_read_error'];
-        if (in_array($analysis['gmail_mark_read_status'], array('gmail_mark_read_failed', 'missing_gmail_modify_scope'), true)) {
+        if ($analysis['gmail_mark_read_status'] === 'gmail_mark_read_failed') {
             $row['error_message'] = trim((string) ($row['error_message'] ?? '') . ' gmail_mark_read_failed: ' . $analysis['gmail_mark_read_error']);
         }
     }
@@ -1222,7 +1169,7 @@ JS;
         return $this->gmail_request($message_list_request['url']);
     }
 
-    private function message_list_request($label_id, $label, $batch_size, $message_status_filter, $allow_duplicate_overfetch = false)
+    private function message_list_request($label_id, $label, $batch_size, $message_status_filter)
     {
         $message_status_filter = $this->sanitize_message_status_filter($message_status_filter);
         $label_ids = array($label_id);
@@ -1237,7 +1184,7 @@ JS;
         return array(
             'url' => 'https://gmail.googleapis.com/gmail/v1/users/me/messages?' . $this->query_string_with_repeated_values(array(
                 'labelIds' => array_values(array_unique($label_ids)),
-                'maxResults' => $allow_duplicate_overfetch ? min(100, max($batch_size, $batch_size * 5)) : $batch_size,
+                'maxResults' => $batch_size,
                 'q' => $query,
             )),
             'gmail_query_used' => $query,
@@ -1288,10 +1235,6 @@ JS;
         $message_id = sanitize_text_field($message_id);
         if ($message_id === '') {
             return new WP_Error('gps_gmail_message_id_missing', 'Gmail message ID is missing.');
-        }
-        $permission = $this->gmail_permission_state();
-        if (!empty($permission['has_scope_info']) && !$permission['has_gmail_modify_scope']) {
-            return new WP_Error('missing_gmail_modify_scope', 'Gmail account is connected without gmail.modify permission. Reconnect Gmail to allow marking messages as read.');
         }
         return $this->gmail_request('https://gmail.googleapis.com/gmail/v1/users/me/messages/' . rawurlencode($message_id) . '/modify', array(
             'method' => 'POST',
@@ -3923,7 +3866,7 @@ JS;
         $args = wp_parse_args($args, array('timeout' => 20, 'headers' => array()));
         $args['headers']['Authorization'] = 'Bearer ' . $token;
         $response = wp_remote_request($url, $args);
-        return $this->json_response($response, $url);
+        return $this->json_response($response);
     }
 
     private function access_token()
@@ -3951,12 +3894,11 @@ JS;
 
     private function store_tokens($body)
     {
-        $existing = (array) get_option(self::OPTION_TOKENS, array());
-        $tokens = array('access_token' => sanitize_text_field($body['access_token'] ?? ''), 'refresh_token' => sanitize_text_field($body['refresh_token'] ?? ($existing['refresh_token'] ?? '')), 'expires_at' => time() + absint($body['expires_in'] ?? 3600), 'scope' => sanitize_text_field($body['scope'] ?? ($existing['scope'] ?? '')), 'token_type' => sanitize_text_field($body['token_type'] ?? 'Bearer'));
+        $tokens = array('access_token' => sanitize_text_field($body['access_token'] ?? ''), 'refresh_token' => sanitize_text_field($body['refresh_token'] ?? ((array) get_option(self::OPTION_TOKENS, array()))['refresh_token'] ?? ''), 'expires_at' => time() + absint($body['expires_in'] ?? 3600), 'scope' => sanitize_text_field($body['scope'] ?? ''), 'token_type' => sanitize_text_field($body['token_type'] ?? 'Bearer'));
         update_option(self::OPTION_TOKENS, $tokens, false);
     }
 
-    private function json_response($response, $url = '')
+    private function json_response($response)
     {
         if (is_wp_error($response)) {
             return $response;
@@ -3964,66 +3906,9 @@ JS;
         $code = wp_remote_retrieve_response_code($response);
         $body = json_decode(wp_remote_retrieve_body($response), true);
         if ($code < 200 || $code >= 300) {
-            $is_gmail_modify = strpos((string) $url, 'gmail.googleapis.com/gmail/v1/users/me/messages/') !== false && strpos((string) $url, '/modify') !== false;
-            if ((int) $code === 403 && $is_gmail_modify) {
-                return new WP_Error('missing_gmail_modify_scope', 'Gmail account is connected without gmail.modify permission. Reconnect Gmail to allow marking messages as read.', $body);
-            }
             return new WP_Error('gps_gmail_http_error', 'Google API request failed with HTTP ' . $code, $body);
         }
         return is_array($body) ? $body : array();
-    }
-
-    private function wp_error_code($error)
-    {
-        if (is_object($error) && method_exists($error, 'get_error_code')) {
-            return (string) $error->get_error_code();
-        }
-        if (is_object($error)) {
-            $ref = new ReflectionObject($error);
-            if ($ref->hasProperty('code')) {
-                $prop = $ref->getProperty('code');
-                $prop->setAccessible(true);
-                return (string) $prop->getValue($error);
-            }
-        }
-        return '';
-    }
-
-    private function gmail_oauth_scopes()
-    {
-        return array(self::GMAIL_MODIFY_SCOPE, self::GMAIL_USERINFO_EMAIL_SCOPE);
-    }
-
-    private function gmail_permission_state($refresh_from_tokeninfo = false)
-    {
-        $tokens = (array) get_option(self::OPTION_TOKENS, array());
-        $scope_text = trim((string) ($tokens['scope'] ?? ''));
-        $source = $scope_text === '' ? 'not_available' : 'stored_token_scope';
-        if ($refresh_from_tokeninfo && !empty($tokens['access_token'])) {
-            $response = wp_remote_get('https://oauth2.googleapis.com/tokeninfo?access_token=' . rawurlencode((string) $tokens['access_token']), array('timeout' => 15));
-            if (!is_wp_error($response)) {
-                $body = $this->json_response($response, 'https://oauth2.googleapis.com/tokeninfo');
-                if (!is_wp_error($body) && isset($body['scope'])) {
-                    $scope_text = trim((string) $body['scope']);
-                    $source = 'google_tokeninfo';
-                    $tokens['scope'] = sanitize_text_field($scope_text);
-                    update_option(self::OPTION_TOKENS, $tokens, false);
-                }
-            }
-        }
-        $scopes = array_values(array_filter(preg_split('/\s+/', $scope_text)));
-        $has_modify = in_array(self::GMAIL_MODIFY_SCOPE, $scopes, true);
-        return array(
-            'connected' => !empty($tokens['access_token']) || !empty($tokens['refresh_token']),
-            'required_scope' => self::GMAIL_MODIFY_SCOPE,
-            'configured_oauth_scopes' => $this->gmail_oauth_scopes(),
-            'granted_scopes' => $scopes,
-            'scope_display' => $scope_text !== '' ? $scope_text : 'unknown (reconnect Gmail to confirm granted scopes)',
-            'scope_source' => $source,
-            'has_scope_info' => $scope_text !== '',
-            'has_gmail_modify_scope' => $has_modify,
-            'permission_label' => $has_modify ? 'gmail.modify granted' : 'gmail.modify missing; reauthorization required',
-        );
     }
 
     private function base64url_decode($data)
