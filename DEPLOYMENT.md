@@ -140,6 +140,31 @@ Skrypt wygeneruje lokalnie:
 
 Katalog `dist/` i pliki archiwów są ignorowane przez `.gitignore`.
 
+
+## 12a) Bezpieczny deploy motywu `shop`
+
+Produkcja używa katalogu docelowego `wp-content/themes/shop`, ale w tym repozytorium **nie ma** katalogu źródłowego `wp-content/themes/shop`. Pliki motywu WordPress znajdują się obecnie w katalogu głównym repozytorium (`style.css`, `functions.php`, `header.php`, `footer.php`, `assets/`, `template-parts/`, `woocommerce/`) i opisują motyw **Global Parts Clone**, a nie motyw o slug `shop`.
+
+Nie wolno wdrażać motywu przez kopiowanie całego katalogu repozytorium do `wp-content/themes/shop`, np. przez:
+
+```php
+recurse_copy($source, $themeTarget);
+```
+
+Taki deploy miesza katalog motywu z plikami repozytorium (`wp-content/plugins`, dokumentacja, skrypty itp.) i może zepsuć frontend lub ścieżki assetów.
+
+Do czasu przeniesienia motywu do `wp-content/themes/shop` deploy motywu `shop` jest celowo wyłączony w `scripts/deploy-theme.php`. Skrypt kopiuje wyłącznie źródło `wp-content/themes/shop`, jeśli taki katalog istnieje; w przeciwnym razie kończy działanie bez kopiowania plików, żeby nie nadpisać produkcyjnego motywu błędną zawartością.
+
+Bezpieczna naprawa produkcyjnego katalogu po błędnym deployu:
+
+1. Zrób backup katalogu motywu:
+   ```bash
+   cp -a /ścieżka/do/wordpress/wp-content/themes/shop /ścieżka/do/backup/shop-$(date +%Y%m%d-%H%M%S)
+   ```
+2. Usuń z `wp-content/themes/shop` tylko pliki, które pochodzą z root repozytorium i nie należą do właściwego motywu produkcyjnego, np. zagnieżdżone `wp-content/`, `scripts/`, dokumentację `*.md`, archiwa i pliki VCS. Nie kasuj `wp-content/uploads`, bazy danych ani żadnych katalogów WordPressa poza `wp-content/themes/shop`.
+3. Odtwórz właściwy motyw `shop` z ostatniego dobrego backupu albo z poprawnego artefaktu motywu.
+4. Wyczyść cache WordPressa/CDN/przeglądarki i sprawdź stronę główną oraz stronę produktu.
+
 ## 13) Konfiguracja SMTP + maile WooCommerce (GPSWISS)
 
 ### Sekrety (bez hardcodowania)
