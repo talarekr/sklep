@@ -55,6 +55,7 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_dry_run', array($this, 'handle_ovoko_enrichment_dry_run'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_save', array($this, 'handle_ovoko_enrichment_save'));
         add_action('wp_ajax_gps_gmail_product_importer_import_batch', array($this, 'ajax_import_batch'));
+        add_action('wp_ajax_gps_gmail_product_importer_auto_runner_batch', array($this, 'ajax_auto_runner_batch'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
     }
@@ -219,43 +220,96 @@ final class GPS_Gmail_Product_Importer
     {
         return <<<'JS'
 (function($){
-    var running = false;
-    function tick(){
-        if(!running){ return; }
-        var delay = parseInt($('#gps-gmail-delay').val() || 3, 10);
+    var runnerActive = false;
+    var runnerTimer = null;
+
+    function autoRunnerDelay(){
+        var delay = parseInt($('#gps-gmail-auto-delay').val() || 5, 10);
+        return Math.max(1, delay) * 1000;
+    }
+
+    function setAutoRunnerButtons(active){
+        $('#gps-gmail-auto-start').prop('disabled', active);
+        $('#gps-gmail-auto-stop').prop('disabled', !active);
+    }
+
+    function updateAutoRunnerOutput(data){
+        data = data || {};
+        $('[data-gps-auto-counter]').each(function(){
+            var key = $(this).data('gps-auto-counter');
+            var value = data[key];
+            if (key === 'total_created' && value === undefined) {
+                value = data.total_products_created;
+            }
+            if (value === undefined || value === null || value === '') {
+                value = (key === 'stopped_reason') ? '-' : 0;
+            }
+            if (typeof value === 'object') {
+                value = JSON.stringify(value);
+            }
+            $(this).text(value);
+        });
+        $('#gps-gmail-auto-output').text(JSON.stringify(data, null, 2));
+    }
+
+    function stopAutoRunner(reason){
+        runnerActive = false;
+        if (runnerTimer) {
+            clearTimeout(runnerTimer);
+            runnerTimer = null;
+        }
+        setAutoRunnerButtons(false);
+        if (reason) {
+            $('[data-gps-auto-counter="stopped_reason"]').text(reason);
+        }
+    }
+
+    function runAutoRunnerBatch(reset){
+        if (!runnerActive) { return; }
         $.post(GPSGmailImporter.ajaxUrl, {
-            action: 'gps_gmail_product_importer_import_batch',
+            action: 'gps_gmail_product_importer_auto_runner_batch',
             nonce: GPSGmailImporter.nonce,
-            batch_size: $('#gps-gmail-auto-batch-size').val()
-        }, function(resp){
-            $('#gps-gmail-run-output').text(JSON.stringify(resp.data || resp, null, 2));
-            if(!resp.success || !resp.data || resp.data.state !== 'running'){
-                running = false;
-                $('#gps-gmail-start').prop('disabled', false);
-                $('#gps-gmail-stop').prop('disabled', true);
+            mode: $('#gps-gmail-auto-mode').val(),
+            batch_size: $('#gps-gmail-auto-batch-size').val(),
+            reset: reset ? 1 : 0
+        }).done(function(resp){
+            var data = resp && resp.data ? resp.data : resp;
+            updateAutoRunnerOutput(data);
+            if (!resp || !resp.success || !data || data.state !== 'running') {
+                stopAutoRunner((data && data.stopped_reason) || (resp && resp.success ? '' : 'ajax_error'));
                 return;
             }
-            setTimeout(tick, Math.max(1, delay) * 1000);
+            runnerTimer = setTimeout(function(){ runAutoRunnerBatch(false); }, autoRunnerDelay());
+        }).fail(function(xhr){
+            var data = {state: 'error', stopped_reason: 'ajax_http_error', status: xhr.status, response: xhr.responseJSON || xhr.responseText};
+            updateAutoRunnerOutput(data);
+            stopAutoRunner('ajax_http_error');
         });
     }
-    $(document).on('click', '#gps-gmail-start', function(e){
+
+    $(document).on('click', '#gps-gmail-auto-start', function(e){
         e.preventDefault();
-        running = true;
-        $('#gps-gmail-start').prop('disabled', true);
-        $('#gps-gmail-stop').prop('disabled', false);
-        tick();
+        runnerActive = true;
+        setAutoRunnerButtons(true);
+        runAutoRunnerBatch(true);
     });
-    $(document).on('click', '#gps-gmail-stop', function(e){
+
+    $(document).on('click', '#gps-gmail-auto-stop', function(e){
         e.preventDefault();
-        running = false;
-        $('#gps-gmail-start').prop('disabled', false);
-        $('#gps-gmail-stop').prop('disabled', true);
+        runnerActive = false;
+        if (runnerTimer) {
+            clearTimeout(runnerTimer);
+            runnerTimer = null;
+        }
+        $('[data-gps-auto-counter="state"]').text('stopping');
         $.post(GPSGmailImporter.ajaxUrl, {
-            action: 'gps_gmail_product_importer_import_batch',
+            action: 'gps_gmail_product_importer_auto_runner_batch',
             nonce: GPSGmailImporter.nonce,
             stop: 1
-        }, function(resp){
-            $('#gps-gmail-run-output').text(JSON.stringify(resp.data || resp, null, 2));
+        }).always(function(resp){
+            var data = resp && resp.data ? resp.data : resp;
+            updateAutoRunnerOutput(data || {state: 'stopped', stopped_reason: 'admin_requested'});
+            setAutoRunnerButtons(false);
         });
     });
 })(jQuery);
@@ -264,7 +318,7 @@ JS;
 
     public function render_admin_page()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->current_user_can_manage_importer()) {
             wp_die(esc_html__('You do not have permission to access this page.', 'gps-gmail-product-importer'));
         }
         $settings = $this->settings();
@@ -503,6 +557,34 @@ JS;
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="errors"><?php submit_button(__('Download audit errors CSV', 'gps-gmail-product-importer'), $audit['summary']['blocked'] > 0 ? 'secondary' : 'secondary disabled', 'submit', false); ?></form>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="full"><?php submit_button(__('Download full audit CSV', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
             </div>
+        </div>
+        <div class="gps-card gps-primary-flow" id="gps-gmail-auto-runner">
+            <h3><?php esc_html_e('Optional Auto runner', 'gps-gmail-product-importer'); ?></h3>
+            <p><?php esc_html_e('Browser-based runner: one small AJAX batch per request, then the browser waits before starting the next batch. It reuses the same Gmail scan/stage, preparation audit, and Woo draft creation methods as the manual buttons.', 'gps-gmail-product-importer'); ?></p>
+            <p class="description"><?php esc_html_e('Safety: no Ovoko live import, no Allegro import, no eBay sends, and Woo products remain drafts. Existing readiness blockers and duplicate/already-created checks are not bypassed.', 'gps-gmail-product-importer'); ?></p>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:12px 0;">
+                <label><strong><?php esc_html_e('Mode', 'gps-gmail-product-importer'); ?></strong><br>
+                    <select id="gps-gmail-auto-mode">
+                        <option value="scan_gmail_dry_run"><?php esc_html_e('dry-run scan Gmail', 'gps-gmail-product-importer'); ?></option>
+                        <option value="scan_gmail_stage"><?php esc_html_e('stage unread Gmail messages', 'gps-gmail-product-importer'); ?></option>
+                        <option value="prepare_audit"><?php esc_html_e('preparation audit', 'gps-gmail-product-importer'); ?></option>
+                        <option value="create_woo_drafts"><?php esc_html_e('create Woo draft products', 'gps-gmail-product-importer'); ?></option>
+                        <option value="full_pipeline_safe"><?php esc_html_e('full safe pipeline', 'gps-gmail-product-importer'); ?></option>
+                    </select>
+                </label>
+                <label><strong><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></strong><br><input id="gps-gmail-auto-batch-size" type="number" min="1" max="25" value="10"></label>
+                <label><strong><?php esc_html_e('Delay between batches', 'gps-gmail-product-importer'); ?></strong><br><input id="gps-gmail-auto-delay" type="number" min="1" max="60" value="5"> <?php esc_html_e('seconds', 'gps-gmail-product-importer'); ?></label>
+                <button id="gps-gmail-auto-start" class="button button-primary"><?php esc_html_e('Start', 'gps-gmail-product-importer'); ?></button>
+                <button id="gps-gmail-auto-stop" class="button" disabled><?php esc_html_e('Stop', 'gps-gmail-product-importer'); ?></button>
+            </div>
+            <table class="widefat striped" style="max-width:1100px;">
+                <tbody>
+                <?php foreach (array('batches_completed', 'total_checked', 'total_staged', 'total_prepared', 'total_created', 'total_skipped', 'total_blocked', 'total_errors', 'remaining_candidates', 'state', 'stopped_reason') as $counter_key) : ?>
+                    <tr><th style="width:240px;"><?php echo esc_html($counter_key); ?></th><td><code data-gps-auto-counter="<?php echo esc_attr($counter_key); ?>"><?php echo $counter_key === 'stopped_reason' ? '-' : ($counter_key === 'state' ? 'idle' : '0'); ?></code></td></tr>
+                <?php endforeach; ?>
+                    <tr><th><?php esc_html_e('last_batch_result', 'gps-gmail-product-importer'); ?></th><td><pre id="gps-gmail-auto-output" style="white-space:pre-wrap;max-height:360px;overflow:auto;margin:0;">{}</pre></td></tr>
+                </tbody>
+            </table>
         </div>
         <div class="gps-card"><h3><?php esc_html_e('Audit table', 'gps-gmail-product-importer'); ?></h3>
             <table class="widefat striped"><thead><tr><th><?php esc_html_e('Staging item ID', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Gmail date', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Gmail subject', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Storage location', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Part code/OEM', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Images', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Fixed category', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Price status', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Woo readiness', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Blockers', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Created product ID', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Actions', 'gps-gmail-product-importer'); ?></th></tr></thead><tbody>
@@ -969,9 +1051,14 @@ JS;
         exit;
     }
 
+    private function current_user_can_manage_importer()
+    {
+        return current_user_can('manage_options') || current_user_can('manage_woocommerce');
+    }
+
     public function ajax_import_batch()
     {
-        if (!current_user_can('manage_options') || !check_ajax_referer(self::NONCE_ACTION, 'nonce', false)) {
+        if (!$this->current_user_can_manage_importer() || !check_ajax_referer(self::NONCE_ACTION, 'nonce', false)) {
             wp_send_json_error(array('message' => 'forbidden'), 403);
         }
         if (!empty($_POST['stop'])) {
@@ -985,9 +1072,245 @@ JS;
         wp_send_json_success($result);
     }
 
+    public function ajax_auto_runner_batch()
+    {
+        if (!$this->current_user_can_manage_importer() || !check_ajax_referer(self::NONCE_ACTION, 'nonce', false)) {
+            wp_send_json_error(array('message' => 'forbidden'), 403);
+        }
+
+        if (!empty($_POST['stop'])) {
+            $state = $this->auto_runner_state();
+            $state['state'] = 'stopping';
+            $state['stopped_reason'] = 'admin_requested';
+            $state['state'] = 'stopped';
+            update_option(self::OPTION_RUN_STATE, $state, false);
+            wp_send_json_success($state);
+        }
+
+        $mode = $this->sanitize_auto_runner_mode($_POST['mode'] ?? 'scan_gmail_stage');
+        $batch_size = max(1, min(25, absint($_POST['batch_size'] ?? 10)));
+        $reset = !empty($_POST['reset']);
+        $state = $reset ? $this->fresh_auto_runner_state($mode) : $this->auto_runner_state();
+        if (($state['mode'] ?? '') !== $mode || !in_array((string) ($state['state'] ?? ''), array('running', 'stopping'), true)) {
+            $state = $this->fresh_auto_runner_state($mode);
+        }
+        if (($state['state'] ?? '') === 'stopping') {
+            $state['state'] = 'stopped';
+            $state['stopped_reason'] = $state['stopped_reason'] ?: 'admin_requested';
+            update_option(self::OPTION_RUN_STATE, $state, false);
+            wp_send_json_success($state);
+        }
+
+        try {
+            $state['state'] = 'running';
+            $state['batch_size'] = $batch_size;
+            $result = $this->run_auto_runner_batch($state, $batch_size);
+            update_option(self::OPTION_RUN_STATE, $result, false);
+            wp_send_json_success($result);
+        } catch (Throwable $e) {
+            $state['state'] = 'error';
+            $state['total_errors'] = absint($state['total_errors'] ?? 0) + 1;
+            $state['stopped_reason'] = $e->getMessage();
+            $state['last_batch_result'] = array('fatal_error' => $e->getMessage());
+            update_option(self::OPTION_RUN_STATE, $state, false);
+            wp_send_json_success($state);
+        }
+    }
+
+    private function sanitize_auto_runner_mode($mode)
+    {
+        $mode = sanitize_key((string) $mode);
+        return in_array($mode, array('scan_gmail_dry_run', 'scan_gmail_stage', 'prepare_audit', 'create_woo_drafts', 'full_pipeline_safe'), true) ? $mode : 'scan_gmail_stage';
+    }
+
+    private function fresh_auto_runner_state($mode)
+    {
+        return array_merge($this->fresh_run_state(), array(
+            'mode' => $this->sanitize_auto_runner_mode($mode),
+            'pipeline_stage' => $mode === 'full_pipeline_safe' ? 'scan_gmail_stage' : '',
+            'state' => 'running',
+            'stopped_reason' => '',
+            'total_prepared' => 0,
+            'total_created' => 0,
+            'total_blocked' => 0,
+            'remaining_candidates' => 0,
+            'processed_staging_item_ids' => array(),
+            'processed_gmail_message_ids' => array(),
+            'last_batch_result' => array(),
+        ));
+    }
+
+    private function auto_runner_state()
+    {
+        $saved = (array) get_option(self::OPTION_RUN_STATE, array());
+        return wp_parse_args($saved, $this->fresh_auto_runner_state($this->sanitize_auto_runner_mode($saved['mode'] ?? 'scan_gmail_stage')));
+    }
+
+    private function run_auto_runner_batch($state, $batch_size)
+    {
+        $mode = (string) ($state['mode'] ?? 'scan_gmail_stage');
+        $effective_mode = $mode === 'full_pipeline_safe' ? (string) ($state['pipeline_stage'] ?? 'scan_gmail_stage') : $mode;
+        if ($mode === 'full_pipeline_safe' && $effective_mode === '') {
+            $effective_mode = 'scan_gmail_stage';
+            $state['pipeline_stage'] = $effective_mode;
+        }
+
+        if ($effective_mode === 'scan_gmail_dry_run' || $effective_mode === 'scan_gmail_stage') {
+            $state = $this->run_auto_gmail_scan_batch($state, $batch_size, $effective_mode === 'scan_gmail_dry_run');
+        } elseif ($effective_mode === 'prepare_audit') {
+            $state = $this->run_auto_prepare_audit_batch($state, $batch_size);
+        } elseif ($effective_mode === 'create_woo_drafts') {
+            $state = $this->run_auto_create_woo_drafts_batch($state, $batch_size);
+        } else {
+            $state['state'] = 'error';
+            $state['total_errors'] = absint($state['total_errors'] ?? 0) + 1;
+            $state['stopped_reason'] = 'unknown_auto_runner_mode';
+        }
+
+        if ($mode === 'full_pipeline_safe') {
+            $state = $this->advance_full_pipeline_if_stage_completed($state);
+        }
+        $state['total_created'] = absint($state['total_created'] ?? $state['total_products_created'] ?? 0);
+        return $state;
+    }
+
+    private function run_auto_gmail_scan_batch($state, $batch_size, $dry_run)
+    {
+        update_option(self::OPTION_RUN_STATE, $state, false);
+        $before = $state;
+        $result = $this->process_batch($dry_run, $batch_size, true);
+        $state = array_merge($state, $result);
+        $items = (array) ($result['last_batch_result'] ?? array());
+        $message_ids = array_values(array_filter(array_map(function ($item) { return is_array($item) ? (string) ($item['message_id'] ?? '') : ''; }, $items)));
+        $already_seen = $message_ids && count(array_diff($message_ids, (array) ($before['processed_gmail_message_ids'] ?? array()))) === 0;
+        $state['processed_gmail_message_ids'] = array_values(array_unique(array_merge((array) ($before['processed_gmail_message_ids'] ?? array()), $message_ids)));
+        $state['remaining_candidates'] = absint($result['remaining_messages'] ?? 0);
+        $state['last_batch_result'] = array('mode' => $dry_run ? 'scan_gmail_dry_run' : 'scan_gmail_stage', 'batch' => $items, 'remaining_messages' => $state['remaining_candidates'], 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
+        if (($result['state'] ?? '') === 'error' || ($result['state'] ?? '') === 'locked') {
+            $state['state'] = 'error';
+            $state['stopped_reason'] = $result['stopped_reason'] ?? 'gmail_scan_error';
+            return $state;
+        }
+        $stage_progress = (absint($state['total_staged'] ?? 0) > absint($before['total_staged'] ?? 0)) || (absint($state['total_stage_updated'] ?? 0) > absint($before['total_stage_updated'] ?? 0));
+        if (($result['state'] ?? '') === 'complete') {
+            $state['state'] = 'completed';
+            $state['stopped_reason'] = $result['stopped_reason'] ?: 'no_messages_returned';
+        } elseif ($dry_run && $already_seen) {
+            $state['state'] = 'completed';
+            $state['stopped_reason'] = 'dry_run_does_not_write_seen_current_batch';
+        } elseif (!$dry_run && $already_seen && !$stage_progress) {
+            $state['state'] = 'completed';
+            $state['stopped_reason'] = 'no_new_stage_progress_for_seen_current_batch';
+        } else {
+            $state['state'] = 'running';
+        }
+        return $state;
+    }
+
+    private function advance_full_pipeline_if_stage_completed($state)
+    {
+        if (($state['state'] ?? '') === 'error') {
+            return $state;
+        }
+        if (($state['state'] ?? '') !== 'completed') {
+            return $state;
+        }
+        $stage = (string) ($state['pipeline_stage'] ?? 'scan_gmail_stage');
+        if ($stage === 'scan_gmail_stage') {
+            $state['pipeline_stage'] = 'prepare_audit';
+            $state['state'] = 'running';
+            $state['stopped_reason'] = '';
+            $state['last_batch_result']['pipeline_advanced_to'] = 'prepare_audit';
+        } elseif ($stage === 'prepare_audit') {
+            $state['pipeline_stage'] = 'create_woo_drafts';
+            $state['state'] = 'running';
+            $state['stopped_reason'] = '';
+            $state['last_batch_result']['pipeline_advanced_to'] = 'create_woo_drafts';
+        } elseif ($stage === 'create_woo_drafts') {
+            $state['pipeline_stage'] = 'completed';
+            $state['state'] = 'completed';
+            $state['stopped_reason'] = $state['stopped_reason'] ?: 'full_pipeline_completed';
+        }
+        return $state;
+    }
+
+    private function run_auto_prepare_audit_batch($state, $batch_size)
+    {
+        $exclude = array_map('absint', (array) ($state['processed_staging_item_ids'] ?? array()));
+        $ids = $this->auto_runner_staging_candidate_ids($batch_size, $exclude, false);
+        if (!$ids) {
+            $state['state'] = 'completed';
+            $state['stopped_reason'] = 'no_staging_items_remaining';
+            $state['remaining_candidates'] = 0;
+            $state['last_batch_result'] = array('mode' => 'prepare_audit', 'items' => array(), 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
+            return $state;
+        }
+        $items = array();
+        foreach ($ids as $id) {
+            $items[] = $this->run_full_preparation_for_staging_item((int) $id);
+        }
+        $blocked = count(array_filter($items, function ($item) { return (($item['result'] ?? '') !== 'ready_to_create_product'); }));
+        $errors = count(array_filter($items, function ($item) { return (($item['result'] ?? '') === 'error') || !empty($item['fatal_error']); }));
+        $state['processed_staging_item_ids'] = array_values(array_unique(array_merge($exclude, array_map('absint', $ids))));
+        $state['batches_completed'] = absint($state['batches_completed'] ?? 0) + 1;
+        $state['total_checked'] = absint($state['total_checked'] ?? 0) + count($ids);
+        $state['total_prepared'] = absint($state['total_prepared'] ?? 0) + count($items);
+        $state['total_blocked'] = absint($state['total_blocked'] ?? 0) + $blocked;
+        $state['total_errors'] = absint($state['total_errors'] ?? 0) + $errors;
+        $state['remaining_candidates'] = $this->auto_runner_staging_candidate_count($state['processed_staging_item_ids'], false);
+        $state['last_batch_result'] = array('action' => 'full_preparation_batch', 'mode' => 'prepare_audit', 'result' => 'completed', 'batch_size' => $batch_size, 'total_processed' => count($items), 'items' => $items, 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_live_import' => true, 'no_allegro_call' => true, 'no_ebay_call' => true);
+        $state['state'] = $state['remaining_candidates'] > 0 ? 'running' : 'completed';
+        $state['stopped_reason'] = $state['state'] === 'completed' ? 'no_staging_items_remaining' : '';
+        return $state;
+    }
+
+    private function run_auto_create_woo_drafts_batch($state, $batch_size)
+    {
+        $exclude = array_map('absint', (array) ($state['processed_staging_item_ids'] ?? array()));
+        $result = $this->create_woo_drafts_from_ready_staging($batch_size, $exclude);
+        $items = (array) ($result['items'] ?? array());
+        $processed_ids = array_values(array_filter(array_map(function ($item) { return absint($item['staging_item_id'] ?? 0); }, $items)));
+        $state['processed_staging_item_ids'] = array_values(array_unique(array_merge($exclude, $processed_ids)));
+        $state['batches_completed'] = absint($state['batches_completed'] ?? 0) + 1;
+        $state['total_checked'] = absint($state['total_checked'] ?? 0) + absint($result['total_checked'] ?? count($items));
+        $state['total_created'] = absint($state['total_created'] ?? 0) + absint($result['created_count'] ?? 0);
+        $state['total_products_created'] = absint($state['total_products_created'] ?? 0) + absint($result['created_count'] ?? 0);
+        $state['total_skipped'] = absint($state['total_skipped'] ?? 0) + absint($result['skipped_count'] ?? 0);
+        $state['total_blocked'] = absint($state['total_blocked'] ?? 0) + absint($result['skipped_count'] ?? 0);
+        $state['total_errors'] = absint($state['total_errors'] ?? 0) + count((array) ($result['errors'] ?? array()));
+        $state['remaining_candidates'] = $this->auto_runner_staging_candidate_count($state['processed_staging_item_ids'], true);
+        $result['mode'] = 'create_woo_drafts';
+        $result['no_ovoko_live_import'] = true;
+        $result['no_allegro_call'] = true;
+        $result['no_ebay_call'] = true;
+        $result['product_status'] = 'draft';
+        $state['last_batch_result'] = $result;
+        $state['state'] = ($state['remaining_candidates'] > 0 && ($items || absint($result['created_count'] ?? 0) > 0)) ? 'running' : 'completed';
+        $state['stopped_reason'] = $state['state'] === 'completed' ? 'no_ready_or_unprocessed_staging_items_remaining' : '';
+        return $state;
+    }
+
+    private function auto_runner_staging_candidate_ids($limit, $exclude_ids = array(), $only_uncreated = false)
+    {
+        $args = array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max(1, min(100, absint($limit))), 'orderby' => 'ID', 'order' => 'ASC');
+        $exclude_ids = array_values(array_filter(array_map('absint', (array) $exclude_ids)));
+        if ($exclude_ids) {
+            $args['post__not_in'] = $exclude_ids;
+        }
+        if ($only_uncreated) {
+            $args['meta_query'] = array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'));
+        }
+        return array_map('absint', get_posts($args));
+    }
+
+    private function auto_runner_staging_candidate_count($exclude_ids = array(), $only_uncreated = false)
+    {
+        return count($this->auto_runner_staging_candidate_ids(1000, $exclude_ids, $only_uncreated));
+    }
+
     private function verify_admin_action()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->current_user_can_manage_importer()) {
             wp_die(esc_html__('Forbidden', 'gps-gmail-product-importer'));
         }
         check_admin_referer(self::NONCE_ACTION);
@@ -3534,9 +3857,14 @@ JS;
         return array('action' => 'full_preparation_batch', 'result' => 'completed', 'batch_size' => max(1, min(25, absint($batch_size))), 'total_processed' => count($items), 'items' => $items, 'writes' => 'staging_meta_only', 'no_woo_product_created' => true, 'no_ovoko_write' => true, 'no_allegro_call' => true);
     }
 
-    private function create_woo_drafts_from_ready_staging($batch_size)
+    private function create_woo_drafts_from_ready_staging($batch_size, $exclude_ids = array())
     {
-        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max($batch_size, 100), 'meta_query' => array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN'))));
+        $query_args = array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max($batch_size, 100), 'meta_query' => array('relation' => 'OR', array('key' => '_gps_gmail_created_product_id', 'compare' => 'NOT EXISTS'), array('key' => '_gps_gmail_created_product_id', 'value' => array('', '0'), 'compare' => 'IN')));
+        $exclude_ids = array_values(array_filter(array_map('absint', (array) $exclude_ids)));
+        if ($exclude_ids) {
+            $query_args['post__not_in'] = $exclude_ids;
+        }
+        $ids = get_posts($query_args);
         $created = array();
         foreach ($ids as $id) {
             if (count(array_filter($created, function ($item) { return empty($item['blocked']) && empty($item['error']); })) >= $batch_size) {
