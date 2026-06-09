@@ -205,6 +205,10 @@ class AdminPage
             $normalizedMenuSlug,
             $callback
         );
+
+        if ($normalizedMenuSlug === 'woo-ebay-fr') {
+            error_log('Woo eBay Integration FR: FR admin page registered');
+        }
     }
 
     private function safe_admin_slug($value, string $fallback, string $section, string $field): string

@@ -18,19 +18,67 @@ define('WEI_FR_BUILD_COMMIT', '65aedd3-shared-oauth-callback-router');
 define('WEI_FR_BUILD_ID', '2026-06-03-shared-oauth-state-router-v4-build-marker');
 define('WEI_FR_OAUTH_CALLBACK_FLOW_VERSION', '2026-06-03-shared-oauth-state-router-v4');
 
-spl_autoload_register(function (string $class): void {
-    if (strpos($class, 'WEI_FR\\') !== 0) {
-        return;
-    }
+if (!function_exists('wei_fr_class_path')) {
+    function wei_fr_class_path(string $class): ?string
+    {
+        if (strpos($class, 'WEI_FR\\') !== 0) {
+            return null;
+        }
 
-    $relative = str_replace('WEI_FR\\', '', $class);
-    $relative = str_replace('\\', '/', $relative);
-    $path = WEI_FR_PLUGIN_DIR . 'src/' . $relative . '.php';
+        $relative = str_replace('WEI_FR\\', '', $class);
+        $relative = str_replace('\\', '/', $relative);
 
-    if (file_exists($path)) {
-        require_once $path;
+        return WEI_FR_PLUGIN_DIR . 'src/' . $relative . '.php';
     }
-});
+}
+
+if (!function_exists('wei_fr_autoload')) {
+    function wei_fr_autoload(string $class): void
+    {
+        $path = wei_fr_class_path($class);
+
+        if ($path !== null && file_exists($path)) {
+            require_once $path;
+        }
+    }
+}
+
+spl_autoload_register('wei_fr_autoload');
+error_log('Woo eBay Integration FR: FR autoloader registered');
+
+if (!function_exists('wei_fr_ensure_class_available')) {
+    function wei_fr_ensure_class_available(string $class, string $label): bool
+    {
+        if (class_exists($class)) {
+            error_log('Woo eBay Integration FR: ' . $label . ' class available');
+
+            return true;
+        }
+
+        wei_fr_autoload($class);
+
+        if (class_exists($class)) {
+            error_log('Woo eBay Integration FR: ' . $label . ' class available');
+
+            return true;
+        }
+
+        $path = wei_fr_class_path($class);
+        if ($path !== null && file_exists($path)) {
+            require_once $path;
+        }
+
+        if (class_exists($class)) {
+            error_log('Woo eBay Integration FR: ' . $label . ' class available');
+
+            return true;
+        }
+
+        error_log('Woo eBay Integration FR: ' . $label . ' class unavailable after autoload/file fallback. Check plugin deploy completeness.');
+
+        return false;
+    }
+}
 
 register_activation_hook(WEI_FR_PLUGIN_FILE, ['WEI_FR\\Database\\Migrations', 'activate']);
 
@@ -44,13 +92,13 @@ if (!function_exists('wei_fr_create_ebay_auth')) {
      */
     function wei_fr_create_ebay_auth(): ?WEI_FR\Services\EbayAuth
     {
-        if (!class_exists(WEI_FR\Services\EbayAuth::class)) {
+        if (!wei_fr_ensure_class_available(WEI_FR\Services\EbayAuth::class, 'EbayAuth')) {
             error_log('Woo eBay Integration FR: OAuth bootstrap skipped because WEI_FR\Services\EbayAuth is not available. Check plugin autoload/deploy completeness.');
 
             return null;
         }
 
-        if (!class_exists(WEI_FR\Services\Logger::class)) {
+        if (!wei_fr_ensure_class_available(WEI_FR\Services\Logger::class, 'Logger')) {
             error_log('Woo eBay Integration FR: OAuth bootstrap skipped because WEI_FR\Services\Logger is not available. Check plugin autoload/deploy completeness.');
 
             return null;
@@ -91,15 +139,16 @@ add_action('plugins_loaded', static function (): void {
 }, 0);
 
 add_action('plugins_loaded', static function (): void {
-    if (!class_exists('WooCommerce')) {
-        return;
-    }
-
-    if (!class_exists(WEI_FR\Plugin::class)) {
+    if (!wei_fr_ensure_class_available(WEI_FR\Plugin::class, 'WEI_FR Plugin')) {
         error_log('Woo eBay Integration FR: plugin boot skipped because WEI_FR\Plugin is not available. Check plugin autoload/deploy completeness.');
 
         return;
     }
 
+    if (!class_exists('WooCommerce')) {
+        return;
+    }
+
     (new WEI_FR\Plugin())->boot();
+    error_log('Woo eBay Integration FR: FR plugin booted');
 });
