@@ -34,32 +34,6 @@ spl_autoload_register(function (string $class): void {
 
 register_activation_hook(WEI_FR_PLUGIN_FILE, ['WEI_FR\\Database\\Migrations', 'activate']);
 
-if (!function_exists('wei_fr_create_ebay_auth')) {
-    /**
-     * Safely creates the FR eBay OAuth service.
-     *
-     * Production deploys may briefly leave the plugin bootstrap newer than the
-     * uploaded src/ tree. In that state, avoid taking down all of WordPress with
-     * a fatal class-not-found error and log a clear diagnostic instead.
-     */
-    function wei_fr_create_ebay_auth(): ?WEI_FR\Services\EbayAuth
-    {
-        if (!class_exists(WEI_FR\Services\EbayAuth::class)) {
-            error_log('Woo eBay Integration FR: OAuth bootstrap skipped because WEI_FR\Services\EbayAuth is not available. Check plugin autoload/deploy completeness.');
-
-            return null;
-        }
-
-        if (!class_exists(WEI_FR\Services\Logger::class)) {
-            error_log('Woo eBay Integration FR: OAuth bootstrap skipped because WEI_FR\Services\Logger is not available. Check plugin autoload/deploy completeness.');
-
-            return null;
-        }
-
-        return new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
-    }
-}
-
 if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
     /**
      * Global FR OAuth handoff used by the DE shared callback router.
@@ -68,12 +42,7 @@ if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
      */
     function wei_fr_handle_shared_oauth_callback(array $request = []): void
     {
-        $auth = wei_fr_create_ebay_auth();
-
-        if ($auth === null) {
-            return;
-        }
-
+        $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
         $auth->handle_shared_callback($request);
     }
 }
@@ -81,23 +50,12 @@ if (!function_exists('wei_fr_handle_shared_oauth_callback')) {
 add_action('wei_fr_handle_shared_oauth_callback', 'wei_fr_handle_shared_oauth_callback', 10, 1);
 
 add_action('plugins_loaded', static function (): void {
-    $auth = wei_fr_create_ebay_auth();
-
-    if ($auth === null) {
-        return;
-    }
-
+    $auth = new WEI_FR\Services\EbayAuth(new WEI_FR\Services\Logger());
     $auth->handle_admin_bootstrap_oauth_callback();
 }, 0);
 
 add_action('plugins_loaded', static function (): void {
     if (!class_exists('WooCommerce')) {
-        return;
-    }
-
-    if (!class_exists(WEI_FR\Plugin::class)) {
-        error_log('Woo eBay Integration FR: plugin boot skipped because WEI_FR\Plugin is not available. Check plugin autoload/deploy completeness.');
-
         return;
     }
 
