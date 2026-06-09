@@ -285,6 +285,7 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
                 <label><input id="gpswiss_crm_auto_preview_only" type="checkbox" /> Dry-run / preview only</label>
             </div>
             <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="button" id="gpswiss_crm_auto_preflight">Test AJAX preflight</button>
                 <button type="button" class="button button-primary" id="gpswiss_crm_auto_start">Start auto import</button>
                 <button type="button" class="button" id="gpswiss_crm_auto_stop" disabled="disabled">Stop</button>
                 <span id="gpswiss_crm_auto_state" style="font-weight:600;">Idle</span>

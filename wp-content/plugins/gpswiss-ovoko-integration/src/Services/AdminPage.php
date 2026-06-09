@@ -249,42 +249,106 @@ class AdminPage
 
     public function handle_crm_only_batch_import_ajax(): void
     {
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error([
-                'ok' => false,
-                'message' => 'Unauthorized: current user cannot manage options.',
-                'stop_reason' => 'unauthorized',
-            ], 403);
-        }
+        $logMarker = static function (string $marker, array $context = []): void {
+            $safeContext = [];
+            foreach ($context as $key => $value) {
+                if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+                    $safeContext[$key] = $value;
+                } else {
+                    $safeContext[$key] = sanitize_text_field((string) $value);
+                }
+            }
+            error_log($marker . ($safeContext ? ' ' . wp_json_encode($safeContext, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) : ''));
+        };
 
-        if (check_ajax_referer('gpswiss_ovoko_crm_only_batch_import', false, false) === false) {
-            wp_send_json_error([
-                'ok' => false,
-                'message' => 'Security check failed: invalid or expired CRM-only batch import nonce.',
-                'stop_reason' => 'nonce_mismatch',
-            ], 403);
-        }
-
-        $args = [
-            'mode' => isset($_POST['mode']) ? sanitize_text_field((string) wp_unslash($_POST['mode'])) : 'live',
-            'batch_number' => isset($_POST['batch_number']) ? (int) $_POST['batch_number'] : 1,
-            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
-            'stop_on_first_error' => !empty($_POST['stop_on_first_error']),
-            'only_gmail_imported' => !array_key_exists('only_gmail_imported', $_POST) || !empty($_POST['only_gmail_imported']),
-            'product_id_from' => isset($_POST['product_id_from']) ? (int) $_POST['product_id_from'] : 0,
-            'product_id_to' => isset($_POST['product_id_to']) ? (int) $_POST['product_id_to'] : 0,
-            'created_after' => isset($_POST['created_after']) ? sanitize_text_field((string) wp_unslash($_POST['created_after'])) : '',
-            'cursor' => isset($_POST['cursor']) ? (int) $_POST['cursor'] : 0,
-        ];
+        $logMarker('CRM_ONLY_AUTORUN_AJAX_START');
 
         try {
-            $result = (new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings()))->run_one_batch($args);
+            $args = [
+                'mode' => isset($_POST['mode']) ? sanitize_text_field((string) wp_unslash($_POST['mode'])) : 'live',
+                'batch_number' => isset($_POST['batch_number']) ? (int) $_POST['batch_number'] : 1,
+                'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
+                'stop_on_first_error' => !empty($_POST['stop_on_first_error']),
+                'only_gmail_imported' => !array_key_exists('only_gmail_imported', $_POST) || !empty($_POST['only_gmail_imported']),
+                'product_id_from' => isset($_POST['product_id_from']) ? (int) $_POST['product_id_from'] : 0,
+                'product_id_to' => isset($_POST['product_id_to']) ? (int) $_POST['product_id_to'] : 0,
+                'created_after' => isset($_POST['created_after']) ? sanitize_text_field((string) wp_unslash($_POST['created_after'])) : '',
+                'cursor' => isset($_POST['cursor']) ? (int) $_POST['cursor'] : 0,
+            ];
+
+            $logMarker('CRM_ONLY_AUTORUN_REQUEST_PARAMS_SANITIZED', [
+                'mode' => $args['mode'],
+                'batch_number' => $args['batch_number'],
+                'batch_size' => $args['batch_size'],
+                'stop_on_first_error' => $args['stop_on_first_error'],
+                'only_gmail_imported' => $args['only_gmail_imported'],
+                'product_id_from' => $args['product_id_from'],
+                'product_id_to' => $args['product_id_to'],
+                'created_after_present' => $args['created_after'] !== '',
+                'cursor' => $args['cursor'],
+            ]);
+
+            if (check_ajax_referer('gpswiss_ovoko_crm_only_batch_import', false, false) === false) {
+                wp_send_json_error([
+                    'ok' => false,
+                    'message' => 'Security check failed: invalid or expired CRM-only batch import nonce.',
+                    'stop_reason' => 'nonce_mismatch',
+                ], 403);
+            }
+            $logMarker('CRM_ONLY_AUTORUN_NONCE_OK');
+
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error([
+                    'ok' => false,
+                    'message' => 'Unauthorized: current user cannot manage options.',
+                    'stop_reason' => 'unauthorized',
+                ], 403);
+            }
+            $logMarker('CRM_ONLY_AUTORUN_CAPABILITY_OK');
+
+            if ($args['mode'] === 'preflight') {
+                $logMarker('CRM_ONLY_AUTORUN_MODE_PREFLIGHT_RETURNING');
+                wp_send_json_success([
+                    'ok' => true,
+                    'mode' => 'preflight',
+                    'server_time' => gmdate('Y-m-d\TH:i:s\Z'),
+                    'nonce_ok' => true,
+                    'current_user_can' => true,
+                    'received_params' => [
+                        'batch_size' => (int) $args['batch_size'],
+                        'only_gmail_imported' => (bool) $args['only_gmail_imported'],
+                        'cursor' => (int) $args['cursor'],
+                    ],
+                ]);
+            }
+
+            $logMarker('CRM_ONLY_AUTORUN_BEFORE_SERVICE');
+            $service = new WooToOvokoCrmOnlyBatchImportService($this->service->get_settings());
+            $logMarker('CRM_ONLY_AUTORUN_BEFORE_BATCH');
+            $result = $service->run_one_batch($args);
+            $logMarker('CRM_ONLY_AUTORUN_AFTER_BATCH', [
+                'ok' => !empty($result['ok']),
+                'attempted' => isset($result['attempted']) ? (int) $result['attempted'] : 0,
+                'success_count' => isset($result['success_count']) ? (int) $result['success_count'] : 0,
+                'failed_count' => isset($result['failed_count']) ? (int) $result['failed_count'] : 0,
+                'stop_reason' => isset($result['stop_reason']) ? (string) $result['stop_reason'] : '',
+            ]);
+            $logMarker('CRM_ONLY_AUTORUN_BEFORE_RESPONSE');
             wp_send_json_success($result);
         } catch (\Throwable $e) {
+            error_log('CRM_ONLY_AUTORUN_BACKEND_EXCEPTION ' . wp_json_encode([
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'class' => get_class($e),
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
             wp_send_json_error([
                 'ok' => false,
-                'message' => 'CRM-only batch import failed: ' . $e->getMessage(),
-                'stop_reason' => 'server_exception',
+                'message' => 'CRM-only auto-runner error',
+                'error_type' => 'exception',
+                'error_message' => $e->getMessage(),
+                'stop_reason' => 'backend_exception',
                 'exception_class' => get_class($e),
             ], 500);
         }

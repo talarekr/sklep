@@ -528,6 +528,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const root = document.getElementById('gpswiss-crm-only-auto-runner');
   if (!root) { return; }
   const config = window.gpswissOvokoAutorunConfig || {};
+  const preflightBtn = document.getElementById('gpswiss_crm_auto_preflight');
   const startBtn = document.getElementById('gpswiss_crm_auto_start');
   const stopBtn = document.getElementById('gpswiss_crm_auto_stop');
   const stateEl = document.getElementById('gpswiss_crm_auto_state');
@@ -608,11 +609,15 @@ document.addEventListener('DOMContentLoaded', function () {
       started_at: nowIso(),
       settings: settings || {},
       last_request_payload: {},
+      last_request_started_at: null,
+      last_request_finished_at: null,
+      last_request_state: 'idle',
       last_http_status: null,
       last_raw_response_excerpt: null,
       last_parsed_response: null,
       last_normalized_batch: null,
-      last_error: null
+      last_error: null,
+      stop_reason: null
     };
   }
   function renderDetails() {
@@ -628,9 +633,15 @@ document.addEventListener('DOMContentLoaded', function () {
       logEl.scrollTop = logEl.scrollHeight;
     }
   }
+  function markRequestFinished(fallbackState) {
+    state.technical.last_request_finished_at = nowIso();
+    if (state.technical.last_request_state === 'in_flight') { state.technical.last_request_state = fallbackState || 'finished'; }
+    renderDetails();
+  }
   function setError(stopReason, message, extra) {
     state.technical.stop_reason = stopReason;
     state.technical.last_error = Object.assign({ stop_reason: stopReason, message: message }, extra || {});
+    if (state.technical.last_request_state === 'in_flight') { state.technical.last_request_state = 'error'; }
     renderDetails();
     addLog('Runner stopped because of error: ' + message);
     stop(stopReason, true);
@@ -688,11 +699,18 @@ document.addEventListener('DOMContentLoaded', function () {
     fd.set('cursor', String(state.cursor || 0));
     return fd;
   }
+  function bodyForPreflight() {
+    const fd = bodyForNextBatch();
+    fd.set('mode', 'preflight');
+    fd.set('batch_number', '1');
+    return fd;
+  }
   function stop(reason, alreadyLogged) {
     state.running = false;
     state.stopped = true;
     state.inFlight = false;
     if (startBtn) { startBtn.disabled = false; }
+    if (preflightBtn) { preflightBtn.disabled = false; }
     if (stopBtn) { stopBtn.disabled = true; }
     state.technical.stop_reason = reason;
     renderDetails();
@@ -728,63 +746,134 @@ document.addEventListener('DOMContentLoaded', function () {
     };
     return normalized;
   }
-  async function requestBatch(fd, batchNumber) {
+  async function ajaxRequest(fd, options) {
+    const opts = Object.assign({ timeoutMs: 60000, context: 'batch', batchNumber: 0 }, options || {});
     state.technical.last_request_payload = payloadObject(fd);
+    state.technical.last_request_started_at = nowIso();
+    state.technical.last_request_finished_at = null;
+    state.technical.last_request_state = 'in_flight';
     state.technical.last_http_status = null;
     state.technical.last_raw_response_excerpt = null;
     state.technical.last_parsed_response = null;
     state.technical.last_normalized_batch = null;
     state.technical.last_error = null;
     renderDetails();
+
     addLog('Sending AJAX request to admin-ajax.php');
-    const response = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fd.toString() });
-    state.technical.last_http_status = response.status;
-    if (response.ok) { addLog('AJAX response received: HTTP ' + response.status); } else { addLog('AJAX error: HTTP ' + response.status); }
-    const text = await response.text();
-    state.technical.last_raw_response_excerpt = text.slice(0, 1000);
-    addLog('AJAX response text received: ' + text.length + ' chars');
-    renderDetails();
-    if (text === '') {
-      setError(response.ok ? 'empty_response' : 'ajax_http_error', response.ok ? 'Empty AJAX response body.' : friendlyHttpMessage(response.status), { http_status: response.status });
-      return null;
-    }
-    addLog('Before JSON.parse');
-    let json = null;
-    let parseError = null;
+    addLog(opts.context === 'preflight' ? 'Preflight request is in flight...' : 'AJAX request is in flight...');
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(function () { controller.abort(); }, opts.timeoutMs);
     try {
-      json = JSON.parse(text);
-    } catch (e) {
-      parseError = e;
-    }
-    if (json !== null) {
+      const response = await fetch(config.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fd.toString(), signal: controller.signal });
+      state.technical.last_http_status = response.status;
+      if (opts.context === 'preflight') {
+        addLog('Preflight response HTTP ' + response.status);
+      } else if (response.ok) {
+        addLog('AJAX response received: HTTP ' + response.status);
+      } else {
+        addLog('AJAX error: HTTP ' + response.status);
+      }
+      const text = await response.text();
+      state.technical.last_raw_response_excerpt = text.slice(0, 1000);
+      addLog('AJAX response text received: ' + text.length + ' chars');
+      renderDetails();
+
+      if (text === '') {
+        setError(response.ok ? 'empty_response' : 'ajax_http_error', response.ok ? 'Empty AJAX response body.' : friendlyHttpMessage(response.status), { http_status: response.status });
+        return null;
+      }
+
+      let json = null;
+      let parseError = null;
+      try {
+        json = JSON.parse(text);
+      } catch (e) {
+        parseError = e;
+      }
+      if (parseError) {
+        setError('non_json_response', 'AJAX response was not JSON. First 1000 characters are shown in Technical details.', { http_status: response.status, raw_response_excerpt: text.slice(0, 1000) });
+        return null;
+      }
+
       state.technical.last_parsed_response = json;
-      addLog('JSON parsed successfully');
-    }
-    const hasWpWrapper = !!(json && Object.prototype.hasOwnProperty.call(json, 'success') && Object.prototype.hasOwnProperty.call(json, 'data'));
-    if (json !== null) { addLog('WordPress success wrapper detected: ' + (hasWpWrapper ? 'true' : 'false')); }
-    let unwrapped = json;
-    if (hasWpWrapper) {
-      unwrapped = json.data || {};
-      addLog('WordPress response.data unwrapped');
-    }
-    if (!response.ok) {
-      setError('ajax_http_error', friendlyHttpMessage(response.status), { http_status: response.status, parsed_response: json, raw_response_excerpt: text.slice(0, 1000) });
+      addLog(opts.context === 'preflight' ? 'Preflight JSON parsed' : 'JSON parsed successfully');
+      const hasWpWrapper = !!(json && Object.prototype.hasOwnProperty.call(json, 'success') && Object.prototype.hasOwnProperty.call(json, 'data'));
+      addLog('WordPress success wrapper detected: ' + (hasWpWrapper ? 'true' : 'false'));
+      const unwrapped = hasWpWrapper ? (json.data || {}) : json;
+      if (hasWpWrapper) { addLog('WordPress response.data unwrapped'); }
+
+      if (!response.ok) {
+        const msg = String((unwrapped && (unwrapped.message || unwrapped.error)) || friendlyHttpMessage(response.status));
+        setError(String((unwrapped && unwrapped.stop_reason) || 'ajax_http_error'), msg, { http_status: response.status, parsed_response: json, raw_response_excerpt: text.slice(0, 1000) });
+        return null;
+      }
+      if (hasWpWrapper && json.success === false) {
+        const msg = String((unwrapped && (unwrapped.message || unwrapped.error)) || 'WordPress AJAX endpoint returned success=false.');
+        setError(String((unwrapped && unwrapped.stop_reason) || 'wordpress_ajax_error'), msg, { http_status: response.status, parsed_response: json });
+        return null;
+      }
+
+      state.technical.last_request_state = 'success';
+      renderDetails();
+      return { response: response, json: json, data: unwrapped, hasWpWrapper: hasWpWrapper };
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        state.technical.last_request_state = 'timeout';
+        const seconds = Math.round(opts.timeoutMs / 1000);
+        setError('ajax_timeout', 'AJAX timeout after ' + seconds + 's. Server did not return a response. Reduce batch size or check server/PHP logs.', { timeout_ms: opts.timeoutMs });
+      } else if (e instanceof TypeError || (e && /Failed to fetch/i.test(String(e.message || e)))) {
+        state.technical.last_request_state = 'network_error';
+        setError('network_error', String(e && e.message ? e.message : 'Network error / Failed to fetch.'), { error_name: e && e.name ? e.name : 'TypeError' });
+      } else {
+        state.technical.last_request_state = 'js_fetch_error';
+        setError('js_fetch_error', String(e && e.message ? e.message : e), { error_name: e && e.name ? e.name : 'Error' });
+      }
       return null;
+    } finally {
+      window.clearTimeout(timeoutId);
+      markRequestFinished('finished');
     }
-    if (parseError) {
-      setError('non_json_response', 'AJAX response was not JSON. First 1000 characters are shown in Technical details.', { http_status: response.status, raw_response_excerpt: text.slice(0, 1000) });
-      return null;
-    }
-    if (hasWpWrapper && json.success === false) {
-      const msg = String((unwrapped && (unwrapped.message || unwrapped.error)) || 'WordPress AJAX endpoint returned success=false.');
-      setError(String((unwrapped && unwrapped.stop_reason) || 'wordpress_ajax_error'), msg, { http_status: response.status, parsed_response: json });
-      return null;
-    }
-    const normalized = normalizeBatch(unwrapped || {});
+  }
+  async function requestBatch(fd, batchNumber) {
+    const result = await ajaxRequest(fd, { timeoutMs: 60000, context: 'batch', batchNumber: batchNumber });
+    if (!result) { return null; }
+    const normalized = normalizeBatch(result.data || {});
     state.technical.last_normalized_batch = normalized;
     renderDetails();
     addLog('Batch #' + batchNumber + ' result: attempted=' + normalized.attempted + ', success=' + normalized.success_count + ', failed=' + normalized.failed_count + ', blocked=' + normalized.blocked_count + ', already_imported=' + normalized.already_imported_count);
     return normalized;
+  }
+  async function runPreflight() {
+    if (state.inFlight) { return; }
+    const settings = settingsSnapshot();
+    state.running = false;
+    state.stopped = false;
+    state.inFlight = true;
+    state.batchNumber = 0;
+    state.cursor = Math.max(0, fieldNumber('gpswiss_crm_auto_product_id_from', 0) - 1);
+    state.logRows = [];
+    state.technical = detailsBase(settings);
+    if (logEl) { logEl.innerHTML = ''; }
+    renderDetails();
+    setStatus('Preflight running...');
+    addLog('Preflight request started');
+    if (preflightBtn) { preflightBtn.disabled = true; }
+    if (startBtn) { startBtn.disabled = true; }
+    const result = await ajaxRequest(bodyForPreflight(), { timeoutMs: 30000, context: 'preflight' });
+    state.inFlight = false;
+    if (!result) { return; }
+    if (!result.data || result.data.ok !== true || result.data.mode !== 'preflight') {
+      setError('preflight_failed', 'Preflight response did not contain ok=true and mode=preflight.', { parsed_response: result.json });
+      return;
+    }
+    addLog('Preflight OK');
+    state.technical.preflight_response = result.data;
+    state.technical.stop_reason = null;
+    renderDetails();
+    setStatus('Preflight OK');
+    if (preflightBtn) { preflightBtn.disabled = false; }
+    if (startBtn) { startBtn.disabled = false; }
   }
   async function runNext() {
     if (!state.running || state.stopped || state.inFlight) { return; }
@@ -795,15 +884,8 @@ document.addEventListener('DOMContentLoaded', function () {
     setStatus('Running batch ' + nextBatch + '...');
     addLog('Preparing AJAX request for batch #' + nextBatch);
     const fd = bodyForNextBatch();
-    let res;
-    try {
-      res = await requestBatch(fd, nextBatch);
-    } catch (e) {
-      setError('ajax_fetch_error', String(e && e.message ? e.message : e), { batch_number: nextBatch });
-      return;
-    } finally {
-      state.inFlight = false;
-    }
+    const res = await requestBatch(fd, nextBatch);
+    state.inFlight = false;
     if (!res) { return; }
     state.batchNumber += 1;
     state.cursor = res.next_cursor || res.next_product_id || state.cursor || 0;
@@ -825,9 +907,11 @@ document.addEventListener('DOMContentLoaded', function () {
     setStatus('Waiting ' + delay + ' ms...');
     window.setTimeout(runNext, delay);
   }
+  preflightBtn && preflightBtn.addEventListener('click', function () { runPreflight(); });
   startBtn && startBtn.addEventListener('click', function () {
     reset();
     startBtn.disabled = true;
+    if (preflightBtn) { preflightBtn.disabled = true; }
     if (stopBtn) { stopBtn.disabled = false; }
     runNext();
   });
