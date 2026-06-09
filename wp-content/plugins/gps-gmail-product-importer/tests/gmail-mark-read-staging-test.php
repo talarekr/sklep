@@ -11,6 +11,7 @@ $GLOBALS['gps_test_next_post_id'] = 1000;
 $GLOBALS['gps_test_messages'] = [];
 $GLOBALS['gps_test_mark_read_calls'] = [];
 $GLOBALS['gps_test_mark_read_fail'] = false;
+$GLOBALS['gps_test_mark_read_fail_code'] = 500;
 $GLOBALS['gps_test_insert_error'] = false;
 
 function add_action(...$args): void {}
@@ -38,6 +39,8 @@ function update_option($key, $value, $autoload = null) { $GLOBALS['gps_test_opti
 function get_transient($key) { return $GLOBALS['gps_test_transients'][$key] ?? false; }
 function set_transient($key, $value, $expiration = 0) { $GLOBALS['gps_test_transients'][$key] = $value; return true; }
 function delete_transient($key) { unset($GLOBALS['gps_test_transients'][$key]); return true; }
+function wp_create_nonce($action = -1) { return 'nonce'; }
+function admin_url($path = '') { return 'https://example.test/wp-admin/' . ltrim((string) $path, '/'); }
 function add_query_arg($args, $url = '') { return $url . (str_contains($url, '?') ? '&' : '?') . http_build_query($args); }
 function trailingslashit($path) { return rtrim((string) $path, '/\\') . '/'; }
 function wp_upload_dir() { $base = sys_get_temp_dir() . '/gps-gmail-mark-read-test'; return ['basedir' => $base]; }
@@ -45,7 +48,7 @@ function wp_mkdir_p($path) { return is_dir($path) || mkdir($path, 0777, true); }
 function taxonomy_exists($taxonomy) { return false; }
 function get_term_by(...$args) { return false; }
 function is_wp_error($value) { return $value instanceof WP_Error; }
-class WP_Error { private $code; private $message; private $data; public function __construct($code = '', $message = '', $data = null) { $this->code = $code; $this->message = $message; $this->data = $data; } public function get_error_message() { return $this->message; } public function get_error_data() { return $this->data; } }
+class WP_Error { private $code; private $message; private $data; public function __construct($code = '', $message = '', $data = null) { $this->code = $code; $this->message = $message; $this->data = $data; } public function get_error_code() { return $this->code; } public function get_error_message() { return $this->message; } public function get_error_data() { return $this->data; } }
 
 function get_post_meta($id, $key = '', $single = false) { if ($key === '') { return $GLOBALS['gps_test_meta'][(int) $id] ?? []; } return $GLOBALS['gps_test_meta'][(int) $id][$key] ?? ''; }
 function update_post_meta($id, $key, $value) { $GLOBALS['gps_test_meta'][(int) $id][$key] = $value; return true; }
@@ -77,10 +80,11 @@ function wp_update_post($postarr, $wp_error = false) {
 function wp_remote_request($url, $args = []) {
     if (str_ends_with($url, '/labels')) { return ['response' => ['code' => 200], 'body' => json_encode(['labels' => [['id' => 'Label_1', 'name' => 'Woo import']]])]; }
     if (str_contains($url, '/messages?')) { return ['response' => ['code' => 200], 'body' => json_encode(['resultSizeEstimate' => count($GLOBALS['gps_test_messages']), 'messages' => array_map(fn($id) => ['id' => $id], array_keys($GLOBALS['gps_test_messages']))])]; }
-    if (preg_match('~/messages/([^/?]+)/modify$~', $url, $m)) { $GLOBALS['gps_test_mark_read_calls'][] = ['id' => urldecode($m[1]), 'args' => $args]; return $GLOBALS['gps_test_mark_read_fail'] ? ['response' => ['code' => 500], 'body' => json_encode(['error' => 'boom'])] : ['response' => ['code' => 200], 'body' => '{}']; }
+    if (preg_match('~/messages/([^/?]+)/modify$~', $url, $m)) { $GLOBALS['gps_test_mark_read_calls'][] = ['id' => urldecode($m[1]), 'args' => $args]; return $GLOBALS['gps_test_mark_read_fail'] ? ['response' => ['code' => $GLOBALS['gps_test_mark_read_fail_code']], 'body' => json_encode(['error' => 'boom'])] : ['response' => ['code' => 200], 'body' => '{}']; }
     if (preg_match('~/messages/([^/?]+)~', $url, $m)) { return ['response' => ['code' => 200], 'body' => json_encode($GLOBALS['gps_test_messages'][urldecode($m[1])] ?? [])]; }
     return ['response' => ['code' => 404], 'body' => '{}'];
 }
+function wp_remote_get($url, $args = []) { return ['response' => ['code' => 200], 'body' => json_encode(['scope' => $GLOBALS['gps_test_tokeninfo_scope'] ?? ''])]; }
 function wp_remote_retrieve_response_code($response) { return (int) ($response['response']['code'] ?? 0); }
 function wp_remote_retrieve_body($response) { return (string) ($response['body'] ?? ''); }
 
@@ -95,8 +99,10 @@ function reset_env(array $settings = []): void {
     $GLOBALS['gps_test_next_post_id'] = 1000;
     $GLOBALS['gps_test_mark_read_calls'] = [];
     $GLOBALS['gps_test_mark_read_fail'] = false;
+    $GLOBALS['gps_test_mark_read_fail_code'] = 500;
+    $GLOBALS['gps_test_tokeninfo_scope'] = GPS_Gmail_Product_Importer::GMAIL_MODIFY_SCOPE . ' ' . GPS_Gmail_Product_Importer::GMAIL_USERINFO_EMAIL_SCOPE;
     $GLOBALS['gps_test_insert_error'] = false;
-    $GLOBALS['gps_test_options'] = [GPS_Gmail_Product_Importer::OPTION_TOKENS => ['access_token' => 'token', 'expires_at' => time() + 3600], GPS_Gmail_Product_Importer::OPTION_SETTINGS => array_merge(GPS_Gmail_Product_Importer::default_settings(), ['message_status_filter' => 'unread', 'gmail_label' => 'Woo import', 'mark_gmail_read_after_staging' => 1], $settings)];
+    $GLOBALS['gps_test_options'] = [GPS_Gmail_Product_Importer::OPTION_TOKENS => ['access_token' => 'token', 'expires_at' => time() + 3600, 'scope' => GPS_Gmail_Product_Importer::GMAIL_MODIFY_SCOPE . ' ' . GPS_Gmail_Product_Importer::GMAIL_USERINFO_EMAIL_SCOPE], GPS_Gmail_Product_Importer::OPTION_SETTINGS => array_merge(GPS_Gmail_Product_Importer::default_settings(), ['message_status_filter' => 'unread', 'gmail_label' => 'Woo import', 'mark_gmail_read_after_staging' => 1], $settings)];
 }
 function seed_message(string $id): void { $GLOBALS['gps_test_messages'] = [$id => ['id' => $id, 'threadId' => 'thread-' . $id, 'labelIds' => ['UNREAD', 'Label_1'], 'payload' => ['headers' => [['name' => 'Subject', 'value' => '17KNS 06K145654L'], ['name' => 'Date', 'value' => 'Tue'], ['name' => 'From', 'value' => 'sender@example.com']]]]]; }
 function run_case(string $name, callable $test): void { reset_env(); seed_message('msg-1'); $test(GPS_Gmail_Product_Importer::instance()); echo "PASS {$name}\n"; }
@@ -141,4 +147,46 @@ run_case('Gmail mark-read failure adds warning but preserves staged item', funct
     tassert($state['total_mark_read_failed'] === 1, 'Expected mark-read failure total.');
     tassert(in_array('gmail_mark_read_failed', $state['warnings'], true), 'Expected gmail_mark_read_failed warning.');
     tassert(($state['last_batch_result'][0]['gmail_mark_read_status'] ?? '') === 'gmail_mark_read_failed', 'Expected per-message failure status.');
+});
+
+run_case('OAuth URL requests gmail.modify without full mail access', function ($plugin): void {
+    $url = call_private($plugin, 'oauth_url');
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+    tassert(str_contains((string) ($query['scope'] ?? ''), GPS_Gmail_Product_Importer::GMAIL_MODIFY_SCOPE), 'OAuth URL must request gmail.modify.');
+    tassert(!str_contains((string) ($query['scope'] ?? ''), 'https://mail.google.com/'), 'OAuth URL must not request full Gmail access.');
+});
+run_case('missing scope gives reauthorization warning without modifying a message', function ($plugin): void {
+    $GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_TOKENS]['scope'] = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email';
+    $state = call_private($plugin, 'process_batch', [false, 1]);
+    tassert(count($GLOBALS['gps_test_mark_read_calls']) === 0, 'Missing scope must not call Gmail modify.');
+    tassert(($state['last_batch_result'][0]['gmail_mark_read_status'] ?? '') === 'missing_gmail_modify_scope', 'Expected missing_gmail_modify_scope status.');
+    tassert(str_contains((string) ($state['last_batch_result'][0]['gmail_mark_read_error'] ?? ''), 'Reconnect Gmail'), 'Expected reconnect guidance.');
+});
+run_case('HTTP 403 Gmail modify is classified as missing_gmail_modify_scope', function ($plugin): void {
+    $GLOBALS['gps_test_mark_read_fail'] = true;
+    $GLOBALS['gps_test_mark_read_fail_code'] = 403;
+    $state = call_private($plugin, 'process_batch', [false, 1]);
+    tassert(count($GLOBALS['gps_test_mark_read_calls']) === 1, 'Expected one Gmail modify attempt.');
+    tassert(($state['last_batch_result'][0]['gmail_mark_read_status'] ?? '') === 'missing_gmail_modify_scope', 'HTTP 403 should be missing_gmail_modify_scope.');
+    tassert(in_array('missing_gmail_modify_scope', $state['warnings'], true), 'Expected state warning.');
+});
+run_case('permission test is safe and reports missing gmail.modify', function ($plugin): void {
+    $GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_TOKENS]['scope'] = 'https://www.googleapis.com/auth/gmail.readonly';
+    $GLOBALS['gps_test_tokeninfo_scope'] = 'https://www.googleapis.com/auth/gmail.readonly';
+    $result = call_private($plugin, 'test_gmail_mark_read_permission');
+    tassert(($result['result'] ?? '') === 'missing_gmail_modify_scope', 'Expected missing scope result.');
+    tassert(($result['message_modified'] ?? true) === false, 'Permission test must not modify messages.');
+    tassert(count($GLOBALS['gps_test_mark_read_calls']) === 0, 'Permission test must not call modify.');
+});
+run_case('already staged unread duplicate does not block next unread message', function ($plugin): void {
+    $GLOBALS['gps_test_options'][GPS_Gmail_Product_Importer::OPTION_TOKENS]['scope'] = 'https://www.googleapis.com/auth/gmail.readonly';
+    seed_message('msg-1');
+    $GLOBALS['gps_test_messages']['msg-2'] = ['id' => 'msg-2', 'threadId' => 'thread-msg-2', 'labelIds' => ['UNREAD', 'Label_1'], 'payload' => ['headers' => [['name' => 'Subject', 'value' => '18KNS 06K145655L'], ['name' => 'Date', 'value' => 'Tue'], ['name' => 'From', 'value' => 'sender@example.com']]]];
+    $GLOBALS['gps_test_posts'][222] = (object) ['ID' => 222, 'post_type' => GPS_Gmail_Product_Importer::STAGING_POST_TYPE, 'post_status' => 'private', 'post_title' => 'old', 'post_content' => 'old'];
+    $GLOBALS['gps_test_meta'][222]['_gps_gmail_message_id'] = 'msg-1';
+    $state = call_private($plugin, 'process_batch', [false, 1]);
+    tassert(count($state['last_batch_result']) === 2, 'Batch should continue past already-staged unread duplicate.');
+    tassert(($state['last_batch_result'][0]['duplicate_status'] ?? '') === 'existing_staging_item', 'First message should be existing staging duplicate.');
+    tassert(($state['last_batch_result'][1]['message_id'] ?? '') === 'msg-2', 'Second unread message should be processed.');
+    tassert($state['total_staged'] === 1, 'Expected one new staged item after duplicate skip.');
 });
