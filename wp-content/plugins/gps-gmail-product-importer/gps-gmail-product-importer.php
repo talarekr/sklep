@@ -54,6 +54,8 @@ final class GPS_Gmail_Product_Importer
         add_action('admin_post_gps_gmail_product_importer_allegro_test', array($this, 'handle_allegro_test'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_dry_run', array($this, 'handle_ovoko_enrichment_dry_run'));
         add_action('admin_post_gps_gmail_product_importer_ovoko_enrichment_save', array($this, 'handle_ovoko_enrichment_save'));
+        add_action('admin_post_gps_gmail_product_importer_mark_unread_preview', array($this, 'handle_mark_unread_preview'));
+        add_action('admin_post_gps_gmail_product_importer_mark_unread', array($this, 'handle_mark_unread'));
         add_action('wp_ajax_gps_gmail_product_importer_import_batch', array($this, 'ajax_import_batch'));
         add_action('wp_ajax_gps_gmail_product_importer_auto_runner_batch', array($this, 'ajax_auto_runner_batch'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
@@ -554,6 +556,13 @@ JS;
                 <p><?php esc_html_e('Creates only items whose Woo draft readiness is ready_to_create_product. Needs-review and duplicate/already-created items are skipped.', 'gps-gmail-product-importer'); ?></p>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_create_woo_drafts"><label><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?> <input type="number" min="1" max="25" name="batch_size" value="10"></label> <?php submit_button(__('Create Woo drafts for ready items', 'gps-gmail-product-importer'), 'primary', 'submit', false); ?></form>
             </div>
+            <div class="gps-card gps-danger"><h3><?php esc_html_e('Step 4: Mark not-imported Gmail messages unread from CSV', 'gps-gmail-product-importer'); ?></h3>
+                <p><?php esc_html_e('Upload or select a Gmail Importer audit CSV, then mark only CSV rows that still need manual attention because the current Woo product state has not been finally imported to Ovoko. Woo/Ovoko meta remains the source of truth: _ovoko_part_id, ovoko_part_id, or _gps_ovoko_crm_only_imported_at.', 'gps-gmail-product-importer'); ?></p>
+                <?php $this->render_mark_unread_form('gps_gmail_product_importer_mark_unread_preview', __('Preview CSV unread candidates', 'gps-gmail-product-importer'), true); ?>
+                <?php $this->render_mark_unread_form('gps_gmail_product_importer_mark_unread', __('Mark previewed Gmail messages unread', 'gps-gmail-product-importer'), false); ?>
+                <p class="description"><?php esc_html_e('Safety: this tool only previews or changes Gmail unread labels plus mark-unread audit meta on staging records. It does not touch Woo products, Ovoko, eBay, images, product statuses, or auto-runner logic. Gmail OAuth must include gmail.modify for live marking.', 'gps-gmail-product-importer'); ?></p>
+                <?php $this->render_mark_unread_result($last_result); ?>
+            </div>
             <div class="gps-card"><h3><?php esc_html_e('Audit CSV exports', 'gps-gmail-product-importer'); ?></h3>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="errors"><?php submit_button(__('Download audit errors CSV', 'gps-gmail-product-importer'), $audit['summary']['blocked'] > 0 ? 'secondary' : 'secondary disabled', 'submit', false); ?></form>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;"><?php wp_nonce_field(self::NONCE_ACTION); ?><input type="hidden" name="action" value="gps_gmail_product_importer_download_audit_csv"><input type="hidden" name="csv_type" value="full"><?php submit_button(__('Download full audit CSV', 'gps-gmail-product-importer'), 'secondary', 'submit', false); ?></form>
@@ -593,7 +602,7 @@ JS;
             <?php foreach ($audit['rows'] as $row) : ?><tr><td><?php echo esc_html((string) $row['staging_item_id']); ?></td><td><?php echo esc_html($row['gmail_date']); ?></td><td><?php echo esc_html($row['gmail_subject']); ?></td><td><?php echo esc_html($row['storage_location']); ?></td><td><?php echo esc_html(trim($row['part_code'] . ' / ' . $row['oem'], ' /')); ?></td><td><?php echo esc_html((string) $row['image_count']); ?></td><td><?php echo esc_html($row['fixed_category_label']); ?></td><td><?php echo esc_html($row['price_status']); ?></td><td><?php echo $this->status_badge($row['status_badge'], $row['readiness_status']); ?></td><td><?php echo esc_html(implode(', ', $row['blocking_reasons'])); ?></td><td><?php echo esc_html((string) $row['created_product_id']); ?></td><td><?php $this->render_import_queue_item_actions((int) $row['staging_item_id'], $row['readiness_status'] === 'ready_to_create_product' && empty($row['blocking_reasons'])); ?></td></tr><?php endforeach; ?>
             </tbody></table>
         </div>
-        <?php if ($audit['created_rows']) : ?><div class="gps-card"><h3><?php esc_html_e('Step 4 — Post-create summary', 'gps-gmail-product-importer'); ?></h3><table class="widefat striped"><thead><tr><th><?php esc_html_e('Staging → product', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Title / SKU', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Images', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Fixed category / price empty', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Links', 'gps-gmail-product-importer'); ?></th></tr></thead><tbody><?php foreach ($audit['created_rows'] as $row) : ?><tr><td><?php echo esc_html($row['staging_item_id'] . ' → ' . $row['created_product_id']); ?></td><td><?php echo esc_html($row['gmail_subject']); ?><br><code><?php echo esc_html($this->product_sku((int) $row['created_product_id'])); ?></code></td><td><?php echo esc_html((string) $row['image_count']); ?></td><td><?php echo esc_html($row['fixed_category_label'] . ' / ' . ($row['price_empty'] ? 'empty price' : 'priced')); ?></td><td><a href="<?php echo esc_url(get_edit_post_link((int) $row['created_product_id'])); ?>"><?php esc_html_e('Edit Woo product', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(admin_url('admin.php?page=gpswiss-ovoko-integration&product_id=' . absint($row['created_product_id']))); ?>"><?php esc_html_e('Preview Woo → Ovoko CRM-only import payload', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => (int) $row['staging_item_id']), admin_url('admin.php'))); ?>"><?php esc_html_e('View Import Queue item', 'gps-gmail-product-importer'); ?></a></td></tr><?php endforeach; ?></tbody></table><p class="description"><?php esc_html_e('No automatic live Ovoko import is run from this dashboard.', 'gps-gmail-product-importer'); ?></p></div><?php endif; ?>
+        <?php if ($audit['created_rows']) : ?><div class="gps-card"><h3><?php esc_html_e('Post-create summary', 'gps-gmail-product-importer'); ?></h3><table class="widefat striped"><thead><tr><th><?php esc_html_e('Staging → product', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Title / SKU', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Images', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Fixed category / price empty', 'gps-gmail-product-importer'); ?></th><th><?php esc_html_e('Links', 'gps-gmail-product-importer'); ?></th></tr></thead><tbody><?php foreach ($audit['created_rows'] as $row) : ?><tr><td><?php echo esc_html($row['staging_item_id'] . ' → ' . $row['created_product_id']); ?></td><td><?php echo esc_html($row['gmail_subject']); ?><br><code><?php echo esc_html($this->product_sku((int) $row['created_product_id'])); ?></code></td><td><?php echo esc_html((string) $row['image_count']); ?></td><td><?php echo esc_html($row['fixed_category_label'] . ' / ' . ($row['price_empty'] ? 'empty price' : 'priced')); ?></td><td><a href="<?php echo esc_url(get_edit_post_link((int) $row['created_product_id'])); ?>"><?php esc_html_e('Edit Woo product', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(admin_url('admin.php?page=gpswiss-ovoko-integration&product_id=' . absint($row['created_product_id']))); ?>"><?php esc_html_e('Preview Woo → Ovoko CRM-only import payload', 'gps-gmail-product-importer'); ?></a> | <a href="<?php echo esc_url(add_query_arg(array('page' => 'gps-gmail-product-importer', 'gps_staging_item_id' => (int) $row['staging_item_id']), admin_url('admin.php'))); ?>"><?php esc_html_e('View Import Queue item', 'gps-gmail-product-importer'); ?></a></td></tr><?php endforeach; ?></tbody></table><p class="description"><?php esc_html_e('No automatic live Ovoko import is run from this dashboard.', 'gps-gmail-product-importer'); ?></p></div><?php endif; ?>
         <hr>
         <?php
     }
@@ -671,6 +680,72 @@ JS;
     private function format_blocker_counts($counts)
     {
         $parts = array(); foreach ($counts as $reason => $count) { $parts[] = $reason . ': ' . $count; } return implode(', ', $parts);
+    }
+
+    private function render_mark_unread_form($action, $button_label, $preview)
+    {
+        $csv_files = $this->mark_unread_csv_file_choices();
+        ?>
+        <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:10px 0;padding:10px;background:#fff;border:1px solid #ccd0d4;">
+            <?php wp_nonce_field(self::NONCE_ACTION); ?>
+            <input type="hidden" name="action" value="<?php echo esc_attr($action); ?>">
+            <p>
+                <label><strong><?php esc_html_e('Upload CSV audit', 'gps-gmail-product-importer'); ?></strong><br><input type="file" name="mark_unread_csv_upload" accept=".csv,text/csv"></label>
+            </p>
+            <p>
+                <label><strong><?php esc_html_e('Or select existing CSV from uploads', 'gps-gmail-product-importer'); ?></strong><br>
+                    <select name="mark_unread_csv_path" style="min-width:360px;max-width:100%;">
+                        <option value=""><?php esc_html_e('Choose CSV file...', 'gps-gmail-product-importer'); ?></option>
+                        <?php foreach ($csv_files as $file) : ?><option value="<?php echo esc_attr($file['path']); ?>"><?php echo esc_html($file['label']); ?></option><?php endforeach; ?>
+                    </select>
+                </label>
+            </p>
+            <p class="description"><?php esc_html_e('Required CSV columns: gmail_message_id. Recommended columns: created_product_id, readiness_status, blocking_reasons, subject or gmail_subject, staging_id or staging_item_id.', 'gps-gmail-product-importer'); ?></p>
+            <label><strong><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></strong> <input type="number" min="1" max="500" name="batch_size" value="50"></label>
+            <?php if (!$preview) : ?>
+                <label style="margin-left:10px;"><input type="checkbox" name="dry_run" value="1" checked> <?php esc_html_e('Dry-run (do not change Gmail)', 'gps-gmail-product-importer'); ?></label>
+            <?php else : ?>
+                <input type="hidden" name="dry_run" value="1">
+            <?php endif; ?>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin:10px 0;">
+                <label><input type="checkbox" name="include_missing_part_code" value="1" checked> <?php esc_html_e('Include missing_part_code', 'gps-gmail-product-importer'); ?></label>
+                <label><input type="checkbox" name="include_missing_images" value="1" checked> <?php esc_html_e('Include missing_images', 'gps-gmail-product-importer'); ?></label>
+                <label><input type="checkbox" name="include_woo_not_created" value="1" checked> <?php esc_html_e('Include no Woo product', 'gps-gmail-product-importer'); ?></label>
+                <label><input type="checkbox" name="include_repair_needed" value="1" checked> <?php esc_html_e('Include repair_needed', 'gps-gmail-product-importer'); ?></label>
+                <label><input type="checkbox" checked disabled> <?php esc_html_e('Skip already Ovoko imported', 'gps-gmail-product-importer'); ?></label>
+                <label><input type="checkbox" name="include_already_marked" value="1"> <?php esc_html_e('Force/include already marked by this tool', 'gps-gmail-product-importer'); ?></label>
+            </div>
+            <?php submit_button($button_label, $preview ? 'secondary' : 'primary', 'submit', false); ?>
+        </form>
+        <?php
+    }
+
+    private function render_mark_unread_result($last_result)
+    {
+        if (!is_array($last_result) || (($last_result['action'] ?? '') !== 'gmail_mark_not_imported_unread_preview' && ($last_result['action'] ?? '') !== 'gmail_mark_not_imported_unread')) {
+            return;
+        }
+        $keys = array('total_csv_rows', 'rows_with_gmail_message_id', 'will_mark_unread_count', 'marked_unread_count', 'failed_count', 'skipped_already_ovoko_imported', 'skipped_product_already_created', 'skipped_missing_gmail_message_id', 'skipped_no_problem', 'skipped_duplicate_gmail_message_id', 'skipped_already_marked_by_tool', 'dry_run', 'batch_id');
+        echo '<div class="notice ' . (empty($last_result['error']) ? 'notice-info' : 'notice-error') . ' inline"><p><strong>' . esc_html__('CSV Gmail mark-unread result:', 'gps-gmail-product-importer') . '</strong> ';
+        $parts = array(); foreach ($keys as $key) { if (array_key_exists($key, $last_result)) { $parts[] = $key . '=' . (is_bool($last_result[$key]) ? ($last_result[$key] ? 'yes' : 'no') : (string) $last_result[$key]); } }
+        if (!empty($last_result['csv_source'])) { $parts[] = 'csv=' . basename((string) $last_result['csv_source']); }
+        if (!empty($last_result['error'])) { $parts[] = 'error=' . (string) $last_result['error']; }
+        echo esc_html(implode(', ', $parts)) . '</p>';
+        if (!empty($last_result['examples_to_mark'])) {
+            echo '<p><strong>' . esc_html__('Examples to mark:', 'gps-gmail-product-importer') . '</strong></p><table class="widefat striped"><thead><tr><th>row_number</th><th>gmail_message_id</th><th>created_product_id</th><th>subject</th><th>readiness_status</th><th>blocking_reasons</th><th>reason_for_unread</th></tr></thead><tbody>';
+            foreach ((array) $last_result['examples_to_mark'] as $example) {
+                echo '<tr><td>' . esc_html((string) ($example['row_number'] ?? '')) . '</td><td><code>' . esc_html((string) ($example['gmail_message_id'] ?? '')) . '</code></td><td>' . esc_html((string) ($example['created_product_id'] ?? '')) . '</td><td>' . esc_html((string) ($example['subject'] ?? '')) . '</td><td>' . esc_html((string) ($example['readiness_status'] ?? '')) . '</td><td>' . esc_html((string) ($example['blocking_reasons'] ?? '')) . '</td><td>' . esc_html((string) ($example['reason_for_unread'] ?? '')) . '</td></tr>';
+            }
+            echo '</tbody></table>';
+        }
+        if (!empty($last_result['examples_skipped_ovoko'])) {
+            echo '<p><strong>' . esc_html__('Examples skipped as already Ovoko imported:', 'gps-gmail-product-importer') . '</strong></p><table class="widefat striped"><thead><tr><th>created_product_id</th><th>ovoko_part_id</th></tr></thead><tbody>';
+            foreach ((array) $last_result['examples_skipped_ovoko'] as $example) {
+                echo '<tr><td>' . esc_html((string) ($example['created_product_id'] ?? '')) . '</td><td>' . esc_html((string) ($example['ovoko_part_id'] ?? '')) . '</td></tr>';
+            }
+            echo '</tbody></table>';
+        }
+        echo '</div>';
     }
 
     private function render_last_batch_summary($last_result)
@@ -932,7 +1007,7 @@ JS;
             'client_id' => $settings['google_client_id'],
             'redirect_uri' => $this->redirect_uri(),
             'response_type' => 'code',
-            'scope' => 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email',
+            'scope' => 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email',
             'access_type' => 'offline',
             'prompt' => 'consent',
             'state' => $state,
@@ -1051,6 +1126,42 @@ JS;
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
         exit;
+    }
+
+    public function handle_mark_unread_preview()
+    {
+        $this->verify_admin_action();
+        $source = $this->mark_unread_csv_source_from_request(false);
+        $result = is_wp_error($source) ? $this->empty_mark_unread_csv_result(true, $source->get_error_message()) : $this->process_mark_not_imported_gmail_unread_csv((string) $source, true, $this->mark_unread_options_from_request(), true);
+        $result['action'] = 'gmail_mark_not_imported_unread_preview';
+        set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
+        wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
+        exit;
+    }
+
+    public function handle_mark_unread()
+    {
+        $this->verify_admin_action();
+        $dry_run = !empty($_POST['dry_run']);
+        $source = $this->mark_unread_csv_source_from_request(true);
+        $result = is_wp_error($source) ? $this->empty_mark_unread_csv_result($dry_run, $source->get_error_message()) : $this->process_mark_not_imported_gmail_unread_csv((string) $source, $dry_run, $this->mark_unread_options_from_request(), false);
+        $result['action'] = 'gmail_mark_not_imported_unread';
+        set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
+        wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
+        exit;
+    }
+
+    private function mark_unread_options_from_request()
+    {
+        return array(
+            'batch_size' => max(1, min(500, absint($_POST['batch_size'] ?? 50))),
+            'include_missing_part_code' => !empty($_POST['include_missing_part_code']),
+            'include_missing_images' => !empty($_POST['include_missing_images']),
+            'include_woo_not_created' => !empty($_POST['include_woo_not_created']),
+            'include_repair_needed' => !empty($_POST['include_repair_needed']),
+            'include_already_marked' => !empty($_POST['include_already_marked']),
+            'skip_already_ovoko_imported' => true,
+        );
     }
 
     private function current_user_can_manage_importer()
@@ -1669,6 +1780,410 @@ JS;
     private function get_message($message_id)
     {
         return $this->gmail_request(add_query_arg(array('format' => 'full'), 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' . rawurlencode($message_id)));
+    }
+
+    private function mark_unread_csv_file_choices()
+    {
+        $choices = array();
+        foreach ($this->report_files() as $name => $path) {
+            if (substr($name, -4) === '.csv' && is_readable($path)) {
+                $choices[$path] = array('path' => $path, 'label' => $name . ' — ' . $path);
+            }
+        }
+        $upload = wp_upload_dir();
+        $base = trailingslashit($upload['basedir']) . self::UPLOAD_DIR;
+        foreach ((array) glob($base . '/*.csv') as $path) {
+            if (is_readable($path)) {
+                $choices[$path] = array('path' => $path, 'label' => basename($path) . ' — ' . $path);
+            }
+        }
+        return array_values($choices);
+    }
+
+    private function mark_unread_csv_source_from_request($allow_saved_preview = false)
+    {
+        if (!empty($_FILES['mark_unread_csv_upload']['tmp_name']) && (int) ($_FILES['mark_unread_csv_upload']['error'] ?? UPLOAD_ERR_OK) === UPLOAD_ERR_OK) {
+            self::ensure_report_directory();
+            $upload = wp_upload_dir();
+            $base = trailingslashit($upload['basedir']) . self::UPLOAD_DIR;
+            $name = sanitize_file_name((string) ($_FILES['mark_unread_csv_upload']['name'] ?? 'gmail-import-audit.csv'));
+            if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) !== 'csv') {
+                return new WP_Error('gps_gmail_mark_unread_csv_type', 'Please upload a CSV file.');
+            }
+            $target = $base . '/mark-unread-audit-' . gmdate('Ymd-His') . '-' . $name;
+            if (!move_uploaded_file((string) $_FILES['mark_unread_csv_upload']['tmp_name'], $target)) {
+                return new WP_Error('gps_gmail_mark_unread_csv_upload_failed', 'Could not save uploaded CSV audit file.');
+            }
+            return $target;
+        }
+        $path = sanitize_text_field(wp_unslash($_POST['mark_unread_csv_path'] ?? ''));
+        if ($path === '' && $allow_saved_preview) {
+            $preview = (array) get_option('gps_gmail_mark_unread_csv_last_preview', array());
+            $path = (string) ($preview['csv_source'] ?? '');
+        }
+        if ($path === '' || !is_readable($path)) {
+            return new WP_Error('gps_gmail_mark_unread_csv_missing', 'Select or upload a readable Gmail Importer audit CSV first.');
+        }
+        $upload = wp_upload_dir();
+        $uploads_root = realpath((string) ($upload['basedir'] ?? ''));
+        $real = realpath($path);
+        if (!$real || !$uploads_root || strpos($real, $uploads_root) !== 0) {
+            return new WP_Error('gps_gmail_mark_unread_csv_outside_uploads', 'CSV must be located under wp-content/uploads.');
+        }
+        return $real;
+    }
+
+    private function empty_mark_unread_csv_result($dry_run, $error = '')
+    {
+        return array('dry_run' => (bool) $dry_run, 'total_csv_rows' => 0, 'rows_with_gmail_message_id' => 0, 'will_mark_unread_count' => 0, 'marked_unread_count' => 0, 'failed_count' => 0, 'skipped_already_ovoko_imported' => 0, 'skipped_product_already_created' => 0, 'skipped_missing_gmail_message_id' => 0, 'skipped_no_problem' => 0, 'skipped_duplicate_gmail_message_id' => 0, 'skipped_already_marked_by_tool' => 0, 'examples_to_mark' => array(), 'examples_skipped_ovoko' => array(), 'errors' => array(), 'error' => $error, 'gmail_scope_required' => 'https://www.googleapis.com/auth/gmail.modify', 'no_ovoko_write' => true, 'no_ebay_write' => true, 'no_woo_product_change' => true);
+    }
+
+    private function process_mark_not_imported_gmail_unread_csv($csv_path, $dry_run, $options, $store_preview = false)
+    {
+        $options = wp_parse_args((array) $options, array('batch_size' => 50, 'include_missing_part_code' => true, 'include_missing_images' => true, 'include_woo_not_created' => true, 'include_repair_needed' => true, 'include_already_marked' => false, 'skip_already_ovoko_imported' => true));
+        $result = $this->empty_mark_unread_csv_result($dry_run);
+        $result['csv_source'] = $csv_path;
+        $result['csv_hash'] = is_readable($csv_path) ? (string) hash_file('sha256', $csv_path) : '';
+        if (!is_readable($csv_path)) {
+            $result['error'] = 'CSV audit file is not readable.';
+            return $result;
+        }
+        $rows = $this->read_mark_unread_csv_rows($csv_path);
+        if (is_wp_error($rows)) {
+            $result['error'] = $rows->get_error_message();
+            return $result;
+        }
+        $seen = array();
+        $candidates = array();
+        foreach ($rows as $row) {
+            $result['total_csv_rows']++;
+            $gmail_message_id = trim((string) ($row['gmail_message_id'] ?? ''));
+            if ($gmail_message_id === '') {
+                $result['skipped_missing_gmail_message_id']++;
+                continue;
+            }
+            $result['rows_with_gmail_message_id']++;
+            if (isset($seen[$gmail_message_id])) {
+                $result['skipped_duplicate_gmail_message_id']++;
+                continue;
+            }
+            $seen[$gmail_message_id] = true;
+            $candidate = $this->mark_unread_csv_candidate($row, $options);
+            if (!$candidate['eligible']) {
+                $bucket = $candidate['skip_bucket'] ?? 'skipped_no_problem';
+                if (isset($result[$bucket])) { $result[$bucket]++; } else { $result['skipped_no_problem']++; }
+                if ($bucket === 'skipped_already_ovoko_imported' && count($result['examples_skipped_ovoko']) < 10) {
+                    $result['examples_skipped_ovoko'][] = $candidate['skip_example'];
+                }
+                continue;
+            }
+            $candidates[] = $candidate['message'];
+            if (count($result['examples_to_mark']) < 10) {
+                $result['examples_to_mark'][] = $candidate['message'];
+            }
+        }
+        $result['will_mark_unread_count'] = count($candidates);
+        $approval_options = $options; unset($approval_options['batch_size']);
+        $preview = array('batch_id' => 'gmail-csv-unread-' . gmdate('Ymd-His') . '-' . substr(wp_generate_password(8, false, false), 0, 8), 'csv_source' => $csv_path, 'csv_hash' => $result['csv_hash'], 'options_hash' => md5(wp_json_encode($approval_options)), 'created_at' => current_time('mysql', true), 'candidates' => $candidates);
+        $result['batch_id'] = $preview['batch_id'];
+        if ($store_preview || $dry_run) {
+            update_option('gps_gmail_mark_unread_csv_last_preview', $preview, false);
+        }
+        if ($dry_run) {
+            return $result;
+        }
+        $saved = (array) get_option('gps_gmail_mark_unread_csv_last_preview', array());
+        $approval_options = $options; unset($approval_options['batch_size']);
+        if (empty($saved['candidates']) || ($saved['csv_hash'] ?? '') !== $result['csv_hash'] || ($saved['options_hash'] ?? '') !== md5(wp_json_encode($approval_options))) {
+            $result['error'] = 'Run Preview CSV unread candidates for this exact CSV and options before live marking. No Gmail messages were changed.';
+            return $result;
+        }
+        $scope = $this->gmail_modify_scope_available();
+        if (is_wp_error($scope)) {
+            $result['error'] = $scope->get_error_message();
+            return $result;
+        }
+        $batch_id = (string) ($saved['batch_id'] ?? $preview['batch_id']);
+        $result['batch_id'] = $batch_id;
+        $approved = array_slice((array) $saved['candidates'], 0, max(1, (int) $options['batch_size']));
+        $log = (array) get_option('gps_gmail_mark_unread_csv_log', array());
+        foreach ($approved as $message) {
+            $gmail_message_id = (string) ($message['gmail_message_id'] ?? '');
+            $marked = $this->mark_gmail_message_unread($gmail_message_id);
+            if (is_wp_error($marked)) {
+                $result['failed_count']++;
+                $result['errors'][] = array('gmail_message_id' => $gmail_message_id, 'error' => $marked->get_error_message());
+                $log[$gmail_message_id] = array('status' => 'error', 'batch_id' => $batch_id, 'error' => $marked->get_error_message(), 'updated_at' => current_time('mysql', true), 'message' => $message);
+                continue;
+            }
+            $result['marked_unread_count']++;
+            $log[$gmail_message_id] = array('status' => 'marked_unread', 'batch_id' => $batch_id, 'updated_at' => current_time('mysql', true), 'message' => $message);
+            $this->mark_unread_update_staging_log_for_gmail_message($gmail_message_id, (string) ($message['reason_for_unread'] ?? ''), $batch_id);
+        }
+        update_option('gps_gmail_mark_unread_csv_log', $log, false);
+        $remaining = array_slice((array) $saved['candidates'], count($approved));
+        $saved['candidates'] = $remaining;
+        update_option('gps_gmail_mark_unread_csv_last_preview', $saved, false);
+        return $result;
+    }
+
+    private function read_mark_unread_csv_rows($csv_path)
+    {
+        $handle = fopen($csv_path, 'r');
+        if (!$handle) {
+            return new WP_Error('gps_gmail_mark_unread_csv_open_failed', 'Could not open CSV audit file.');
+        }
+        $headers = fgetcsv($handle);
+        if (!$headers) {
+            fclose($handle);
+            return new WP_Error('gps_gmail_mark_unread_csv_empty', 'CSV audit file is empty.');
+        }
+        $columns = array_map(array($this, 'normalize_csv_header'), $headers);
+        if (!in_array('gmail_message_id', $columns, true)) {
+            fclose($handle);
+            return new WP_Error('gps_gmail_mark_unread_csv_missing_column', 'CSV audit must include gmail_message_id column.');
+        }
+        $rows = array();
+        $row_number = 1;
+        while (($data = fgetcsv($handle)) !== false) {
+            $row_number++;
+            $row = array('row_number' => $row_number);
+            foreach ($columns as $index => $column) {
+                if ($column !== '') { $row[$column] = $data[$index] ?? ''; }
+            }
+            $rows[] = $row;
+        }
+        fclose($handle);
+        return $rows;
+    }
+
+    private function normalize_csv_header($header)
+    {
+        $header = preg_replace('/^\xEF\xBB\xBF/', '', (string) $header);
+        return sanitize_key(str_replace(array(' ', '-'), '_', strtolower(trim($header))));
+    }
+
+    private function mark_unread_csv_candidate($row, $options)
+    {
+        $gmail_message_id = trim((string) ($row['gmail_message_id'] ?? ''));
+        $created_product_id = absint($row['created_product_id'] ?? ($row['product_id'] ?? 0));
+        $readiness_status = sanitize_key((string) ($row['readiness_status'] ?? ($row['status'] ?? '')));
+        $blocking_reasons = (string) ($row['blocking_reasons'] ?? ($row['reason'] ?? ''));
+        $subject = (string) (($row['subject'] ?? '') ?: ($row['gmail_subject'] ?? ''));
+        $ovoko = $this->ovoko_success_for_product_id($created_product_id);
+        if (!empty($ovoko['imported'])) {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_already_ovoko_imported', 'skip_example' => array('created_product_id' => $created_product_id, 'ovoko_part_id' => (string) $ovoko['ovoko_part_id']));
+        }
+        if (empty($options['include_already_marked']) && $this->gmail_message_already_marked_unread_by_csv_tool($gmail_message_id)) {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_already_marked_by_tool', 'skip_example' => array());
+        }
+        $reason = $this->mark_unread_csv_reason($readiness_status, $blocking_reasons, $created_product_id, $options);
+        if ($reason === 'product_already_created') {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_product_already_created', 'skip_example' => array());
+        }
+        if ($reason === '') {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_no_problem', 'skip_example' => array());
+        }
+        return array('eligible' => true, 'message' => array('row_number' => (int) ($row['row_number'] ?? 0), 'gmail_message_id' => $gmail_message_id, 'created_product_id' => $created_product_id, 'subject' => $subject, 'readiness_status' => $readiness_status, 'blocking_reasons' => $blocking_reasons, 'reason_for_unread' => $reason));
+    }
+
+    private function mark_unread_csv_reason($readiness_status, $blocking_reasons, $created_product_id, $options)
+    {
+        $text = strtolower($readiness_status . ' ' . str_replace(array('|', ',', ';'), ' ', (string) $blocking_reasons));
+        $selected = array();
+        if (!empty($options['include_missing_part_code']) && strpos($text, 'missing_part_code') !== false) { $selected[] = 'missing_part_code'; }
+        if (!empty($options['include_missing_images']) && strpos($text, 'missing_images') !== false) { $selected[] = 'missing_images'; }
+        if (!empty($options['include_woo_not_created']) && ($created_product_id <= 0 || strpos($text, 'product_not_created') !== false || strpos($text, 'create_woo_failed') !== false)) { $selected[] = $created_product_id > 0 ? 'create_woo_failed' : 'product_not_created'; }
+        if (!empty($options['include_repair_needed']) && (strpos($text, 'repair_needed') !== false || strpos($text, 'recoverable_part_id_blocks_retry') !== false || strpos($text, 'recoverable_retry_blocked') !== false)) { $selected[] = strpos($text, 'recoverable_part_id_blocks_retry') !== false ? 'recoverable_part_id_blocks_retry' : 'repair_needed'; }
+        if (strpos($text, 'needs_review') !== false || strpos($text, 'blocked') !== false) { $selected[] = strpos($text, 'blocked') !== false ? 'blocked' : 'needs_review'; }
+        if (!$selected && strpos($text, 'product_already_created') !== false) { return 'product_already_created'; }
+        if (!$selected && preg_match('/\b(imported|ovoko_imported|ready|product_already_created|already_created)\b/', $text)) { return ''; }
+        return implode('|', array_values(array_unique($selected)));
+    }
+
+    private function ovoko_success_for_product_id($product_id)
+    {
+        $product_id = absint($product_id);
+        if ($product_id <= 0 || !get_post($product_id)) {
+            return array('imported' => false, 'source' => '', 'ovoko_part_id' => '');
+        }
+        foreach (array('_ovoko_part_id', 'ovoko_part_id', '_gps_ovoko_crm_only_imported_at') as $key) {
+            $value = trim((string) get_post_meta($product_id, $key, true));
+            if ($value !== '') { return array('imported' => true, 'source' => 'product_meta:' . $key, 'ovoko_part_id' => $value); }
+        }
+        return array('imported' => false, 'source' => '', 'ovoko_part_id' => '');
+    }
+
+    private function gmail_message_already_marked_unread_by_csv_tool($gmail_message_id)
+    {
+        $log = (array) get_option('gps_gmail_mark_unread_csv_log', array());
+        return isset($log[$gmail_message_id]) && ($log[$gmail_message_id]['status'] ?? '') === 'marked_unread';
+    }
+
+    private function mark_unread_update_staging_log_for_gmail_message($gmail_message_id, $reason, $batch_id)
+    {
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 10, 'meta_query' => array(array('key' => '_gps_gmail_message_id', 'value' => $gmail_message_id))));
+        foreach ($ids as $id) {
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_at', current_time('mysql', true));
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_reason', $reason);
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_batch_id', $batch_id);
+        }
+    }
+
+    private function process_mark_not_imported_gmail_unread($dry_run, $options)
+    {
+        $options = wp_parse_args((array) $options, array(
+            'batch_size' => 50,
+            'include_missing_part_code' => true,
+            'include_missing_images' => true,
+            'include_woo_not_created' => true,
+            'include_repair_needed' => true,
+            'include_blocked_validation' => true,
+            'include_already_marked' => false,
+            'skip_already_ovoko_imported' => true,
+        ));
+        $result = array(
+            'dry_run' => (bool) $dry_run,
+            'total_candidates' => 0,
+            'will_mark_unread_count' => 0,
+            'marked_unread_count' => 0,
+            'failed_count' => 0,
+            'skipped_already_ovoko_imported' => 0,
+            'skipped_missing_gmail_message_id' => 0,
+            'skipped_no_action_needed' => 0,
+            'skipped_already_marked_by_tool' => 0,
+            'examples' => array(),
+            'errors' => array(),
+            'gmail_scope_required' => 'https://www.googleapis.com/auth/gmail.modify',
+            'no_ovoko_write' => true,
+            'no_ebay_write' => true,
+            'no_woo_product_change' => true,
+        );
+        if (!$dry_run) {
+            $scope = $this->gmail_modify_scope_available();
+            if (is_wp_error($scope)) {
+                $result['error'] = $scope->get_error_message();
+                return $result;
+            }
+        }
+        $ids = get_posts(array('post_type' => self::STAGING_POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => max(1, (int) $options['batch_size']), 'orderby' => 'modified', 'order' => 'DESC'));
+        $batch_id = $dry_run ? '' : ('gmail-unread-' . gmdate('Ymd-His') . '-' . substr(wp_generate_password(8, false, false), 0, 8));
+        foreach ($ids as $id) {
+            $result['total_candidates']++;
+            $candidate = $this->mark_unread_candidate_for_staging_item((int) $id, $options);
+            if (!$candidate['eligible']) {
+                $bucket = $candidate['skip_bucket'] ?? 'skipped_no_action_needed';
+                if (isset($result[$bucket])) { $result[$bucket]++; } else { $result['skipped_no_action_needed']++; }
+                continue;
+            }
+            $result['will_mark_unread_count']++;
+            if (count($result['examples']) < 10) {
+                $result['examples'][] = $candidate['example'];
+            }
+            if ($dry_run) {
+                continue;
+            }
+            $marked = $this->mark_gmail_message_unread($candidate['gmail_message_id']);
+            if (is_wp_error($marked)) {
+                $result['failed_count']++;
+                $result['errors'][] = array('staging_id' => (int) $id, 'gmail_message_id' => $candidate['gmail_message_id'], 'error' => $marked->get_error_message());
+                continue;
+            }
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_at', current_time('mysql', true));
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_reason', $candidate['reason']);
+            update_post_meta((int) $id, '_gps_gmail_marked_unread_batch_id', $batch_id);
+            $result['marked_unread_count']++;
+        }
+        return $result;
+    }
+
+    private function mark_unread_candidate_for_staging_item($item_id, $options)
+    {
+        $row = $this->bulk_dashboard_audit_row($item_id);
+        $gmail_message_id = trim((string) ($row['gmail_message_id'] ?? ''));
+        if ($gmail_message_id === '') {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_missing_gmail_message_id');
+        }
+        if (empty($options['include_already_marked']) && trim((string) get_post_meta($item_id, '_gps_gmail_marked_unread_at', true)) !== '') {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_already_marked_by_tool');
+        }
+        $ovoko = $this->ovoko_success_for_staging_item($item_id, absint($row['created_product_id'] ?? 0));
+        if (!empty($ovoko['imported'])) {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_already_ovoko_imported');
+        }
+        $reason = $this->mark_unread_reason_for_row($row, $item_id, $options);
+        if ($reason === '') {
+            return array('eligible' => false, 'skip_bucket' => 'skipped_no_action_needed');
+        }
+        return array(
+            'eligible' => true,
+            'gmail_message_id' => $gmail_message_id,
+            'reason' => $reason,
+            'example' => array(
+                'staging_id' => (int) $item_id,
+                'gmail_message_id' => $gmail_message_id,
+                'subject' => (string) ($row['gmail_subject'] ?? ''),
+                'created_product_id' => absint($row['created_product_id'] ?? 0),
+                'reason' => $reason,
+                'ovoko_part_id' => (string) ($ovoko['ovoko_part_id'] ?? ''),
+            ),
+        );
+    }
+
+    private function mark_unread_reason_for_row($row, $item_id, $options)
+    {
+        $reasons = array_values(array_unique(array_filter(array_map('strval', (array) ($row['blocking_reasons'] ?? array())))));
+        $staging_status = sanitize_key((string) get_post_meta($item_id, '_gps_staging_status', true));
+        $readiness_status = sanitize_key((string) ($row['readiness_status'] ?? ''));
+        $created_product_id = absint($row['created_product_id'] ?? 0);
+        $haystack = strtolower($staging_status . ' ' . $readiness_status . ' ' . implode(' ', $reasons) . ' ' . (string) get_post_meta($item_id, '_gps_last_create_woo_error', true));
+        $selected = array();
+        if (!empty($options['include_missing_part_code']) && in_array('missing_part_code', $reasons, true)) { $selected[] = 'missing_part_code'; }
+        if (!empty($options['include_missing_images']) && in_array('missing_images', $reasons, true)) { $selected[] = 'missing_images'; }
+        if (!empty($options['include_woo_not_created']) && ($created_product_id <= 0 || strpos($haystack, 'create_woo_failed') !== false || strpos($haystack, 'product_not_created') !== false)) { $selected[] = $created_product_id > 0 ? 'create_woo_failed' : 'product_not_created'; }
+        if (!empty($options['include_repair_needed']) && (strpos($haystack, 'repair_needed') !== false || strpos($haystack, 'recoverable_retry_blocked') !== false || strpos($haystack, 'retry_blocked') !== false)) { $selected[] = 'repair_needed'; }
+        if (!empty($options['include_blocked_validation']) && (in_array($readiness_status, array('needs_review', 'blocked'), true) || in_array($staging_status, array('needs_review', 'blocked', 'error', 'create_woo_failed', 'repair_needed'), true))) { $selected[] = 'blocked_by_validation'; }
+        if (!$selected && $created_product_id > 0 && in_array('product_already_created', $reasons, true)) { $selected[] = 'product_already_created_without_ovoko_meta'; }
+        return implode('|', array_values(array_unique($selected)));
+    }
+
+    private function ovoko_success_for_staging_item($item_id, $created_product_id)
+    {
+        $keys = array('_ovoko_part_id', 'ovoko_part_id', '_gps_ovoko_crm_only_imported_at');
+        foreach ($keys as $key) {
+            $value = trim((string) get_post_meta($item_id, $key, true));
+            if ($value !== '') { return array('imported' => true, 'source' => 'staging_meta:' . $key, 'ovoko_part_id' => $value); }
+        }
+        if ($created_product_id > 0 && get_post($created_product_id)) {
+            foreach ($keys as $key) {
+                $value = trim((string) get_post_meta($created_product_id, $key, true));
+                if ($value !== '') { return array('imported' => true, 'source' => 'product_meta:' . $key, 'ovoko_part_id' => $value); }
+            }
+        }
+        return array('imported' => false, 'source' => '', 'ovoko_part_id' => '');
+    }
+
+    private function gmail_modify_scope_available()
+    {
+        $tokens = (array) get_option(self::OPTION_TOKENS, array());
+        $scope = (string) ($tokens['scope'] ?? '');
+        if ($scope === '' || (strpos($scope, 'https://www.googleapis.com/auth/gmail.modify') === false && strpos($scope, 'gmail.modify') === false)) {
+            return new WP_Error('gps_gmail_modify_scope_missing', 'Gmail token does not include gmail.modify scope. Reconnect Gmail from this plugin before running live mark-unread. No Gmail messages were changed.');
+        }
+        return true;
+    }
+
+    private function mark_gmail_message_unread($message_id)
+    {
+        $message_id = sanitize_text_field($message_id);
+        if ($message_id === '') {
+            return new WP_Error('gps_gmail_message_id_missing', 'Gmail message ID is missing.');
+        }
+        return $this->gmail_request('https://gmail.googleapis.com/gmail/v1/users/me/messages/' . rawurlencode($message_id) . '/modify', array(
+            'method' => 'POST',
+            'headers' => array('Content-Type' => 'application/json'),
+            'body' => wp_json_encode(array('addLabelIds' => array('UNREAD'))),
+        ));
     }
 
     private function mark_gmail_message_read($message_id)
@@ -4340,7 +4855,8 @@ JS;
 
     private function store_tokens($body)
     {
-        $tokens = array('access_token' => sanitize_text_field($body['access_token'] ?? ''), 'refresh_token' => sanitize_text_field($body['refresh_token'] ?? ((array) get_option(self::OPTION_TOKENS, array()))['refresh_token'] ?? ''), 'expires_at' => time() + absint($body['expires_in'] ?? 3600), 'scope' => sanitize_text_field($body['scope'] ?? ''), 'token_type' => sanitize_text_field($body['token_type'] ?? 'Bearer'));
+        $existing = (array) get_option(self::OPTION_TOKENS, array());
+        $tokens = array('access_token' => sanitize_text_field($body['access_token'] ?? ''), 'refresh_token' => sanitize_text_field($body['refresh_token'] ?? ($existing['refresh_token'] ?? '')), 'expires_at' => time() + absint($body['expires_in'] ?? 3600), 'scope' => sanitize_text_field($body['scope'] ?? ($existing['scope'] ?? '')), 'token_type' => sanitize_text_field($body['token_type'] ?? 'Bearer'));
         update_option(self::OPTION_TOKENS, $tokens, false);
     }
 
