@@ -78,11 +78,14 @@ class WooToOvokoCrmOnlyImportService
         $result['response_classification'] = $classification;
         if (empty($classification['success'])) {
             $result['ok'] = false;
-            $result['status'] = 'failed';
-            $result['error_code'] = 'ovoko_import_failed';
-            $result['message'] = $this->response_has_photo_file_missing_error($response)
-                ? 'Ovoko rejected photo field. Image payload format/accessibility must be fixed before retry.'
+            $result['status'] = !empty($classification['photo_file_missing']) ? 'repair_needed' : 'failed';
+            $result['error_code'] = !empty($classification['photo_file_missing']) ? 'ovoko_photo_file_missing' : 'ovoko_import_failed';
+            $result['message'] = !empty($classification['photo_file_missing'])
+                ? 'Ovoko rejected photo file; image must be checked/reuploaded before retry'
                 : 'Ovoko /crm/importPart did not return HTTP 200 + status_code R200/R202 + part_id for CRM-only no-price import.';
+            if (!empty($classification['photo_file_missing'])) {
+                $result['skip_reason'] = 'ovoko_photo_file_missing';
+            }
             $result['part_id'] = $partId;
             if ($partId !== '') {
                 $result['recoverable_part_id'] = $partId;
@@ -270,6 +273,7 @@ class WooToOvokoCrmOnlyImportService
             }
         }
         $missingPriceWarning = $this->is_missing_price_r202_warning($statusCode, $message);
+        $photoFileMissing = $this->response_has_photo_file_missing_error($statusCode, $response, $message);
         $success = $httpCode === 200 && $partId !== '' && ($statusCode === 'R200' || $missingPriceWarning);
         return [
             'success' => $success,
@@ -278,7 +282,8 @@ class WooToOvokoCrmOnlyImportService
             'part_id' => $partId,
             'message' => $message,
             'crm_only_missing_price_warning' => $missingPriceWarning,
-            'success_rule' => $success ? ($missingPriceWarning ? 'http_200_r202_part_id_missing_price_warning' : 'http_200_r200_part_id') : 'not_success',
+            'photo_file_missing' => $photoFileMissing,
+            'success_rule' => $success ? ($missingPriceWarning ? 'http_200_r202_part_id_missing_price_warning' : 'http_200_r200_part_id') : ($photoFileMissing ? 'r400_photo_file_missing_repair_needed' : 'not_success'),
         ];
     }
 
@@ -321,9 +326,12 @@ class WooToOvokoCrmOnlyImportService
         return $this->extract_part_id_from_decoded_response($decoded);
     }
 
-    private function response_has_photo_file_missing_error(array $response): bool
+    private function response_has_photo_file_missing_error(string $statusCode, array $response, string $message): bool
     {
-        $haystack = strtolower(wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+        if (strtoupper(trim($statusCode)) !== 'R400') {
+            return false;
+        }
+        $haystack = strtolower($message . ' ' . (wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: ''));
         return str_contains($haystack, 'photo') && str_contains($haystack, 'file does not exist');
     }
 
@@ -356,9 +364,13 @@ class WooToOvokoCrmOnlyImportService
 
     private function store_failure(int $productId, array $result, array $response): void
     {
-        update_post_meta($productId, '_gps_ovoko_crm_only_import_last_error', wp_json_encode(['code' => $result['error_code'] ?? 'unknown', 'message' => $result['message'] ?? ''], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_last_error', wp_json_encode(['code' => $result['error_code'] ?? 'unknown', 'message' => $result['message'] ?? '', 'status' => $result['status'] ?? ''], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_last_error_at', gmdate('c'));
         update_post_meta($productId, '_gps_ovoko_crm_only_import_last_response_raw', (string) ($response['raw_body'] ?? wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+        if ((string) ($result['error_code'] ?? '') === 'ovoko_photo_file_missing') {
+            update_post_meta($productId, '_gps_ovoko_crm_only_import_repair_needed', '1');
+            update_post_meta($productId, '_gps_ovoko_crm_only_import_repair_reason', 'ovoko_photo_file_missing');
+        }
         if (trim((string) ($result['part_id'] ?? '')) !== '') {
             update_post_meta($productId, '_gps_ovoko_crm_only_import_recoverable_part_id', trim((string) $result['part_id']));
             update_post_meta($productId, '_gps_ovoko_crm_only_import_repair_available', '1');

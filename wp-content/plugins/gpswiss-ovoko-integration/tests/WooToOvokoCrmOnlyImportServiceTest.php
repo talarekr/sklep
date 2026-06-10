@@ -288,10 +288,11 @@ gpswiss_run_live_test('failed response does not store part_id and stores error',
 gpswiss_run_live_test('photo file does not exist response stores clear error and no part_id', function (): void {
     gpswiss_seed_valid_live_product();
     $result = (new WooToOvokoCrmOnlyImportService([], 'gpswiss_fake_photo_fail_importer'))->create(60886, gpswiss_confirmations());
-    gpswiss_assert($result['ok'] === false && ($result['error_code'] ?? '') === 'ovoko_import_failed', 'Photo failure must fail safely.');
-    gpswiss_assert(($result['message'] ?? '') === 'Ovoko rejected photo field. Image payload format/accessibility must be fixed before retry.', 'Photo failure must show clear admin message.');
+    gpswiss_assert($result['ok'] === false && ($result['status'] ?? '') === 'repair_needed' && ($result['error_code'] ?? '') === 'ovoko_photo_file_missing', 'Photo failure must become repair-needed safely.');
+    gpswiss_assert(($result['message'] ?? '') === 'Ovoko rejected photo file; image must be checked/reuploaded before retry', 'Photo failure must show clear admin message.');
     gpswiss_assert(get_post_meta(60886, '_ovoko_part_id', true) === '', 'Photo failure must not store _ovoko_part_id.');
-    gpswiss_assert(str_contains((string) get_post_meta(60886, '_gps_ovoko_crm_only_import_last_error', true), 'Ovoko rejected photo field'), 'Photo failure must store clear last error.');
+    gpswiss_assert(get_post_meta(60886, '_gps_ovoko_crm_only_import_repair_reason', true) === 'ovoko_photo_file_missing', 'Photo failure must store repair reason.');
+    gpswiss_assert(str_contains((string) get_post_meta(60886, '_gps_ovoko_crm_only_import_last_error', true), 'ovoko_photo_file_missing'), 'Photo failure must store clear last error.');
 });
 
 gpswiss_run_live_test('repeated photos encoding uses repeated form fields', function (): void {

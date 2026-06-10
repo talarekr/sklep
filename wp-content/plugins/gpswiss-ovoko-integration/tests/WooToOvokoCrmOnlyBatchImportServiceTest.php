@@ -18,6 +18,7 @@ $GLOBALS['gpswiss_batch_test_attachments'] = [];
 $GLOBALS['gpswiss_batch_test_products'] = [];
 $GLOBALS['gpswiss_batch_test_options'] = [];
 $GLOBALS['gpswiss_batch_test_import_payloads'] = [];
+$GLOBALS['gpswiss_batch_test_import_responses'] = [];
 
 class GPSwissBatchTestProduct
 {
@@ -105,6 +106,7 @@ function gpswiss_batch_reset(): void
     $GLOBALS['gpswiss_batch_test_products'] = [];
     $GLOBALS['gpswiss_batch_test_options'] = [];
     $GLOBALS['gpswiss_batch_test_import_payloads'] = [];
+    $GLOBALS['gpswiss_batch_test_import_responses'] = [];
 }
 
 function gpswiss_batch_seed_product(int $id, string $sku): void
@@ -129,7 +131,7 @@ function gpswiss_batch_seed_product(int $id, string $sku): void
 }
 
 function gpswiss_batch_set_meta(int $id, string $key, mixed $value): void { $GLOBALS['gpswiss_batch_test_meta'][$id][$key] = $value; }
-function gpswiss_batch_importer(array $payload): array { $GLOBALS['gpswiss_batch_test_import_payloads'][] = $payload; return ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-999', 'raw_body' => '{"status_code":"R200","part_id":"RRR-999"}']; }
+function gpswiss_batch_importer(array $payload): array { $GLOBALS['gpswiss_batch_test_import_payloads'][] = $payload; if ($GLOBALS['gpswiss_batch_test_import_responses'] !== []) { return array_shift($GLOBALS['gpswiss_batch_test_import_responses']); } return ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-999', 'raw_body' => '{"status_code":"R200","part_id":"RRR-999"}']; }
 function gpswiss_batch_service(): WooToOvokoCrmOnlyBatchImportService { return new WooToOvokoCrmOnlyBatchImportService([], null, new WooToOvokoCrmOnlyImportService([], 'gpswiss_batch_importer')); }
 function gpswiss_batch_assert(bool $condition, string $message, mixed $context = null): void { if (!$condition) { throw new RuntimeException($message . ($context === null ? '' : ' ' . json_encode($context))); } }
 function gpswiss_batch_run(string $name, callable $test): void { gpswiss_batch_reset(); $test(); echo "PASS {$name}\n"; }
@@ -185,6 +187,38 @@ gpswiss_batch_run('batch skips recoverable retry block without importing and con
     gpswiss_batch_assert(count($GLOBALS['gpswiss_batch_test_import_payloads']) === 1, 'Only next eligible product should call importer.', $GLOBALS['gpswiss_batch_test_import_payloads']);
     gpswiss_batch_assert(($result['items'][0]['product_id'] ?? 0) === 60886 && ($result['items'][0]['skip_reason'] ?? '') === 'skipped_recoverable_retry_blocked', 'Skipped item for 60886 missing.', $result['items']);
     gpswiss_batch_assert(($result['items'][1]['product_id'] ?? 0) === 60887 && !empty($result['items'][1]['ok']), 'Imported item for 60887 missing.', $result['items']);
+});
+
+
+gpswiss_batch_run('batch marks Ovoko photo file missing as repair-needed and continues', function (): void {
+    gpswiss_batch_seed_product(62803, 'GPS-GMAIL-62803');
+    gpswiss_batch_seed_product(62804, 'GPS-GMAIL-62804');
+    gpswiss_batch_seed_product(62805, 'GPS-GMAIL-62805');
+    $GLOBALS['gpswiss_batch_test_import_responses'] = [
+        ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-A', 'raw_body' => '{"status_code":"R200","part_id":"RRR-A"}'],
+        ['ok' => false, 'http_code' => 200, 'status_code' => 'R400', 'msg' => ['photo' => '[ERROR] file does not exist'], 'part_id' => '', 'raw_body' => '{"status_code":"R400","msg":{"photo":"[ERROR] file does not exist"}}'],
+        ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => 'RRR-C', 'raw_body' => '{"status_code":"R200","part_id":"RRR-C"}'],
+    ];
+
+    $result = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 3, 'stop_on_first_error' => true]);
+
+    gpswiss_batch_assert(($result['ok'] ?? false) === true, 'Photo file missing must not make the batch fatal.', $result);
+    gpswiss_batch_assert(($result['success_count'] ?? 0) === 2, 'Products A and C should import successfully.', $result);
+    gpswiss_batch_assert(($result['failed_count'] ?? 0) === 0, 'Photo file missing must not increment failed_count.', $result);
+    gpswiss_batch_assert(($result['repair_needed_count'] ?? 0) === 1, 'Photo file missing should increment repair_needed_count.', $result);
+    gpswiss_batch_assert(($result['photo_file_missing_count'] ?? 0) === 1, 'Photo file missing count missing.', $result);
+    gpswiss_batch_assert(($result['skipped_photo_file_missing'] ?? 0) === 1, 'Skipped photo file missing count missing.', $result);
+    gpswiss_batch_assert(($result['items'][1]['product_id'] ?? 0) === 62804, 'Product B item missing.', $result['items']);
+    gpswiss_batch_assert(($result['items'][1]['status'] ?? '') === 'repair_needed', 'Product B should be repair_needed.', $result['items'][1]);
+    gpswiss_batch_assert(($result['items'][1]['skip_reason'] ?? '') === 'ovoko_photo_file_missing', 'Product B skip reason should be ovoko_photo_file_missing.', $result['items'][1]);
+    gpswiss_batch_assert(get_post_meta(62804, '_gps_ovoko_crm_only_import_repair_reason', true) === 'ovoko_photo_file_missing', 'Product B should persist photo repair reason.');
+
+    $GLOBALS['gpswiss_batch_test_import_payloads'] = [];
+    $GLOBALS['gpswiss_batch_test_import_responses'] = [];
+    $second = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 1, 'cursor' => 62803]);
+    gpswiss_batch_assert(($second['skipped_photo_file_missing'] ?? 0) === 1, 'Next run should skip product B as skipped_photo_file_missing.', $second);
+    gpswiss_batch_assert(($second['items'][0]['product_id'] ?? 0) === 62804 && ($second['items'][0]['skip_reason'] ?? '') === 'ovoko_photo_file_missing', 'Next run should report B as photo repair skip.', $second['items']);
+    gpswiss_batch_assert($GLOBALS['gpswiss_batch_test_import_payloads'] === [], 'Next run must not resend product B.', $GLOBALS['gpswiss_batch_test_import_payloads']);
 });
 
 gpswiss_batch_run('batch scans past already imported lookahead window to next eligible Gmail draft', function (): void {

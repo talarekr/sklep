@@ -124,6 +124,10 @@ class WooToOvokoCrmOnlyBatchImportService
         foreach ((array) ($candidateScan['skipped_recoverable_items'] ?? []) as $skippedItem) {
             $result['items'][] = $skippedItem;
             $result['repair_needed_count']++;
+            if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
+                $result['photo_file_missing_count']++;
+                $result['skipped_photo_file_missing']++;
+            }
         }
         $lastProductId = $cursor;
         $lastCheckedProductId = (int) $candidateScan['last_checked_product_id'];
@@ -149,7 +153,13 @@ class WooToOvokoCrmOnlyBatchImportService
                 $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_recoverable', 'recoverable_part_id' => (string) ($recoverableState['recoverable_part_id'] ?? ''), 'validation_ms' => $validationMs]);
                 $result['repair_needed_count']++;
                 $result['skipped_counts']['skipped_recoverable_retry_blocked']++;
-                $result['items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
+                $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
+                    $result['photo_file_missing_count']++;
+                    $result['skipped_photo_file_missing']++;
+                    $result['skipped_counts']['skipped_photo_file_missing']++;
+                }
+                $result['items'][] = $skippedItem;
                 continue;
             }
             $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'candidate', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
@@ -210,11 +220,19 @@ class WooToOvokoCrmOnlyBatchImportService
             $importMs = $this->elapsed_ms($importStartedAt);
             $this->log_marker('CRM_ONLY_BATCH_IMPORT_DONE', ['product_id' => $productId, 'import_ms' => $importMs, 'ok' => !empty($import['ok']), 'status' => (string) ($import['status'] ?? ''), 'error_code' => (string) ($import['error_code'] ?? '')]);
             $result['imported_items'][] = $import;
-            $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => !empty($import['ok']), 'part_id' => (string) ($import['part_id'] ?? '')];
 
             if (!empty($import['ok'])) {
+                $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => true, 'part_id' => (string) ($import['part_id'] ?? '')];
                 $result['success_count']++;
+            } elseif ($this->is_photo_file_missing_import_result($import)) {
+                $result['repair_needed_count']++;
+                $result['photo_file_missing_count']++;
+                $result['skipped_photo_file_missing']++;
+                $result['skipped_counts']['skipped_photo_file_missing']++;
+                $result['items'][] = $this->photo_file_missing_item($productId);
+                $this->append_limited($result['examples_not_imported_not_selected'], $this->not_selected_example($productId, 'repair_needed:ovoko_photo_file_missing'), 5);
             } else {
+                $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => false, 'part_id' => (string) ($import['part_id'] ?? '')];
                 $result['failed_count']++;
                 if ((string) ($import['error_code'] ?? '') === 'recoverable_part_id_blocks_retry') {
                     $result['repair_needed_count']++;
@@ -311,7 +329,13 @@ class WooToOvokoCrmOnlyBatchImportService
             $result['attempted'] = 1;
             $result['repair_needed_count'] = 1;
             $result['skipped_counts']['skipped_recoverable_retry_blocked'] = 1;
-            $result['items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
+            $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+            if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
+                $result['photo_file_missing_count'] = 1;
+                $result['skipped_photo_file_missing'] = 1;
+                $result['skipped_counts']['skipped_photo_file_missing'] = 1;
+            }
+            $result['items'][] = $skippedItem;
             $result['stop_reason'] = 'recoverable_retry_blocked';
             $result['total_attempted'] = 1;
             $result['total_ms'] = $this->elapsed_ms($startedAt);
@@ -373,10 +397,18 @@ class WooToOvokoCrmOnlyBatchImportService
         $importMs = $this->elapsed_ms($importStartedAt);
         $this->log_marker('CRM_ONLY_BATCH_IMPORT_DONE', ['product_id' => $productId, 'import_ms' => $importMs, 'ok' => !empty($import['ok']), 'status' => (string) ($import['status'] ?? ''), 'error_code' => (string) ($import['error_code'] ?? '')]);
         $result['imported_items'][] = $import;
-        $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => !empty($import['ok']), 'part_id' => (string) ($import['part_id'] ?? '')];
         if (!empty($import['ok'])) {
+            $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => true, 'part_id' => (string) ($import['part_id'] ?? '')];
             $result['success_count'] = 1;
+        } elseif ($this->is_photo_file_missing_import_result($import)) {
+            $result['items'][] = $this->photo_file_missing_item($productId);
+            $result['repair_needed_count'] = 1;
+            $result['photo_file_missing_count'] = 1;
+            $result['skipped_photo_file_missing'] = 1;
+            $result['skipped_counts']['skipped_photo_file_missing'] = 1;
+            $result['stop_reason'] = 'ovoko_photo_file_missing_repair_needed';
         } else {
+            $result['items'][] = ['product_id' => $productId, 'status' => (string) ($import['status'] ?? ''), 'ok' => false, 'part_id' => (string) ($import['part_id'] ?? '')];
             $result['ok'] = false;
             $result['failed_count'] = 1;
             if ((string) ($import['error_code'] ?? '') === 'recoverable_part_id_blocks_retry') {
@@ -419,6 +451,8 @@ class WooToOvokoCrmOnlyBatchImportService
             'missing_part_code_count' => 0,
             'missing_category_count' => 0,
             'repair_needed_count' => 0,
+            'photo_file_missing_count' => 0,
+            'skipped_photo_file_missing' => 0,
             'has_more' => false,
             'should_continue' => false,
             'stop_reason' => '',
@@ -510,7 +544,11 @@ class WooToOvokoCrmOnlyBatchImportService
                 $recoverableState = $this->recoverable_retry_blocked_state($productId);
                 if (!empty($recoverableState['blocked'])) {
                     $skippedCounts['skipped_recoverable_retry_blocked']++;
-                    $skippedRecoverableItems[] = $this->recoverable_skipped_item($productId, $recoverableState);
+                    $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                    if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
+                        $skippedCounts['skipped_photo_file_missing']++;
+                    }
+                    $skippedRecoverableItems[] = $skippedItem;
                     $this->append_limited($examplesNotImportedNotSelected, $this->not_selected_example($productId, 'repair_needed:' . (string) ($recoverableState['error_code'] ?? 'recoverable_part_id_blocks_retry')), 5);
                     $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_recoverable', 'recoverable_part_id' => (string) ($recoverableState['recoverable_part_id'] ?? ''), 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
                     continue;
@@ -557,7 +595,11 @@ class WooToOvokoCrmOnlyBatchImportService
             $recoverableState = $this->recoverable_retry_blocked_state($productId);
             if (!empty($recoverableState['blocked'])) {
                 $candidateScan['skipped_counts']['skipped_recoverable_retry_blocked']++;
-                $candidateScan['skipped_recoverable_items'][] = $this->recoverable_skipped_item($productId, $recoverableState);
+                $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
+                    $candidateScan['skipped_counts']['skipped_photo_file_missing']++;
+                }
+                $candidateScan['skipped_recoverable_items'][] = $skippedItem;
                 $this->append_limited($candidateScan['examples_not_imported_not_selected'], $this->not_selected_example($productId, 'repair_needed:' . (string) ($recoverableState['error_code'] ?? 'recoverable_part_id_blocks_retry')), 5);
                 continue;
             }
@@ -588,6 +630,7 @@ class WooToOvokoCrmOnlyBatchImportService
             'found_gps_gmail_drafts' => 0,
             'skipped_already_imported' => 0,
             'skipped_recoverable_retry_blocked' => 0,
+            'skipped_photo_file_missing' => 0,
             'skipped_missing_images' => 0,
             'skipped_missing_part_code' => 0,
             'skipped_other_blocked' => 0,
@@ -925,9 +968,23 @@ class WooToOvokoCrmOnlyBatchImportService
             'source' => '',
         ];
 
+        $storedRepairReason = trim((string) get_post_meta($productId, '_gps_ovoko_crm_only_import_repair_reason', true));
+        if ($storedRepairReason === 'ovoko_photo_file_missing') {
+            $state['blocked'] = true;
+            $state['error_code'] = 'ovoko_photo_file_missing';
+            $state['message'] = 'Ovoko rejected photo file; image must be checked/reuploaded before retry';
+            $state['source'] = '_gps_ovoko_crm_only_import_repair_reason';
+        }
+
         $lastError = $this->decode_json_meta($productId, '_gps_ovoko_crm_only_import_last_error');
         $lastErrorCode = trim((string) ($lastError['code'] ?? $lastError['error_code'] ?? ''));
         $lastErrorMessage = trim((string) ($lastError['message'] ?? ''));
+        if ($lastErrorCode === 'ovoko_photo_file_missing') {
+            $state['blocked'] = true;
+            $state['error_code'] = 'ovoko_photo_file_missing';
+            $state['message'] = 'Ovoko rejected photo file; image must be checked/reuploaded before retry';
+            $state['source'] = $state['source'] !== '' ? $state['source'] : '_gps_ovoko_crm_only_import_last_error';
+        }
         if ($lastErrorCode === 'recoverable_part_id_blocks_retry') {
             $state['blocked'] = true;
             $state['error_code'] = $lastErrorCode;
@@ -949,6 +1006,12 @@ class WooToOvokoCrmOnlyBatchImportService
         }
 
         $lastResponse = $this->decode_json_meta($productId, '_gps_ovoko_crm_only_import_last_response_raw');
+        if ($lastResponse !== [] && $this->decoded_response_is_photo_file_missing($lastResponse)) {
+            $state['blocked'] = true;
+            $state['error_code'] = 'ovoko_photo_file_missing';
+            $state['message'] = 'Ovoko rejected photo file; image must be checked/reuploaded before retry';
+            $state['source'] = $state['source'] !== '' ? $state['source'] : '_gps_ovoko_crm_only_import_last_response_raw';
+        }
         if ($lastResponse !== []) {
             $responsePartId = $this->extract_part_id_from_decoded_response($lastResponse);
             if ($responsePartId !== '') {
@@ -1005,6 +1068,10 @@ class WooToOvokoCrmOnlyBatchImportService
 
     private function recoverable_skipped_item(int $productId, array $state): array
     {
+        if ((string) ($state['error_code'] ?? '') === 'ovoko_photo_file_missing') {
+            return $this->photo_file_missing_item($productId);
+        }
+
         return [
             'product_id' => $productId,
             'status' => 'repair_needed',
@@ -1013,6 +1080,30 @@ class WooToOvokoCrmOnlyBatchImportService
             'recoverable_part_id' => (string) ($state['recoverable_part_id'] ?? ''),
             'message' => 'needs manual repair/link or stale recoverable clear',
         ];
+    }
+
+    private function photo_file_missing_item(int $productId): array
+    {
+        return [
+            'product_id' => $productId,
+            'status' => 'repair_needed',
+            'skip_reason' => 'ovoko_photo_file_missing',
+            'error_code' => 'ovoko_photo_file_missing',
+            'message' => 'Ovoko rejected photo file; image must be checked/reuploaded before retry',
+        ];
+    }
+
+    private function is_photo_file_missing_import_result(array $import): bool
+    {
+        return (string) ($import['error_code'] ?? '') === 'ovoko_photo_file_missing'
+            || (string) ($import['skip_reason'] ?? '') === 'ovoko_photo_file_missing';
+    }
+
+    private function decoded_response_is_photo_file_missing(array $response): bool
+    {
+        $statusCode = strtoupper(trim((string) ($response['status_code'] ?? $response['status'] ?? '')));
+        $haystack = strtolower(wp_json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+        return $statusCode === 'R400' && str_contains($haystack, 'photo') && str_contains($haystack, 'file does not exist');
     }
 
 
@@ -1052,6 +1143,8 @@ class WooToOvokoCrmOnlyBatchImportService
             'missing_part_code_count' => $result['missing_part_code_count'],
             'missing_category_count' => $result['missing_category_count'],
             'repair_needed_count' => $result['repair_needed_count'],
+            'photo_file_missing_count' => $result['photo_file_missing_count'],
+            'skipped_photo_file_missing' => $result['skipped_photo_file_missing'],
             'has_more' => $result['has_more'],
             'next_cursor' => $result['next_cursor'],
             'stop_reason' => $result['stop_reason'],
