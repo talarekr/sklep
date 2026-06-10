@@ -261,7 +261,11 @@ class AdminPage
 
         $productId = isset($_POST['product_id']) ? (int) wp_unslash((string) $_POST['product_id']) : 0;
         $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
-        $result = (new OvokoWooGmailDraftUpdateService())->preview_one($productId, ['publish_when_ready' => $publishWhenReady]);
+        try {
+            $result = $this->build_gmail_draft_update_service()->preview_one($productId, ['publish_when_ready' => $publishWhenReady]);
+        } catch (\Throwable $throwable) {
+            $result = $this->gmail_draft_controlled_error($productId, $throwable);
+        }
         wp_send_json($result, !empty($result['ok']) ? 200 : 400);
     }
 
@@ -275,7 +279,11 @@ class AdminPage
         $productId = isset($_POST['product_id']) ? (int) wp_unslash((string) $_POST['product_id']) : 0;
         $confirmation = isset($_POST['confirmation']) ? sanitize_text_field((string) wp_unslash((string) $_POST['confirmation'])) : '';
         $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
-        $result = (new OvokoWooGmailDraftUpdateService())->update_one($productId, ['publish_when_ready' => $publishWhenReady, 'confirmation' => $confirmation]);
+        try {
+            $result = $this->build_gmail_draft_update_service()->update_one($productId, ['publish_when_ready' => $publishWhenReady, 'confirmation' => $confirmation]);
+        } catch (\Throwable $throwable) {
+            $result = $this->gmail_draft_controlled_error($productId, $throwable);
+        }
         wp_send_json($result, !empty($result['ok']) ? 200 : 400);
     }
 
@@ -288,8 +296,41 @@ class AdminPage
 
         $batchSize = isset($_POST['batch_size']) ? (int) wp_unslash((string) $_POST['batch_size']) : 10;
         $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
-        $result = (new OvokoWooGmailDraftUpdateService())->preview_eligible($batchSize, ['publish_when_ready' => $publishWhenReady]);
+        try {
+            $result = $this->build_gmail_draft_update_service()->preview_eligible($batchSize, ['publish_when_ready' => $publishWhenReady]);
+        } catch (\Throwable $throwable) {
+            $result = $this->gmail_draft_controlled_error(0, $throwable, 'preview_eligible_gmail_products');
+        }
         wp_send_json($result, 200);
+    }
+
+
+    private function build_gmail_draft_update_service(): OvokoWooGmailDraftUpdateService
+    {
+        return new OvokoWooGmailDraftUpdateService(new RrrApiClient($this->service->get_settings()));
+    }
+
+    private function gmail_draft_controlled_error(int $productId, \Throwable $throwable, string $mode = 'preview_one'): array
+    {
+        $result = [
+            'ok' => false,
+            'action_name' => 'Ovoko → Woo Gmail draft update',
+            'mode' => $mode,
+            'product_id' => $productId,
+            'would_update' => false,
+            'would_publish' => false,
+            'ready_for_sale' => false,
+            'blocked_reasons' => ['ovoko_fetch_failed'],
+            'error' => 'ovoko_fetch_failed',
+            'technical_details' => [
+                'message' => $throwable->getMessage(),
+                'type' => get_class($throwable),
+                'file' => $throwable->getFile(),
+                'line' => $throwable->getLine(),
+            ],
+        ];
+        $result['json_report'] = wp_json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $result;
     }
 
     public function handle_gmail_draft_batch_placeholder(): void

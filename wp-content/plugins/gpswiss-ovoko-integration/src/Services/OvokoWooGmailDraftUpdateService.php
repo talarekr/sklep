@@ -21,7 +21,14 @@ class OvokoWooGmailDraftUpdateService
 
     public function preview_one(int $productId, array $options = []): array
     {
-        return $this->build_plan($productId, $options + ['dry_run' => true]);
+        try {
+            return $this->build_plan($productId, $options + ['dry_run' => true]);
+        } catch (\Throwable $throwable) {
+            return $this->with_json_report($this->report_error($productId, 'ovoko_fetch_failed', [
+                'blocked_reasons' => ['ovoko_fetch_failed'],
+                'technical_details' => $this->throwable_details($throwable),
+            ]));
+        }
     }
 
     public function update_one(int $productId, array $options = []): array
@@ -101,11 +108,19 @@ class OvokoWooGmailDraftUpdateService
             'total_missing_title' => 0,
             'total_missing_description' => 0,
             'total_missing_existing_woo_images' => 0,
+            'total_ovoko_fetch_failed' => 0,
             'examples' => [],
         ];
 
         foreach ($ids as $id) {
-            $plan = $this->preview_one((int) $id, $options);
+            try {
+                $plan = $this->preview_one((int) $id, $options);
+            } catch (\Throwable $throwable) {
+                $plan = $this->with_json_report($this->report_error((int) $id, 'ovoko_fetch_failed', [
+                    'blocked_reasons' => ['ovoko_fetch_failed'],
+                    'technical_details' => $this->throwable_details($throwable),
+                ]));
+            }
             if (!empty($plan['ready_for_sale'])) {
                 $summary['total_ready_to_update']++;
             } else {
@@ -117,7 +132,7 @@ class OvokoWooGmailDraftUpdateService
                 $summary['total_would_remain_draft']++;
             }
             $blocked = (array) ($plan['blocked_reasons'] ?? []);
-            foreach (['missing_price','missing_category','missing_title','missing_description','missing_existing_woo_images'] as $reason) {
+            foreach (['missing_price','missing_category','missing_title','missing_description','missing_existing_woo_images','ovoko_fetch_failed'] as $reason) {
                 if (in_array($reason, $blocked, true)) {
                     $summary['total_' . $reason]++;
                 }
@@ -196,7 +211,9 @@ class OvokoWooGmailDraftUpdateService
             $base['ok'] = false;
             $base['blocked_reasons'][] = 'ovoko_fetch_failed';
             $base['error'] = (string) ($fetch['error'] ?? 'ovoko_fetch_failed');
-            return $base;
+            $base['ovoko_fetch_ok'] = false;
+            $base['technical_details'] = (array) ($fetch['technical_details'] ?? ['error' => $base['error']]);
+            return $this->with_json_report($base);
         }
 
         $part = (array) ($fetch['part'] ?? []);
@@ -249,24 +266,47 @@ class OvokoWooGmailDraftUpdateService
 
     private function fetch_part(string $partId): array
     {
-        if ($this->partFetcher !== null) {
-            $result = ($this->partFetcher)($partId);
-            if (isset($result['part']) && is_array($result['part'])) return ['ok' => !empty($result['ok']), 'part' => $result['part'], 'error' => (string) ($result['error'] ?? '')];
-            if (isset($result['payload']) && is_array($result['payload'])) return $this->normalize_fetch_result($result);
-            return ['ok' => !empty($result['ok']), 'part' => is_array($result) ? $result : [], 'error' => ''];
+        try {
+            if ($this->partFetcher !== null) {
+                $result = ($this->partFetcher)($partId);
+                if (isset($result['part']) && is_array($result['part'])) return ['ok' => !empty($result['ok']), 'part' => $result['part'], 'error' => (string) ($result['error'] ?? '')];
+                if (isset($result['payload']) && is_array($result['payload'])) return $this->normalize_fetch_result($result);
+                return ['ok' => !empty($result['ok']), 'part' => is_array($result) ? $result : [], 'error' => ''];
+            }
+
+            if ($this->rrrClient === null) {
+                return ['ok' => false, 'part' => [], 'error' => 'rrr_api_client_not_configured', 'technical_details' => ['message' => 'RrrApiClient was not injected with plugin settings.']];
+            }
+
+            return $this->normalize_fetch_result($this->rrrClient->preview_fetch_single_part((int) $partId), $this->rrrClient);
+        } catch (\Throwable $throwable) {
+            return ['ok' => false, 'part' => [], 'error' => 'ovoko_fetch_failed', 'technical_details' => $this->throwable_details($throwable)];
         }
-        $client = $this->rrrClient ?? new RrrApiClient();
-        return $this->normalize_fetch_result($client->preview_fetch_single_part((int) $partId), $client);
     }
 
     private function normalize_fetch_result(array $result, ?RrrApiClient $client = null): array
     {
         if (empty($result['ok']) && empty($result['success'])) {
-            return ['ok' => false, 'part' => [], 'error' => (string) ($result['message'] ?? $result['error'] ?? 'ovoko_fetch_failed')];
+            return [
+                'ok' => false,
+                'part' => [],
+                'error' => (string) ($result['message'] ?? $result['error'] ?? 'ovoko_fetch_failed'),
+                'technical_details' => $this->fetch_diagnostics($result),
+            ];
         }
-        $client = $client ?? ($this->rrrClient ?? new RrrApiClient());
-        $part = $client->normalize_rrr_single_part_payload((array) ($result['payload'] ?? []), ['details_only' => false]);
-        return ['ok' => $part !== [], 'part' => $part, 'error' => $part === [] ? 'ovoko_normalize_failed' : ''];
+
+        $client = $client ?? $this->rrrClient;
+        if ($client === null) {
+            return ['ok' => false, 'part' => [], 'error' => 'rrr_api_client_not_configured', 'technical_details' => ['message' => 'RrrApiClient was not injected with plugin settings.']];
+        }
+
+        try {
+            $part = $client->normalize_rrr_single_part_payload((array) ($result['payload'] ?? []), ['details_only' => false]);
+        } catch (\Throwable $throwable) {
+            return ['ok' => false, 'part' => [], 'error' => 'ovoko_normalize_failed', 'technical_details' => $this->throwable_details($throwable)];
+        }
+
+        return ['ok' => $part !== [], 'part' => $part, 'error' => $part === [] ? 'ovoko_normalize_failed' : '', 'technical_details' => $part === [] ? $this->fetch_diagnostics($result) : []];
     }
 
     private function build_meta_payload(string $partId, array $part, string $price, array $category): array
@@ -448,5 +488,32 @@ class OvokoWooGmailDraftUpdateService
     private function report_error(int $productId, string $error, array $extra = []): array
     {
         return $extra + ['ok' => false, 'product_id' => $productId, 'would_update' => false, 'would_publish' => false, 'ready_for_sale' => false, 'blocked_reasons' => [$error], 'images_preserved' => true, 'error' => $error, 'updated' => false, 'published' => false];
+    }
+
+    private function with_json_report(array $report): array
+    {
+        $report['json_report'] = wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $report['csv'] = $this->build_csv([$report]);
+        return $report;
+    }
+
+    private function fetch_diagnostics(array $result): array
+    {
+        return [
+            'http_code' => $result['http_code'] ?? null,
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'message' => (string) ($result['message'] ?? $result['msg'] ?? $result['error'] ?? 'ovoko_fetch_failed'),
+            'executed' => !empty($result['executed']),
+        ];
+    }
+
+    private function throwable_details(\Throwable $throwable): array
+    {
+        return [
+            'message' => $throwable->getMessage(),
+            'type' => get_class($throwable),
+            'file' => $throwable->getFile(),
+            'line' => $throwable->getLine(),
+        ];
     }
 }
