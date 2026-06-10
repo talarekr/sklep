@@ -156,7 +156,41 @@ function wp_remote_get(string $url, array $args = []): array { return wp_remote_
 function wp_remote_retrieve_response_code(array $response): int { return (int) ($response['response']['code'] ?? 0); }
 function get_option(string $key, mixed $default = false): mixed { return $GLOBALS['gpswiss_batch_test_options'][$key] ?? $default; }
 function wp_json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false { return json_encode($value, $flags, $depth); }
-function get_posts(array $args): array { return []; }
+function get_posts(array $args): array
+{
+    $ids = [];
+    foreach ($GLOBALS['gpswiss_batch_test_posts'] as $id => $post) {
+        if (($args['post_type'] ?? '') !== '' && (string) $post->post_type !== (string) $args['post_type']) {
+            continue;
+        }
+        if (($args['post_status'] ?? 'any') !== 'any' && (string) $post->post_status !== (string) $args['post_status']) {
+            continue;
+        }
+        if (in_array((int) $id, array_map('intval', (array) ($args['exclude'] ?? [])), true)) {
+            continue;
+        }
+        $matchesMeta = true;
+        foreach ((array) ($args['meta_query'] ?? []) as $clause) {
+            if (!is_array($clause) || !isset($clause['key'])) {
+                continue;
+            }
+            $value = get_post_meta((int) $id, (string) $clause['key'], true);
+            $compare = (string) ($clause['compare'] ?? '=');
+            if ($compare === 'EXISTS') {
+                $matchesMeta = $matchesMeta && trim((string) $value) !== '';
+            } elseif ($compare === '=') {
+                $matchesMeta = $matchesMeta && (string) $value === (string) ($clause['value'] ?? '');
+            }
+        }
+        if ($matchesMeta) {
+            $ids[] = (int) $id;
+        }
+    }
+    sort($ids);
+    $limit = (int) ($args['posts_per_page'] ?? 0);
+    return $limit > 0 ? array_slice($ids, 0, $limit) : $ids;
+}
+function current_time(string $type): string { return $type === 'mysql' ? '2026-06-10 12:00:00' : gmdate('c'); }
 function sanitize_text_field(string $value): string { return trim($value); }
 function sanitize_key(string $value): string { return preg_replace('/[^a-z0-9_\-]/', '', strtolower($value)) ?? ''; }
 
@@ -218,6 +252,45 @@ gpswiss_batch_run('batch marks Ovoko photo file missing as repair-needed and con
     $second = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 1, 'cursor' => 62803]);
     gpswiss_batch_assert(($second['skipped_photo_file_missing'] ?? 0) === 1, 'Next run should skip product B as skipped_photo_file_missing.', $second);
     gpswiss_batch_assert(($second['items'][0]['product_id'] ?? 0) === 62804 && ($second['items'][0]['skip_reason'] ?? '') === 'ovoko_photo_file_missing', 'Next run should report B as photo repair skip.', $second['items']);
+    gpswiss_batch_assert($GLOBALS['gpswiss_batch_test_import_payloads'] === [], 'Next run must not resend product B.', $GLOBALS['gpswiss_batch_test_import_payloads']);
+});
+
+
+gpswiss_batch_run('batch treats same-SKU linked Ovoko part preview block as item-level duplicate and continues', function (): void {
+    gpswiss_batch_seed_product(63874, 'GPS-GMAIL-63874');
+    gpswiss_batch_seed_product(63895, 'GPS-GMAIL-DUPLICATE');
+    gpswiss_batch_seed_product(63896, 'GPS-GMAIL-DUPLICATE');
+    gpswiss_batch_seed_product(63897, 'GPS-GMAIL-63897');
+    $GLOBALS['gpswiss_batch_test_posts'][63896]->post_status = 'publish';
+    gpswiss_batch_set_meta(63896, '_ovoko_part_id', '11683');
+    $GLOBALS['gpswiss_batch_test_import_responses'] = [
+        ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => '11678', 'raw_body' => '{"status_code":"R200","part_id":"11678"}'],
+        ['ok' => true, 'http_code' => 200, 'status_code' => 'R200', 'part_id' => '11680', 'raw_body' => '{"status_code":"R200","part_id":"11680"}'],
+    ];
+
+    $result = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 3, 'stop_on_first_error' => true]);
+
+    gpswiss_batch_assert(($result['ok'] ?? false) === true, 'Duplicate SKU block must not make the batch fatal.', $result);
+    gpswiss_batch_assert(($result['success_count'] ?? 0) === 2, 'Products A and C should import successfully.', $result);
+    gpswiss_batch_assert(($result['blocked_count'] ?? 0) === 1, 'Product B should increment blocked_count.', $result);
+    gpswiss_batch_assert(($result['failed_count'] ?? 0) === 0, 'Duplicate SKU block must not increment failed_count.', $result);
+    gpswiss_batch_assert(($result['duplicate_sku_ovoko_count'] ?? 0) === 1, 'Duplicate SKU Ovoko count missing.', $result);
+    gpswiss_batch_assert(($result['skipped_duplicate_sku_ovoko'] ?? 0) === 1, 'Skipped duplicate SKU Ovoko count missing.', $result);
+    gpswiss_batch_assert(($result['stop_reason'] ?? '') !== 'preview_ineligible_stop_on_first_error', 'Duplicate SKU must not stop on first error.', $result);
+    gpswiss_batch_assert(count($result['errors'] ?? []) === 0, 'Duplicate SKU block must not be added to fatal errors.', $result['errors'] ?? []);
+    gpswiss_batch_assert(count($GLOBALS['gpswiss_batch_test_import_payloads']) === 2, 'Only products A and C should call importer.', $GLOBALS['gpswiss_batch_test_import_payloads']);
+    gpswiss_batch_assert(($result['items'][1]['product_id'] ?? 0) === 63895, 'Product B item missing.', $result['items']);
+    gpswiss_batch_assert(($result['items'][1]['status'] ?? '') === 'blocked', 'Product B should be blocked.', $result['items'][1]);
+    gpswiss_batch_assert(($result['items'][1]['skip_reason'] ?? '') === 'duplicate_sku_already_has_ovoko_part_id', 'Product B skip reason should be duplicate_sku_already_has_ovoko_part_id.', $result['items'][1]);
+    gpswiss_batch_assert(in_array('another_product_same_sku_has_ovoko_part_id', (array) ($result['items'][1]['validation_codes'] ?? []), true), 'Product B validation code missing.', $result['items'][1]);
+    gpswiss_batch_assert(get_post_meta(63895, '_gps_ovoko_crm_only_import_blocked_reason', true) === 'duplicate_sku_already_has_ovoko_part_id', 'Product B should persist duplicate blocked reason.');
+
+    $GLOBALS['gpswiss_batch_test_import_payloads'] = [];
+    $GLOBALS['gpswiss_batch_test_import_responses'] = [];
+    $second = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 1, 'cursor' => 63874]);
+    gpswiss_batch_assert(($second['blocked_count'] ?? 0) === 1, 'Next run should count product B as blocked duplicate.', $second);
+    gpswiss_batch_assert(($second['skipped_duplicate_sku_ovoko'] ?? 0) === 1, 'Next run should skip product B as duplicate SKU blocked.', $second);
+    gpswiss_batch_assert(($second['items'][0]['product_id'] ?? 0) === 63895 && ($second['items'][0]['skip_reason'] ?? '') === 'duplicate_sku_already_has_ovoko_part_id', 'Next run should report B as duplicate SKU skip.', $second['items']);
     gpswiss_batch_assert($GLOBALS['gpswiss_batch_test_import_payloads'] === [], 'Next run must not resend product B.', $GLOBALS['gpswiss_batch_test_import_payloads']);
 });
 
