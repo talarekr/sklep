@@ -11,12 +11,18 @@ class OvokoWooGmailDraftUpdateService
 
     /** @var callable|null */
     private $partFetcher;
+    /** @var callable|null */
+    private $titleBuilder;
+    /** @var callable|null */
+    private $slugBuilder;
     private ?RrrApiClient $rrrClient;
 
-    public function __construct(?RrrApiClient $rrrClient = null, ?callable $partFetcher = null)
+    public function __construct(?RrrApiClient $rrrClient = null, ?callable $partFetcher = null, ?callable $titleBuilder = null, ?callable $slugBuilder = null)
     {
         $this->rrrClient = $rrrClient;
         $this->partFetcher = $partFetcher;
+        $this->titleBuilder = $titleBuilder;
+        $this->slugBuilder = $slugBuilder;
     }
 
     public function preview_one(int $productId, array $options = []): array
@@ -218,7 +224,8 @@ class OvokoWooGmailDraftUpdateService
 
         $part = (array) ($fetch['part'] ?? []);
         $mappedCategory = $this->map_category((string) ($part['category_id'] ?? ''), (string) ($part['category_title_path'] ?? ''));
-        $title = $this->first_text($part, ['title','name']);
+        $titlePreview = $this->build_title_preview($part);
+        $title = (string) ($titlePreview['proposed_title'] ?? '');
         $description = $this->first_text($part, ['description','notes','comment','comments']);
         $shortDescription = $this->short_description($part);
         $price = $this->normalize_price($part['woo_target_price'] ?? $part['price'] ?? $part['ovoko_price'] ?? $part['original_price'] ?? null);
@@ -233,14 +240,15 @@ class OvokoWooGmailDraftUpdateService
         $ready = $blocked === [];
         $statusAfter = ($publishWhenReady && $ready) ? 'publish' : 'draft';
         $meta = $this->build_meta_payload($partId, $part, $price, $mappedCategory);
+        $slugPreview = $title !== '' ? $this->build_slug_preview($title, $productId, $statusAfter) : ['slug' => '', 'slug_builder' => 'none'];
         $postPayload = [
             'post_title' => $title !== '' ? $title : (string) $post->post_title,
             'post_content' => $description,
             'post_excerpt' => $shortDescription,
             'post_status' => $statusAfter,
         ];
-        if ($title !== '' && function_exists('sanitize_title')) {
-            $postPayload['post_name'] = sanitize_title($title . '-' . $sku);
+        if ((string) ($slugPreview['slug'] ?? '') !== '') {
+            $postPayload['post_name'] = (string) $slugPreview['slug'];
         }
 
         $base['would_update'] = true;
@@ -255,6 +263,16 @@ class OvokoWooGmailDraftUpdateService
         $base['matched_by'] = (string) ($mappedCategory['matched_by'] ?? 'none');
         $base['candidate_terms'] = (array) ($mappedCategory['candidate_terms'] ?? []);
         $base['category_mapping_source'] = (string) ($mappedCategory['category_mapping_source'] ?? 'none');
+        $base['title_builder_preview'] = $titlePreview;
+        $base['title_builder_source'] = (string) ($titlePreview['_ovoko_title_source'] ?? ($titlePreview['source'] ?? ''));
+        $base['title_builder_used_vehicle_data'] = !empty($titlePreview['title_builder_used_vehicle_data']);
+        $base['slug_builder_preview'] = $slugPreview;
+        $base['slug_builder_source'] = (string) ($slugPreview['slug_source'] ?? ($slugPreview['slug_builder'] ?? ''));
+        $base['slug_before'] = (string) ($post->post_name ?? '');
+        $base['slug_after'] = (string) ($postPayload['post_name'] ?? '');
+        $base['url_before'] = $this->product_url_preview($productId, $base['slug_before']);
+        $base['url_after'] = $this->product_url_preview($productId, $base['slug_after']);
+        $base['planned_permalink_path'] = $this->product_permalink_path($base['url_after']);
         $base['update_payload'] = ['post' => $postPayload, 'meta' => $meta, 'category_term_id' => $mappedCategory['term_id']];
         $base['title_before'] = (string) $post->post_title;
         $base['title_after'] = (string) $postPayload['post_title'];
@@ -266,6 +284,8 @@ class OvokoWooGmailDraftUpdateService
         $base['description_after'] = $this->summarize($description);
         $base['diff'] = [
             'title' => ['before' => $base['title_before'], 'after' => $base['title_after']],
+            'slug' => ['before' => $base['slug_before'], 'after' => $base['slug_after']],
+            'url' => ['before' => $base['url_before'], 'after' => $base['url_after']],
             'price' => ['before' => $base['price_before'], 'after' => $base['price_after']],
             'category' => ['before' => $base['category_before'], 'after' => $base['category_after']],
             'status' => ['before' => (string) $post->post_status, 'after' => $statusAfter],
@@ -321,6 +341,82 @@ class OvokoWooGmailDraftUpdateService
         }
 
         return ['ok' => $part !== [], 'part' => $part, 'error' => $part === [] ? 'ovoko_normalize_failed' : '', 'technical_details' => $part === [] ? $this->fetch_diagnostics($result) : []];
+    }
+
+    private function build_title_preview(array $part): array
+    {
+        if ($this->titleBuilder !== null) {
+            $preview = ($this->titleBuilder)($part, $this->rrrClient);
+            if (is_array($preview)) {
+                $title = trim((string) ($preview['proposed_title'] ?? ''));
+                if ($title !== '') {
+                    return $preview + ['title_builder' => 'injected_existing_ovoko_to_woo_builder'];
+                }
+            }
+        }
+
+        $title = $this->first_text($part, ['title','name']);
+        return [
+            'proposed_title' => $title,
+            'title_builder' => 'raw_title_fallback',
+            '_ovoko_title_source' => 'raw_title_fallback',
+            '_ovoko_title_review_required' => 'yes',
+            'title_builder_used_vehicle_data' => false,
+        ];
+    }
+
+    private function build_slug_preview(string $title, int $productId, string $postStatus): array
+    {
+        if ($this->slugBuilder !== null) {
+            $preview = ($this->slugBuilder)($title, $productId, $postStatus);
+            if (is_array($preview) && trim((string) ($preview['slug'] ?? '')) !== '') {
+                return $preview + ['slug_builder' => 'injected_existing_ovoko_to_woo_slug_builder'];
+            }
+        }
+
+        $slug = function_exists('sanitize_title') ? sanitize_title($title) : strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', $title) ?? '', '-'));
+        return [
+            'slug' => $slug,
+            'slug_base' => $slug,
+            'slug_builder' => 'wordpress_title_slug_fallback',
+            'slug_source' => 'wordpress_post_slug_from_generated_title_fallback',
+        ];
+    }
+
+    private function product_url_preview(int $productId, string $slug): string
+    {
+        $slug = trim($slug);
+        $currentUrl = function_exists('get_permalink') ? (string) get_permalink($productId) : '';
+        if ($slug === '') {
+            return $currentUrl;
+        }
+
+        $currentPath = $currentUrl !== '' ? (string) (parse_url($currentUrl, PHP_URL_PATH) ?: '') : '';
+        if ($currentPath !== '') {
+            $hasTrailingSlash = str_ends_with($currentPath, '/');
+            $segments = array_values(array_filter(explode('/', trim($currentPath, '/')), static fn(string $segment): bool => $segment !== ''));
+            if ($segments !== []) {
+                $segments[count($segments) - 1] = $slug;
+                $path = '/' . implode('/', $segments) . ($hasTrailingSlash ? '/' : '');
+                return function_exists('home_url') ? (string) home_url($path) : $path;
+            }
+        }
+
+        if (function_exists('home_url')) {
+            return (string) home_url('/produkt/' . $slug . '/');
+        }
+
+        return '/produkt/' . $slug . '/';
+    }
+
+    private function product_permalink_path(string $url): string
+    {
+        if ($url === '') {
+            return '';
+        }
+
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?: '');
+        return $path !== '' ? $path : $url;
     }
 
     private function build_meta_payload(string $partId, array $part, string $price, array $category): array
