@@ -44,6 +44,10 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_analyze_internal_notes_backfill_api', [$this, 'handle_analyze_internal_notes_backfill_api']);
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_preview_one', [$this, 'handle_gmail_draft_preview_one']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_update_one', [$this, 'handle_gmail_draft_update_one']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_preview_eligible', [$this, 'handle_gmail_draft_preview_eligible']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_batch_placeholder', [$this, 'handle_gmail_draft_batch_placeholder']);
         add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
         add_action('wp_ajax_gpswiss_ovoko_crm_only_batch_import', [$this, 'handle_crm_only_batch_import_ajax']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
@@ -245,6 +249,75 @@ class AdminPage
 
 
 
+
+
+
+    public function handle_gmail_draft_preview_one(): void
+    {
+        $this->assert_gmail_draft_update_access('gpswiss_ovoko_gmail_draft_preview_one');
+        $productId = $this->posted_int('product_id');
+        $service = new OvokoToWooGmailDraftUpdateService($this->service->get_settings());
+        wp_send_json($service->preview_one($productId, $this->posted_gmail_draft_update_options(true)));
+    }
+
+    public function handle_gmail_draft_update_one(): void
+    {
+        $this->assert_gmail_draft_update_access('gpswiss_ovoko_gmail_draft_update_one');
+        $productId = $this->posted_int('product_id');
+        $confirmed = strtoupper(trim((string) ($_POST['confirm_live_update'] ?? ''))) === 'UPDATE ONE GMAIL DRAFT';
+        if (!$confirmed) {
+            wp_send_json(['ok' => false, 'action_name' => 'Ovoko → Woo Gmail draft update', 'updated' => false, 'error' => 'Confirmation required: type UPDATE ONE GMAIL DRAFT.']);
+        }
+        $service = new OvokoToWooGmailDraftUpdateService($this->service->get_settings());
+        wp_send_json($service->update_one($productId, $this->posted_gmail_draft_update_options(false)));
+    }
+
+    public function handle_gmail_draft_preview_eligible(): void
+    {
+        $this->assert_gmail_draft_update_access('gpswiss_ovoko_gmail_draft_preview_eligible');
+        $batchSize = $this->posted_int('batch_size', 10);
+        $service = new OvokoToWooGmailDraftUpdateService($this->service->get_settings());
+        wp_send_json($service->preview_eligible($batchSize, $this->posted_gmail_draft_update_options(true)));
+    }
+
+    public function handle_gmail_draft_batch_placeholder(): void
+    {
+        $this->assert_gmail_draft_update_access('gpswiss_ovoko_gmail_draft_batch_placeholder');
+        wp_send_json([
+            'ok' => false,
+            'action_name' => 'Ovoko → Woo Gmail draft update batch',
+            'stage' => 'stage_2_placeholder',
+            'message' => 'Batch live/auto-runner is intentionally not enabled in MVP. Use Preview one product and Update one product first.',
+            'no_cron' => true,
+            'no_background_worker' => true,
+        ]);
+    }
+
+    private function assert_gmail_draft_update_access(string $nonceAction): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer($nonceAction);
+    }
+
+    private function posted_int(string $key, int $default = 0): int
+    {
+        $raw = $_POST[$key] ?? $default;
+        if (is_array($raw)) {
+            return $default;
+        }
+        return (int) (string) wp_unslash((string) $raw);
+    }
+
+    private function posted_gmail_draft_update_options(bool $forceDryRun): array
+    {
+        return [
+            'dry_run' => $forceDryRun || !empty($_POST['dry_run']),
+            'publish_when_ready' => !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']),
+            'stop_on_first_error' => !empty($_POST['stop_on_first_error']),
+        ];
+    }
 
 
     public function handle_crm_only_batch_import_ajax(): void
