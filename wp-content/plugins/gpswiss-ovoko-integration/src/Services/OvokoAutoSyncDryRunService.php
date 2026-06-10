@@ -221,6 +221,7 @@ class OvokoAutoSyncDryRunService
             'updated' => 0,
             'skipped_missing_price' => 0,
             'skipped_already_synced' => 0,
+            'skipped_existing_gmail_product_by_ovoko_part_id' => 0,
             'errors' => [],
             'warnings' => [],
             'created_product_ids' => [],
@@ -283,6 +284,25 @@ class OvokoAutoSyncDryRunService
             $incomingHash = (string) ($idempotency['hash'] ?? '');
             $idempotencyFieldsUsed = (array) ($idempotency['fields_used'] ?? []);
             $productId = $this->find_product_id_by_ovoko_id($partId);
+            $gmailGuard = (new OvokoProductSyncService())->find_existing_gmail_product_by_ovoko_part_id($partId);
+            if (!empty($gmailGuard['found'])) {
+                $report['processed']++;
+                $report['skipped_existing_gmail_product_by_ovoko_part_id']++;
+                $report['warnings']['skipped_existing_gmail_product_by_ovoko_part_id'] = (int) ($report['warnings']['skipped_existing_gmail_product_by_ovoko_part_id'] ?? 0) + 1;
+                $report['skipped_part_ids'][] = $partId;
+                $report['items'][] = [
+                    'part_id' => $partId,
+                    'product_id' => (int) ($gmailGuard['product_id'] ?? 0),
+                    'sku' => (string) ($gmailGuard['sku'] ?? ''),
+                    'action' => 'skipped',
+                    'skip_reason' => 'skipped_existing_gmail_product_by_ovoko_part_id',
+                    'matched_meta_key' => (string) ($gmailGuard['matched_meta_key'] ?? ''),
+                    'created' => false,
+                    'updated' => false,
+                    'published' => false,
+                ];
+                continue;
+            }
             $lastSyncedHash = $productId > 0 ? $this->get_first_product_meta($productId, ['_gpswiss_ovoko_last_synced_hash']) : '';
             $alreadySynced = $productId > 0 && $partId !== '' && $lastSyncedHash !== '' && $incomingHash !== '' && hash_equals($lastSyncedHash, $incomingHash);
             if ($alreadySynced) {
@@ -521,12 +541,18 @@ class OvokoAutoSyncDryRunService
             $normalized['part_id'] = $partId;
         }
         $productId = $this->find_product_id_by_ovoko_id($partId);
+        $gmailGuard = (new OvokoProductSyncService())->find_existing_gmail_product_by_ovoko_part_id($partId);
         $product = $productId > 0 && function_exists('wc_get_product') ? wc_get_product($productId) : null;
         $warnings = [];
+        if (!empty($gmailGuard['found'])) {
+            $warnings[] = 'skipped_existing_gmail_product_by_ovoko_part_id';
+            $productId = (int) ($gmailGuard['product_id'] ?? $productId);
+        }
 
         $price = self::parse_internal_notes_price($record['internal_notes'] ?? null);
         $priceWarning = (string) ($price['warning'] ?? '');
         $isExistingProduct = $productId > 0;
+        $isExistingGmailProduct = !empty($gmailGuard['found']);
         $newProductMissingPrice = !$isExistingProduct && $priceWarning === 'missing_price_in_internal_notes';
         $newProductInvalidPrice = !$isExistingProduct && $priceWarning === 'invalid_internal_notes_price';
         $newProductBlockedByPrice = !$isExistingProduct && (empty($price['ok']) || $newProductMissingPrice || $newProductInvalidPrice);
@@ -598,11 +624,14 @@ class OvokoAutoSyncDryRunService
             'part_id' => $partId,
             'product_id' => $productId,
             'product_exists' => $isExistingProduct,
-            'products_would_create' => !$isExistingProduct && !$newProductBlockedByPrice,
-            'products_would_update' => $isExistingProduct && !$alreadySynced,
-            'products_would_skip' => $newProductBlockedByPrice || $alreadySynced,
+            'products_would_create' => !$isExistingProduct && !$newProductBlockedByPrice && !$isExistingGmailProduct,
+            'products_would_update' => $isExistingProduct && !$alreadySynced && !$isExistingGmailProduct,
+            'products_would_skip' => $newProductBlockedByPrice || $alreadySynced || $isExistingGmailProduct,
             'products_would_skip_already_synced' => $alreadySynced,
             'skipped_already_synced' => $alreadySynced,
+            'skipped_existing_gmail_product_by_ovoko_part_id' => $isExistingGmailProduct,
+            'skip_reason' => $isExistingGmailProduct ? 'skipped_existing_gmail_product_by_ovoko_part_id' : ($alreadySynced ? 'stable_business_fields_unchanged' : ''),
+            'gmail_product_guard' => $gmailGuard,
             'title' => (string) ($record['name'] ?? $normalized['title'] ?? ''),
             'updated_at' => $updatedAt,
             'idempotency' => [

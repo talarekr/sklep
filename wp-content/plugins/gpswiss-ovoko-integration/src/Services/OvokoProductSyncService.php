@@ -9,6 +9,8 @@ class OvokoProductSyncService
     private const PART_MATCH_META_KEYS = ['_ovoko_part_id', 'ovoko_part_id', 'part_id'];
     private const EXTERNAL_META_KEYS = ['external_id', 'source_part_id', 'external_part_id', '_allegro_source_id', '_ovoko_source_id'];
     private const GEARBOX_HARD_META_KEYS = ['_allegro_gearbox_id', '_gearbox_id', '_gpswiss_allegro_gearboxes'];
+    private const GMAIL_PRODUCT_PART_META_KEYS = ['_ovoko_part_id', 'ovoko_part_id'];
+    private const GMAIL_PRODUCT_SKU_PREFIX = 'GPS-GMAIL-';
 
     public function calculate_payload_hash(NormalizedOvokoPart $part): string
     {
@@ -63,6 +65,43 @@ class OvokoProductSyncService
     }
 
 
+
+
+    public function find_existing_gmail_product_by_ovoko_part_id(string $partId): array
+    {
+        $partId = trim($partId);
+        if ($partId === '' || !post_type_exists('product')) {
+            return ['found' => false, 'part_id' => $partId, 'product_id' => 0, 'sku' => '', 'matched_meta_key' => '', 'skip_reason' => ''];
+        }
+
+        foreach (self::GMAIL_PRODUCT_PART_META_KEYS as $metaKey) {
+            $ids = $this->find_ids_by_meta($metaKey, $partId);
+            foreach ($ids as $productId) {
+                $sku = (string) get_post_meta($productId, '_sku', true);
+                if ($this->is_gps_gmail_sku($sku)) {
+                    return [
+                        'found' => true,
+                        'part_id' => $partId,
+                        'product_id' => $productId,
+                        'sku' => $sku,
+                        'matched_meta_key' => $metaKey,
+                        'skip_reason' => 'skipped_existing_gmail_product_by_ovoko_part_id',
+                    ];
+                }
+            }
+        }
+
+        return ['found' => false, 'part_id' => $partId, 'product_id' => 0, 'sku' => '', 'matched_meta_key' => '', 'skip_reason' => ''];
+    }
+
+    public function is_gps_gmail_product(int $productId): bool
+    {
+        if ($productId <= 0) {
+            return false;
+        }
+
+        return $this->is_gps_gmail_sku((string) get_post_meta($productId, '_sku', true));
+    }
 
     public function is_product_excluded_from_ovoko_sync(int $productId): array
     {
@@ -188,6 +227,11 @@ class OvokoProductSyncService
     public function developer_sample_fixture(): array
     {
         return ['sample_only' => true, 'not_production' => true, 'no_outbound' => true, 'no_import' => true, 'part_id' => 'OVK-EXAMPLE-123', 'title' => 'Sample gearbox for preview', 'price' => '199.99', 'currency' => 'EUR', 'images' => ['https://example.test/img1.jpg'], 'vehicle_make' => 'Volkswagen', 'vehicle_model' => 'Golf', 'vehicle_generation' => 'VII', 'year' => '2018', 'oe_numbers' => ['02E300012A']];
+    }
+
+    private function is_gps_gmail_sku(string $sku): bool
+    {
+        return str_starts_with(strtoupper(trim($sku)), self::GMAIL_PRODUCT_SKU_PREFIX);
     }
 
     private function find_ids_by_meta(string $metaKey, string $metaValue): array

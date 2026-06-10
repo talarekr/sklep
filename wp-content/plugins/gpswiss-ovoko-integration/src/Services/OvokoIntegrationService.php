@@ -1533,6 +1533,24 @@ class OvokoIntegrationService
             $deltaNormalized['part_id'] = $partId;
         }
         $productId = max(0, (int) ($options['product_id'] ?? 0));
+        $gmailGuard = (new OvokoProductSyncService())->find_existing_gmail_product_by_ovoko_part_id($partId);
+        if (!empty($gmailGuard['found']) && ($productId <= 0 || $productId === (int) ($gmailGuard['product_id'] ?? 0))) {
+            return [
+                'ok' => true,
+                'part_id' => $partId,
+                'product_id' => (int) ($gmailGuard['product_id'] ?? 0),
+                'sku' => (string) ($gmailGuard['sku'] ?? ''),
+                'created_product_id' => 0,
+                'created' => false,
+                'updated' => false,
+                'published' => false,
+                'action' => 'skipped',
+                'skip_reason' => 'skipped_existing_gmail_product_by_ovoko_part_id',
+                'matched_meta_key' => (string) ($gmailGuard['matched_meta_key'] ?? ''),
+                'existing_product_untouched' => true,
+                'delegated_to' => 'Ovoko → Woo Gmail draft update',
+            ];
+        }
         $detailsSource = 'delta_payload';
         $fullPartFetchUsed = false;
         $fullPartFetchReport = ['ok' => false, 'status_code' => '', 'message' => ''];
