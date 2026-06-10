@@ -173,3 +173,37 @@ gpswiss_run('Image import service is not invoked', function (OvokoWooGmailDraftU
     $service->update_one(101, ['confirmation' => OvokoWooGmailDraftUpdateService::LIVE_CONFIRMATION]);
     gpswiss_assert($GLOBALS['gpswiss_gmail_image_import_calls'] === 0, 'Image import service was called.');
 });
+
+gpswiss_run('Preview one converts fetch exception to ovoko_fetch_failed report', function (): void {
+    $service = new OvokoWooGmailDraftUpdateService(null, static function (): array {
+        throw new RuntimeException('simulated fetch outage');
+    });
+    $result = $service->preview_one(101);
+    gpswiss_assert($result['ok'] === false, 'Fetch exception should not be OK.');
+    gpswiss_assert(in_array('ovoko_fetch_failed', $result['blocked_reasons'], true), 'ovoko_fetch_failed not reported.');
+    gpswiss_assert(($result['technical_details']['message'] ?? '') === 'simulated fetch outage', 'Technical details missing fetch exception.');
+});
+
+gpswiss_run('Preview eligible reports one fetch failure and continues', function (): void {
+    gpswiss_gmail_seed(102);
+    $GLOBALS['gpswiss_gmail_meta'][102]['_sku'] = 'GPS-GMAIL-102';
+    $GLOBALS['gpswiss_gmail_meta'][102]['_ovoko_part_id'] = '556';
+    $service = new OvokoWooGmailDraftUpdateService(null, static function (string $partId): array {
+        if ($partId === '555') {
+            throw new RuntimeException('simulated one-item fetch outage');
+        }
+        return ['ok' => true, 'part' => gpswiss_gmail_part(['part_id' => $partId])];
+    });
+
+    $result = $service->preview_eligible(2);
+    gpswiss_assert($result['total_ovoko_fetch_failed'] === 1, 'Fetch failure count should be one.');
+    gpswiss_assert(count($result['examples']) === 2, 'Preview should continue to the second product.');
+});
+
+gpswiss_run('Preview one without injected RRR client reports controlled configuration error', function (): void {
+    $service = new OvokoWooGmailDraftUpdateService();
+    $result = $service->preview_one(101);
+    gpswiss_assert($result['ok'] === false, 'Missing RRR client should not be OK.');
+    gpswiss_assert(in_array('ovoko_fetch_failed', $result['blocked_reasons'], true), 'Missing RRR client should be reported as ovoko_fetch_failed.');
+    gpswiss_assert(($result['error'] ?? '') === 'rrr_api_client_not_configured', 'Missing RRR client error should be controlled.');
+});
