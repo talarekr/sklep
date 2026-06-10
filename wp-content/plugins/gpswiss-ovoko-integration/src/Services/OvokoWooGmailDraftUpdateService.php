@@ -217,7 +217,7 @@ class OvokoWooGmailDraftUpdateService
         }
 
         $part = (array) ($fetch['part'] ?? []);
-        $mappedCategory = $this->map_category((string) ($part['category_id'] ?? ''));
+        $mappedCategory = $this->map_category((string) ($part['category_id'] ?? ''), (string) ($part['category_title_path'] ?? ''));
         $title = $this->first_text($part, ['title','name']);
         $description = $this->first_text($part, ['description','notes','comment','comments']);
         $shortDescription = $this->short_description($part);
@@ -248,14 +248,28 @@ class OvokoWooGmailDraftUpdateService
         $base['ready_for_sale'] = $ready;
         $base['blocked_reasons'] = $blocked;
         $base['ovoko_fetch_ok'] = true;
+        $base['ovoko_category_id'] = (string) ($part['category_id'] ?? '');
+        $base['ovoko_category_title_path'] = (string) ($part['category_title_path'] ?? '');
         $base['category_mapping'] = $mappedCategory;
+        $base['category_mapping_attempts'] = (array) ($mappedCategory['category_mapping_attempts'] ?? []);
+        $base['matched_by'] = (string) ($mappedCategory['matched_by'] ?? 'none');
+        $base['candidate_terms'] = (array) ($mappedCategory['candidate_terms'] ?? []);
+        $base['category_mapping_source'] = (string) ($mappedCategory['category_mapping_source'] ?? 'none');
         $base['update_payload'] = ['post' => $postPayload, 'meta' => $meta, 'category_term_id' => $mappedCategory['term_id']];
+        $base['title_before'] = (string) $post->post_title;
+        $base['title_after'] = (string) $postPayload['post_title'];
+        $base['price_before'] = (string) get_post_meta($productId, '_price', true);
+        $base['price_after'] = $price;
+        $base['category_before'] = $currentTerms['label'];
+        $base['category_after'] = (string) $mappedCategory['label'];
+        $base['description_before'] = $this->summarize((string) $post->post_content);
+        $base['description_after'] = $this->summarize($description);
         $base['diff'] = [
-            'title' => ['before' => (string) $post->post_title, 'after' => $postPayload['post_title']],
-            'price' => ['before' => (string) get_post_meta($productId, '_price', true), 'after' => $price],
-            'category' => ['before' => $currentTerms['label'], 'after' => $mappedCategory['label']],
+            'title' => ['before' => $base['title_before'], 'after' => $base['title_after']],
+            'price' => ['before' => $base['price_before'], 'after' => $base['price_after']],
+            'category' => ['before' => $base['category_before'], 'after' => $base['category_after']],
             'status' => ['before' => (string) $post->post_status, 'after' => $statusAfter],
-            'description' => ['before' => $this->summarize((string) $post->post_content), 'after' => $this->summarize($description)],
+            'description' => ['before' => $base['description_before'], 'after' => $base['description_after']],
             'short_description' => ['before' => $this->summarize((string) ($post->post_excerpt ?? '')), 'after' => $this->summarize($shortDescription)],
             'key_meta' => $this->meta_diff($productId, $meta),
         ];
@@ -357,20 +371,191 @@ class OvokoWooGmailDraftUpdateService
         return $eligible;
     }
 
-    private function map_category(string $ovokoCategoryId): array
+    private function map_category(string $ovokoCategoryId, string $categoryTitlePath = ''): array
     {
         $ovokoCategoryId = trim($ovokoCategoryId);
+        $categoryTitlePath = trim($categoryTitlePath);
+        $base = [
+            'term_id' => 0,
+            'label' => '',
+            'ovoko_category_id' => $ovokoCategoryId,
+            'ovoko_category_title_path' => $categoryTitlePath,
+            'matched_by' => 'none',
+            'category_mapping_source' => 'none',
+            'category_mapping_attempts' => [],
+            'candidate_terms' => [],
+        ];
         if ($ovokoCategoryId === '' || !function_exists('get_terms')) {
-            return ['term_id' => 0, 'label' => '', 'ovoko_category_id' => $ovokoCategoryId];
+            $base['category_mapping_attempts'][] = ['method' => 'none', 'ok' => false, 'reason' => $ovokoCategoryId === '' ? 'missing_ovoko_category_id' : 'get_terms_unavailable'];
+            return $base;
         }
-        foreach (['_ovoko_category_id', 'ovoko_category_id', '_rrr_category_id', 'rrr_category_id'] as $metaKey) {
+
+        $mappingTable = $this->lookup_category_mapping_table($ovokoCategoryId);
+        $base['category_mapping_attempts'][] = ['method' => 'existing_mapping_table', 'ok' => $mappingTable['term_id'] > 0, 'source' => $mappingTable['source'], 'term_id' => $mappingTable['term_id']];
+        if ($mappingTable['term_id'] > 0) {
+            return $this->mapped_category_result($base, $mappingTable['term_id'], $mappingTable['label'], 'existing mapping table', $mappingTable['source']);
+        }
+
+        foreach (['_gpswiss_ovoko_category_id', 'gpswiss_ovoko_category_id', '_ovoko_category_id', 'ovoko_category_id', '_rrr_category_id', 'rrr_category_id'] as $metaKey) {
             $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'meta_key' => $metaKey, 'meta_value' => $ovokoCategoryId, 'number' => 1]);
-            if (!is_wp_error($terms) && !empty($terms[0])) {
+            $ok = !is_wp_error($terms) && !empty($terms[0]);
+            $base['category_mapping_attempts'][] = ['method' => 'ovoko_category_id meta', 'ok' => $ok, 'meta_key' => $metaKey, 'term_id' => $ok ? (int) $terms[0]->term_id : 0];
+            if ($ok) {
                 $term = $terms[0];
-                return ['term_id' => (int) $term->term_id, 'label' => (string) $term->name, 'ovoko_category_id' => $ovokoCategoryId, 'meta_key' => $metaKey];
+                return $this->mapped_category_result($base, (int) $term->term_id, (string) $term->name, 'ovoko_category_id meta', 'term_meta:' . $metaKey);
             }
         }
-        return ['term_id' => 0, 'label' => '', 'ovoko_category_id' => $ovokoCategoryId];
+
+        $terms = $this->all_product_category_terms();
+        $pathCandidates = $this->category_path_candidates($categoryTitlePath);
+        $base['category_mapping_attempts'][] = ['method' => 'exact name/path', 'ok' => false, 'candidates' => $pathCandidates];
+        foreach ($pathCandidates as $candidate) {
+            foreach ($terms as $term) {
+                $termPath = $this->term_path((int) $term->term_id, $terms);
+                if ($candidate !== '' && ($termPath === $candidate || (string) $term->name === $candidate)) {
+                    $base['category_mapping_attempts'][count($base['category_mapping_attempts']) - 1]['ok'] = true;
+                    $base['candidate_terms'] = $this->candidate_terms($terms, $pathCandidates, $term, 'exact path/name match');
+                    return $this->mapped_category_result($base, (int) $term->term_id, (string) $term->name, 'exact name/path', 'product_cat_path_exact');
+                }
+            }
+        }
+
+        $normalizedCandidates = array_values(array_unique(array_filter(array_map([$this, 'normalize_category_text'], $pathCandidates))));
+        $base['category_mapping_attempts'][] = ['method' => 'normalized name/path', 'ok' => false, 'candidates' => $normalizedCandidates];
+        foreach ($normalizedCandidates as $candidate) {
+            foreach ($terms as $term) {
+                $termPath = $this->term_path((int) $term->term_id, $terms);
+                $normalizedTermValues = array_values(array_unique(array_filter([
+                    $this->normalize_category_text($termPath),
+                    $this->normalize_category_text((string) $term->name),
+                ])));
+                if ($candidate !== '' && in_array($candidate, $normalizedTermValues, true)) {
+                    $base['category_mapping_attempts'][count($base['category_mapping_attempts']) - 1]['ok'] = true;
+                    $base['candidate_terms'] = $this->candidate_terms($terms, $pathCandidates, $term, 'normalized path/name match');
+                    return $this->mapped_category_result($base, (int) $term->term_id, (string) $term->name, 'normalized name/path', 'product_cat_path_normalized');
+                }
+            }
+        }
+
+        $base['candidate_terms'] = $this->candidate_terms($terms, $pathCandidates, null, 'no exact or normalized match');
+        $base['category_mapping_attempts'][] = ['method' => 'none', 'ok' => false, 'reason' => 'no_existing_product_cat_match'];
+        return $base;
+    }
+
+    private function lookup_category_mapping_table(string $ovokoCategoryId): array
+    {
+        if (!function_exists('get_option')) return ['term_id' => 0, 'label' => '', 'source' => 'get_option_unavailable'];
+        $settings = (array) get_option('gpswiss_ovoko_settings', []);
+        $tables = [
+            'gpswiss_ovoko_settings.ovoko_to_woo_category_map' => (array) ($settings['ovoko_to_woo_category_map'] ?? []),
+            'gpswiss_ovoko_settings.ovoko_category_to_woo_term_map' => (array) ($settings['ovoko_category_to_woo_term_map'] ?? []),
+            'gpswiss_ovoko_category_map' => (array) get_option('gpswiss_ovoko_category_map', []),
+            'gpswiss_ovoko_category_mapping' => (array) get_option('gpswiss_ovoko_category_mapping', []),
+        ];
+        foreach ($tables as $source => $table) {
+            if ($table === []) continue;
+            $value = $table[$ovokoCategoryId] ?? $table[(int) $ovokoCategoryId] ?? null;
+            $termId = is_array($value) ? (int) ($value['term_id'] ?? $value['woo_term_id'] ?? 0) : (int) $value;
+            if ($termId > 0) {
+                return ['term_id' => $termId, 'label' => $this->term_label($termId), 'source' => $source];
+            }
+        }
+        return ['term_id' => 0, 'label' => '', 'source' => 'not_configured'];
+    }
+
+    private function mapped_category_result(array $base, int $termId, string $label, string $matchedBy, string $source): array
+    {
+        $base['term_id'] = $termId;
+        $base['label'] = $label !== '' ? $label : $this->term_label($termId);
+        $base['matched_by'] = $matchedBy;
+        $base['category_mapping_source'] = $source;
+        if ($base['candidate_terms'] === []) {
+            $terms = $this->all_product_category_terms();
+            $matchedTerm = null;
+            foreach ($terms as $term) {
+                if ((int) $term->term_id === $termId) { $matchedTerm = $term; break; }
+            }
+            $base['candidate_terms'] = $this->candidate_terms($terms, $this->category_path_candidates((string) $base['ovoko_category_title_path']), $matchedTerm, $matchedBy);
+        }
+        return $base;
+    }
+
+    private function all_product_category_terms(): array
+    {
+        if (!function_exists('get_terms')) return [];
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'number' => 0]);
+        return is_wp_error($terms) ? [] : array_values((array) $terms);
+    }
+
+    private function category_path_candidates(string $path): array
+    {
+        $path = trim($path);
+        $segments = array_values(array_filter(array_map('trim', preg_split('/\s*(?:>|\/|»|→)\s*/u', $path) ?: []), static fn($segment) => $segment !== ''));
+        $candidates = [$path];
+        if (count($segments) > 1) $candidates[] = implode(' / ', array_slice($segments, 1));
+        if ($segments !== []) {
+            $candidates[] = (string) end($segments);
+            $candidates[] = (string) reset($segments);
+        }
+        return array_values(array_unique(array_filter(array_map('trim', $candidates), static fn($candidate) => $candidate !== '')));
+    }
+
+    private function normalize_category_text(string $value): string
+    {
+        $value = mb_strtolower(trim(wp_strip_all_tags($value)));
+        $value = preg_replace('/\s*(?:>|\/|»|→)\s*/u', ' / ', $value) ?? $value;
+        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
+        return trim($value);
+    }
+
+    private function term_path(int $termId, array $terms): string
+    {
+        $byId = [];
+        foreach ($terms as $term) $byId[(int) $term->term_id] = $term;
+        if (!isset($byId[$termId])) return $this->term_label($termId);
+        $segments = [];
+        $current = $byId[$termId];
+        $guard = 0;
+        while ($current && $guard < 20) {
+            array_unshift($segments, (string) $current->name);
+            $parent = (int) ($current->parent ?? 0);
+            $current = $parent > 0 && isset($byId[$parent]) ? $byId[$parent] : null;
+            $guard++;
+        }
+        return implode(' / ', $segments);
+    }
+
+    private function term_label(int $termId): string
+    {
+        if ($termId <= 0 || !function_exists('get_term')) return '';
+        $term = get_term($termId, 'product_cat');
+        return ($term && !is_wp_error($term)) ? (string) $term->name : '';
+    }
+
+    private function candidate_terms(array $terms, array $pathCandidates, ?object $matchedTerm, string $reason): array
+    {
+        $rows = [];
+        $normalizedCandidates = array_values(array_unique(array_filter(array_map([$this, 'normalize_category_text'], $pathCandidates))));
+        foreach ($terms as $term) {
+            $termId = (int) ($term->term_id ?? 0);
+            if ($termId <= 0) continue;
+            $termPath = $this->term_path($termId, $terms);
+            $score = 0;
+            $rowReason = 'candidate';
+            if ($matchedTerm !== null && $termId === (int) $matchedTerm->term_id) {
+                $score = 100;
+                $rowReason = $reason;
+            } elseif (in_array($termPath, $pathCandidates, true) || in_array((string) $term->name, $pathCandidates, true)) {
+                $score = 90;
+                $rowReason = 'exact candidate';
+            } elseif (in_array($this->normalize_category_text($termPath), $normalizedCandidates, true) || in_array($this->normalize_category_text((string) $term->name), $normalizedCandidates, true)) {
+                $score = 80;
+                $rowReason = 'normalized candidate';
+            }
+            $rows[] = ['term_id' => $termId, 'name' => (string) ($term->name ?? ''), 'slug' => (string) ($term->slug ?? ''), 'parent' => (int) ($term->parent ?? 0), 'matched_score' => $score, 'reason' => $rowReason];
+        }
+        usort($rows, static fn(array $a, array $b): int => ($b['matched_score'] <=> $a['matched_score']) ?: ($a['term_id'] <=> $b['term_id']));
+        return array_slice($rows, 0, 10);
     }
 
     private function get_part_id(int $productId): string
