@@ -2135,6 +2135,49 @@ class OvokoIntegrationService
         ]);
     }
 
+    public function build_woo_product_slug_preview_for_gmail_draft(string $generatedTitle, int $productId, string $postStatus): array
+    {
+        $slugBase = function_exists('sanitize_title') ? sanitize_title($generatedTitle) : strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', $generatedTitle) ?? '', '-'));
+        $slug = $slugBase;
+        if ($slug !== '' && function_exists('wp_unique_post_slug')) {
+            $slug = (string) wp_unique_post_slug($slug, $productId, $postStatus, 'product', 0);
+        }
+
+        return [
+            'slug' => $slug,
+            'slug_base' => $slugBase,
+            'slug_builder' => 'OvokoIntegrationService::build_woo_product_slug_preview_for_gmail_draft',
+            'slug_source' => 'wordpress_post_slug_from_existing_ovoko_woo_generated_title',
+            'normal_importer_compatibility' => 'Normal Ovoko → Woo creates products with wp_insert_post(post_title) and no custom post_name, so WordPress derives post_name from the generated title.',
+        ];
+    }
+
+    public function build_woo_product_title_preview_for_gmail_draft(array $normalizedPart, ?RrrApiClient $client = null): array
+    {
+        $normalized = $normalizedPart;
+        foreach (['make' => 'vehicle_make', 'model' => 'vehicle_model', 'version' => 'vehicle_generation', 'year' => 'vehicle_year', 'engine' => 'vehicle_engine_marketing'] as $legacyKey => $normalizedKey) {
+            if (trim((string) ($normalized[$normalizedKey] ?? '')) === '' && trim((string) ($normalized[$legacyKey] ?? '')) !== '') {
+                $normalized[$normalizedKey] = $normalized[$legacyKey];
+            }
+        }
+        $vehicleDebug = ['vehicle_fetch_attempted' => false, 'vehicle_fetch_success' => false, 'vehicle_data_source' => ''];
+
+        if ($client !== null) {
+            $missingVehicle = trim((string) ($normalized['vehicle_make'] ?? ($normalized['make'] ?? ''))) === ''
+                || trim((string) ($normalized['vehicle_model'] ?? ($normalized['model'] ?? ''))) === '';
+            if ($missingVehicle && trim((string) ($normalized['car_id'] ?? '')) !== '') {
+                $enriched = $this->enrich_with_vehicle_data($normalized, $client);
+                $normalized = (array) ($enriched['normalized'] ?? $normalized);
+                $vehicleDebug = (array) ($enriched['vehicle_debug'] ?? $vehicleDebug);
+            }
+        }
+
+        $preview = $this->build_woo_product_title_from_ovoko_part($normalized);
+        $preview['gmail_draft_title_builder'] = 'OvokoIntegrationService::build_woo_product_title_from_ovoko_part';
+        $preview['vehicle_enrichment_debug'] = $vehicleDebug;
+        return $preview;
+    }
+
     public function build_woo_product_title_from_rrr_part(array $normalizedPart): array
     {
         return $this->build_woo_product_title_from_ovoko_part($normalizedPart);

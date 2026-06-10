@@ -307,7 +307,12 @@ class AdminPage
 
     private function build_gmail_draft_update_service(): OvokoWooGmailDraftUpdateService
     {
-        return new OvokoWooGmailDraftUpdateService(new RrrApiClient($this->service->get_settings()));
+        $rrrClient = new RrrApiClient($this->service->get_settings());
+        return new OvokoWooGmailDraftUpdateService($rrrClient, null, function (array $part) use ($rrrClient): array {
+            return $this->service->build_woo_product_title_preview_for_gmail_draft($part, $rrrClient);
+        }, function (string $generatedTitle, int $productId, string $postStatus): array {
+            return $this->service->build_woo_product_slug_preview_for_gmail_draft($generatedTitle, $productId, $postStatus);
+        });
     }
 
     private function gmail_draft_controlled_error(int $productId, \Throwable $throwable, string $mode = 'preview_one'): array
