@@ -51,6 +51,30 @@ class GPSwissBatchTestWpdb
                 $max = min($max, $param);
             }
         }
+        $ids = $this->matching_ids($min, $max);
+        return array_slice($ids, 0, $limit > 0 ? $limit : 50);
+    }
+
+    public function get_var(string $sql): int
+    {
+        if (str_starts_with($sql, 'SELECT p.ID')) {
+            $ids = $this->get_col($sql);
+            return (int) ($ids[0] ?? 0);
+        }
+
+        $withOvokoMetaOnly = str_contains($sql, 'opm.post_id IS NOT NULL OR npm.post_id IS NOT NULL');
+        $ids = $this->matching_ids(0, PHP_INT_MAX);
+        if ($withOvokoMetaOnly) {
+            $ids = array_values(array_filter($ids, static function (int $id): bool {
+                return trim((string) get_post_meta($id, '_ovoko_part_id', true)) !== ''
+                    || trim((string) get_post_meta($id, 'ovoko_part_id', true)) !== '';
+            }));
+        }
+        return count($ids);
+    }
+
+    private function matching_ids(int $min, int $max): array
+    {
         $ids = [];
         foreach ($GLOBALS['gpswiss_batch_test_posts'] as $id => $post) {
             if ((string) $post->post_type !== 'product' || (string) $post->post_status !== 'draft') {
@@ -65,7 +89,7 @@ class GPSwissBatchTestWpdb
             $ids[] = (int) $id;
         }
         sort($ids);
-        return array_slice($ids, 0, $limit > 0 ? $limit : 50);
+        return $ids;
     }
 }
 
@@ -161,4 +185,20 @@ gpswiss_batch_run('batch skips recoverable retry block without importing and con
     gpswiss_batch_assert(count($GLOBALS['gpswiss_batch_test_import_payloads']) === 1, 'Only next eligible product should call importer.', $GLOBALS['gpswiss_batch_test_import_payloads']);
     gpswiss_batch_assert(($result['items'][0]['product_id'] ?? 0) === 60886 && ($result['items'][0]['skip_reason'] ?? '') === 'skipped_recoverable_retry_blocked', 'Skipped item for 60886 missing.', $result['items']);
     gpswiss_batch_assert(($result['items'][1]['product_id'] ?? 0) === 60887 && !empty($result['items'][1]['ok']), 'Imported item for 60887 missing.', $result['items']);
+});
+
+gpswiss_batch_run('batch scans past already imported lookahead window to next eligible Gmail draft', function (): void {
+    for ($id = 61000; $id < 61050; $id++) {
+        gpswiss_batch_seed_product($id, 'GPS-GMAIL-' . $id);
+        gpswiss_batch_set_meta($id, '_ovoko_part_id', 'RRR-' . $id);
+    }
+    gpswiss_batch_seed_product(61050, 'GPS-GMAIL-61050');
+
+    $result = gpswiss_batch_service()->run_one_batch(['mode' => 'live', 'batch_size' => 1]);
+
+    gpswiss_batch_assert(($result['success_count'] ?? 0) === 1, 'Runner must import product after already-imported first window.', $result);
+    gpswiss_batch_assert(($result['stop_reason'] ?? '') !== 'no_eligible_products', 'Runner must not stop no_eligible_products while later unimported drafts exist.', $result);
+    gpswiss_batch_assert(($result['already_imported_count'] ?? 0) === 50, 'First window imported products must be counted.', $result);
+    gpswiss_batch_assert(($result['windows_scanned'] ?? 0) >= 2, 'Runner must scan beyond the first lookahead window.', $result);
+    gpswiss_batch_assert(($result['scan_window_first_id'] ?? 0) === 61000 && ($result['scan_window_last_id'] ?? 0) === 61050, 'Scan window diagnostics should cover first and last checked IDs.', $result);
 });
