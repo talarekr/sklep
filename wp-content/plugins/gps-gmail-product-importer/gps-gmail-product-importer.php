@@ -558,8 +558,7 @@ JS;
             </div>
             <div class="gps-card gps-danger"><h3><?php esc_html_e('Step 4: Mark not-imported Gmail messages unread from CSV', 'gps-gmail-product-importer'); ?></h3>
                 <p><?php esc_html_e('Upload or select a Gmail Importer audit CSV, then mark only CSV rows that still need manual attention because the current Woo product state has not been finally imported to Ovoko. Woo/Ovoko meta remains the source of truth: _ovoko_part_id, ovoko_part_id, or _gps_ovoko_crm_only_imported_at.', 'gps-gmail-product-importer'); ?></p>
-                <?php $this->render_mark_unread_form('gps_gmail_product_importer_mark_unread_preview', __('Preview CSV unread candidates', 'gps-gmail-product-importer'), true); ?>
-                <?php $this->render_mark_unread_form('gps_gmail_product_importer_mark_unread', __('Mark previewed Gmail messages unread', 'gps-gmail-product-importer'), false); ?>
+                <?php $this->render_mark_unread_form(); ?>
                 <p class="description"><?php esc_html_e('Safety: this tool only previews or changes Gmail unread labels plus mark-unread audit meta on staging records. It does not touch Woo products, Ovoko, eBay, images, product statuses, or auto-runner logic. Gmail OAuth must include gmail.modify for live marking.', 'gps-gmail-product-importer'); ?></p>
                 <?php $this->render_mark_unread_result($last_result); ?>
             </div>
@@ -682,13 +681,16 @@ JS;
         $parts = array(); foreach ($counts as $reason => $count) { $parts[] = $reason . ': ' . $count; } return implode(', ', $parts);
     }
 
-    private function render_mark_unread_form($action, $button_label, $preview)
+    private function render_mark_unread_form()
     {
         $csv_files = $this->mark_unread_csv_file_choices();
+        $last_preview = (array) get_option('gps_gmail_mark_unread_csv_last_preview', array());
+        $preview_batch_id = (string) ($last_preview['batch_id'] ?? '');
+        $has_preview = $preview_batch_id !== '' && !empty($last_preview['csv_hash']);
         ?>
         <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:10px 0;padding:10px;background:#fff;border:1px solid #ccd0d4;">
             <?php wp_nonce_field(self::NONCE_ACTION); ?>
-            <input type="hidden" name="action" value="<?php echo esc_attr($action); ?>">
+            <input type="hidden" name="preview_batch_id" value="<?php echo esc_attr($preview_batch_id); ?>">
             <p>
                 <label><strong><?php esc_html_e('Upload CSV audit', 'gps-gmail-product-importer'); ?></strong><br><input type="file" name="mark_unread_csv_upload" accept=".csv,text/csv"></label>
             </p>
@@ -701,12 +703,10 @@ JS;
                 </label>
             </p>
             <p class="description"><?php esc_html_e('Required CSV columns: gmail_message_id. Recommended columns: created_product_id, readiness_status, blocking_reasons, subject or gmail_subject, staging_id or staging_item_id.', 'gps-gmail-product-importer'); ?></p>
-            <label><strong><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></strong> <input type="number" min="1" max="500" name="batch_size" value="50"></label>
-            <?php if (!$preview) : ?>
+            <p>
+                <label><strong><?php esc_html_e('Batch size', 'gps-gmail-product-importer'); ?></strong> <input type="number" min="1" max="500" name="batch_size" value="50"></label>
                 <label style="margin-left:10px;"><input type="checkbox" name="dry_run" value="1" checked> <?php esc_html_e('Dry-run (do not change Gmail)', 'gps-gmail-product-importer'); ?></label>
-            <?php else : ?>
-                <input type="hidden" name="dry_run" value="1">
-            <?php endif; ?>
+            </p>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin:10px 0;">
                 <label><input type="checkbox" name="include_missing_part_code" value="1" checked> <?php esc_html_e('Include missing_part_code', 'gps-gmail-product-importer'); ?></label>
                 <label><input type="checkbox" name="include_missing_images" value="1" checked> <?php esc_html_e('Include missing_images', 'gps-gmail-product-importer'); ?></label>
@@ -715,7 +715,17 @@ JS;
                 <label><input type="checkbox" checked disabled> <?php esc_html_e('Skip already Ovoko imported', 'gps-gmail-product-importer'); ?></label>
                 <label><input type="checkbox" name="include_already_marked" value="1"> <?php esc_html_e('Force/include already marked by this tool', 'gps-gmail-product-importer'); ?></label>
             </div>
-            <?php submit_button($button_label, $preview ? 'secondary' : 'primary', 'submit', false); ?>
+            <p>
+                <button type="submit" class="button button-secondary" name="action" value="gps_gmail_product_importer_mark_unread_preview"><?php esc_html_e('Preview CSV unread candidates', 'gps-gmail-product-importer'); ?></button>
+                <button type="submit" class="button button-primary" name="action" value="gps_gmail_product_importer_mark_unread"<?php disabled(!$has_preview); ?> onclick="if (!this.form.dry_run.checked) { return confirm('<?php echo esc_js(__('Live Gmail mark-unread requires the saved preview batch for the same CSV and options. Continue?', 'gps-gmail-product-importer')); ?>'); } return true;"><?php esc_html_e('Mark previewed Gmail messages unread', 'gps-gmail-product-importer'); ?></button>
+            </p>
+            <p class="description">
+                <?php if ($has_preview) : ?>
+                    <?php printf(esc_html__('Live marking requires current preview batch_id: %s. If you change CSV or option values, run Preview again first.', 'gps-gmail-product-importer'), esc_html($preview_batch_id)); ?>
+                <?php else : ?>
+                    <?php esc_html_e('Run Preview CSV unread candidates first. Live marking is disabled until a preview batch is available.', 'gps-gmail-product-importer'); ?>
+                <?php endif; ?>
+            </p>
         </form>
         <?php
     }
@@ -1143,8 +1153,14 @@ JS;
     {
         $this->verify_admin_action();
         $dry_run = !empty($_POST['dry_run']);
-        $source = $this->mark_unread_csv_source_from_request(true);
-        $result = is_wp_error($source) ? $this->empty_mark_unread_csv_result($dry_run, $source->get_error_message()) : $this->process_mark_not_imported_gmail_unread_csv((string) $source, $dry_run, $this->mark_unread_options_from_request(), false);
+        $preview_batch_id = sanitize_text_field(wp_unslash($_POST['preview_batch_id'] ?? ''));
+        $saved_preview = (array) get_option('gps_gmail_mark_unread_csv_last_preview', array());
+        if (!$dry_run && ($preview_batch_id === '' || (string) ($saved_preview['batch_id'] ?? '') !== $preview_batch_id)) {
+            $result = $this->empty_mark_unread_csv_result(false, 'Run Preview CSV unread candidates again before live marking. No Gmail messages were changed.');
+        } else {
+            $source = $this->mark_unread_csv_source_from_request(false);
+            $result = is_wp_error($source) ? $this->empty_mark_unread_csv_result($dry_run, $source->get_error_message()) : $this->process_mark_not_imported_gmail_unread_csv((string) $source, $dry_run, $this->mark_unread_options_from_request(), false);
+        }
         $result['action'] = 'gmail_mark_not_imported_unread';
         set_transient('gps_gmail_product_importer_last_admin_result', $result, 120);
         wp_safe_redirect(admin_url('admin.php?page=gps-gmail-product-importer'));
