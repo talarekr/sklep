@@ -7,6 +7,9 @@ class WooToOvokoCrmOnlyBatchImportService
     private const GMAIL_SKU_PREFIX = 'GPS-GMAIL-';
     private const DEFAULT_LOOKAHEAD_WINDOW = 50;
     private const DEFAULT_MAX_SCAN_WINDOWS = 20;
+    private const DUPLICATE_SKU_OVOKO_CODE = 'another_product_same_sku_has_ovoko_part_id';
+    private const DUPLICATE_SKU_OVOKO_SKIP_REASON = 'duplicate_sku_already_has_ovoko_part_id';
+    private const DUPLICATE_SKU_OVOKO_MESSAGE = 'Another product with the same SKU already has Ovoko part ID; skipped to avoid duplicate import.';
 
     private array $settings;
     private WooToOvokoCreatePartPreviewService $previewService;
@@ -123,6 +126,12 @@ class WooToOvokoCrmOnlyBatchImportService
         $result['already_imported_count'] = (int) $candidateScan['skipped_counts']['skipped_already_imported'];
         foreach ((array) ($candidateScan['skipped_recoverable_items'] ?? []) as $skippedItem) {
             $result['items'][] = $skippedItem;
+            if ((string) ($skippedItem['skip_reason'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+                $result['blocked_count']++;
+                $result['duplicate_sku_ovoko_count']++;
+                $result['skipped_duplicate_sku_ovoko']++;
+                continue;
+            }
             $result['repair_needed_count']++;
             if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
                 $result['photo_file_missing_count']++;
@@ -151,9 +160,17 @@ class WooToOvokoCrmOnlyBatchImportService
             if (!empty($recoverableState['blocked'])) {
                 $validationMs = $this->elapsed_ms($validationStartedAt);
                 $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_recoverable', 'recoverable_part_id' => (string) ($recoverableState['recoverable_part_id'] ?? ''), 'validation_ms' => $validationMs]);
+                $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                if ((string) ($skippedItem['skip_reason'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+                    $result['blocked_count']++;
+                    $result['duplicate_sku_ovoko_count']++;
+                    $result['skipped_duplicate_sku_ovoko']++;
+                    $result['skipped_counts']['skipped_duplicate_sku_ovoko']++;
+                    $result['items'][] = $skippedItem;
+                    continue;
+                }
                 $result['repair_needed_count']++;
                 $result['skipped_counts']['skipped_recoverable_retry_blocked']++;
-                $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
                 if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
                     $result['photo_file_missing_count']++;
                     $result['skipped_photo_file_missing']++;
@@ -190,6 +207,13 @@ class WooToOvokoCrmOnlyBatchImportService
 
             if (empty($preview['would_be_eligible']) || !empty($preview['validation_errors'])) {
                 $result['blocked_count']++;
+                $result['skipped_counts'][$this->preview_blocker_bucket($previewCodes)]++;
+                $this->append_limited($result['examples_not_imported_not_selected'], $this->not_selected_example($productId, 'blocked_validation:' . implode(',', $previewCodes)), 5);
+                if ($this->is_duplicate_sku_ovoko_preview_block($previewCodes)) {
+                    $this->store_duplicate_sku_ovoko_block($productId);
+                    $result['items'][] = $this->duplicate_sku_ovoko_item($productId, $previewCodes);
+                    continue;
+                }
                 $error = [
                     'product_id' => $productId,
                     'code' => 'preview_ineligible',
@@ -197,8 +221,6 @@ class WooToOvokoCrmOnlyBatchImportService
                     'validation_codes' => $previewCodes,
                 ];
                 $result['errors'][] = $error;
-                $result['skipped_counts'][$this->preview_blocker_bucket($previewCodes)]++;
-                $this->append_limited($result['examples_not_imported_not_selected'], $this->not_selected_example($productId, 'blocked_validation:' . implode(',', $previewCodes)), 5);
                 $result['items'][] = ['product_id' => $productId, 'status' => 'blocked', 'validation_codes' => $previewCodes];
                 if ($stopOnFirstError) {
                     $result['stop_reason'] = 'preview_ineligible_stop_on_first_error';
@@ -327,9 +349,23 @@ class WooToOvokoCrmOnlyBatchImportService
         $recoverableState = $this->recoverable_retry_blocked_state($productId);
         if (!empty($recoverableState['blocked'])) {
             $result['attempted'] = 1;
+            $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+            if ((string) ($skippedItem['skip_reason'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+                $result['blocked_count'] = 1;
+                $result['duplicate_sku_ovoko_count'] = 1;
+                $result['skipped_duplicate_sku_ovoko'] = 1;
+                $result['skipped_counts']['skipped_duplicate_sku_ovoko'] = 1;
+                $result['items'][] = $skippedItem;
+                $result['stop_reason'] = self::DUPLICATE_SKU_OVOKO_SKIP_REASON;
+                $result['total_attempted'] = 1;
+                $result['total_ms'] = $this->elapsed_ms($startedAt);
+                $result['summary'] = $this->raw_summary($result);
+                $result['raw_summary'] = $result['summary'];
+                $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => true, 'stop_reason' => $result['stop_reason'], 'total_ms' => $result['total_ms']]);
+                return $result;
+            }
             $result['repair_needed_count'] = 1;
             $result['skipped_counts']['skipped_recoverable_retry_blocked'] = 1;
-            $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
             if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
                 $result['photo_file_missing_count'] = 1;
                 $result['skipped_photo_file_missing'] = 1;
@@ -376,18 +412,24 @@ class WooToOvokoCrmOnlyBatchImportService
         }
 
         if (empty($preview['would_be_eligible']) || !empty($preview['validation_errors'])) {
-            $result['ok'] = false;
             $result['blocked_count'] = 1;
-            $result['stop_reason'] = 'preview_ineligible';
-            $result['errors'][] = ['product_id' => $productId, 'code' => 'preview_ineligible', 'message' => 'CRM-only preview is not eligible for live import.', 'validation_codes' => $previewCodes];
-            $result['items'][] = ['product_id' => $productId, 'status' => 'blocked', 'validation_codes' => $previewCodes];
+            if ($this->is_duplicate_sku_ovoko_preview_block($previewCodes)) {
+                $this->store_duplicate_sku_ovoko_block($productId);
+                $result['items'][] = $this->duplicate_sku_ovoko_item($productId, $previewCodes);
+                $result['stop_reason'] = self::DUPLICATE_SKU_OVOKO_SKIP_REASON;
+            } else {
+                $result['ok'] = false;
+                $result['stop_reason'] = 'preview_ineligible';
+                $result['errors'][] = ['product_id' => $productId, 'code' => 'preview_ineligible', 'message' => 'CRM-only preview is not eligible for live import.', 'validation_codes' => $previewCodes];
+                $result['items'][] = ['product_id' => $productId, 'status' => 'blocked', 'validation_codes' => $previewCodes];
+            }
             $result['eligible'] = 0;
             $result['total_attempted'] = 1;
             $result['preview_ms'] = $previewMs;
             $result['total_ms'] = $this->elapsed_ms($startedAt);
             $result['summary'] = $this->raw_summary($result);
             $result['raw_summary'] = $result['summary'];
-            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => false, 'stop_reason' => $result['stop_reason'], 'preview_ms' => $previewMs, 'total_ms' => $result['total_ms']]);
+            $this->log_marker('CRM_ONLY_BATCH_RESULT_READY', ['mode' => $mode, 'product_id' => $productId, 'ok' => !empty($result['ok']), 'stop_reason' => $result['stop_reason'], 'preview_ms' => $previewMs, 'total_ms' => $result['total_ms']]);
             return $result;
         }
 
@@ -453,6 +495,8 @@ class WooToOvokoCrmOnlyBatchImportService
             'repair_needed_count' => 0,
             'photo_file_missing_count' => 0,
             'skipped_photo_file_missing' => 0,
+            'duplicate_sku_ovoko_count' => 0,
+            'skipped_duplicate_sku_ovoko' => 0,
             'has_more' => false,
             'should_continue' => false,
             'stop_reason' => '',
@@ -543,8 +587,15 @@ class WooToOvokoCrmOnlyBatchImportService
 
                 $recoverableState = $this->recoverable_retry_blocked_state($productId);
                 if (!empty($recoverableState['blocked'])) {
-                    $skippedCounts['skipped_recoverable_retry_blocked']++;
                     $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                    if ((string) ($skippedItem['skip_reason'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+                        $skippedCounts['skipped_duplicate_sku_ovoko']++;
+                        $skippedRecoverableItems[] = $skippedItem;
+                        $this->append_limited($examplesNotImportedNotSelected, $this->not_selected_example($productId, 'blocked_validation:' . self::DUPLICATE_SKU_OVOKO_CODE), 5);
+                        $this->log_marker('CRM_ONLY_BATCH_VALIDATE_PRODUCT_DONE', ['product_id' => $productId, 'status' => 'skipped_duplicate_sku_ovoko', 'validation_ms' => $this->elapsed_ms($validationStartedAt)]);
+                        continue;
+                    }
+                    $skippedCounts['skipped_recoverable_retry_blocked']++;
                     if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
                         $skippedCounts['skipped_photo_file_missing']++;
                     }
@@ -594,8 +645,14 @@ class WooToOvokoCrmOnlyBatchImportService
             $productId = (int) $productId;
             $recoverableState = $this->recoverable_retry_blocked_state($productId);
             if (!empty($recoverableState['blocked'])) {
-                $candidateScan['skipped_counts']['skipped_recoverable_retry_blocked']++;
                 $skippedItem = $this->recoverable_skipped_item($productId, $recoverableState);
+                if ((string) ($skippedItem['skip_reason'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+                    $candidateScan['skipped_counts']['skipped_duplicate_sku_ovoko']++;
+                    $candidateScan['skipped_recoverable_items'][] = $skippedItem;
+                    $this->append_limited($candidateScan['examples_not_imported_not_selected'], $this->not_selected_example($productId, 'blocked_validation:' . self::DUPLICATE_SKU_OVOKO_CODE), 5);
+                    continue;
+                }
+                $candidateScan['skipped_counts']['skipped_recoverable_retry_blocked']++;
                 if ((string) ($skippedItem['skip_reason'] ?? '') === 'ovoko_photo_file_missing') {
                     $candidateScan['skipped_counts']['skipped_photo_file_missing']++;
                 }
@@ -631,6 +688,7 @@ class WooToOvokoCrmOnlyBatchImportService
             'skipped_already_imported' => 0,
             'skipped_recoverable_retry_blocked' => 0,
             'skipped_photo_file_missing' => 0,
+            'skipped_duplicate_sku_ovoko' => 0,
             'skipped_missing_images' => 0,
             'skipped_missing_part_code' => 0,
             'skipped_other_blocked' => 0,
@@ -955,6 +1013,10 @@ class WooToOvokoCrmOnlyBatchImportService
         if (array_intersect($codes, ['recoverable_part_id_blocks_retry', 'existing_ovoko_part_id']) !== []) {
             $result['repair_needed_count']++;
         }
+        if ($this->is_duplicate_sku_ovoko_preview_block($codes)) {
+            $result['duplicate_sku_ovoko_count']++;
+            $result['skipped_duplicate_sku_ovoko']++;
+        }
     }
 
 
@@ -967,6 +1029,14 @@ class WooToOvokoCrmOnlyBatchImportService
             'message' => '',
             'source' => '',
         ];
+
+        $storedBlockedReason = trim((string) get_post_meta($productId, '_gps_ovoko_crm_only_import_blocked_reason', true));
+        if ($storedBlockedReason === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+            $state['blocked'] = true;
+            $state['error_code'] = self::DUPLICATE_SKU_OVOKO_SKIP_REASON;
+            $state['message'] = self::DUPLICATE_SKU_OVOKO_MESSAGE;
+            $state['source'] = '_gps_ovoko_crm_only_import_blocked_reason';
+        }
 
         $storedRepairReason = trim((string) get_post_meta($productId, '_gps_ovoko_crm_only_import_repair_reason', true));
         if ($storedRepairReason === 'ovoko_photo_file_missing') {
@@ -1071,6 +1141,9 @@ class WooToOvokoCrmOnlyBatchImportService
         if ((string) ($state['error_code'] ?? '') === 'ovoko_photo_file_missing') {
             return $this->photo_file_missing_item($productId);
         }
+        if ((string) ($state['error_code'] ?? '') === self::DUPLICATE_SKU_OVOKO_SKIP_REASON) {
+            return $this->duplicate_sku_ovoko_item($productId, [self::DUPLICATE_SKU_OVOKO_CODE]);
+        }
 
         return [
             'product_id' => $productId,
@@ -1099,6 +1172,28 @@ class WooToOvokoCrmOnlyBatchImportService
             || (string) ($import['skip_reason'] ?? '') === 'ovoko_photo_file_missing';
     }
 
+    private function is_duplicate_sku_ovoko_preview_block(array $codes): bool
+    {
+        return in_array(self::DUPLICATE_SKU_OVOKO_CODE, $codes, true);
+    }
+
+    private function duplicate_sku_ovoko_item(int $productId, array $codes): array
+    {
+        return [
+            'product_id' => $productId,
+            'status' => 'blocked',
+            'skip_reason' => self::DUPLICATE_SKU_OVOKO_SKIP_REASON,
+            'validation_codes' => array_values(array_unique($codes)),
+            'message' => self::DUPLICATE_SKU_OVOKO_MESSAGE,
+        ];
+    }
+
+    private function store_duplicate_sku_ovoko_block(int $productId): void
+    {
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_blocked_reason', self::DUPLICATE_SKU_OVOKO_SKIP_REASON);
+        update_post_meta($productId, '_gps_ovoko_crm_only_import_blocked_at', function_exists('current_time') ? current_time('mysql') : gmdate('Y-m-d H:i:s'));
+    }
+
     private function decoded_response_is_photo_file_missing(array $response): bool
     {
         $statusCode = strtoupper(trim((string) ($response['status_code'] ?? $response['status'] ?? '')));
@@ -1109,6 +1204,9 @@ class WooToOvokoCrmOnlyBatchImportService
 
     private function preview_blocker_bucket(array $codes): string
     {
+        if ($this->is_duplicate_sku_ovoko_preview_block($codes)) {
+            return 'skipped_duplicate_sku_ovoko';
+        }
         if (array_intersect($codes, ['missing_images', 'inaccessible_image_url', 'photo_must_equal_first_photos']) !== []) {
             return 'skipped_missing_images';
         }
@@ -1145,6 +1243,8 @@ class WooToOvokoCrmOnlyBatchImportService
             'repair_needed_count' => $result['repair_needed_count'],
             'photo_file_missing_count' => $result['photo_file_missing_count'],
             'skipped_photo_file_missing' => $result['skipped_photo_file_missing'],
+            'duplicate_sku_ovoko_count' => $result['duplicate_sku_ovoko_count'],
+            'skipped_duplicate_sku_ovoko' => $result['skipped_duplicate_sku_ovoko'],
             'has_more' => $result['has_more'],
             'next_cursor' => $result['next_cursor'],
             'stop_reason' => $result['stop_reason'],
