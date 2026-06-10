@@ -82,6 +82,8 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <p><strong>Build marker:</strong> <code><?php echo esc_html($buildMarker); ?></code> | Legacy/maintenance tools are now collapsed under <strong>Advanced Settings</strong>.</p>
     </div>
 
+    <?php include __DIR__ . '/partials/gmail-draft-update.php'; ?>
+
     <?php if (!empty($notice)): ?>
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>">
             <p><?php echo esc_html((string) ($notice['text'] ?? '')); ?></p>

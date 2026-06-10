@@ -45,6 +45,10 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_dry_run_internal_notes_price_backfill', [$this, 'handle_dry_run_internal_notes_price_backfill']);
         add_action('admin_post_gpswiss_ovoko_preview_woo_to_ovoko_create_part', [$this, 'handle_preview_woo_to_ovoko_create_part']);
         add_action('admin_post_gpswiss_ovoko_create_crm_only_part_from_woo', [$this, 'handle_create_crm_only_part_from_woo']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_preview_one', [$this, 'handle_gmail_draft_preview_one']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_update_one', [$this, 'handle_gmail_draft_update_one']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_preview_eligible', [$this, 'handle_gmail_draft_preview_eligible']);
+        add_action('admin_post_gpswiss_ovoko_gmail_draft_batch_placeholder', [$this, 'handle_gmail_draft_batch_placeholder']);
         add_action('wp_ajax_gpswiss_ovoko_crm_only_batch_import', [$this, 'handle_crm_only_batch_import_ajax']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
@@ -246,6 +250,64 @@ class AdminPage
 
 
 
+
+
+    public function handle_gmail_draft_preview_one(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_gmail_draft_preview_one');
+
+        $productId = isset($_POST['product_id']) ? (int) wp_unslash((string) $_POST['product_id']) : 0;
+        $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
+        $result = (new OvokoWooGmailDraftUpdateService())->preview_one($productId, ['publish_when_ready' => $publishWhenReady]);
+        wp_send_json($result, !empty($result['ok']) ? 200 : 400);
+    }
+
+    public function handle_gmail_draft_update_one(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_gmail_draft_update_one');
+
+        $productId = isset($_POST['product_id']) ? (int) wp_unslash((string) $_POST['product_id']) : 0;
+        $confirmation = isset($_POST['confirmation']) ? sanitize_text_field((string) wp_unslash((string) $_POST['confirmation'])) : '';
+        $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
+        $result = (new OvokoWooGmailDraftUpdateService())->update_one($productId, ['publish_when_ready' => $publishWhenReady, 'confirmation' => $confirmation]);
+        wp_send_json($result, !empty($result['ok']) ? 200 : 400);
+    }
+
+    public function handle_gmail_draft_preview_eligible(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_gmail_draft_preview_eligible');
+
+        $batchSize = isset($_POST['batch_size']) ? (int) wp_unslash((string) $_POST['batch_size']) : 10;
+        $publishWhenReady = !isset($_POST['publish_when_ready']) || !empty($_POST['publish_when_ready']);
+        $result = (new OvokoWooGmailDraftUpdateService())->preview_eligible($batchSize, ['publish_when_ready' => $publishWhenReady]);
+        wp_send_json($result, 200);
+    }
+
+    public function handle_gmail_draft_batch_placeholder(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_gmail_draft_batch_placeholder');
+
+        wp_send_json([
+            'ok' => false,
+            'action_name' => 'Ovoko → Woo Gmail draft update',
+            'mode' => 'batch_live_placeholder_stage_2',
+            'message' => 'Batch live update is intentionally disabled in stage 1. Use Preview one product and Update one product first.',
+            'no_cron' => true,
+            'no_background_worker' => true,
+        ], 400);
+    }
 
     public function handle_crm_only_batch_import_ajax(): void
     {
