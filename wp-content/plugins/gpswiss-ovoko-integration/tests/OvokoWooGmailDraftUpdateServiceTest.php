@@ -37,7 +37,7 @@ function gpswiss_gmail_seed(int $id = 101): void
         '_regular_price' => '',
     ];
     $GLOBALS['gpswiss_gmail_terms'][$id] = [(object) ['term_id' => 11, 'name' => 'Old category']];
-    $GLOBALS['gpswiss_gmail_term_meta'][22] = ['_ovoko_category_id' => '1407', 'name' => 'Real mapped category'];
+    $GLOBALS['gpswiss_gmail_term_meta'][22] = ['_ovoko_category_id' => '1407', 'name' => 'Real mapped category', 'slug' => 'real-mapped-category', 'parent' => 0];
 }
 
 function gpswiss_gmail_part(array $overrides = []): array
@@ -92,7 +92,24 @@ function update_post_meta(int $id, string $key, mixed $value): bool { $GLOBALS['
 function wp_update_post(array $postarr): int { $GLOBALS['gpswiss_gmail_writes'][] = ['wp_update_post', $postarr]; $id = (int) $postarr['ID']; foreach ($postarr as $key => $value) { if ($key !== 'ID') $GLOBALS['gpswiss_gmail_posts'][$id]->$key = $value; } return $id; }
 function wp_set_object_terms(int $id, array $terms, string $taxonomy, bool $append = false): array { $GLOBALS['gpswiss_gmail_writes'][] = ['wp_set_object_terms', $id, $terms, $taxonomy, $append]; $GLOBALS['gpswiss_gmail_terms'][$id] = [(object) ['term_id' => (int) $terms[0], 'name' => 'Real mapped category']]; return $terms; }
 function wp_get_post_terms(int $id, string $taxonomy): array { return $GLOBALS['gpswiss_gmail_terms'][$id] ?? []; }
-function get_terms(array $args): array { foreach ($GLOBALS['gpswiss_gmail_term_meta'] as $termId => $meta) { if (($meta[$args['meta_key']] ?? '') === (string) $args['meta_value']) return [(object) ['term_id' => (int) $termId, 'name' => (string) ($meta['name'] ?? 'Mapped')]]; } return []; }
+function get_terms(array $args): array {
+    $rows = [];
+    foreach ($GLOBALS['gpswiss_gmail_term_meta'] as $termId => $meta) {
+        if (isset($args['meta_key'])) {
+            if (($meta[$args['meta_key']] ?? '') !== (string) ($args['meta_value'] ?? '')) continue;
+        }
+        if (isset($args['name']) && (string) ($meta['name'] ?? '') !== (string) $args['name']) continue;
+        if (isset($args['parent']) && (int) ($meta['parent'] ?? 0) !== (int) $args['parent']) continue;
+        $rows[] = (object) ['term_id' => (int) $termId, 'name' => (string) ($meta['name'] ?? 'Mapped'), 'slug' => (string) ($meta['slug'] ?? sanitize_title((string) ($meta['name'] ?? 'Mapped'))), 'parent' => (int) ($meta['parent'] ?? 0)];
+        if ((int) ($args['number'] ?? 0) === 1) break;
+    }
+    return $rows;
+}
+function get_term(int $termId, string $taxonomy): ?object {
+    $meta = $GLOBALS['gpswiss_gmail_term_meta'][$termId] ?? null;
+    return is_array($meta) ? (object) ['term_id' => $termId, 'name' => (string) ($meta['name'] ?? 'Mapped'), 'slug' => (string) ($meta['slug'] ?? sanitize_title((string) ($meta['name'] ?? 'Mapped'))), 'parent' => (int) ($meta['parent'] ?? 0)] : null;
+}
+function get_option(string $key, mixed $default = false): mixed { return $default; }
 function get_posts(array $args): array { return array_keys($GLOBALS['gpswiss_gmail_posts']); }
 function is_wp_error(mixed $thing): bool { return false; }
 function wp_json_encode(mixed $data, int $flags = 0): string { return json_encode($data, $flags) ?: ''; }
@@ -172,6 +189,49 @@ gpswiss_run('Live update does not create a Woo product', function (OvokoWooGmail
 gpswiss_run('Image import service is not invoked', function (OvokoWooGmailDraftUpdateService $service): void {
     $service->update_one(101, ['confirmation' => OvokoWooGmailDraftUpdateService::LIVE_CONFIRMATION]);
     gpswiss_assert($GLOBALS['gpswiss_gmail_image_import_calls'] === 0, 'Image import service was called.');
+});
+
+
+gpswiss_run('Preview maps Ovoko category 1524 by existing Woo category path', function (OvokoWooGmailDraftUpdateService $service): void {
+    $GLOBALS['gpswiss_gmail_next_part'] = gpswiss_gmail_part([
+        'category_id' => '1524',
+        'category_title_path' => 'Lusterko wsteczne / Podsufitki / Szyberdachy i inne elementy',
+        'title' => 'Lusterko wsteczne',
+        'description' => "LUSTERKO WEWNĘTRZNE WSTECZNE EUROPA
+MAG: FA4",
+        'price' => '120',
+    ]);
+    $GLOBALS['gpswiss_gmail_term_meta'] = [
+        123 => ['name' => 'Lusterko wsteczne', 'slug' => 'lusterko-wsteczne', 'parent' => 0],
+        124 => ['name' => 'Podsufitki', 'slug' => 'podsufitki', 'parent' => 123],
+        125 => ['name' => 'Szyberdachy i inne elementy', 'slug' => 'szyberdachy-i-inne-elementy', 'parent' => 124],
+    ];
+
+    $result = $service->preview_one(101);
+    gpswiss_assert((int) $result['category_mapping']['term_id'] === 125, 'Preview should map category path to existing term_id.');
+    gpswiss_assert(!in_array('category_mapping_failed', $result['blocked_reasons'], true), 'category_mapping_failed should disappear.');
+    gpswiss_assert($result['ready_for_sale'] === true, 'Product should be ready after category mapping.');
+    gpswiss_assert($result['would_publish'] === true, 'Product should publish when ready.');
+    gpswiss_assert(($result['matched_by'] ?? '') === 'exact name/path', 'matched_by should report exact name/path.');
+    gpswiss_assert(($result['ovoko_category_id'] ?? '') === '1524', 'ovoko_category_id diagnostic missing.');
+    gpswiss_assert(($result['ovoko_category_title_path'] ?? '') === 'Lusterko wsteczne / Podsufitki / Szyberdachy i inne elementy', 'ovoko_category_title_path diagnostic missing.');
+});
+
+gpswiss_run('Preview exposes category mapping diagnostics when mapping fails', function (OvokoWooGmailDraftUpdateService $service): void {
+    $GLOBALS['gpswiss_gmail_next_part'] = gpswiss_gmail_part([
+        'category_id' => '1524',
+        'category_title_path' => 'Lusterko wsteczne / Podsufitki / Szyberdachy i inne elementy',
+    ]);
+    $GLOBALS['gpswiss_gmail_term_meta'] = [
+        501 => ['name' => 'Unrelated category', 'slug' => 'unrelated-category', 'parent' => 0],
+    ];
+
+    $result = $service->preview_one(101);
+    gpswiss_assert(in_array('category_mapping_failed', $result['blocked_reasons'], true), 'category_mapping_failed should be reported.');
+    gpswiss_assert(($result['matched_by'] ?? '') === 'none', 'matched_by should be none.');
+    gpswiss_assert(!empty($result['category_mapping_attempts']), 'category_mapping_attempts diagnostic missing.');
+    gpswiss_assert(!empty($result['candidate_terms']), 'candidate_terms diagnostic missing.');
+    gpswiss_assert(count($result['candidate_terms']) <= 10, 'candidate_terms should be capped at 10.');
 });
 
 gpswiss_run('Preview one converts fetch exception to ovoko_fetch_failed report', function (): void {
