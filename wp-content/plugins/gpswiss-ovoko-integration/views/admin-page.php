@@ -82,52 +82,6 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <p><strong>Build marker:</strong> <code><?php echo esc_html($buildMarker); ?></code> | Legacy/maintenance tools are now collapsed under <strong>Advanced Settings</strong>.</p>
     </div>
 
-    <div class="postbox" style="padding:16px; margin:18px 0 14px; border-left:4px solid #00a32a;">
-        <h2 style="margin-top:0;">Ovoko → Woo Gmail draft update</h2>
-        <p><strong>Safe MVP:</strong> updates only existing Woo products from Gmail flow (<code>GPS-GMAIL-*</code>) that already have <code>_ovoko_part_id</code> or <code>ovoko_part_id</code>. It never creates Woo products and keeps existing Woo/Gmail images as the source of truth.</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;align-items:end;margin-bottom:12px;">
-            <?php wp_nonce_field('gpswiss_ovoko_gmail_draft_preview_one'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_gmail_draft_preview_one" />
-            <label><strong>Product ID for single product</strong><br><input type="number" min="1" name="product_id" class="regular-text" value="" placeholder="Existing Woo product_id" /></label>
-            <label><strong>Batch size</strong><br><input type="number" min="1" max="100" name="batch_size" value="10" disabled="disabled" /></label>
-            <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry-run (default ON)</label>
-            <label><input type="checkbox" name="publish_when_ready" value="1" checked="checked" /> Publish when ready for sale (default ON)</label>
-            <label><input type="checkbox" checked="checked" disabled="disabled" /> Only Gmail SKU (<code>GPS-GMAIL-*</code>) — locked</label>
-            <label><input type="checkbox" checked="checked" disabled="disabled" /> Preserve Woo images — locked</label>
-            <label><input type="checkbox" name="stop_on_first_error" value="1" /> Stop on first error</label>
-            <div><?php submit_button('Preview one product', 'secondary', 'submit', false); ?></div>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;align-items:end;margin-bottom:12px;">
-            <?php wp_nonce_field('gpswiss_ovoko_gmail_draft_update_one'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_gmail_draft_update_one" />
-            <label><strong>Product ID for single product</strong><br><input type="number" min="1" name="product_id" class="regular-text" value="" placeholder="Existing Woo product_id" /></label>
-            <label><input type="checkbox" name="publish_when_ready" value="1" checked="checked" /> Publish when ready for sale</label>
-            <label><input type="checkbox" checked="checked" disabled="disabled" /> Only Gmail SKU — locked</label>
-            <label><input type="checkbox" checked="checked" disabled="disabled" /> Preserve Woo images — locked</label>
-            <label style="grid-column:1/-1;"><strong>Live confirmation</strong><br><input type="text" name="confirm_live_update" class="regular-text" placeholder="UPDATE ONE GMAIL DRAFT" /> <small>Required for live update one product.</small></label>
-            <div><?php submit_button('Update one product', 'primary', 'submit', false); ?></div>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
-            <?php wp_nonce_field('gpswiss_ovoko_gmail_draft_preview_eligible'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_gmail_draft_preview_eligible" />
-            <label>Batch size <input type="number" min="1" max="100" name="batch_size" value="10" /></label>
-            <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry-run</label>
-            <label><input type="checkbox" name="publish_when_ready" value="1" checked="checked" /> Publish when ready for sale</label>
-            <label><input type="checkbox" name="stop_on_first_error" value="1" /> Stop on first error</label>
-            <?php submit_button('Preview eligible Gmail products', 'secondary', 'submit', false); ?>
-        </form>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-            <?php wp_nonce_field('gpswiss_ovoko_gmail_draft_batch_placeholder'); ?>
-            <input type="hidden" name="action" value="gpswiss_ovoko_gmail_draft_batch_placeholder" />
-            <label>Batch size <input type="number" min="1" max="100" name="batch_size" value="10" /></label>
-            <label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry-run</label>
-            <label><input type="checkbox" name="publish_when_ready" value="1" checked="checked" /> Publish when ready for sale</label>
-            <?php submit_button('Run batch update', 'secondary', 'submit', false, ['disabled' => 'disabled']); ?>
-            <span><em>Stage 2 placeholder: browser-based Start/Stop auto-runner will be added after single-product validation.</em></span>
-        </form>
-        <details style="margin-top:12px;"><summary>Raw JSON / Technical details</summary><p>Each button returns JSON including a CSV report string, diff, ready-for-sale blockers, and image preservation fields.</p></details>
-    </div>
-
     <?php if (!empty($notice)): ?>
         <div class="notice notice-<?php echo esc_attr($notice['type']); ?>">
             <p><?php echo esc_html((string) ($notice['text'] ?? '')); ?></p>
