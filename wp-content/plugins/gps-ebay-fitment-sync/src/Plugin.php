@@ -1,40 +1,52 @@
 <?php
 
-namespace GPS_Ebay_Fitment;
+declare(strict_types=1);
 
-use GPS_Ebay_Fitment\Admin\AdminPage;
-use GPS_Ebay_Fitment\Database\Installer;
-use GPS_Ebay_Fitment\Registry\MarketplaceRegistry;
-use GPS_Ebay_Fitment\Repository\FitmentSyncRepository;
-use GPS_Ebay_Fitment\Repository\TecDocCacheRepository;
-use GPS_Ebay_Fitment\Resolver\PartNumberResolver;
-use GPS_Ebay_Fitment\Service\ApifyTecDocLookupService;
-use GPS_Ebay_Fitment\Service\ProductDiscoveryService;
+namespace GPS_Ebay_Fitment_Sync;
 
-class Plugin
+use GPS_Ebay_Fitment_Sync\Admin\AdminPage;
+use GPS_Ebay_Fitment_Sync\Database\Database;
+use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
+use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
+use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
+use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
+use GPS_Ebay_Fitment_Sync\Support\Settings;
+
+final class Plugin
 {
-    private static $instance;
+    private static ?self $instance = null;
 
-    public static function instance()
+    public static function instance(): self
     {
         if (!self::$instance) {
             self::$instance = new self();
         }
+
         return self::$instance;
     }
 
-    public function init()
+    public function init(): void
     {
-        Installer::maybe_install();
-        if (is_admin()) {
-            $fitment_repository = new FitmentSyncRepository();
-            $cache_repository = new TecDocCacheRepository();
-            $part_number_resolver = new PartNumberResolver();
-            $registry = new MarketplaceRegistry();
-            $discovery_service = new ProductDiscoveryService($registry, $fitment_repository, $part_number_resolver);
-            $lookup_service = new ApifyTecDocLookupService($cache_repository);
+        $settings = new Settings();
+        $settings->hooks();
 
-            (new AdminPage($registry, $fitment_repository, $cache_repository, $discovery_service, $lookup_service))->hooks();
+        if (!is_admin()) {
+            return;
         }
+
+        Database::maybe_upgrade();
+
+        $normalizer = new PartNumberNormalizer();
+        $database = new Database($normalizer);
+        $client = new ApifyClient($settings);
+        $lookup = new FitmentLookupService($database, $client, $normalizer, $settings);
+        $scanner = new ProductScanner($database, $normalizer, $settings);
+
+        (new AdminPage($settings, $lookup, $scanner, $database))->hooks();
+    }
+
+    public static function deactivate(): void
+    {
+        // Data is intentionally retained. Cached KTypes are canonical product/part-number data.
     }
 }
