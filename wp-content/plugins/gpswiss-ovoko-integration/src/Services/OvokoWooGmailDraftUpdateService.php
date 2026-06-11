@@ -8,6 +8,7 @@ class OvokoWooGmailDraftUpdateService
 {
     public const GMAIL_SKU_PREFIX = 'GPS-GMAIL-';
     public const LIVE_CONFIRMATION = 'UPDATE ONE GMAIL DRAFT';
+    public const BATCH_LIVE_CONFIRMATION = 'RUN GMAIL BATCH UPDATE';
 
     /** @var callable|null */
     private $partFetcher;
@@ -104,7 +105,8 @@ class OvokoWooGmailDraftUpdateService
             'ok' => true,
             'action_name' => 'Ovoko → Woo Gmail draft update preview',
             'mode' => 'preview_eligible_gmail_products',
-            'total_gmail_products_with_ovoko_part_id' => count($ids),
+            'total_gmail_products_with_ovoko_part_id' => $this->count_eligible_product_ids(),
+            'sample_size' => count($ids),
             'total_ready_to_update' => 0,
             'total_not_ready' => 0,
             'total_would_publish' => 0,
@@ -150,6 +152,150 @@ class OvokoWooGmailDraftUpdateService
         $summary['json_report'] = wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $summary['csv'] = $this->build_csv($examples);
         return $summary;
+    }
+
+
+    public function preview_batch(int $batchSize = 10, array $options = []): array
+    {
+        $batchSize = max(1, min(100, $batchSize));
+        return $this->run_batch([
+            'mode' => 'preview',
+            'cursor' => isset($options['cursor']) ? (int) $options['cursor'] : 0,
+            'batch_size' => $batchSize,
+            'publish_when_ready' => !array_key_exists('publish_when_ready', $options) || !empty($options['publish_when_ready']),
+            'stop_on_first_error' => false,
+        ]);
+    }
+
+    public function run_batch(array $args = []): array
+    {
+        $mode = ((string) ($args['mode'] ?? 'preview')) === 'live' ? 'live' : 'preview';
+        $batchSize = max(1, min(100, (int) ($args['batch_size'] ?? 10)));
+        $cursor = max(0, (int) ($args['cursor'] ?? 0));
+        $publishWhenReady = !array_key_exists('publish_when_ready', $args) || !empty($args['publish_when_ready']);
+        $stopOnFirstError = !empty($args['stop_on_first_error']);
+        $confirmation = (string) ($args['confirmation'] ?? '');
+
+        if ($mode === 'live' && $confirmation !== self::BATCH_LIVE_CONFIRMATION) {
+            return $this->batch_response(false, $mode, $cursor, $cursor, $batchSize, true, [
+                'errors' => 1,
+            ], [], 'confirmation_required', ['required_confirmation' => self::BATCH_LIVE_CONFIRMATION]);
+        }
+
+        $scanLimit = max($batchSize, min(500, $batchSize * 20));
+        $ids = $this->find_product_ids_after_cursor($cursor, $scanLimit);
+        $nextCursor = $cursor;
+        $rows = [];
+        $counters = [
+            'scanned' => 0,
+            'eligible' => 0,
+            'updated' => 0,
+            'published' => 0,
+            'skipped' => 0,
+            'blocked' => 0,
+            'errors' => 0,
+            'images_preserved_failures' => 0,
+            'no_change' => 0,
+            'would_update' => 0,
+            'would_publish' => 0,
+        ];
+
+        foreach ($ids as $id) {
+            $productId = (int) $id;
+            if ($productId <= 0) {
+                continue;
+            }
+            $nextCursor = max($nextCursor, $productId);
+            $counters['scanned']++;
+            $sku = (string) get_post_meta($productId, '_sku', true);
+            $partId = $this->get_part_id($productId);
+
+            if (!$this->is_gmail_sku($sku)) {
+                $counters['skipped']++;
+                $rows[] = $this->batch_skip_row($productId, $sku, $partId, 'skipped', ['non_gmail_sku']);
+                continue;
+            }
+            if ($partId === '') {
+                $counters['skipped']++;
+                $rows[] = $this->batch_skip_row($productId, $sku, $partId, 'skipped', ['missing_part_id']);
+                continue;
+            }
+
+            $counters['eligible']++;
+            try {
+                $plan = $this->preview_one($productId, ['publish_when_ready' => $publishWhenReady]);
+                if (!empty($plan['would_update'])) {
+                    $counters['would_update']++;
+                }
+                if (!empty($plan['would_publish'])) {
+                    $counters['would_publish']++;
+                }
+
+                if (empty($plan['ok']) || !empty($plan['error'])) {
+                    $counters['errors']++;
+                    $rows[] = $this->batch_row_from_report($plan, 'error');
+                    if ($stopOnFirstError) {
+                        break;
+                    }
+                    continue;
+                }
+
+                if (empty($plan['ready_for_sale'])) {
+                    $counters['blocked']++;
+                    $rows[] = $this->batch_row_from_report($plan, 'blocked');
+                    continue;
+                }
+
+                if ($mode === 'preview') {
+                    $rows[] = $this->batch_row_from_report($plan, !empty($plan['would_publish']) ? 'would_publish' : 'would_update');
+                    if (count(array_filter($rows, static fn(array $row): bool => !in_array($row['action'] ?? '', ['skipped'], true))) >= $batchSize) {
+                        break;
+                    }
+                    continue;
+                }
+
+                $updated = $this->update_one($productId, [
+                    'publish_when_ready' => $publishWhenReady,
+                    'confirmation' => self::LIVE_CONFIRMATION,
+                ]);
+                if (empty($updated['ok']) || !empty($updated['error'])) {
+                    $counters['errors']++;
+                    $rows[] = $this->batch_row_from_report($updated, 'error');
+                    if ($stopOnFirstError) {
+                        break;
+                    }
+                    continue;
+                }
+                $action = !empty($updated['published']) ? 'published' : (!empty($updated['updated']) ? 'updated' : 'no_change');
+                if ($action === 'published') {
+                    $counters['published']++;
+                    $counters['updated']++;
+                } elseif ($action === 'updated') {
+                    $counters['updated']++;
+                } else {
+                    $counters['no_change']++;
+                    $counters['skipped']++;
+                }
+                if (array_key_exists('images_preserved', $updated) && empty($updated['images_preserved'])) {
+                    $counters['images_preserved_failures']++;
+                }
+                $rows[] = $this->batch_row_from_report($updated, $action);
+            } catch (\Throwable $throwable) {
+                $counters['errors']++;
+                $rows[] = $this->batch_skip_row($productId, $sku, $partId, 'error', ['exception'], $throwable->getMessage());
+                if ($stopOnFirstError) {
+                    break;
+                }
+            }
+
+            if ($counters['eligible'] >= $batchSize) {
+                break;
+            }
+        }
+
+        $exhaustedFetchedIds = $counters['scanned'] >= count($ids);
+        $done = ($exhaustedFetchedIds && count($ids) < $scanLimit) || $nextCursor === $cursor;
+        return $this->batch_response(true, $mode, $cursor, $nextCursor, $batchSize, $done, $counters, $rows, '');
     }
 
     public function build_csv(array $reports): string
@@ -450,6 +596,137 @@ class OvokoWooGmailDraftUpdateService
             if ($value !== '') $meta[$metaKey] = $value;
         }
         return $meta;
+    }
+
+
+    private function find_product_ids_after_cursor(int $cursor, int $limit): array
+    {
+        $limit = max(1, min(500, $limit));
+        global $wpdb;
+        if (isset($wpdb) && is_object($wpdb) && isset($wpdb->posts) && method_exists($wpdb, 'prepare') && method_exists($wpdb, 'get_col')) {
+            $statuses = ['publish', 'draft', 'pending', 'private'];
+            $placeholders = implode(',', array_fill(0, count($statuses), '%s'));
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Status placeholders are generated above and prepared below.
+            $sql = "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'product' AND post_status IN ($placeholders) AND ID > %d ORDER BY ID ASC LIMIT %d";
+            return array_map('intval', (array) $wpdb->get_col($wpdb->prepare($sql, ...array_merge($statuses, [$cursor, $limit]))));
+        }
+
+        if (!function_exists('get_posts')) {
+            return [];
+        }
+        $ids = array_map('intval', (array) get_posts(['post_type' => 'product', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids']));
+        sort($ids, SORT_NUMERIC);
+        $out = [];
+        foreach ($ids as $id) {
+            if ($id > $cursor) {
+                $out[] = $id;
+                if (count($out) >= $limit) {
+                    break;
+                }
+            }
+        }
+        return $out;
+    }
+
+    private function batch_response(bool $ok, string $mode, int $cursor, int $nextCursor, int $batchSize, bool $done, array $counters, array $rows, string $error = '', array $extra = []): array
+    {
+        $defaults = [
+            'scanned' => 0,
+            'eligible' => 0,
+            'updated' => 0,
+            'published' => 0,
+            'skipped' => 0,
+            'blocked' => 0,
+            'errors' => 0,
+            'images_preserved_failures' => 0,
+            'no_change' => 0,
+            'would_update' => 0,
+            'would_publish' => 0,
+        ];
+        $response = $extra + [
+            'ok' => $ok,
+            'action_name' => 'Ovoko → Woo Gmail draft update',
+            'mode' => $mode === 'live' ? 'live_batch_update' : 'preview_batch_update',
+            'cursor' => $cursor,
+            'next_cursor' => $nextCursor,
+            'batch_size' => $batchSize,
+            'done' => $done,
+            'counters' => $counters + $defaults,
+            'rows' => $rows,
+            'error' => $error,
+        ];
+        $response['json_report'] = wp_json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $response;
+    }
+
+    private function batch_skip_row(int $productId, string $sku, string $partId, string $action, array $blockedReasons, string $error = ''): array
+    {
+        $post = function_exists('get_post') ? get_post($productId) : null;
+        return [
+            'product_id' => $productId,
+            'sku' => $sku,
+            'ovoko_part_id' => $partId,
+            'action' => $action,
+            'ready_for_sale' => false,
+            'blocked_reasons' => $blockedReasons,
+            'title_before' => $post ? (string) ($post->post_title ?? '') : '',
+            'title_after' => '',
+            'status_before' => $post ? (string) ($post->post_status ?? '') : '',
+            'status_after' => '',
+            'price_before' => function_exists('get_post_meta') ? (string) get_post_meta($productId, '_price', true) : '',
+            'price_after' => '',
+            'category_before' => '',
+            'category_after' => '',
+            'images_preserved' => true,
+            'error_message' => $error,
+        ];
+    }
+
+    private function batch_row_from_report(array $report, string $action): array
+    {
+        $diff = (array) ($report['diff'] ?? []);
+        return [
+            'product_id' => (int) ($report['product_id'] ?? 0),
+            'sku' => (string) ($report['sku'] ?? ''),
+            'ovoko_part_id' => (string) ($report['ovoko_part_id'] ?? ''),
+            'action' => $action,
+            'ready_for_sale' => !empty($report['ready_for_sale']),
+            'blocked_reasons' => (array) ($report['blocked_reasons'] ?? []),
+            'title_before' => (string) ($report['title_before'] ?? ($diff['title']['before'] ?? '')),
+            'title_after' => (string) ($report['title_after'] ?? ($diff['title']['after'] ?? '')),
+            'status_before' => (string) ($report['current_status'] ?? ($diff['status']['before'] ?? '')),
+            'status_after' => (string) ($diff['status']['after'] ?? ''),
+            'price_before' => (string) ($report['price_before'] ?? ($diff['price']['before'] ?? '')),
+            'price_after' => (string) ($report['price_after'] ?? ($diff['price']['after'] ?? '')),
+            'category_before' => (string) ($report['category_before'] ?? ($diff['category']['before'] ?? '')),
+            'category_after' => (string) ($report['category_after'] ?? ($diff['category']['after'] ?? '')),
+            'images_preserved' => !array_key_exists('images_preserved', $report) || !empty($report['images_preserved']),
+            'error_message' => (string) ($report['error'] ?? ''),
+        ];
+    }
+
+
+    private function count_eligible_product_ids(): int
+    {
+        global $wpdb;
+        if (isset($wpdb) && is_object($wpdb) && isset($wpdb->posts, $wpdb->postmeta) && method_exists($wpdb, 'prepare') && method_exists($wpdb, 'get_var') && method_exists($wpdb, 'esc_like')) {
+            $skuLike = $wpdb->esc_like(self::GMAIL_SKU_PREFIX) . '%';
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table names are from $wpdb and values are prepared.
+            $sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} sku ON sku.post_id = p.ID AND sku.meta_key = '_sku' INNER JOIN {$wpdb->postmeta} part ON part.post_id = p.ID AND part.meta_key IN ('_ovoko_part_id','ovoko_part_id') AND part.meta_value <> '' WHERE p.post_type = 'product' AND p.post_status IN ('publish','draft','pending','private') AND sku.meta_value LIKE %s";
+            return (int) $wpdb->get_var($wpdb->prepare($sql, $skuLike));
+        }
+
+        if (!function_exists('get_posts')) {
+            return 0;
+        }
+        $count = 0;
+        foreach ((array) get_posts(['post_type' => 'product', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids']) as $id) {
+            $productId = (int) $id;
+            if ($this->is_gmail_sku((string) get_post_meta($productId, '_sku', true)) && $this->get_part_id($productId) !== '') {
+                $count++;
+            }
+        }
+        return $count;
     }
 
     private function find_eligible_product_ids(int $limit): array
