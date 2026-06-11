@@ -323,3 +323,57 @@ gpswiss_run('Preview one without injected RRR client reports controlled configur
     gpswiss_assert(in_array('ovoko_fetch_failed', $result['blocked_reasons'], true), 'Missing RRR client should be reported as ovoko_fetch_failed.');
     gpswiss_assert(($result['error'] ?? '') === 'rrr_api_client_not_configured', 'Missing RRR client error should be controlled.');
 });
+
+gpswiss_run('Batch preview scans only eligible Gmail products with Ovoko part IDs for updates', function (OvokoWooGmailDraftUpdateService $service): void {
+    gpswiss_gmail_seed(102);
+    $GLOBALS['gpswiss_gmail_meta'][102]['_sku'] = 'NORMAL-102';
+    $GLOBALS['gpswiss_gmail_meta'][102]['_ovoko_part_id'] = '556';
+    gpswiss_gmail_seed(103);
+    $GLOBALS['gpswiss_gmail_meta'][103]['_sku'] = 'GPS-GMAIL-103';
+    unset($GLOBALS['gpswiss_gmail_meta'][103]['_ovoko_part_id']);
+
+    $result = $service->run_batch(['mode' => 'preview', 'batch_size' => 10]);
+    gpswiss_assert($result['counters']['scanned'] === 3, 'Batch should scan all seeded products.');
+    gpswiss_assert($result['counters']['eligible'] === 1, 'Only one product should be eligible.');
+    gpswiss_assert($result['counters']['skipped'] === 2, 'Non-Gmail and missing part products should be skipped.');
+    gpswiss_assert($result['counters']['would_update'] === 1, 'Ready eligible product should be reported as would_update.');
+    gpswiss_assert($GLOBALS['gpswiss_gmail_writes'] === [], 'Preview batch must not write.');
+});
+
+gpswiss_run('Batch live updates ready Gmail products and preserves images without creating Woo products', function (OvokoWooGmailDraftUpdateService $service): void {
+    $beforePostCount = count($GLOBALS['gpswiss_gmail_posts']);
+    $beforeImages = [
+        'thumbnail' => $GLOBALS['gpswiss_gmail_meta'][101]['_thumbnail_id'],
+        'gallery' => $GLOBALS['gpswiss_gmail_meta'][101]['_product_image_gallery'],
+    ];
+
+    $result = $service->run_batch([
+        'mode' => 'live',
+        'batch_size' => 1,
+        'publish_when_ready' => true,
+        'confirmation' => OvokoWooGmailDraftUpdateService::BATCH_LIVE_CONFIRMATION,
+    ]);
+
+    gpswiss_assert($result['counters']['eligible'] === 1, 'Live batch should process one eligible product.');
+    gpswiss_assert($result['counters']['updated'] === 1, 'Ready product should be updated.');
+    gpswiss_assert($result['counters']['published'] === 1, 'Ready product should be published when enabled.');
+    gpswiss_assert(count($GLOBALS['gpswiss_gmail_posts']) === $beforePostCount, 'Batch must not create Woo products.');
+    gpswiss_assert($GLOBALS['gpswiss_gmail_meta'][101]['_thumbnail_id'] === $beforeImages['thumbnail'], 'Thumbnail should be preserved.');
+    gpswiss_assert($GLOBALS['gpswiss_gmail_meta'][101]['_product_image_gallery'] === $beforeImages['gallery'], 'Gallery should be preserved.');
+    foreach ($GLOBALS['gpswiss_gmail_writes'] as $write) {
+        gpswiss_assert($write[0] !== 'wp_insert_post', 'wp_insert_post was called.');
+    }
+});
+
+gpswiss_run('Batch live skips blocked product without updating', function (OvokoWooGmailDraftUpdateService $service): void {
+    $GLOBALS['gpswiss_gmail_next_part'] = gpswiss_gmail_part(['price' => '']);
+    $result = $service->run_batch([
+        'mode' => 'live',
+        'batch_size' => 1,
+        'confirmation' => OvokoWooGmailDraftUpdateService::BATCH_LIVE_CONFIRMATION,
+    ]);
+
+    gpswiss_assert($result['counters']['blocked'] === 1, 'Missing price should block product.');
+    gpswiss_assert($result['counters']['updated'] === 0, 'Blocked product should not be updated.');
+    gpswiss_assert($GLOBALS['gpswiss_gmail_writes'] === [], 'Blocked live batch should not write.');
+});

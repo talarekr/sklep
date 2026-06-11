@@ -49,6 +49,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_gmail_draft_update_one', [$this, 'handle_gmail_draft_update_one']);
         add_action('admin_post_gpswiss_ovoko_gmail_draft_preview_eligible', [$this, 'handle_gmail_draft_preview_eligible']);
         add_action('admin_post_gpswiss_ovoko_gmail_draft_batch_placeholder', [$this, 'handle_gmail_draft_batch_placeholder']);
+        add_action('wp_ajax_gpswiss_ovoko_gmail_draft_batch_run', [$this, 'handle_gmail_draft_batch_run_ajax']);
         add_action('wp_ajax_gpswiss_ovoko_crm_only_batch_import', [$this, 'handle_crm_only_batch_import_ajax']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
@@ -304,6 +305,40 @@ class AdminPage
         wp_send_json($result, 200);
     }
 
+
+
+    public function handle_gmail_draft_batch_run_ajax(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_send_json(['ok' => false, 'error' => 'unauthorized'], 403);
+        }
+        check_ajax_referer('gpswiss_ovoko_gmail_draft_batch_run');
+
+        $mode = isset($_POST['mode']) && (string) wp_unslash((string) $_POST['mode']) === 'live' ? 'live' : 'preview';
+        $batchSize = isset($_POST['batch_size']) ? max(1, min(100, (int) wp_unslash((string) $_POST['batch_size']))) : 10;
+        $cursor = isset($_POST['cursor']) ? max(0, (int) wp_unslash((string) $_POST['cursor'])) : 0;
+        $publishWhenReady = !empty($_POST['publish_when_ready']);
+        $stopOnFirstError = !empty($_POST['stop_on_first_error']);
+        $confirmation = isset($_POST['confirmation']) ? sanitize_text_field((string) wp_unslash((string) $_POST['confirmation'])) : '';
+
+        try {
+            $result = $this->build_gmail_draft_update_service()->run_batch([
+                'mode' => $mode,
+                'batch_size' => $batchSize,
+                'cursor' => $cursor,
+                'publish_when_ready' => $publishWhenReady,
+                'stop_on_first_error' => $stopOnFirstError,
+                'confirmation' => $confirmation,
+            ]);
+        } catch (\Throwable $throwable) {
+            $result = $this->gmail_draft_controlled_error(0, $throwable, $mode === 'live' ? 'live_batch_update' : 'preview_batch_update');
+            $result['done'] = true;
+            $result['next_cursor'] = $cursor;
+            $result['counters'] = ['errors' => 1];
+            $result['rows'] = [];
+        }
+        wp_send_json($result, !empty($result['ok']) ? 200 : 400);
+    }
 
     private function build_gmail_draft_update_service(): OvokoWooGmailDraftUpdateService
     {
