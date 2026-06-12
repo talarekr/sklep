@@ -39,6 +39,23 @@ if (!function_exists('wp_json_encode')) {
     function wp_json_encode($value, $flags = 0, $depth = 512) { return json_encode($value, $flags, $depth); }
 }
 
+if (!function_exists('wp_upload_dir')) {
+    function wp_upload_dir($time = null, $create_dir = true) {
+        $basedir = sys_get_temp_dir() . '/gps-fitment-tests/wp-content/uploads';
+        return [
+            'basedir' => $basedir,
+            'baseurl' => 'https://example.test/wp-content/uploads',
+            'error' => false,
+        ];
+    }
+}
+if (!function_exists('wp_mkdir_p')) {
+    function wp_mkdir_p($target): bool { return is_dir($target) || mkdir($target, 0777, true); }
+}
+if (!function_exists('sanitize_file_name')) {
+    function sanitize_file_name($filename): string { return preg_replace('/[^A-Za-z0-9._-]/', '-', (string) $filename) ?? (string) $filename; }
+}
+
 final class FakeWpdb
 {
     public string $prefix = 'wp_';
@@ -252,11 +269,13 @@ require_once __DIR__ . '/../src/Support/PartNumberCandidateValidator.php';
 require_once __DIR__ . '/../src/Support/Settings.php';
 require_once __DIR__ . '/../src/Database/Database.php';
 require_once __DIR__ . '/../src/Service/ApifyClient.php';
+require_once __DIR__ . '/../src/Service/AuditCsvExporter.php';
 require_once __DIR__ . '/../src/Service/ProductScanner.php';
 require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
+use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
@@ -457,3 +476,157 @@ assert_same(null, $failed['cache_part_cache_id'], 'failed part insert has no cac
 assert_same('Simulated insert failure for wp_gps_fitment_part_cache', $failed['save_debug']['last_db_error'] ?? '', 'failed part insert exposes DB error');
 assert_same(0, count($failedWpdb->tables['wp_gps_fitment_article_cache'] ?? []), 'failed part insert does not write article rows');
 assert_same(0, count($failedWpdb->tables['wp_gps_fitment_vehicle_cache'] ?? []), 'failed part insert does not write vehicle rows');
+
+
+$GLOBALS['wpdb'] = $wpdb;
+$auditExporter = new AuditCsvExporter($database);
+$auditScan = [
+    'accepted_rows' => [
+        ['product_id' => 30, 'sku' => 'sku, "30"', 'source_field' => '_part_number', 'source_raw' => "FOUND-RAW\nLINE", 'part_number_raw' => 'FOUND-RAW', 'part_number_normalized' => 'FOUND1', 'warnings' => []],
+        ['product_id' => 20, 'sku' => 'sku-20', 'source_field' => '_part_number', 'source_raw' => 'NF-RAW', 'part_number_raw' => 'NF-RAW', 'part_number_normalized' => 'NF1', 'warnings' => ['split candidate']],
+        ['product_id' => 10, 'sku' => 'sku-10', 'source_field' => '_part_number', 'source_raw' => 'ERR-RAW', 'part_number_raw' => 'ERR-RAW', 'part_number_normalized' => 'ERR1', 'warnings' => []],
+        ['product_id' => 40, 'sku' => 'sku-40', 'source_field' => '_part_number', 'source_raw' => 'CACHED-RAW', 'part_number_raw' => 'CACHED-RAW', 'part_number_normalized' => 'CACHED1', 'warnings' => []],
+    ],
+    'rejected_rows' => [
+        ['product_id' => 50, 'sku' => 'sku-50', 'source_field' => '_part_number', 'source_raw' => 'BRAK', 'part_number_raw' => 'BRAK', 'part_number_normalized' => 'BRAK', 'warnings' => [], 'rejection_reason' => 'known placeholder token'],
+    ],
+];
+$auditBackfill = [
+    'processed' => [
+        [
+            'part_number_raw' => 'FOUND-RAW',
+            'part_number_normalized' => 'FOUND1',
+            'status' => 'found',
+            'articles' => [
+                ['articleNo' => 'ART,"1"', 'supplierId' => 1, 'supplierName' => "Supplier\nOne"],
+                ['articleNo' => 'ART2', 'supplierId' => 2, 'supplierName' => 'Supplier Two'],
+            ],
+            'vehicles' => [['vehicleId' => 300], ['vehicleId' => 100], ['vehicleId' => 300]],
+            'unique_vehicle_ids' => ['300', '100'],
+            'errors' => [],
+            'from_cache' => false,
+            'saved' => true,
+            'cache_part_cache_id' => 701,
+        ],
+        [
+            'part_number_raw' => 'NF-RAW',
+            'part_number_normalized' => 'NF1',
+            'status' => 'not_found',
+            'articles' => [],
+            'vehicles' => [],
+            'unique_vehicle_ids' => [],
+            'errors' => ['No TecDoc articles found for this OEM/part number.'],
+            'from_cache' => false,
+            'saved' => true,
+            'cache_part_cache_id' => 702,
+        ],
+        [
+            'part_number_raw' => 'ERR-RAW',
+            'part_number_normalized' => 'ERR1',
+            'status' => 'error',
+            'articles' => [],
+            'vehicles' => [],
+            'unique_vehicle_ids' => [],
+            'errors' => ['Lookup failed, remote error'],
+            'from_cache' => false,
+            'saved' => false,
+            'cache_part_cache_id' => null,
+        ],
+        [
+            'part_number_raw' => 'CACHED-RAW',
+            'part_number_normalized' => 'CACHED1',
+            'status' => 'found',
+            'articles' => [['article_no' => 'CACHED-ART', 'supplier_name' => 'Cached Supplier']],
+            'vehicles' => [['vehicle_id' => 900]],
+            'unique_vehicle_ids' => ['900'],
+            'errors' => [],
+            'from_cache' => true,
+            'saved' => false,
+            'cache_part_cache_id' => 703,
+        ],
+    ],
+];
+$csvResult = $auditExporter->export_backfill($auditScan, $auditBackfill, 5, 10);
+assert_same(true, $csvResult['csv_generated'], 'audit CSV generated from mock backfill result');
+assert_same(5, $csvResult['csv_row_count'], 'audit CSV row count includes accepted and rejected rows');
+assert_same(true, str_contains($csvResult['csv_path'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'audit CSV path remains in plugin-owned uploads audit directory');
+assert_same(true, str_contains($csvResult['csv_url'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'audit CSV URL points at audit directory');
+
+$handle = fopen($csvResult['csv_path'], 'rb');
+$headers = fgetcsv($handle);
+$csvRows = [];
+while (($data = fgetcsv($handle)) !== false) {
+    $csvRows[] = array_combine($headers, $data);
+}
+fclose($handle);
+assert_same(AuditCsvExporter::columns(), $headers, 'audit CSV header columns');
+assert_same(['found', 'not_found', 'error', 'rejected', 'skipped_cached'], array_column($csvRows, 'lookup_status'), 'audit CSV sorting/grouping order');
+assert_same('300,100', $csvRows[0]['unique_vehicle_ids'], 'found row includes vehicle IDs');
+assert_same('2', $csvRows[0]['ktype_count'], 'found row includes KType count');
+assert_same('2', $csvRows[0]['article_count'], 'found row includes article count');
+assert_same("Supplier\nOne,Supplier Two", $csvRows[0]['supplier_names'], 'CSV escaping preserves newline in supplier names');
+assert_same('ART,"1",ART2', $csvRows[0]['article_numbers'], 'CSV escaping preserves comma and quotes in article numbers');
+assert_same('No TecDoc articles found for this OEM/part number.', $csvRows[1]['not_found_reason'], 'not_found row includes not_found_reason');
+assert_same('known placeholder token', $csvRows[3]['rejection_reason'], 'rejected row includes rejection_reason');
+assert_same('no', $csvRows[3]['lookup_attempted'], 'rejected row lookup_attempted is no');
+assert_same('no', $csvRows[4]['lookup_attempted'], 'cached row does not imply Apify lookup');
+assert_same('hit', $csvRows[4]['cache_status'], 'cached row cache status hit');
+assert_same('yes', $csvRows[4]['from_cache'], 'cached row from_cache yes');
+
+$scanPreviewWpdb = new FakeWpdb();
+$GLOBALS['wpdb'] = $scanPreviewWpdb;
+$scanPreviewDatabase = new Database($normalizer);
+$scanPreviewWpdb->tables['wp_gps_fitment_part_cache'] = [[
+    'id' => 801,
+    'part_number_raw' => 'SCAN-CACHED',
+    'part_number_normalized' => 'SCANCACHED',
+    'status' => 'found',
+    'article_count' => 1,
+    'vehicle_count' => 1,
+    'error_message' => null,
+]];
+$scanPreviewWpdb->tables['wp_gps_fitment_article_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 801,
+    'article_no' => 'SCAN-ART',
+    'supplier_name' => 'Scan Supplier',
+]];
+$scanPreviewWpdb->tables['wp_gps_fitment_vehicle_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 801,
+    'vehicle_id' => 456,
+]];
+$scanPreviewExporter = new AuditCsvExporter($scanPreviewDatabase);
+$scanPreviewResult = $scanPreviewExporter->export_scan_preview([
+    'accepted_rows' => [[
+        'product_id' => 60,
+        'sku' => 'sku-60',
+        'source_field' => '_part_number',
+        'source_raw' => 'SCAN-CACHED',
+        'part_number_raw' => 'SCAN-CACHED',
+        'part_number_normalized' => 'SCANCACHED',
+        'warnings' => [],
+    ]],
+    'rejected_rows' => [[
+        'product_id' => 61,
+        'sku' => 'sku-61',
+        'source_field' => '_part_number',
+        'source_raw' => 'NOPE',
+        'part_number_raw' => 'NOPE',
+        'part_number_normalized' => 'NOPE',
+        'warnings' => [],
+        'rejection_reason' => 'too short',
+    ]],
+], 0, 2);
+$handle = fopen($scanPreviewResult['csv_path'], 'rb');
+$headers = fgetcsv($handle);
+$previewRows = [];
+while (($data = fgetcsv($handle)) !== false) {
+    $previewRows[] = array_combine($headers, $data);
+}
+fclose($handle);
+assert_same(true, $scanPreviewResult['csv_generated'], 'scan preview CSV generated optionally');
+assert_same('not_run', $previewRows[1]['lookup_status'], 'scan preview cached candidate lookup not run');
+assert_same('hit', $previewRows[1]['cache_status'], 'scan preview cached candidate shows cache hit');
+assert_same('no', $previewRows[1]['lookup_attempted'], 'scan preview cached candidate does not call Apify');
+assert_same('rejected', $previewRows[0]['lookup_status'], 'scan preview rejected candidate marked rejected');
