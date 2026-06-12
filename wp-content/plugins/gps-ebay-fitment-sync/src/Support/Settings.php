@@ -27,6 +27,7 @@ final class Settings
             'country_filter_id' => 63,
             'timeout' => 60,
             'batch_size' => 5,
+            'max_apify_lookups_per_batch' => 5,
         ];
     }
 
@@ -56,6 +57,7 @@ final class Settings
             'country_filter_id' => isset($value['country_filter_id']) ? max(1, (int) $value['country_filter_id']) : 63,
             'timeout' => isset($value['timeout']) ? max(5, min(300, (int) $value['timeout'])) : 60,
             'batch_size' => isset($value['batch_size']) ? max(1, min(50, (int) $value['batch_size'])) : 5,
+            'max_apify_lookups_per_batch' => isset($value['max_apify_lookups_per_batch']) ? max(1, min(10, (int) $value['max_apify_lookups_per_batch'])) : 5,
         ];
     }
 

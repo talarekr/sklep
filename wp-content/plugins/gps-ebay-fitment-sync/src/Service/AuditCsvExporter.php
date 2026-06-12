@@ -138,6 +138,10 @@ final class AuditCsvExporter
             'found',
             'not_found',
             'errors',
+            'deferred_due_to_lookup_cap',
+            'transient_retry_count',
+            'last_http_error',
+            'retry_delay_seconds',
             'csv_files_count',
             'batch_csv_urls',
             'previous_run_id',
@@ -222,7 +226,7 @@ final class AuditCsvExporter
             return $row;
         }
 
-        $this->merge_lookup_result($row, $result, true);
+        $this->merge_lookup_result($row, $result, (string) ($result['status'] ?? '') !== 'deferred_lookup_cap');
         return $row;
     }
 
@@ -299,7 +303,7 @@ final class AuditCsvExporter
         $row['ktype_count'] = count($vehicleIds);
         $row['supplier_names'] = $this->article_values($articles, ['supplierName', 'supplier_name']);
         $row['article_numbers'] = $this->article_values($articles, ['articleNo', 'article_no']);
-        $row['error_message'] = $status === 'error' ? implode("\n", $errors) : '';
+        $row['error_message'] = ($status === 'error' || $status === 'deferred_lookup_cap') ? implode("\n", $errors) : '';
         $row['not_found_reason'] = $status === 'not_found' ? (implode("\n", $errors) ?: 'No TecDoc articles found for this OEM/part number.') : '';
         $row['from_cache'] = $fromCache ? 'yes' : 'no';
         $row['saved_to_cache'] = $saved ? 'yes' : 'no';
