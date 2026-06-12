@@ -8,10 +8,12 @@ use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 
 final class Database
 {
-    private const DB_VERSION = '0.1.0';
+    private const DB_VERSION = '0.1.1';
     private const DB_OPTION = 'gps_ebay_fitment_sync_db_version';
 
     private PartNumberNormalizer $normalizer;
+    /** @var array<string, mixed> */
+    private array $lastSaveDebug = [];
 
     public function __construct(PartNumberNormalizer $normalizer)
     {
@@ -107,6 +109,187 @@ final class Database
         ) {$charset};");
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function table_names(): array
+    {
+        global $wpdb;
+        return [
+            'part_cache' => $wpdb->prefix . 'gps_fitment_part_cache',
+            'article_cache' => $wpdb->prefix . 'gps_fitment_article_cache',
+            'vehicle_cache' => $wpdb->prefix . 'gps_fitment_vehicle_cache',
+            'product_map' => $wpdb->prefix . 'gps_fitment_product_map',
+        ];
+    }
+
+    /**
+     * Re-runs dbDelta and returns schema diagnostics. This is safe for admin repair because
+     * dbDelta adds/updates missing columns and indexes without dropping cache data.
+     */
+    public static function repair_schema(): array
+    {
+        self::create_tables();
+        update_option(self::DB_OPTION, self::DB_VERSION, false);
+
+        return self::schema_diagnostics();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function schema_diagnostics(): array
+    {
+        global $wpdb;
+        $tables = self::table_names();
+        $requiredPartColumns = self::required_part_cache_columns();
+        $tableDetails = [];
+        $schemaOk = true;
+        $lastError = '';
+
+        foreach ($tables as $key => $table) {
+            $exists = self::table_exists($table);
+            $columns = $exists ? self::table_columns($table) : [];
+            $indexes = $exists ? self::table_indexes($table) : [];
+            $missingColumns = $key === 'part_cache' ? array_values(array_diff($requiredPartColumns, array_keys($columns))) : [];
+            $missingIndexes = [];
+            if ($key === 'part_cache' && !isset($indexes['part_number_normalized'])) {
+                $missingIndexes[] = 'part_number_normalized';
+            }
+            if (!$exists || $missingColumns || $missingIndexes) {
+                $schemaOk = false;
+            }
+            if (!empty($wpdb->last_error)) {
+                $lastError = (string) $wpdb->last_error;
+            }
+
+            $tableDetails[$key] = [
+                'name' => $table,
+                'exists' => $exists,
+                'columns' => array_keys($columns),
+                'missing_columns' => $missingColumns,
+                'indexes' => array_keys($indexes),
+                'missing_indexes' => $missingIndexes,
+            ];
+        }
+
+        return [
+            'tables' => $tableDetails,
+            'schema_ok' => $schemaOk,
+            'required_part_cache_columns' => $requiredPartColumns,
+            'last_db_error' => $lastError,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function cache_diagnostics(string $partNumber): array
+    {
+        global $wpdb;
+        $normalized = $this->normalizer->normalize($partNumber);
+        $schema = self::schema_diagnostics();
+        $partTable = $this->table('part_cache');
+        $row = null;
+        $alternateRows = [];
+        $lastError = (string) ($schema['last_db_error'] ?? '');
+
+        if (!empty($schema['tables']['part_cache']['exists'])) {
+            $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $partTable . ' WHERE part_number_normalized = %s', $normalized), ARRAY_A);
+            if (!empty($wpdb->last_error)) {
+                $lastError = (string) $wpdb->last_error;
+            }
+
+            $alternateRows = $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT id, part_number_raw, part_number_normalized, status, article_count, vehicle_count FROM ' . $partTable . ' WHERE part_number_raw = %s OR LOWER(part_number_normalized) = LOWER(%s) OR LOWER(part_number_raw) = LOWER(%s) ORDER BY id ASC LIMIT 10',
+                    $partNumber,
+                    $normalized,
+                    $partNumber
+                ),
+                ARRAY_A
+            ) ?: [];
+            if (!empty($wpdb->last_error)) {
+                $lastError = (string) $wpdb->last_error;
+            }
+        }
+
+        return [
+            'cache_lookup_key' => $normalized,
+            'table_name' => $partTable,
+            'table_exists' => !empty($schema['tables']['part_cache']['exists']),
+            'schema_ok' => !empty($schema['schema_ok']),
+            'row_exists' => is_array($row),
+            'row_id' => is_array($row) ? (int) $row['id'] : null,
+            'row_status' => is_array($row) ? (string) ($row['status'] ?? '') : '',
+            'row_article_count' => is_array($row) ? (int) ($row['article_count'] ?? 0) : null,
+            'row_vehicle_count' => is_array($row) ? (int) ($row['vehicle_count'] ?? 0) : null,
+            'alternate_rows' => $alternateRows,
+            'tables' => $schema['tables'],
+            'last_db_error' => $lastError,
+        ];
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function required_part_cache_columns(): array
+    {
+        return [
+            'id',
+            'part_number_raw',
+            'part_number_normalized',
+            'status',
+            'article_count',
+            'vehicle_count',
+            'last_lookup_at',
+            'error_message',
+            'response_hash',
+            'created_at',
+            'updated_at',
+        ];
+    }
+
+    private static function table_exists(string $table): bool
+    {
+        global $wpdb;
+        return (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) === $table;
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    private static function table_columns(string $table): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results('SHOW COLUMNS FROM ' . $table, ARRAY_A) ?: [];
+        $columns = [];
+        foreach ($rows as $row) {
+            if (isset($row['Field'])) {
+                $columns[(string) $row['Field']] = $row;
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * @return array<string, array<int, array<string, mixed>>>
+     */
+    private static function table_indexes(string $table): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results('SHOW INDEX FROM ' . $table, ARRAY_A) ?: [];
+        $indexes = [];
+        foreach ($rows as $row) {
+            if (isset($row['Key_name'])) {
+                $indexes[(string) $row['Key_name']][] = $row;
+            }
+        }
+
+        return $indexes;
+    }
+
     public function table(string $name): string
     {
         global $wpdb;
@@ -148,10 +331,20 @@ final class Database
     {
         global $wpdb;
 
+        $this->lastSaveDebug = [
+            'saved' => false,
+            'part_cache_id' => null,
+            'last_db_error' => '',
+            'operation' => '',
+            'verified' => false,
+        ];
+
         $normalized = $this->normalizer->normalize((string) ($result['part_number_normalized'] ?? $raw));
         if ($normalized === '') {
+            $this->lastSaveDebug['last_db_error'] = 'Part number is empty after normalization.';
             return 0;
         }
+
         $now = current_time('mysql');
         $status = $result['status'] ?? 'error';
         $articles = $result['articles'] ?? [];
@@ -164,7 +357,7 @@ final class Database
             'part_number_normalized' => $normalized,
             'status' => $status,
             'article_count' => count($articles),
-            'vehicle_count' => count(array_unique(array_map(static fn($vehicle) => (string) ($vehicle['vehicleId'] ?? $vehicle['vehicle_id'] ?? ''), $vehicles))),
+            'vehicle_count' => count(array_unique(array_filter(array_map(static fn($vehicle) => (string) ($vehicle['vehicleId'] ?? $vehicle['vehicle_id'] ?? ''), $vehicles)))),
             'last_lookup_at' => $now,
             'error_message' => empty($result['errors']) ? null : implode("\n", array_map('strval', $result['errors'])),
             'response_hash' => $hash,
@@ -172,21 +365,43 @@ final class Database
         ];
 
         if ($existing) {
-            $wpdb->update($this->table('part_cache'), $data, ['id' => (int) $existing['id']]);
+            $this->lastSaveDebug['operation'] = 'update';
+            $updateResult = $wpdb->update($this->table('part_cache'), $data, ['id' => (int) $existing['id']]);
+            if ($updateResult === false) {
+                $this->lastSaveDebug['last_db_error'] = (string) ($wpdb->last_error ?? 'Part cache update failed.');
+                return 0;
+            }
             $partId = (int) $existing['id'];
-            $wpdb->delete($this->table('article_cache'), ['part_cache_id' => $partId]);
-            $wpdb->delete($this->table('vehicle_cache'), ['part_cache_id' => $partId]);
         } else {
+            $this->lastSaveDebug['operation'] = 'insert';
             $data['created_at'] = $now;
-            $wpdb->insert($this->table('part_cache'), $data);
+            $insertResult = $wpdb->insert($this->table('part_cache'), $data);
+            if ($insertResult === false || (int) $wpdb->insert_id <= 0) {
+                $this->lastSaveDebug['last_db_error'] = (string) ($wpdb->last_error ?? 'Part cache insert failed.');
+                return 0;
+            }
             $partId = (int) $wpdb->insert_id;
         }
+
+        $verifiedPart = $this->get_part_cache($normalized);
+        if (!$verifiedPart || (int) ($verifiedPart['id'] ?? 0) <= 0) {
+            $this->lastSaveDebug['part_cache_id'] = $partId;
+            $this->lastSaveDebug['last_db_error'] = (string) ($wpdb->last_error ?? 'Part cache row was not found after save.');
+            return 0;
+        }
+
+        $partId = (int) $verifiedPart['id'];
+        $this->lastSaveDebug['part_cache_id'] = $partId;
+        $this->lastSaveDebug['verified'] = true;
+
+        $wpdb->delete($this->table('article_cache'), ['part_cache_id' => $partId]);
+        $wpdb->delete($this->table('vehicle_cache'), ['part_cache_id' => $partId]);
 
         $articleIdMap = [];
         foreach ($articles as $article) {
             $articleNo = (string) ($article['articleNo'] ?? '');
             $supplierId = isset($article['supplierId']) ? (int) $article['supplierId'] : null;
-            $wpdb->insert($this->table('article_cache'), [
+            $inserted = $wpdb->insert($this->table('article_cache'), [
                 'part_cache_id' => $partId,
                 'article_id' => isset($article['articleId']) ? (int) $article['articleId'] : null,
                 'article_no' => $articleNo,
@@ -195,7 +410,11 @@ final class Database
                 'raw_json' => wp_json_encode($article),
                 'created_at' => $now,
             ]);
-            $articleIdMap[$articleNo . ':' . (string) $supplierId] = (int) $wpdb->insert_id;
+            if ($inserted !== false) {
+                $articleIdMap[$articleNo . ':' . (string) $supplierId] = (int) $wpdb->insert_id;
+            } elseif (empty($this->lastSaveDebug['last_db_error'])) {
+                $this->lastSaveDebug['last_db_error'] = (string) ($wpdb->last_error ?? 'Article cache insert failed.');
+            }
         }
 
         $seenVehicles = [];
@@ -206,7 +425,7 @@ final class Database
             }
             $seenVehicles[$vehicleId] = true;
             $articleKey = (string) ($vehicle['_articleNo'] ?? '') . ':' . (string) ($vehicle['_supplierId'] ?? '');
-            $wpdb->insert($this->table('vehicle_cache'), [
+            $inserted = $wpdb->insert($this->table('vehicle_cache'), [
                 'part_cache_id' => $partId,
                 'article_cache_id' => $articleIdMap[$articleKey] ?? null,
                 'vehicle_id' => $vehicleId,
@@ -216,9 +435,21 @@ final class Database
                 'raw_json' => wp_json_encode($vehicle),
                 'created_at' => $now,
             ]);
+            if ($inserted === false && empty($this->lastSaveDebug['last_db_error'])) {
+                $this->lastSaveDebug['last_db_error'] = (string) ($wpdb->last_error ?? 'Vehicle cache insert failed.');
+            }
         }
 
+        $this->lastSaveDebug['saved'] = true;
         return $partId;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function last_save_debug(): array
+    {
+        return $this->lastSaveDebug;
     }
 
     public function upsert_product_map(array $row): void

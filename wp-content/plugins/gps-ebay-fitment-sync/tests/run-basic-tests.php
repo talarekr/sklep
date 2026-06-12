@@ -37,6 +37,11 @@ final class FakeWpdb
     /** @var array<string, array<int, array<string, mixed>>> */
     public array $tables = [];
     public int $insert_id = 0;
+    public string $last_error = '';
+    /** @var array<string, bool> */
+    public array $failInsertsFor = [];
+    /** @var array<string, array<string, bool>> */
+    public array $schemas = [];
     /** @var array<string, int> */
     private array $nextIds = [];
 
@@ -56,6 +61,12 @@ final class FakeWpdb
 
     public function insert(string $table, array $data): bool
     {
+        if (!empty($this->failInsertsFor[$table])) {
+            $this->last_error = 'Simulated insert failure for ' . $table;
+            $this->insert_id = 0;
+            return false;
+        }
+        $this->last_error = '';
         $id = $this->nextIds[$table] ?? 1;
         $this->nextIds[$table] = $id + 1;
         $this->insert_id = $id;
@@ -96,6 +107,30 @@ final class FakeWpdb
 
     public function get_results(string $query, $output = null): array
     {
+        if (preg_match('/SHOW COLUMNS FROM (\S+)/', $query, $matches)) {
+            $columns = array_keys($this->schemas[$matches[1]] ?? []);
+            if (!$columns && isset($this->tables[$matches[1]][0])) {
+                $columns = array_keys($this->tables[$matches[1]][0]);
+            }
+            return array_map(fn(string $column): array => ['Field' => $column], $columns);
+        }
+
+        if (preg_match('/SHOW INDEX FROM (\S+)/', $query, $matches)) {
+            $indexes = [];
+            if (($this->schemas[$matches[1]]['part_number_normalized_index'] ?? false) === true) {
+                $indexes[] = ['Key_name' => 'part_number_normalized'];
+            }
+            return $indexes;
+        }
+
+        if (preg_match("/SELECT id, part_number_raw, part_number_normalized, status, article_count, vehicle_count FROM (\S+) WHERE part_number_raw = '([^']*)' OR LOWER\(part_number_normalized\) = LOWER\('([^']*)'\) OR LOWER\(part_number_raw\) = LOWER\('([^']*)'\)/", $query, $matches)) {
+            return array_values(array_filter($this->tables[$matches[1]] ?? [], static function (array $row) use ($matches): bool {
+                return (string) ($row['part_number_raw'] ?? '') === $matches[2]
+                    || strtolower((string) ($row['part_number_normalized'] ?? '')) === strtolower($matches[3])
+                    || strtolower((string) ($row['part_number_raw'] ?? '')) === strtolower($matches[4]);
+            }));
+        }
+
         if (preg_match('/FROM (\S+) WHERE part_cache_id = (\d+)/', $query, $matches)) {
             $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], fn(array $row): bool => (int) $row['part_cache_id'] === (int) $matches[2]));
             if (str_contains($query, 'ORDER BY vehicle_id')) {
@@ -111,6 +146,10 @@ final class FakeWpdb
 
     public function get_var(string $query)
     {
+        if (preg_match("/SHOW TABLES LIKE '([^']*)'/", $query, $matches)) {
+            return (isset($this->schemas[$matches[1]]) || isset($this->tables[$matches[1]])) ? $matches[1] : null;
+        }
+
         if (preg_match('/COUNT\(\*\).*FROM (\S+) WHERE part_number_normalized IN \((.*)\)/', $query, $matches)) {
             preg_match_all("/'([^']*)'/", $matches[2], $keys);
             $wanted = array_flip($keys[1]);
@@ -281,6 +320,17 @@ assert_same(82, count($vehicleRows), 'vehicle rows saved');
 assert_same(true, array_reduce($articleRows, fn(bool $carry, array $row): bool => $carry && (int) $row['part_cache_id'] === $partCacheId, true), 'article rows linked to part cache');
 assert_same(true, array_reduce($vehicleRows, fn(bool $carry, array $row): bool => $carry && (int) $row['part_cache_id'] === $partCacheId, true), 'vehicle rows linked to part cache');
 
+
+$diagnostics = $database->cache_diagnostics('1T0941329A');
+assert_same('1T0941329A', $diagnostics['cache_lookup_key'], 'cache diagnostics lookup key');
+assert_same('wp_gps_fitment_part_cache', $diagnostics['table_name'], 'cache diagnostics part table name');
+assert_same(true, $diagnostics['table_exists'], 'cache diagnostics part table exists');
+assert_same(true, $diagnostics['row_exists'], 'cache diagnostics row exists');
+assert_same($partCacheId, $diagnostics['row_id'], 'cache diagnostics row id');
+assert_same('found', $diagnostics['row_status'], 'cache diagnostics row status');
+assert_same(4, $diagnostics['row_article_count'], 'cache diagnostics article count');
+assert_same(82, $diagnostics['row_vehicle_count'], 'cache diagnostics vehicle count');
+
 $GLOBALS['gps_test_http_calls'] = 0;
 $cached = $lookup->lookup('1T0-941-329-A', false, false);
 assert_same('found', $cached['status'], 'repeat dry-run cache status');
@@ -312,3 +362,16 @@ $backfill = $lookup->backfill(['1T0 941 329 A']);
 assert_same(1, count($backfill['processed']), 'backfill processed cached part');
 assert_same(true, $backfill['processed'][0]['from_cache'], 'backfill uses cache first');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'backfill skips Apify for cached part');
+
+$failedWpdb = new FakeWpdb();
+$failedWpdb->failInsertsFor['wp_gps_fitment_part_cache'] = true;
+$GLOBALS['wpdb'] = $failedWpdb;
+$failedDatabase = new Database($normalizer);
+$failedLookup = new FitmentLookupService($failedDatabase, $client, $normalizer, $settings);
+$GLOBALS['gps_test_http_calls'] = 0;
+$failed = $failedLookup->lookup('FAIL-INSERT', true, false);
+assert_same(false, $failed['saved'], 'failed part insert is not marked saved');
+assert_same(null, $failed['cache_part_cache_id'], 'failed part insert has no cache id');
+assert_same('Simulated insert failure for wp_gps_fitment_part_cache', $failed['save_debug']['last_db_error'] ?? '', 'failed part insert exposes DB error');
+assert_same(0, count($failedWpdb->tables['wp_gps_fitment_article_cache'] ?? []), 'failed part insert does not write article rows');
+assert_same(0, count($failedWpdb->tables['wp_gps_fitment_vehicle_cache'] ?? []), 'failed part insert does not write vehicle rows');

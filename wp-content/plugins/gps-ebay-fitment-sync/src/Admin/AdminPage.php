@@ -28,6 +28,8 @@ final class AdminPage
     {
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_post_gps_ebay_fitment_manual_lookup', [$this, 'manual_lookup']);
+        add_action('admin_post_gps_ebay_fitment_cache_diagnostics', [$this, 'cache_diagnostics']);
+        add_action('admin_post_gps_ebay_fitment_repair_schema', [$this, 'repair_schema']);
         add_action('admin_post_gps_ebay_fitment_scan', [$this, 'scan_products']);
         add_action('admin_post_gps_ebay_fitment_backfill', [$this, 'backfill']);
     }
@@ -44,7 +46,21 @@ final class AdminPage
         $save = isset($_POST['lookup_save']);
         $forceLive = isset($_POST['force_live']);
         $result = $this->lookup->lookup($partNumber, $save, $forceLive);
+        $result['cache_diagnostics'] = $this->database->cache_diagnostics($partNumber);
         $this->store_result(['type' => 'manual_lookup', 'result' => $result]);
+    }
+
+    public function cache_diagnostics(): void
+    {
+        $this->guard('gps_ebay_fitment_cache_diagnostics');
+        $partNumber = isset($_POST['part_number']) ? sanitize_text_field(wp_unslash($_POST['part_number'])) : '';
+        $this->store_result(['type' => 'cache_diagnostics', 'result' => $this->database->cache_diagnostics($partNumber)]);
+    }
+
+    public function repair_schema(): void
+    {
+        $this->guard('gps_ebay_fitment_repair_schema');
+        $this->store_result(['type' => 'schema_repair', 'result' => Database::repair_schema()]);
     }
 
     public function scan_products(): void
@@ -124,6 +140,23 @@ final class AdminPage
                     <label><input type="checkbox" name="force_live" value="1"> <?php echo esc_html__('Force live Apify lookup', 'gps-ebay-fitment-sync'); ?></label>
                 </p>
             </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="gps_ebay_fitment_cache_diagnostics">
+                <?php wp_nonce_field('gps_ebay_fitment_cache_diagnostics'); ?>
+                <p>
+                    <label><?php echo esc_html__('Part number / OEM', 'gps-ebay-fitment-sync'); ?> <input name="part_number" type="text" class="regular-text" required></label>
+                    <button class="button" type="submit"><?php echo esc_html__('Check cache only (no Apify)', 'gps-ebay-fitment-sync'); ?></button>
+                </p>
+            </form>
+
+            <hr>
+            <h2><?php echo esc_html__('Cache table repair', 'gps-ebay-fitment-sync'); ?></h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="gps_ebay_fitment_repair_schema">
+                <?php wp_nonce_field('gps_ebay_fitment_repair_schema'); ?>
+                <p><?php echo esc_html__('Safely re-run dbDelta to create missing cache tables, add missing columns, and add indexes without dropping cached data.', 'gps-ebay-fitment-sync'); ?></p>
+                <p><button class="button" type="submit"><?php echo esc_html__('Repair/check cache tables', 'gps-ebay-fitment-sync'); ?></button></p>
+            </form>
 
             <hr>
             <h2><?php echo esc_html__('Scan Woo products for unique part numbers', 'gps-ebay-fitment-sync'); ?></h2>
@@ -173,6 +206,21 @@ final class AdminPage
             $this->row('Cache part cache ID', isset($result['cache_part_cache_id']) && $result['cache_part_cache_id'] !== null ? (string) $result['cache_part_cache_id'] : '');
             $this->row('Cache hit', !empty($result['cache_hit']) ? 'true' : 'false');
             $this->row('Force live', !empty($result['force_live']) ? 'true' : 'false');
+            if (!empty($result['cache_diagnostics']) && is_array($result['cache_diagnostics'])) {
+                $diagnostics = $result['cache_diagnostics'];
+                $this->row('Diagnostic table name', (string) ($diagnostics['table_name'] ?? ''));
+                $this->row('Diagnostic table exists', !empty($diagnostics['table_exists']) ? 'true' : 'false');
+                $this->row('Diagnostic schema OK', !empty($diagnostics['schema_ok']) ? 'true' : 'false');
+                $this->row('Diagnostic row exists', !empty($diagnostics['row_exists']) ? 'true' : 'false');
+                $this->row('Diagnostic row ID', isset($diagnostics['row_id']) && $diagnostics['row_id'] !== null ? (string) $diagnostics['row_id'] : '');
+                $this->row('Diagnostic row status', (string) ($diagnostics['row_status'] ?? ''));
+                $this->row('Diagnostic row article count', isset($diagnostics['row_article_count']) && $diagnostics['row_article_count'] !== null ? (string) $diagnostics['row_article_count'] : '');
+                $this->row('Diagnostic row vehicle count', isset($diagnostics['row_vehicle_count']) && $diagnostics['row_vehicle_count'] !== null ? (string) $diagnostics['row_vehicle_count'] : '');
+                $this->row('Diagnostic last DB error', (string) ($diagnostics['last_db_error'] ?? ''));
+            }
+            if (!empty($result['save_debug']) && is_array($result['save_debug'])) {
+                $this->row('Save debug', wp_json_encode($result['save_debug'], JSON_PRETTY_PRINT));
+            }
             $this->row('Step 1 articles found', (string) count($result['articles'] ?? []));
             $this->row('Step 2 compatible vehicle count', (string) count($result['unique_vehicle_ids'] ?? []));
             $this->row('Unique KTypes / vehicleIds', implode(', ', array_slice($result['unique_vehicle_ids'] ?? [], 0, 100)));

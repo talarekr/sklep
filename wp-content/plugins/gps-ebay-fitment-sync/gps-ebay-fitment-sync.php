@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GPS eBay Fitment Sync
  * Description: TecDoc/Apify vehicle compatibility lookup and local KType cache for WooCommerce products. This MVP does not sync anything to eBay.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: GPS
  * Text Domain: gps-ebay-fitment-sync
  */
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 
 define('GPS_EBAY_FITMENT_SYNC_FILE', __FILE__);
 define('GPS_EBAY_FITMENT_SYNC_DIR', plugin_dir_path(__FILE__));
-define('GPS_EBAY_FITMENT_SYNC_VERSION', '0.1.0');
+define('GPS_EBAY_FITMENT_SYNC_VERSION', '0.1.1');
 
 spl_autoload_register(static function (string $class): void {
     $prefix = 'GPS_Ebay_Fitment_Sync\\';

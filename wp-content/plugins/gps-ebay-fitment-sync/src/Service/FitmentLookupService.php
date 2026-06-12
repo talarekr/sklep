@@ -45,6 +45,7 @@ final class FitmentLookupService
                 $partId = $this->database->save_lookup($partNumber, $live);
                 $live['saved'] = $partId > 0;
                 $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
+                $live['save_debug'] = $this->database->last_save_debug();
             }
             return $live;
         }
@@ -56,6 +57,7 @@ final class FitmentLookupService
                 $partId = $this->database->save_lookup($partNumber, $live);
                 $live['saved'] = $partId > 0;
                 $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
+                $live['save_debug'] = $this->database->last_save_debug();
             }
             return $live;
         }
@@ -85,6 +87,7 @@ final class FitmentLookupService
             $partId = $this->database->save_lookup($partNumber, $live);
             $live['saved'] = $partId > 0;
             $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
+            $live['save_debug'] = $this->database->last_save_debug();
         }
 
         return $live;
@@ -117,6 +120,7 @@ final class FitmentLookupService
             'cache_part_cache_id' => (int) $cached['part_cache']['id'],
             'cache_hit' => true,
             'force_live' => $forceLive,
+            'save_debug' => [],
         ];
     }
 
@@ -145,6 +149,7 @@ final class FitmentLookupService
             'cache_part_cache_id' => $partCacheId,
             'cache_hit' => $fromCache,
             'force_live' => $forceLive,
+            'save_debug' => [],
         ];
     }
 }
