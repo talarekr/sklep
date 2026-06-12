@@ -8,7 +8,7 @@ use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 
 final class Database
 {
-    private const DB_VERSION = '0.1.1';
+    private const DB_VERSION = '0.1.2';
     private const DB_OPTION = 'gps_ebay_fitment_sync_db_version';
 
     private PartNumberNormalizer $normalizer;
@@ -44,6 +44,7 @@ final class Database
         $article = $wpdb->prefix . 'gps_fitment_article_cache';
         $vehicle = $wpdb->prefix . 'gps_fitment_vehicle_cache';
         $map = $wpdb->prefix . 'gps_fitment_product_map';
+        $jobs = $wpdb->prefix . 'gps_fitment_apify_jobs';
 
         dbDelta("CREATE TABLE {$part} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -90,6 +91,30 @@ final class Database
             KEY vehicle_id (vehicle_id)
         ) {$charset};");
 
+        dbDelta("CREATE TABLE {$jobs} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            run_id varchar(191) NOT NULL,
+            product_id bigint(20) unsigned NOT NULL,
+            part_number_raw varchar(191) NOT NULL,
+            part_number_normalized varchar(191) NOT NULL,
+            step varchar(20) NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'pending',
+            apify_run_id varchar(191) NULL,
+            apify_dataset_id varchar(191) NULL,
+            article_no varchar(191) NULL,
+            supplier_id bigint(20) unsigned NULL,
+            article_cache_id bigint(20) unsigned NULL,
+            attempts int(11) NOT NULL DEFAULT 0,
+            last_error text NULL,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            last_checked_at datetime NULL,
+            PRIMARY KEY  (id),
+            KEY run_part_step_status (run_id, part_number_normalized, step, status),
+            KEY apify_run_id (apify_run_id),
+            KEY part_step_article (part_number_normalized, step, article_no, supplier_id)
+        ) {$charset};");
+
         dbDelta("CREATE TABLE {$map} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             product_id bigint(20) unsigned NOT NULL,
@@ -120,6 +145,7 @@ final class Database
             'article_cache' => $wpdb->prefix . 'gps_fitment_article_cache',
             'vehicle_cache' => $wpdb->prefix . 'gps_fitment_vehicle_cache',
             'product_map' => $wpdb->prefix . 'gps_fitment_product_map',
+            'apify_jobs' => $wpdb->prefix . 'gps_fitment_apify_jobs',
         ];
     }
 
@@ -450,6 +476,88 @@ final class Database
     public function last_save_debug(): array
     {
         return $this->lastSaveDebug;
+    }
+
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function find_active_apify_job(string $runId, string $normalized, string $step, ?string $articleNo = null, ?int $supplierId = null): ?array
+    {
+        foreach ($this->apify_jobs_for_part($runId, $normalized) as $job) {
+            if ((string) ($job['step'] ?? '') !== $step || !in_array((string) ($job['status'] ?? ''), ['pending', 'running'], true)) {
+                continue;
+            }
+            if ($articleNo !== null && (string) ($job['article_no'] ?? '') !== $articleNo) {
+                continue;
+            }
+            if ($supplierId !== null && (int) ($job['supplier_id'] ?? 0) !== $supplierId) {
+                continue;
+            }
+            return $job;
+        }
+        return null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function create_apify_job(array $data): array
+    {
+        global $wpdb;
+        $now = current_time('mysql');
+        $row = array_merge([
+            'run_id' => '',
+            'product_id' => 0,
+            'part_number_raw' => '',
+            'part_number_normalized' => '',
+            'step' => 'articles',
+            'status' => 'pending',
+            'apify_run_id' => null,
+            'apify_dataset_id' => null,
+            'article_no' => null,
+            'supplier_id' => null,
+            'article_cache_id' => null,
+            'attempts' => 0,
+            'last_error' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+            'last_checked_at' => null,
+        ], $data);
+        $wpdb->insert($this->table('apify_jobs'), $row);
+        $row['id'] = (int) $wpdb->insert_id;
+        return $row;
+    }
+
+    public function update_apify_job(int $id, array $data): void
+    {
+        global $wpdb;
+        $data['updated_at'] = current_time('mysql');
+        $wpdb->update($this->table('apify_jobs'), $data, ['id' => $id]);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function apify_jobs_for_part(string $runId, string $normalized): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . $this->table('apify_jobs') . ' WHERE run_id = %s AND part_number_normalized = %s ORDER BY id ASC', $runId, $this->normalizer->normalize($normalized)), ARRAY_A) ?: [];
+        return array_values(array_filter($rows, 'is_array'));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function next_active_apify_job(string $runId, string $normalized): ?array
+    {
+        foreach ($this->apify_jobs_for_part($runId, $normalized) as $job) {
+            $status = (string) ($job['status'] ?? '');
+            if (in_array($status, ['pending', 'running'], true) || ($status === 'failed' && (int) ($job['attempts'] ?? 0) < 3)) {
+                return $job;
+            }
+        }
+        return null;
     }
 
     public function upsert_product_map(array $row): void

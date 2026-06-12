@@ -97,6 +97,32 @@ final class FitmentLookupService
         return $live;
     }
 
+
+    public function article_search_payload(string $partNumber): array
+    {
+        return $this->client->article_search_payload($partNumber);
+    }
+
+    public function compatible_vehicles_payload(string $articleNo, int $supplierId): array
+    {
+        return $this->client->compatible_vehicles_payload($articleNo, $supplierId);
+    }
+
+    public function start_async_run(array $payload): array
+    {
+        return $this->client->start_run($payload);
+    }
+
+    public function get_async_run(string $runId): array
+    {
+        return $this->client->get_run($runId);
+    }
+
+    public function get_async_dataset_items(string $datasetId): array
+    {
+        return $this->client->get_dataset_items($datasetId);
+    }
+
     public function backfill(array $partNumbers): array
     {
         $limit = (int) $this->settings->get('batch_size');

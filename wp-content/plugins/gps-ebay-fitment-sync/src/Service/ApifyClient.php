@@ -56,6 +56,90 @@ final class ApifyClient
         return ['success' => true, 'vehicles' => self::parse_vehicles($response['items']), 'error' => null];
     }
 
+
+    public function start_run(array $payload): array
+    {
+        $token = (string) $this->settings->get('apify_token');
+        $actorId = (string) $this->settings->get('actor_id');
+        if ($token === '') {
+            return ['success' => false, 'run_id' => '', 'dataset_id' => '', 'status' => 'failed', 'error' => 'Missing Apify token.'];
+        }
+        if ($actorId === '') {
+            return ['success' => false, 'run_id' => '', 'dataset_id' => '', 'status' => 'failed', 'error' => 'Missing Apify actor ID.'];
+        }
+
+        $url = sprintf('https://api.apify.com/v2/acts/%s/runs?token=%s', rawurlencode($actorId), rawurlencode($token));
+        $response = wp_remote_post($url, [
+            'timeout' => min(30, (int) $this->settings->get('timeout')),
+            'headers' => ['Content-Type' => 'application/json'],
+            'body' => wp_json_encode($payload),
+        ]);
+
+        $decoded = $this->decode_response($response, 'Apify async run start');
+        if (!$decoded['success']) {
+            return ['success' => false, 'run_id' => '', 'dataset_id' => '', 'status' => 'failed', 'error' => $decoded['error']];
+        }
+
+        $data = is_array($decoded['data']['data'] ?? null) ? $decoded['data']['data'] : $decoded['data'];
+        $runId = (string) ($data['id'] ?? $data['defaultDatasetId'] ?? '');
+        return [
+            'success' => $runId !== '',
+            'run_id' => $runId,
+            'dataset_id' => (string) ($data['defaultDatasetId'] ?? ''),
+            'status' => (string) ($data['status'] ?? 'RUNNING'),
+            'error' => $runId === '' ? 'Apify async run response did not include a run ID.' : null,
+        ];
+    }
+
+    public function get_run(string $runId): array
+    {
+        $token = (string) $this->settings->get('apify_token');
+        if ($token === '') {
+            return ['success' => false, 'status' => 'FAILED', 'dataset_id' => '', 'error' => 'Missing Apify token.'];
+        }
+        if ($runId === '') {
+            return ['success' => false, 'status' => 'FAILED', 'dataset_id' => '', 'error' => 'Missing Apify run ID.'];
+        }
+
+        $url = sprintf('https://api.apify.com/v2/actor-runs/%s?token=%s', rawurlencode($runId), rawurlencode($token));
+        $response = wp_remote_get($url, ['timeout' => min(30, (int) $this->settings->get('timeout'))]);
+        $decoded = $this->decode_response($response, 'Apify run status');
+        if (!$decoded['success']) {
+            return ['success' => false, 'status' => 'FAILED', 'dataset_id' => '', 'error' => $decoded['error']];
+        }
+
+        $data = is_array($decoded['data']['data'] ?? null) ? $decoded['data']['data'] : $decoded['data'];
+        return [
+            'success' => true,
+            'status' => (string) ($data['status'] ?? ''),
+            'dataset_id' => (string) ($data['defaultDatasetId'] ?? ''),
+            'error' => null,
+        ];
+    }
+
+    public function get_dataset_items(string $datasetId): array
+    {
+        $token = (string) $this->settings->get('apify_token');
+        if ($token === '') {
+            return ['success' => false, 'items' => [], 'error' => 'Missing Apify token.'];
+        }
+        if ($datasetId === '') {
+            return ['success' => false, 'items' => [], 'error' => 'Missing Apify dataset ID.'];
+        }
+
+        $url = sprintf('https://api.apify.com/v2/datasets/%s/items?clean=true&token=%s', rawurlencode($datasetId), rawurlencode($token));
+        $response = wp_remote_get($url, ['timeout' => min(30, (int) $this->settings->get('timeout'))]);
+        $decoded = $this->decode_response($response, 'Apify dataset items');
+        if (!$decoded['success']) {
+            return ['success' => false, 'items' => [], 'error' => $decoded['error']];
+        }
+        if (!is_array($decoded['data'])) {
+            return ['success' => false, 'items' => [], 'error' => 'Invalid JSON returned by Apify dataset.'];
+        }
+
+        return ['success' => true, 'items' => $decoded['data'], 'error' => null];
+    }
+
     public function post(array $payload): array
     {
         $token = (string) $this->settings->get('apify_token');
@@ -90,6 +174,27 @@ final class ApifyClient
         }
 
         return ['success' => true, 'items' => $decoded, 'error' => null];
+    }
+
+
+    private function decode_response($response, string $context): array
+    {
+        if (is_wp_error($response)) {
+            return ['success' => false, 'data' => null, 'error' => $response->get_error_message()];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 300) {
+            return ['success' => false, 'data' => null, 'error' => $context . ' HTTP error ' . $code . ': ' . substr($body, 0, 500)];
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return ['success' => false, 'data' => null, 'error' => 'Invalid JSON returned by ' . $context . '.'];
+        }
+
+        return ['success' => true, 'data' => $decoded, 'error' => null];
     }
 
     public static function parse_articles(array $items): array
