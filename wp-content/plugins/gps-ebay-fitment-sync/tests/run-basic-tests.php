@@ -850,7 +850,10 @@ assert_same(50, $sanitizedAutoOptions['batch_limit'], 'auto-runner batch limit r
 assert_same(10, $sanitizedAutoOptions['max_apify_lookups_per_batch'], 'auto-runner lookup cap option is clamped at 10');
 $adminSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 assert_same(true, str_contains($adminSource, "request_failed_http_(503|502|504|429)"), 'browser runner treats HTTP 503/502/504/429 as transient');
-assert_same(true, str_contains($adminSource, "transient error, retry ' + nextAttempt + '/3"), 'browser runner shows transient retry status');
+assert_same(true, str_contains($adminSource, "transient error, retry ' + nextAttempt + '/' + MAX_TRANSIENT_RETRIES"), 'browser runner shows transient retry status');
+assert_same(true, str_contains($adminSource, 'REQUEST_TIMEOUT_SECONDS') && str_contains($adminSource, 'data-request-timeout-seconds="180"'), 'browser runner has 180 second request timeout');
+assert_same(true, str_contains($adminSource, 'stalled_no_progress') && str_contains($adminSource, 'DEFAULT_STALL_THRESHOLD_SECONDS'), 'browser runner detects no-progress stalls');
+assert_same(true, str_contains($adminSource, 'next_retry_time'), 'browser runner shows next retry time');
 assert_same(true, str_contains($adminSource, "postBatchWithTransientRetries"), 'browser runner retries the same batch request');
 assert_same(true, str_contains($adminSource, "value=\"5000\""), 'auto-runner delay default is 5000 ms');
 
@@ -890,6 +893,31 @@ assert_same(2, $capBatch['counters']['deferred_due_to_lookup_cap'], 'lookup cap 
 assert_same(5, $GLOBALS['gps_test_http_calls'], 'lookup cap prevents extra Apify HTTP calls in one request');
 $capCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
 assert_same(2, $capCheckpoint['aggregate_counters']['deferred_due_to_lookup_cap'] ?? null, 'lookup cap deferred counter is checkpointed');
+assert_same(0, $capCheckpoint['next_offset'] ?? null, 'lookup cap keeps offset parked while candidates are deferred');
+$capBatchSecond = $capRunner->run_batch([
+    'run_id' => 'cap-run',
+    'offset' => 0,
+    'batch_limit' => 10,
+    'max_apify_lookups_per_batch' => 1,
+    'export_csv' => false,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(1, $capBatchSecond['counters']['skipped_cached'], 'lookup cap retry uses cache-first for the already looked-up candidate');
+assert_same(1, $capBatchSecond['counters']['apify_lookup_attempted'], 'lookup cap retry performs only one new Apify lookup');
+assert_same(1, $capBatchSecond['counters']['deferred_due_to_lookup_cap'], 'lookup cap retry leaves remaining candidates deferred instead of skipped');
+$capBatchThird = $capRunner->run_batch([
+    'run_id' => 'cap-run',
+    'offset' => 0,
+    'batch_limit' => 10,
+    'max_apify_lookups_per_batch' => 1,
+    'export_csv' => false,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(2, $capBatchThird['counters']['skipped_cached'], 'lookup cap final retry uses cache for prior candidates');
+assert_same(0, $capBatchThird['counters']['deferred_due_to_lookup_cap'], 'lookup cap eventually drains deferred candidates');
+assert_same(10, $capBatchThird['next_offset'], 'lookup cap advances offset only after deferred candidates are drained');
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [
     'run_id' => 'transient-resume',
@@ -910,8 +938,13 @@ $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [
     'previous_run_id' => '',
 ];
 $transientStop = $capRunner->stop('request_failed_http_503');
-assert_same('stopped', $transientStop['status'] ?? '', 'transient retries exhausted can stop without completing checkpoint');
+assert_same('error', $transientStop['status'] ?? '', 'transient retries exhausted can stop without completing checkpoint');
 assert_same(10, $transientStop['next_offset'] ?? null, 'transient retries exhausted keep checkpoint next offset resumable');
+assert_same('request_failed_http_503', $transientStop['stopped_reason'] ?? '', 'transient retries exhausted records stopped reason');
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION]['last_progress_at'] = '2026-06-12T00:00:00Z';
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION]['updated_at'] = '2026-06-12T00:00:00Z';
+$staleCheckpoint = $capRunner->checkpoint();
+assert_same('2026-06-12T00:00:00Z', $staleCheckpoint['last_progress_at'] ?? '', 'stale running checkpoint keeps last progress timestamp for page-load detection');
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = $resumeCheckpoint;
 assert_same(2, $resumeCheckpoint['aggregate_counters']['total_scanned_products'] ?? null, 'auto-runner checkpoint aggregates resumed scanned products');
 $resumeSummary = $resumeRunner->final_summary([
@@ -929,6 +962,8 @@ assert_same('2', $resumeSummaryValues['total_scanned_products'], 'auto-runner fi
 assert_same(true, str_contains((string) (get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['final_summary_csv_url'] ?? ''), '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner checkpoint stores final summary CSV URL');
 
 $autoRunnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
+assert_same(true, str_contains($autoRunnerSource, 'last_batch_started_at') && str_contains($autoRunnerSource, 'last_successful_offset'), 'auto-runner checkpoint tracks heartbeat and progress fields');
+assert_same(true, str_contains($autoRunnerSource, 'export_final_summary') && substr_count($autoRunnerSource, 'export_final_summary') === 1, 'auto-runner final summary export is isolated to final summary method');
 assert_same(false, str_contains($autoRunnerSource, 'ReviseInventoryStatus') || str_contains($autoRunnerSource, 'ReviseFixedPriceItem') || str_contains($autoRunnerSource, 'Trading API') || str_contains($autoRunnerSource, 'offerId'), 'auto-runner adds no eBay write code');
 
 $GLOBALS['wpdb'] = $wpdb;
