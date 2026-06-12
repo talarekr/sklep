@@ -21,6 +21,7 @@ if (!function_exists('get_option')) {
                 'country_filter_id' => 63,
                 'timeout' => 60,
                 'batch_size' => 5,
+                'max_apify_lookups_per_batch' => 5,
             ];
         }
         return $default;
@@ -838,6 +839,80 @@ assert_same(0, $resumeSecond['counters']['apify_lookup_attempted'], 'auto-runner
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner cached values are not sent to Apify again on resume');
 $resumeCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
 assert_same(2, $resumeCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint aggregates resumed batch count');
+
+// New resilience defaults and browser retry/backoff wiring.
+$settingsDefaults = $settings->defaults();
+assert_same(5, $settingsDefaults['max_apify_lookups_per_batch'] ?? null, 'max Apify lookup cap default is safe');
+$sanitizedSettings = $settings->sanitize(['max_apify_lookups_per_batch' => 99]);
+assert_same(10, $sanitizedSettings['max_apify_lookups_per_batch'] ?? null, 'max Apify lookup cap is clamped to 10');
+$sanitizedAutoOptions = KTypeBackfillAutoRunner::sanitize_options(['batch_limit' => 999, 'max_apify_lookups_per_batch' => 99]);
+assert_same(50, $sanitizedAutoOptions['batch_limit'], 'auto-runner batch limit remains capped at 50');
+assert_same(10, $sanitizedAutoOptions['max_apify_lookups_per_batch'], 'auto-runner lookup cap option is clamped at 10');
+$adminSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
+assert_same(true, str_contains($adminSource, "request_failed_http_(503|502|504|429)"), 'browser runner treats HTTP 503/502/504/429 as transient');
+assert_same(true, str_contains($adminSource, "transient error, retry ' + nextAttempt + '/3"), 'browser runner shows transient retry status');
+assert_same(true, str_contains($adminSource, "postBatchWithTransientRetries"), 'browser runner retries the same batch request');
+assert_same(true, str_contains($adminSource, "value=\"5000\""), 'auto-runner delay default is 5000 ms');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$capWpdb = new FakeWpdb();
+$capWpdb->tables[$capWpdb->posts] = [
+    ['ID' => 300],
+    ['ID' => 301],
+    ['ID' => 302],
+];
+$GLOBALS['wpdb'] = $capWpdb;
+$GLOBALS['gps_test_post_meta'] = [
+    300 => ['_part_number' => '8K0805607A', '_sku' => 'cap-live-1'],
+    301 => ['_part_number' => '1T0941329A', '_sku' => 'cap-live-2'],
+    302 => ['_part_number' => '5K0959455A', '_sku' => 'cap-live-3'],
+];
+$capDatabase = new Database($normalizer);
+$capRunner = new KTypeBackfillAutoRunner(
+    new ProductScanner($capDatabase, $normalizer, $settings, $validator),
+    new FitmentLookupService($capDatabase, $client, $normalizer, $settings, $validator),
+    $capDatabase,
+    new AuditCsvExporter($capDatabase)
+);
+$GLOBALS['gps_test_http_calls'] = 0;
+$capBatch = $capRunner->run_batch([
+    'run_id' => 'cap-run',
+    'offset' => 0,
+    'batch_limit' => 10,
+    'max_apify_lookups_per_batch' => 1,
+    'export_csv' => false,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $capBatch['success'], 'lookup-cap batch succeeds');
+assert_same(1, $capBatch['counters']['apify_lookup_attempted'], 'lookup cap allows only one Apify lookup per request');
+assert_same(2, $capBatch['counters']['deferred_due_to_lookup_cap'], 'lookup cap defers remaining uncached accepted candidates');
+assert_same(5, $GLOBALS['gps_test_http_calls'], 'lookup cap prevents extra Apify HTTP calls in one request');
+$capCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
+assert_same(2, $capCheckpoint['aggregate_counters']['deferred_due_to_lookup_cap'] ?? null, 'lookup cap deferred counter is checkpointed');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [
+    'run_id' => 'transient-resume',
+    'status' => 'running',
+    'started_at' => '2026-06-12T00:00:00Z',
+    'start_offset' => 0,
+    'current_offset' => 10,
+    'next_offset' => 10,
+    'last_completed_offset' => 0,
+    'batch_limit' => 10,
+    'max_batches' => 0,
+    'max_apify_lookups_per_batch' => 5,
+    'total_batches_completed' => 1,
+    'aggregate_counters' => [],
+    'batch_csv_urls' => [],
+    'final_summary_csv_url' => '',
+    'last_error' => '',
+    'previous_run_id' => '',
+];
+$transientStop = $capRunner->stop('request_failed_http_503');
+assert_same('stopped', $transientStop['status'] ?? '', 'transient retries exhausted can stop without completing checkpoint');
+assert_same(10, $transientStop['next_offset'] ?? null, 'transient retries exhausted keep checkpoint next offset resumable');
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = $resumeCheckpoint;
 assert_same(2, $resumeCheckpoint['aggregate_counters']['total_scanned_products'] ?? null, 'auto-runner checkpoint aggregates resumed scanned products');
 $resumeSummary = $resumeRunner->final_summary([
     'run_id' => 'resume-run',

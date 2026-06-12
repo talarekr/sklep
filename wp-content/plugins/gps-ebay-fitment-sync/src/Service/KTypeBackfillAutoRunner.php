@@ -10,6 +10,8 @@ final class KTypeBackfillAutoRunner
 {
     public const CONFIRMATION_TEXT = 'RUN KTYPE BACKFILL';
     public const MAX_BATCH_LIMIT = 50;
+    public const DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH = 5;
+    public const MAX_APIFY_LOOKUPS_PER_BATCH = 10;
     public const CHECKPOINT_OPTION = 'gps_ebay_fitment_sync_ktype_backfill_checkpoint';
 
     private const COUNTER_KEYS = [
@@ -23,6 +25,7 @@ final class KTypeBackfillAutoRunner
         'not_found',
         'errors',
         'rejected_before_lookup',
+        'deferred_due_to_lookup_cap',
     ];
 
     private ProductScanner $scanner;
@@ -57,6 +60,7 @@ final class KTypeBackfillAutoRunner
             'resume' => !empty($options['resume']),
             'stop_on_first_error' => !empty($options['stop_on_first_error']),
             'confirmation' => (string) ($options['confirmation'] ?? ''),
+            'max_apify_lookups_per_batch' => max(0, min(self::MAX_APIFY_LOOKUPS_PER_BATCH, (int) ($options['max_apify_lookups_per_batch'] ?? self::DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH))),
         ];
     }
 
@@ -91,6 +95,7 @@ final class KTypeBackfillAutoRunner
 
         $offset = (int) $options['offset'];
         $limit = (int) $options['batch_limit'];
+        $maxApifyLookups = (int) $options['max_apify_lookups_per_batch'];
         $checkpoint = $this->base_checkpoint($options, $runId, $checkpoint);
         $checkpoint['status'] = 'running';
         $checkpoint['current_offset'] = $offset;
@@ -100,12 +105,12 @@ final class KTypeBackfillAutoRunner
 
         try {
             $scan = $this->scanner->scan($limit, $offset, $isLive && !empty($options['persist_product_map']));
-            $backfill = $this->build_backfill_result($scan, $isLive);
+            $backfill = $this->build_backfill_result($scan, $isLive, $maxApifyLookups);
             $csv = !empty($options['export_csv'])
                 ? $this->auditCsvExporter->export_backfill($scan, $backfill, $offset, $limit, $runId)
                 : $this->empty_csv_result($runId);
         } catch (\Throwable $throwable) {
-            $nextOffset = $offset + $limit;
+            $nextOffset = $offset;
             $checkpoint['status'] = 'error';
             $checkpoint['current_offset'] = $offset;
             $checkpoint['next_offset'] = $nextOffset;
@@ -115,7 +120,7 @@ final class KTypeBackfillAutoRunner
             return [
                 'success' => false,
                 'done' => true,
-                'stopped_reason' => 'batch_error_checkpoint_saved_next_offset',
+                'stopped_reason' => 'batch_error_checkpoint_kept_current_offset',
                 'error' => $throwable->getMessage(),
                 'run_id' => $runId,
                 'offset' => $offset,
@@ -221,6 +226,7 @@ final class KTypeBackfillAutoRunner
         $options['start_offset'] = max(0, (int) ($checkpoint['start_offset'] ?? $options['start_offset']));
         $options['batch_limit'] = max(1, min(self::MAX_BATCH_LIMIT, (int) ($checkpoint['batch_limit'] ?? $options['batch_limit'])));
         $options['max_batches'] = max(0, (int) ($checkpoint['max_batches'] ?? $options['max_batches']));
+        $options['max_apify_lookups_per_batch'] = max(0, min(self::MAX_APIFY_LOOKUPS_PER_BATCH, (int) ($checkpoint['max_apify_lookups_per_batch'] ?? $options['max_apify_lookups_per_batch'])));
         $options['batch_number'] = max(1, (int) ($checkpoint['total_batches_completed'] ?? 0) + 1);
         return $options;
     }
@@ -243,6 +249,7 @@ final class KTypeBackfillAutoRunner
                 'last_completed_offset' => -1,
                 'batch_limit' => (int) $options['batch_limit'],
                 'max_batches' => (int) $options['max_batches'],
+                'max_apify_lookups_per_batch' => (int) $options['max_apify_lookups_per_batch'],
                 'total_batches_completed' => 0,
                 'aggregate_counters' => $this->empty_counters(),
                 'batch_csv_urls' => [],
@@ -253,6 +260,7 @@ final class KTypeBackfillAutoRunner
         }
         $checkpoint['batch_limit'] = (int) $options['batch_limit'];
         $checkpoint['max_batches'] = (int) $options['max_batches'];
+        $checkpoint['max_apify_lookups_per_batch'] = (int) $options['max_apify_lookups_per_batch'];
         return $this->normalize_checkpoint($checkpoint);
     }
 
@@ -310,6 +318,7 @@ final class KTypeBackfillAutoRunner
             'final_offset' => (int) ($checkpoint['next_offset'] ?? 0),
             'batch_limit' => (int) ($checkpoint['batch_limit'] ?? 0),
             'max_batches' => (int) ($checkpoint['max_batches'] ?? 0),
+            'max_apify_lookups_per_batch' => (int) ($checkpoint['max_apify_lookups_per_batch'] ?? self::DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH),
             'total_batches' => (int) ($checkpoint['total_batches_completed'] ?? 0),
             'total_scanned_products' => (int) ($aggregate['total_scanned_products'] ?? 0),
             'products_with_raw_part_number' => (int) ($aggregate['products_with_raw_part_number'] ?? 0),
@@ -320,6 +329,10 @@ final class KTypeBackfillAutoRunner
             'found' => (int) ($aggregate['found'] ?? 0),
             'not_found' => (int) ($aggregate['not_found'] ?? 0),
             'errors' => (int) ($aggregate['errors'] ?? 0),
+            'deferred_due_to_lookup_cap' => (int) ($aggregate['deferred_due_to_lookup_cap'] ?? 0),
+            'transient_retry_count' => (int) ($fallback['transient_retry_count'] ?? 0),
+            'last_http_error' => (string) ($fallback['last_http_error'] ?? ''),
+            'retry_delay_seconds' => (int) ($fallback['retry_delay_seconds'] ?? 0),
             'csv_files_count' => count((array) ($checkpoint['batch_csv_urls'] ?? [])),
             'batch_csv_urls' => (array) ($checkpoint['batch_csv_urls'] ?? []),
             'previous_run_id' => (string) ($checkpoint['previous_run_id'] ?? ''),
@@ -352,6 +365,7 @@ final class KTypeBackfillAutoRunner
         $checkpoint['batch_limit'] = max(1, min(self::MAX_BATCH_LIMIT, (int) ($checkpoint['batch_limit'] ?? 10)));
         $checkpoint['max_batches'] = max(0, (int) ($checkpoint['max_batches'] ?? 0));
         $checkpoint['total_batches_completed'] = max(0, (int) ($checkpoint['total_batches_completed'] ?? 0));
+        $checkpoint['max_apify_lookups_per_batch'] = max(0, min(self::MAX_APIFY_LOOKUPS_PER_BATCH, (int) ($checkpoint['max_apify_lookups_per_batch'] ?? self::DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH)));
         $checkpoint['aggregate_counters'] = $aggregate;
         $checkpoint['batch_csv_urls'] = array_values(array_map('strval', (array) ($checkpoint['batch_csv_urls'] ?? [])));
         $checkpoint['final_summary_csv_url'] = (string) ($checkpoint['final_summary_csv_url'] ?? '');
@@ -372,7 +386,7 @@ final class KTypeBackfillAutoRunner
     /**
      * @return array<string, mixed>
      */
-    private function build_backfill_result(array $scan, bool $isLive): array
+    private function build_backfill_result(array $scan, bool $isLive, int $maxApifyLookups): array
     {
         $processed = [];
         $counters = [
@@ -383,6 +397,7 @@ final class KTypeBackfillAutoRunner
             'found' => 0,
             'not_found' => 0,
             'errors' => 0,
+            'deferred_due_to_lookup_cap' => 0,
         ];
 
         foreach ((array) ($scan['unique_part_numbers'] ?? []) as $normalized => $raw) {
@@ -398,6 +413,9 @@ final class KTypeBackfillAutoRunner
                 $result = $this->cached_result($raw, $normalized, $cached);
             } elseif (!$isLive) {
                 continue;
+            } elseif ($maxApifyLookups > 0 && (int) $counters['apify_lookup_attempted'] >= $maxApifyLookups) {
+                $counters['deferred_due_to_lookup_cap']++;
+                $result = $this->deferred_result($raw, $normalized);
             } else {
                 $counters['apify_lookup_attempted']++;
                 $result = $this->lookup->lookup($raw, true, false);
@@ -433,6 +451,7 @@ final class KTypeBackfillAutoRunner
             'not_found' => (int) ($backfill['not_found'] ?? 0),
             'errors' => (int) ($backfill['errors'] ?? 0),
             'rejected_before_lookup' => (int) ($backfill['rejected_before_lookup'] ?? 0),
+            'deferred_due_to_lookup_cap' => (int) ($backfill['deferred_due_to_lookup_cap'] ?? 0),
         ];
     }
 
@@ -451,6 +470,27 @@ final class KTypeBackfillAutoRunner
             'cache_lookup_key' => $normalized,
             'cache_part_cache_id' => isset($cached['part_cache']['id']) ? (int) $cached['part_cache']['id'] : null,
             'cache_hit' => true,
+            'force_live' => false,
+            'save_debug' => [],
+        ];
+    }
+
+
+    private function deferred_result(string $raw, string $normalized): array
+    {
+        return [
+            'part_number_raw' => $raw,
+            'part_number_normalized' => $normalized,
+            'status' => 'deferred_lookup_cap',
+            'articles' => [],
+            'vehicles' => [],
+            'unique_vehicle_ids' => [],
+            'errors' => ['Deferred because the max Apify lookups per batch/request cap was reached.'],
+            'from_cache' => false,
+            'saved' => false,
+            'cache_lookup_key' => $normalized,
+            'cache_part_cache_id' => null,
+            'cache_hit' => false,
             'force_live' => false,
             'save_debug' => [],
         ];
