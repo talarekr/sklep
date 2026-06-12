@@ -706,23 +706,23 @@ $autoBatch = $autoRunner->run_batch([
     'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
 ]);
 assert_same(true, $autoBatch['success'], 'auto-runner one batch succeeds');
-assert_same(50, $autoBatch['batch_limit'], 'auto-runner caps batch limit at 50');
-assert_same(50, $autoBatch['next_offset'], 'auto-runner advances offset by capped batch limit');
-assert_same(3, $autoBatch['counters']['total_scanned_products'], 'auto-runner scans one product batch');
-assert_same(1, $autoBatch['counters']['rejected_before_lookup'], 'auto-runner counts rejected rows before lookup');
-assert_same(1, $autoBatch['counters']['skipped_cached'], 'auto-runner skips cached rows');
-assert_same(1, $autoBatch['counters']['apify_lookup_attempted'], 'auto-runner calls Apify only for accepted uncached rows');
-assert_same(5, $GLOBALS['gps_test_http_calls'], 'auto-runner rejected and cached rows do not call Apify');
-assert_same(true, $autoBatch['csv_generated'], 'auto-runner generates batch CSV');
-assert_same(true, str_contains($autoBatch['csv_path'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner batch CSV path safety');
-assert_same(2, count($autoWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'auto-runner persists accepted product map rows only');
+assert_same(1, $autoBatch['batch_limit'], 'auto-runner processes one item per request');
+assert_same(1, $autoBatch['next_offset'], 'auto-runner advances offset by one item');
+assert_same(1, $autoBatch['counters']['total_scanned_products'], 'auto-runner scans one product per request');
+assert_same(0, $autoBatch['counters']['rejected_before_lookup'], 'auto-runner does not scan later rejected rows in same request');
+assert_same(1, $autoBatch['counters']['skipped_cached'], 'auto-runner skips cached row');
+assert_same(0, $autoBatch['counters']['apify_lookup_attempted'], 'auto-runner does not call Apify for cached row');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner cached row does not call Apify');
+assert_same(false, $autoBatch['csv_generated'], 'auto-runner does not generate per-request CSV');
+assert_same('', $autoBatch['csv_path'], 'auto-runner per-request CSV path is empty');
+assert_same(1, count($autoWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'auto-runner persists only the processed accepted product map row');
 $autoCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
 assert_same('test-auto-run', $autoCheckpoint['run_id'] ?? '', 'auto-runner checkpoint stores run id after successful batch');
 assert_same('running', $autoCheckpoint['status'] ?? '', 'auto-runner checkpoint status remains running after non-terminal batch');
-assert_same(50, $autoCheckpoint['next_offset'] ?? null, 'auto-runner checkpoint saves next offset after successful batch');
+assert_same(1, $autoCheckpoint['next_offset'] ?? null, 'auto-runner checkpoint saves next offset after successful item');
 assert_same(0, $autoCheckpoint['last_completed_offset'] ?? null, 'auto-runner checkpoint saves last completed offset after successful batch');
 assert_same(1, $autoCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint counts completed batches');
-assert_same(1, $autoCheckpoint['aggregate_counters']['apify_lookup_attempted'] ?? null, 'auto-runner checkpoint aggregates counters');
+assert_same(0, $autoCheckpoint['aggregate_counters']['apify_lookup_attempted'] ?? null, 'auto-runner checkpoint aggregates counters');
 
 $GLOBALS['gps_test_http_calls'] = 0;
 $dryRunBatch = $autoRunner->run_batch([
@@ -743,21 +743,21 @@ $summaryResult = $autoRunner->final_summary([
     'finished_at' => '2026-06-12T00:01:00Z',
     'stopped_reason' => 'completed',
     'start_offset' => 0,
-    'final_offset' => 50,
-    'batch_limit' => 50,
+    'final_offset' => 1,
+    'batch_limit' => 1,
     'max_batches' => 0,
     'total_batches' => 1,
-    'total_scanned_products' => 3,
-    'products_with_raw_part_number' => 3,
-    'accepted_products' => 2,
-    'rejected_products' => 1,
+    'total_scanned_products' => 1,
+    'products_with_raw_part_number' => 1,
+    'accepted_products' => 1,
+    'rejected_products' => 0,
     'skipped_cached' => 1,
-    'apify_lookup_attempted' => 1,
-    'found' => 2,
+    'apify_lookup_attempted' => 0,
+    'found' => 1,
     'not_found' => 0,
     'errors' => 0,
-    'csv_files_count' => 1,
-    'batch_csv_urls' => [$autoBatch['csv_url']],
+    'csv_files_count' => 0,
+    'batch_csv_urls' => [],
 ]);
 assert_same(true, $summaryResult['summary_csv_generated'], 'auto-runner final summary CSV generated');
 assert_same(true, str_contains($summaryResult['summary_csv_path'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner summary CSV path safety');
@@ -846,8 +846,8 @@ assert_same(5, $settingsDefaults['max_apify_lookups_per_batch'] ?? null, 'max Ap
 $sanitizedSettings = $settings->sanitize(['max_apify_lookups_per_batch' => 99]);
 assert_same(10, $sanitizedSettings['max_apify_lookups_per_batch'] ?? null, 'max Apify lookup cap is clamped to 10');
 $sanitizedAutoOptions = KTypeBackfillAutoRunner::sanitize_options(['batch_limit' => 999, 'max_apify_lookups_per_batch' => 99]);
-assert_same(50, $sanitizedAutoOptions['batch_limit'], 'auto-runner batch limit remains capped at 50');
-assert_same(10, $sanitizedAutoOptions['max_apify_lookups_per_batch'], 'auto-runner lookup cap option is clamped at 10');
+assert_same(1, $sanitizedAutoOptions['batch_limit'], 'auto-runner batch limit is forced to one item');
+assert_same(1, $sanitizedAutoOptions['max_apify_lookups_per_batch'], 'auto-runner lookup cap is forced to one');
 $adminSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 assert_same(true, str_contains($adminSource, "request_failed_http_(503|502|504|429)"), 'browser runner treats HTTP 503/502/504/429 as transient');
 assert_same(true, str_contains($adminSource, "transient error, retry ' + nextAttempt + '/' + MAX_TRANSIENT_RETRIES"), 'browser runner shows transient retry status');
@@ -855,116 +855,83 @@ assert_same(true, str_contains($adminSource, 'REQUEST_TIMEOUT_SECONDS') && str_c
 assert_same(true, str_contains($adminSource, 'stalled_no_progress') && str_contains($adminSource, 'DEFAULT_STALL_THRESHOLD_SECONDS'), 'browser runner detects no-progress stalls');
 assert_same(true, str_contains($adminSource, 'next_retry_time'), 'browser runner shows next retry time');
 assert_same(true, str_contains($adminSource, "postBatchWithTransientRetries"), 'browser runner retries the same batch request');
-assert_same(true, str_contains($adminSource, "value=\"5000\""), 'auto-runner delay default is 5000 ms');
+assert_same(true, str_contains($adminSource, "value=\"750\""), 'auto-runner delay default is 750 ms');
+
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
-$capWpdb = new FakeWpdb();
-$capWpdb->tables[$capWpdb->posts] = [
+$singleWpdb = new FakeWpdb();
+$singleWpdb->tables[$singleWpdb->posts] = [
     ['ID' => 300],
     ['ID' => 301],
-    ['ID' => 302],
 ];
-$GLOBALS['wpdb'] = $capWpdb;
+$GLOBALS['wpdb'] = $singleWpdb;
 $GLOBALS['gps_test_post_meta'] = [
-    300 => ['_part_number' => '8K0805607A', '_sku' => 'cap-live-1'],
-    301 => ['_part_number' => '1T0941329A', '_sku' => 'cap-live-2'],
-    302 => ['_part_number' => '5K0959455A', '_sku' => 'cap-live-3'],
+    300 => ['_part_number' => '8K0805607A', '_sku' => 'single-live-1'],
+    301 => ['_part_number' => '1T0941329A', '_sku' => 'single-live-2'],
 ];
-$capDatabase = new Database($normalizer);
-$capRunner = new KTypeBackfillAutoRunner(
-    new ProductScanner($capDatabase, $normalizer, $settings, $validator),
-    new FitmentLookupService($capDatabase, $client, $normalizer, $settings, $validator),
-    $capDatabase,
-    new AuditCsvExporter($capDatabase)
+$singleDatabase = new Database($normalizer);
+$singleRunner = new KTypeBackfillAutoRunner(
+    new ProductScanner($singleDatabase, $normalizer, $settings, $validator),
+    new FitmentLookupService($singleDatabase, $client, $normalizer, $settings, $validator),
+    $singleDatabase,
+    new AuditCsvExporter($singleDatabase)
 );
 $GLOBALS['gps_test_http_calls'] = 0;
-$capBatch = $capRunner->run_batch([
-    'run_id' => 'cap-run',
+$singleBatch = $singleRunner->run_batch([
+    'run_id' => 'single-run',
     'offset' => 0,
     'batch_limit' => 10,
-    'max_apify_lookups_per_batch' => 1,
-    'export_csv' => false,
+    'max_apify_lookups_per_batch' => 10,
+    'export_csv' => true,
     'dry_run' => false,
     'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
 ]);
-assert_same(true, $capBatch['success'], 'lookup-cap batch succeeds');
-assert_same(1, $capBatch['counters']['apify_lookup_attempted'], 'lookup cap allows only one Apify lookup per request');
-assert_same(2, $capBatch['counters']['deferred_due_to_lookup_cap'], 'lookup cap defers remaining uncached accepted candidates');
-assert_same(5, $GLOBALS['gps_test_http_calls'], 'lookup cap prevents extra Apify HTTP calls in one request');
-$capCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
-assert_same(2, $capCheckpoint['aggregate_counters']['deferred_due_to_lookup_cap'] ?? null, 'lookup cap deferred counter is checkpointed');
-assert_same(0, $capCheckpoint['next_offset'] ?? null, 'lookup cap keeps offset parked while candidates are deferred');
-$capBatchSecond = $capRunner->run_batch([
-    'run_id' => 'cap-run',
+assert_same(true, $singleBatch['success'], 'one-item lookup request succeeds');
+assert_same(1, $singleBatch['counters']['total_scanned_products'], 'one-item lookup scans only one product');
+assert_same(1, $singleBatch['counters']['apify_lookup_attempted'], 'one-item lookup performs one Apify lookup');
+assert_same(5, $GLOBALS['gps_test_http_calls'], 'one-item lookup performs one Apify chain');
+assert_same(false, array_key_exists('scan', $singleBatch), 'auto-runner response omits scan payload');
+assert_same(false, array_key_exists('backfill', $singleBatch), 'auto-runner response omits backfill payload');
+assert_same(false, array_key_exists('articles', $singleBatch['processed_item']), 'auto-runner processed item omits articles array');
+assert_same(false, array_key_exists('vehicles', $singleBatch['processed_item']), 'auto-runner processed item omits vehicles array');
+assert_same(false, $singleBatch['csv_generated'], 'auto-runner live loop does not generate per-request CSV');
+assert_same(1, get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['next_offset'] ?? null, 'one-item checkpoint advances by one');
+
+assert_same(true, isset($singleBatch['processed_item']['product_id']), 'auto-runner small response includes product id');
+assert_same(true, isset($singleBatch['processed_item']['part_number_normalized']), 'auto-runner small response includes normalized part number');
+$singleSummary = $singleRunner->final_summary(['run_id' => 'single-run', 'finished_at' => gmdate('c'), 'stopped_reason' => 'completed']);
+assert_same(true, $singleSummary['final_csv_generated'], 'auto-runner final CSV generated from persisted state');
+assert_same(true, $singleSummary['found_only_csv_generated'], 'auto-runner found-only CSV generated from persisted state');
+$singleFinalHandle = fopen($singleSummary['final_csv_path'], 'rb');
+$singleFinalHeaders = fgetcsv($singleFinalHandle);
+fclose($singleFinalHandle);
+assert_same(true, in_array('product_id', $singleFinalHeaders, true) && in_array('part_number_normalized', $singleFinalHeaders, true), 'auto-runner final CSV includes required product columns');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$rejectWpdb = new FakeWpdb();
+$rejectWpdb->tables[$rejectWpdb->posts] = [['ID' => 400]];
+$GLOBALS['wpdb'] = $rejectWpdb;
+$GLOBALS['gps_test_post_meta'] = [400 => ['_part_number' => 'BRAK', '_sku' => 'reject-only']];
+$rejectDatabase = new Database($normalizer);
+$rejectRunner = new KTypeBackfillAutoRunner(
+    new ProductScanner($rejectDatabase, $normalizer, $settings, $validator),
+    new FitmentLookupService($rejectDatabase, $client, $normalizer, $settings, $validator),
+    $rejectDatabase,
+    new AuditCsvExporter($rejectDatabase)
+);
+$GLOBALS['gps_test_http_calls'] = 0;
+$rejectBatch = $rejectRunner->run_batch([
+    'run_id' => 'reject-run',
     'offset' => 0,
-    'batch_limit' => 10,
-    'max_apify_lookups_per_batch' => 1,
-    'export_csv' => false,
     'dry_run' => false,
     'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
 ]);
-assert_same(1, $capBatchSecond['counters']['skipped_cached'], 'lookup cap retry uses cache-first for the already looked-up candidate');
-assert_same(1, $capBatchSecond['counters']['apify_lookup_attempted'], 'lookup cap retry performs only one new Apify lookup');
-assert_same(1, $capBatchSecond['counters']['deferred_due_to_lookup_cap'], 'lookup cap retry leaves remaining candidates deferred instead of skipped');
-$capBatchThird = $capRunner->run_batch([
-    'run_id' => 'cap-run',
-    'offset' => 0,
-    'batch_limit' => 10,
-    'max_apify_lookups_per_batch' => 1,
-    'export_csv' => false,
-    'dry_run' => false,
-    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
-]);
-assert_same(2, $capBatchThird['counters']['skipped_cached'], 'lookup cap final retry uses cache for prior candidates');
-assert_same(0, $capBatchThird['counters']['deferred_due_to_lookup_cap'], 'lookup cap eventually drains deferred candidates');
-assert_same(10, $capBatchThird['next_offset'], 'lookup cap advances offset only after deferred candidates are drained');
+assert_same('rejected', $rejectBatch['processed_item']['status'], 'auto-runner rejected candidate marked rejected');
+assert_same(1, $rejectBatch['counters']['rejected_before_lookup'], 'auto-runner rejected candidate counter increments');
+assert_same(0, $rejectBatch['counters']['apify_lookup_attempted'], 'auto-runner rejected candidate does not call Apify');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner rejected candidate makes no HTTP calls');
+assert_same(0, count($rejectWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'auto-runner rejected candidate does not create product map cache row');
 
-$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [
-    'run_id' => 'transient-resume',
-    'status' => 'running',
-    'started_at' => '2026-06-12T00:00:00Z',
-    'start_offset' => 0,
-    'current_offset' => 10,
-    'next_offset' => 10,
-    'last_completed_offset' => 0,
-    'batch_limit' => 10,
-    'max_batches' => 0,
-    'max_apify_lookups_per_batch' => 5,
-    'total_batches_completed' => 1,
-    'aggregate_counters' => [],
-    'batch_csv_urls' => [],
-    'final_summary_csv_url' => '',
-    'last_error' => '',
-    'previous_run_id' => '',
-];
-$transientStop = $capRunner->stop('request_failed_http_503');
-assert_same('error', $transientStop['status'] ?? '', 'transient retries exhausted can stop without completing checkpoint');
-assert_same(10, $transientStop['next_offset'] ?? null, 'transient retries exhausted keep checkpoint next offset resumable');
-assert_same('request_failed_http_503', $transientStop['stopped_reason'] ?? '', 'transient retries exhausted records stopped reason');
-$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION]['last_progress_at'] = '2026-06-12T00:00:00Z';
-$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION]['updated_at'] = '2026-06-12T00:00:00Z';
-$staleCheckpoint = $capRunner->checkpoint();
-assert_same('2026-06-12T00:00:00Z', $staleCheckpoint['last_progress_at'] ?? '', 'stale running checkpoint keeps last progress timestamp for page-load detection');
-$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = $resumeCheckpoint;
-assert_same(2, $resumeCheckpoint['aggregate_counters']['total_scanned_products'] ?? null, 'auto-runner checkpoint aggregates resumed scanned products');
-$resumeSummary = $resumeRunner->final_summary([
-    'run_id' => 'resume-run',
-    'finished_at' => '2026-06-12T00:02:00Z',
-    'stopped_reason' => 'completed',
-]);
-$resumeSummaryHandle = fopen($resumeSummary['summary_csv_path'], 'rb');
-$resumeSummaryHeaders = fgetcsv($resumeSummaryHandle);
-$resumeSummaryRow = fgetcsv($resumeSummaryHandle);
-fclose($resumeSummaryHandle);
-$resumeSummaryValues = array_combine($resumeSummaryHeaders, $resumeSummaryRow);
-assert_same('2', $resumeSummaryValues['total_batches'], 'auto-runner final summary includes resumed batches');
-assert_same('2', $resumeSummaryValues['total_scanned_products'], 'auto-runner final summary includes resumed aggregate scanned products');
-assert_same(true, str_contains((string) (get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['final_summary_csv_url'] ?? ''), '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner checkpoint stores final summary CSV URL');
-
-$autoRunnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
-assert_same(true, str_contains($autoRunnerSource, 'last_batch_started_at') && str_contains($autoRunnerSource, 'last_successful_offset'), 'auto-runner checkpoint tracks heartbeat and progress fields');
-assert_same(true, str_contains($autoRunnerSource, 'export_final_summary') && substr_count($autoRunnerSource, 'export_final_summary') === 1, 'auto-runner final summary export is isolated to final summary method');
-assert_same(false, str_contains($autoRunnerSource, 'ReviseInventoryStatus') || str_contains($autoRunnerSource, 'ReviseFixedPriceItem') || str_contains($autoRunnerSource, 'Trading API') || str_contains($autoRunnerSource, 'offerId'), 'auto-runner adds no eBay write code');
-
-$GLOBALS['wpdb'] = $wpdb;
-$GLOBALS['gps_test_post_meta'] = [];
+$runnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
+assert_same(false, str_contains($runnerSource, 'update_post_meta'), 'auto-runner adds no Woo product meta writes');
+assert_same(false, str_contains($runnerSource, 'ReviseFixedPriceItem') || str_contains($runnerSource, 'AddFixedPriceItem'), 'auto-runner adds no eBay write API calls');

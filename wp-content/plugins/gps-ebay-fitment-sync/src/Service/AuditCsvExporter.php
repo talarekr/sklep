@@ -37,6 +37,7 @@ final class AuditCsvExporter
         'saved_to_cache',
         'part_cache_id',
         'created_at',
+        'processed_at',
     ];
 
     private Database $database;
@@ -183,6 +184,59 @@ final class AuditCsvExporter
         ];
     }
 
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function export_auto_runner_final(array $checkpoint, ProductScanner $scanner): array
+    {
+        $runId = (string) ($checkpoint['run_id'] ?? $this->run_id('ktype_backfill_final'));
+        $startOffset = max(0, (int) ($checkpoint['start_offset'] ?? 0));
+        $finalOffset = max($startOffset, (int) ($checkpoint['next_offset'] ?? $startOffset));
+        $rows = [];
+
+        for ($offset = $startOffset; $offset < $finalOffset; $offset++) {
+            $scan = $scanner->scan(1, $offset, false);
+            if ((int) ($scan['total_scanned_products'] ?? 0) === 0) {
+                break;
+            }
+            foreach (($scan['accepted_rows'] ?? []) as $candidate) {
+                if (is_array($candidate)) {
+                    $rows[] = $this->row_from_accepted_candidate($runId, 'ktype_auto_runner_final', $candidate, null);
+                }
+            }
+            foreach (($scan['rejected_rows'] ?? []) as $candidate) {
+                if (is_array($candidate)) {
+                    $rows[] = $this->row_from_rejected_candidate($runId, 'ktype_auto_runner_final', $candidate);
+                }
+            }
+        }
+
+        $final = $this->write(
+            sprintf('gps-fitment-ktype-final-%s-%s.csv', gmdate('Ymd-His'), $runId),
+            $rows,
+            $runId
+        );
+        $foundOnly = $this->write_found_only(
+            sprintf('gps-fitment-ktype-found-only-%s-%s.csv', gmdate('Ymd-His'), $runId),
+            $rows,
+            $runId
+        );
+
+        return [
+            'final_csv_generated' => (bool) ($final['csv_generated'] ?? false),
+            'final_csv_path' => (string) ($final['csv_path'] ?? ''),
+            'final_csv_url' => (string) ($final['csv_url'] ?? ''),
+            'final_csv_row_count' => (int) ($final['csv_row_count'] ?? 0),
+            'final_csv_error' => (string) ($final['csv_error'] ?? ''),
+            'found_only_csv_generated' => (bool) ($foundOnly['csv_generated'] ?? false),
+            'found_only_csv_path' => (string) ($foundOnly['csv_path'] ?? ''),
+            'found_only_csv_url' => (string) ($foundOnly['csv_url'] ?? ''),
+            'found_only_csv_row_count' => (int) ($foundOnly['csv_row_count'] ?? 0),
+            'found_only_csv_error' => (string) ($foundOnly['csv_error'] ?? ''),
+        ];
+    }
+
     /**
      * @return array<string, string|int|bool|null>
      */
@@ -278,6 +332,7 @@ final class AuditCsvExporter
             'saved_to_cache' => 'no',
             'part_cache_id' => '',
             'created_at' => current_time('mysql'),
+            'processed_at' => current_time('mysql'),
         ];
     }
 
@@ -407,6 +462,58 @@ final class AuditCsvExporter
             'csv_path' => $path,
             'csv_url' => $this->audit_url(basename($path)),
             'csv_row_count' => count($rows),
+            'run_id' => $runId,
+            'csv_error' => '',
+        ];
+    }
+
+
+    /**
+     * @param array<int, array<string, string|int|bool|null>> $rows
+     * @return array<string, mixed>
+     */
+    private function write_found_only(string $filename, array $rows, string $runId): array
+    {
+        $columns = ['product_id', 'part_number_normalized', 'ktype_count', 'vehicle_ids'];
+        $foundRows = [];
+        foreach ($rows as $row) {
+            $ktypeCount = (int) ($row['ktype_count'] ?? 0);
+            $lookupStatus = (string) ($row['lookup_status'] ?? '');
+            if ($ktypeCount <= 0 || !in_array($lookupStatus, ['found', 'skipped_cached'], true)) {
+                continue;
+            }
+            $foundRows[] = [
+                'product_id' => (string) ($row['product_id'] ?? ''),
+                'part_number_normalized' => (string) ($row['part_number_normalized'] ?? ''),
+                'ktype_count' => (string) $ktypeCount,
+                'vehicle_ids' => (string) ($row['unique_vehicle_ids'] ?? ''),
+            ];
+        }
+
+        $directory = $this->audit_directory();
+        if ($directory === '') {
+            return $this->failed_result($runId, count($foundRows), 'Unable to resolve WordPress uploads directory.');
+        }
+        if (!is_dir($directory) && !wp_mkdir_p($directory)) {
+            return $this->failed_result($runId, count($foundRows), 'Unable to create audit CSV directory.');
+        }
+
+        $path = $directory . '/' . sanitize_file_name($filename);
+        $handle = fopen($path, 'wb');
+        if (!$handle) {
+            return $this->failed_result($runId, count($foundRows), 'Unable to open found-only CSV file for writing.');
+        }
+        fputcsv($handle, $columns);
+        foreach ($foundRows as $row) {
+            fputcsv($handle, array_map(static fn(string $column): string => (string) ($row[$column] ?? ''), $columns));
+        }
+        fclose($handle);
+
+        return [
+            'csv_generated' => true,
+            'csv_path' => $path,
+            'csv_url' => $this->audit_url(basename($path)),
+            'csv_row_count' => count($foundRows),
             'run_id' => $runId,
             'csv_error' => '',
         ];

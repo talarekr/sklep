@@ -202,7 +202,7 @@ final class AdminPage
                     </tr>
                     <tr>
                         <th scope="row"><label for="gps-max-apify-lookups"><?php echo esc_html__('Max Apify lookups per request', 'gps-ebay-fitment-sync'); ?></label></th>
-                        <td><input id="gps-max-apify-lookups" name="<?php echo esc_attr(Settings::OPTION); ?>[max_apify_lookups_per_batch]" type="number" min="1" max="10" value="<?php echo esc_attr((string) ($settings['max_apify_lookups_per_batch'] ?? 5)); ?>"> <span class="description"><?php echo esc_html__('Hard cap for live uncached Apify lookups in one backfill AJAX request. Default 5, max 10.', 'gps-ebay-fitment-sync'); ?></span></td>
+                        <td><input id="gps-max-apify-lookups" name="<?php echo esc_attr(Settings::OPTION); ?>[max_apify_lookups_per_batch]" type="number" min="1" max="10" value="<?php echo esc_attr((string) ($settings['max_apify_lookups_per_batch'] ?? 5)); ?>"> <span class="description"><?php echo esc_html__('Legacy manual backfill cap. The KType auto-runner always uses one lookup per request.', 'gps-ebay-fitment-sync'); ?></span></td>
                     </tr>
                 </table>
                 <?php submit_button(__('Save settings', 'gps-ebay-fitment-sync')); ?>
@@ -285,11 +285,11 @@ final class AdminPage
             <h2><?php echo esc_html__('KType Backfill Auto Runner', 'gps-ebay-fitment-sync'); ?></h2>
             <div id="gps-ktype-backfill-runner" class="gps-auto-runner" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>" data-checkpoint="<?php echo esc_attr((string) $checkpointJson); ?>" data-stall-threshold-seconds="<?php echo esc_attr((string) $stallThresholdSeconds); ?>" data-request-timeout-seconds="180">
                 <p><strong><?php echo esc_html__('Cost warning:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('This can call paid Apify lookups for accepted not-cached part numbers.', 'gps-ebay-fitment-sync'); ?></p>
-                <p><strong><?php echo esc_html__('503/load warning:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('Use a lower batch size and a higher delay (recommended live settings: batch limit 10, delay 5000–10000 ms, max Apify lookups 5) to reduce admin-ajax/server 503 errors.', 'gps-ebay-fitment-sync'); ?></p>
+                <p><strong><?php echo esc_html__('503/load warning:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('The auto-runner now processes one product candidate per AJAX request. Recommended live settings: 500–1000 ms delay, 180 second request timeout.', 'gps-ebay-fitment-sync'); ?></p>
                 <?php if ($isStaleRunning): ?>
                 <div class="notice notice-warning inline"><p><strong><?php echo esc_html__('Stale running detected.', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('The last checkpoint has not progressed within the stall threshold. Use Resume last run to continue from the saved next offset, or Mark as stopped to clear running status.', 'gps-ebay-fitment-sync'); ?></p></div>
                 <?php endif; ?>
-                <p><?php echo esc_html__('Browser-based automation follows the existing eBay auto-runner pattern, but progress is also checkpointed server-side after each completed batch so refreshes, timeouts, and manual stops can resume from the stored next offset.', 'gps-ebay-fitment-sync'); ?></p>
+                <p><?php echo esc_html__('Each AJAX request scans one product offset, validates at most one candidate lookup, writes cache/product-map state, checkpoints, and returns a small JSON payload. No eBay or Woo product writes are performed.', 'gps-ebay-fitment-sync'); ?></p>
                 <h3><?php echo esc_html__('Last server checkpoint', 'gps-ebay-fitment-sync'); ?></h3>
                 <table class="widefat striped" style="max-width:980px;"><tbody>
                     <tr><th><?php echo esc_html__('Run ID', 'gps-ebay-fitment-sync'); ?></th><td><code data-ktype-checkpoint="run_id"><?php echo esc_html((string) ($checkpoint['run_id'] ?? '')); ?></code></td></tr>
@@ -307,28 +307,24 @@ final class AdminPage
                 </tbody></table>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0;">
                     <label><?php echo esc_html__('Start offset', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-start-offset" type="number" min="0" value="0"></label>
-                    <label><?php echo esc_html__('Batch limit', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-batch-limit" type="number" min="1" max="50" value="10"></label>
+                    <label><?php echo esc_html__('Items per request', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-batch-limit" type="number" min="1" max="1" value="1" disabled></label>
                     <label><?php echo esc_html__('Max batches', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-max-batches" type="number" min="0" value="0"></label>
-                    <label><?php echo esc_html__('Delay between batches (ms)', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-delay" type="number" min="0" max="600000" value="5000"></label>
-                    <label><?php echo esc_html__('Max Apify lookups/request', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-max-apify-lookups" type="number" min="1" max="10" value="<?php echo esc_attr((string) ($this->settings->get('max_apify_lookups_per_batch') ?? 5)); ?>"></label>
+                    <label><?php echo esc_html__('Delay between requests (ms)', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-delay" type="number" min="0" max="600000" value="750"></label>
+                    <label><?php echo esc_html__('Max Apify lookups/request', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-max-apify-lookups" type="number" min="1" max="1" value="1" disabled></label>
                 </div>
                 <p>
                     <label><input id="gps-ktype-stop-on-error" type="checkbox" value="1"> <?php echo esc_html__('Stop on first error', 'gps-ebay-fitment-sync'); ?></label><br>
-                    <label><input id="gps-ktype-export-csv" type="checkbox" value="1" checked> <?php echo esc_html__('Export CSV per batch', 'gps-ebay-fitment-sync'); ?></label><br>
                     <label><input id="gps-ktype-final-summary" type="checkbox" value="1" checked> <?php echo esc_html__('Generate final summary CSV', 'gps-ebay-fitment-sync'); ?></label><br>
                     <label><input id="gps-ktype-persist-map" type="checkbox" value="1" checked> <?php echo esc_html__('Persist product map rows', 'gps-ebay-fitment-sync'); ?></label><br>
                     <label><input id="gps-ktype-dry-run" type="checkbox" value="1"> <?php echo esc_html__('Dry-run / preview only mode (no Apify calls and no cache writes)', 'gps-ebay-fitment-sync'); ?></label>
                 </p>
                 <p><label><?php echo esc_html__('Confirmation', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-confirmation" type="text" class="regular-text" placeholder="RUN KTYPE BACKFILL"></label> <code>RUN KTYPE BACKFILL</code></p>
-                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-mark-stopped" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Mark as stopped', 'gps-ebay-fitment-sync'); ?></button></p>
+                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-generate-report"><?php echo esc_html__('Generate final CSV/report', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-mark-stopped" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Mark as stopped', 'gps-ebay-fitment-sync'); ?></button></p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;max-width:980px;">
-                    <?php foreach (['state','current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'] as $counter): ?>
+                    <?php foreach (['state','current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','last_processed_part_number','last_processed_status','items_per_minute','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'] as $counter): ?>
                         <div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html($counter); ?></span><br><strong data-ktype-counter="<?php echo esc_attr($counter); ?>">0</strong></div>
                     <?php endforeach; ?>
                 </div>
-                <p><strong><?php echo esc_html__('Latest CSV', 'gps-ebay-fitment-sync'); ?></strong><br><span data-ktype-counter="latest_csv">-</span></p>
-                <p><strong><?php echo esc_html__('Batch CSV links', 'gps-ebay-fitment-sync'); ?></strong></p>
-                <ol data-ktype-counter="batch_csv_links"></ol>
                 <p><strong><?php echo esc_html__('Final summary CSV', 'gps-ebay-fitment-sync'); ?></strong><br><span data-ktype-counter="final_summary_csv">-</span></p>
                 <p><strong><?php echo esc_html__('Last batch counters', 'gps-ebay-fitment-sync'); ?></strong></p>
                 <pre data-ktype-counter="last_batch_result" style="max-height:260px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:10px;">-</pre>
@@ -341,6 +337,7 @@ final class AdminPage
                 const startButton = $('gps-ktype-start');
                 const resumeButton = $('gps-ktype-resume');
                 const stopButton = $('gps-ktype-stop');
+                const generateReportButton = $('gps-ktype-generate-report');
                 const markStoppedButton = $('gps-ktype-mark-stopped');
                 const confirmationInput = $('gps-ktype-confirmation');
                 const dryRunInput = $('gps-ktype-dry-run');
@@ -353,7 +350,7 @@ final class AdminPage
                 const STALL_THRESHOLD_SECONDS = parseInt(runner.dataset.stallThresholdSeconds || '300', 10) || 300;
                 const REQUEST_TIMEOUT_SECONDS = parseInt(runner.dataset.requestTimeoutSeconds || '180', 10) || 180;
                 const MAX_TRANSIENT_RETRIES = 3;
-                const state = { running:false, stopped:false, inFlight:false, delayTimer:0, stallTimer:0, abortController:null, resume:false, run_id:'', started_at:'', start_offset:0, current_offset:0, last_completed_offset:-1, next_offset:0, batch_limit:10, max_batches:0, max_apify_lookups_per_batch:5, total_batches:0, total_scanned_products:0, products_with_raw_part_number:0, accepted_products:0, rejected_products:0, skipped_cached:0, apify_lookup_attempted:0, found:0, not_found:0, errors:0, deferred_due_to_lookup_cap:0, transient_retry_count:0, last_http_error:'-', retry_delay_seconds:0, csvUrls:[], stopped_reason:'-', last_batch_started_at:'-', last_batch_finished_at:'-', last_progress_at:'-', in_flight_since:'-', last_request_duration_seconds:0, last_successful_batch_number:0, last_successful_offset:-1, total_batch_duration_seconds:0, apify_duration_seconds:0, csv_duration_seconds:0, summary_duration_seconds:0, request_duration_seconds:0, delay_duration_seconds:0, next_retry_time:'-' };
+                const state = { running:false, stopped:false, inFlight:false, delayTimer:0, stallTimer:0, abortController:null, resume:false, run_id:'', started_at:'', start_offset:0, current_offset:0, last_completed_offset:-1, next_offset:0, batch_limit:1, max_batches:0, max_apify_lookups_per_batch:1, total_batches:0, total_scanned_products:0, products_with_raw_part_number:0, accepted_products:0, rejected_products:0, skipped_cached:0, apify_lookup_attempted:0, found:0, not_found:0, errors:0, deferred_due_to_lookup_cap:0, transient_retry_count:0, last_http_error:'-', retry_delay_seconds:0, csvUrls:[], stopped_reason:'-', last_batch_started_at:'-', last_batch_finished_at:'-', last_progress_at:'-', in_flight_since:'-', last_request_duration_seconds:0, last_successful_batch_number:0, last_successful_offset:-1, total_batch_duration_seconds:0, apify_duration_seconds:0, csv_duration_seconds:0, summary_duration_seconds:0, request_duration_seconds:0, delay_duration_seconds:0, next_retry_time:'-', last_processed_part_number:'-', last_processed_status:'-', items_per_minute:0 };
                 function numberInput(id, fallback, min, max) { const value = parseInt(($(id) || {}).value || String(fallback), 10); return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback; }
                 function setField(name, value) { if (fields[name]) { fields[name].textContent = String(value); } }
                 function safeText(value) { return String(value || '').replace(/</g, '&lt;'); }
@@ -368,9 +365,9 @@ final class AdminPage
                     state.current_offset = parseInt(checkpoint.next_offset || checkpoint.current_offset || 0, 10) || 0;
                     state.next_offset = parseInt(checkpoint.next_offset || 0, 10) || 0;
                     state.last_completed_offset = parseInt(checkpoint.last_completed_offset || -1, 10);
-                    state.batch_limit = parseInt(checkpoint.batch_limit || state.batch_limit, 10) || state.batch_limit;
+                    state.batch_limit = 1;
                     state.max_batches = parseInt(checkpoint.max_batches || 0, 10) || 0;
-                    state.max_apify_lookups_per_batch = parseInt(checkpoint.max_apify_lookups_per_batch || state.max_apify_lookups_per_batch, 10) || state.max_apify_lookups_per_batch;
+                    state.max_apify_lookups_per_batch = 1;
                     state.total_batches = parseInt(checkpoint.total_batches_completed || 0, 10) || 0;
                     state.last_batch_started_at = checkpoint.last_batch_started_at || '-';
                     state.last_batch_finished_at = checkpoint.last_batch_finished_at || '-';
@@ -382,18 +379,21 @@ final class AdminPage
                     const timing = checkpoint.last_timing || {};
                     ['total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds'].forEach(function (name) { state[name] = parseFloat(timing[name] || 0) || 0; });
                     ['total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap'].forEach(function (name) { state[name] = parseInt(aggregate[name] || 0, 10) || 0; });
-                    state.csvUrls = Array.isArray(checkpoint.batch_csv_urls) ? checkpoint.batch_csv_urls.slice() : [];
+                    state.csvUrls = [];
+                    state.last_processed_part_number = checkpoint.last_processed_part_number || '-';
+                    state.last_processed_status = checkpoint.last_processed_status || '-';
                     state.stopped_reason = checkpoint.status || '-';
                     if (checkpointFields.run_id) { checkpointFields.run_id.textContent = checkpoint.run_id || ''; }
                     ['status','last_completed_offset','next_offset','last_error','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset'].forEach(function (name) { if (checkpointFields[name]) { checkpointFields[name].textContent = checkpoint[name] || ''; } });
                     if (checkpointFields.final_summary_csv_url) { checkpointFields.final_summary_csv_url.innerHTML = link(checkpoint.final_summary_csv_url || ''); }
                 }
                 function refresh(lastBatch) {
-                    ['current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'].forEach(function (name) { setField(name, state[name] ?? 0); });
+                    ['current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','last_processed_part_number','last_processed_status','items_per_minute','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'].forEach(function (name) { setField(name, state[name] ?? 0); });
                     setField('state', state.retry_delay_seconds > 0 ? 'retry_backoff' : (state.inFlight ? 'request_in_flight' : (state.running ? 'running' : (state.stopped ? 'stopped' : 'idle'))));
                     if (fields.last_batch_result) { fields.last_batch_result.textContent = lastBatch ? JSON.stringify(lastBatch, null, 2) : '-'; }
-                    if (fields.latest_csv) { fields.latest_csv.innerHTML = link(state.csvUrls[state.csvUrls.length - 1] || ''); }
-                    if (fields.batch_csv_links) { fields.batch_csv_links.innerHTML = state.csvUrls.map(function (url) { return '<li>' + link(url) + '</li>'; }).join(''); }
+                    if (state.started_at && state.started_at !== '-') { const elapsedMinutes = Math.max(1 / 60, (Date.now() - Date.parse(state.started_at)) / 60000); state.items_per_minute = Math.round((state.total_scanned_products / elapsedMinutes) * 10) / 10; }
+                    if (fields.latest_csv) { fields.latest_csv.textContent = 'Per-request CSV disabled; use final report.'; }
+                    if (fields.batch_csv_links) { fields.batch_csv_links.innerHTML = ''; }
                     startButton.disabled = state.running || (!dryRunInput.checked && confirmationInput.value !== 'RUN KTYPE BACKFILL');
                     resumeButton.disabled = state.running || !serverCheckpoint.run_id || (!dryRunInput.checked && confirmationInput.value !== 'RUN KTYPE BACKFILL');
                     if (markStoppedButton) { markStoppedButton.disabled = state.running || !serverCheckpoint.run_id; }
@@ -464,7 +464,7 @@ final class AdminPage
                 async function writeSummary(reason) {
                     if (!$('gps-ktype-final-summary').checked) { return; }
                     const result = await post('gps_ebay_fitment_ktype_backfill_summary', { run_id:state.run_id, finished_at:(new Date()).toISOString(), stopped_reason:reason || state.stopped_reason, transient_retry_count:state.transient_retry_count, last_http_error:state.last_http_error === '-' ? '' : state.last_http_error, retry_delay_seconds:state.retry_delay_seconds, deferred_due_to_lookup_cap:state.deferred_due_to_lookup_cap });
-                    if (fields.final_summary_csv) { fields.final_summary_csv.innerHTML = link(result.summary_csv_url || ''); }
+                    if (fields.final_summary_csv) { fields.final_summary_csv.innerHTML = [link(result.summary_csv_url || ''), link(result.final_csv_url || ''), link(result.found_only_csv_url || '')].join('<br>'); }
                     if (serverCheckpoint.run_id) { serverCheckpoint.final_summary_csv_url = result.summary_csv_url || ''; applyCheckpoint(serverCheckpoint); }
                 }
                 async function start(resume) {
@@ -473,7 +473,7 @@ final class AdminPage
                     if (resume && serverCheckpoint.run_id) {
                         applyCheckpoint(serverCheckpoint);
                     } else {
-                        state.started_at = (new Date()).toISOString(); state.last_progress_at = state.started_at; state.run_id = 'ktype-backfill-' + Date.now().toString(36); state.start_offset = numberInput('gps-ktype-start-offset', 0, 0, 999999999); state.current_offset = state.start_offset; state.next_offset = state.start_offset; state.last_completed_offset = -1; state.batch_limit = numberInput('gps-ktype-batch-limit', 10, 1, 50); state.max_batches = numberInput('gps-ktype-max-batches', 0, 0, 999999); state.max_apify_lookups_per_batch = numberInput('gps-ktype-max-apify-lookups', 5, 1, 10); state.total_batches = 0; state.total_scanned_products = 0; state.products_with_raw_part_number = 0; state.accepted_products = 0; state.rejected_products = 0; state.skipped_cached = 0; state.apify_lookup_attempted = 0; state.found = 0; state.not_found = 0; state.errors = 0; state.deferred_due_to_lookup_cap = 0; state.transient_retry_count = 0; state.last_http_error = '-'; state.retry_delay_seconds = 0; state.csvUrls = []; state.stopped_reason = '-'; state.last_batch_started_at = '-'; state.last_batch_finished_at = '-'; state.in_flight_since = '-'; state.last_request_duration_seconds = 0; state.last_successful_batch_number = 0; state.last_successful_offset = -1; state.next_retry_time = '-';
+                        state.started_at = (new Date()).toISOString(); state.last_progress_at = state.started_at; state.run_id = 'ktype-backfill-' + Date.now().toString(36); state.start_offset = numberInput('gps-ktype-start-offset', 0, 0, 999999999); state.current_offset = state.start_offset; state.next_offset = state.start_offset; state.last_completed_offset = -1; state.batch_limit = 1; state.max_batches = numberInput('gps-ktype-max-batches', 0, 0, 999999); state.max_apify_lookups_per_batch = 1; state.total_batches = 0; state.total_scanned_products = 0; state.products_with_raw_part_number = 0; state.accepted_products = 0; state.rejected_products = 0; state.skipped_cached = 0; state.apify_lookup_attempted = 0; state.found = 0; state.not_found = 0; state.errors = 0; state.deferred_due_to_lookup_cap = 0; state.transient_retry_count = 0; state.last_http_error = '-'; state.retry_delay_seconds = 0; state.csvUrls = []; state.last_processed_part_number = '-'; state.last_processed_status = '-'; state.items_per_minute = 0; state.stopped_reason = '-'; state.last_batch_started_at = '-'; state.last_batch_finished_at = '-'; state.in_flight_since = '-'; state.last_request_duration_seconds = 0; state.last_successful_batch_number = 0; state.last_successful_offset = -1; state.next_retry_time = '-';
                     }
                     refresh();
                     try {
@@ -481,7 +481,7 @@ final class AdminPage
                             armStallTimer();
                             const batchNumber = state.total_batches + 1;
                             state.last_batch_started_at = (new Date()).toISOString(); state.in_flight_since = state.last_batch_started_at; refresh();
-                            const result = await postBatchWithTransientRetries({ run_id:state.run_id, started_at:state.started_at, offset:state.current_offset, start_offset:state.start_offset, batch_limit:state.batch_limit, batch_number:batchNumber, max_batches:state.max_batches, max_apify_lookups_per_batch:state.max_apify_lookups_per_batch, export_csv:$('gps-ktype-export-csv').checked ? '1' : '', persist_product_map:$('gps-ktype-persist-map').checked ? '1' : '', dry_run:dryRunInput.checked ? '1' : '', resume:state.resume ? '1' : '', stop_on_first_error:$('gps-ktype-stop-on-error').checked ? '1' : '', confirmation:confirmationInput.value, last_request_duration_seconds:state.last_request_duration_seconds });
+                            const result = await postBatchWithTransientRetries({ run_id:state.run_id, started_at:state.started_at, offset:state.current_offset, start_offset:state.start_offset, batch_limit:state.batch_limit, batch_number:batchNumber, max_batches:state.max_batches, max_apify_lookups_per_batch:state.max_apify_lookups_per_batch, export_csv:'', persist_product_map:$('gps-ktype-persist-map').checked ? '1' : '', dry_run:dryRunInput.checked ? '1' : '', resume:state.resume ? '1' : '', stop_on_first_error:$('gps-ktype-stop-on-error').checked ? '1' : '', confirmation:confirmationInput.value, last_request_duration_seconds:state.last_request_duration_seconds });
                             state.resume = false;
                             if (result.success === false) { throw new Error(result.error || result.stopped_reason || 'batch_failed'); }
                             if (result.timing) { ['total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds'].forEach(function (name) { state[name] = parseFloat(result.timing[name] || state[name] || 0) || 0; }); }
@@ -493,7 +493,7 @@ final class AdminPage
                             }
                             state.last_progress_at = (new Date()).toISOString(); armStallTimer(); refresh(result);
                             if (result.done) { state.stopped_reason = result.stopped_reason || 'completed'; break; }
-                            await wait(numberInput('gps-ktype-delay', 5000, 0, 600000));
+                            await wait(numberInput('gps-ktype-delay', 750, 0, 600000));
                         }
                     } catch (error) {
                         if (!(state.stopped && error.name === 'AbortError')) {
@@ -513,6 +513,7 @@ final class AdminPage
                 startButton.addEventListener('click', function () { start(false); });
                 resumeButton.addEventListener('click', function () { start(true); });
                 stopButton.addEventListener('click', function () { stop('manual_stop'); });
+                if (generateReportButton) { generateReportButton.addEventListener('click', function () { writeSummary('manual_report').catch(function (error) { if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'summary_failed: ' + (error && error.message ? error.message : error); } }); }); }
                 if (markStoppedButton) { markStoppedButton.addEventListener('click', function () { stop('manual_mark_stopped'); }); }
                 window.addEventListener('beforeunload', function () { if (state.running) { stop('page_unload'); } });
                 refresh();
