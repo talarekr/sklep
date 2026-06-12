@@ -21,6 +21,14 @@ if (!function_exists('get_option')) {
         return $default;
     }
 }
+if (!function_exists('apply_filters')) {
+    function apply_filters($hook, $value, ...$args) { return $value; }
+}
+if (!function_exists('get_post_meta')) {
+    function get_post_meta($post_id, $key, $single = false) {
+        return $GLOBALS['gps_test_post_meta'][(int) $post_id][(string) $key] ?? '';
+    }
+}
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field($value) { return trim((string) $value); }
 }
@@ -34,6 +42,7 @@ if (!function_exists('wp_json_encode')) {
 final class FakeWpdb
 {
     public string $prefix = 'wp_';
+    public string $posts = 'wp_posts';
     /** @var array<string, array<int, array<string, mixed>>> */
     public array $tables = [];
     public int $insert_id = 0;
@@ -144,6 +153,19 @@ final class FakeWpdb
         return [];
     }
 
+    public function get_col(string $query): array
+    {
+        if (preg_match('/SELECT ID FROM \S+ .* LIMIT (\d+) OFFSET (\d+)/', $query, $matches)) {
+            $limit = (int) $matches[1];
+            $offset = (int) $matches[2];
+            $ids = array_map(static fn(array $row): int => (int) $row['ID'], $this->tables[$this->posts] ?? []);
+            sort($ids);
+            return array_slice($ids, $offset, $limit);
+        }
+
+        return [];
+    }
+
     public function get_var(string $query)
     {
         if (preg_match("/SHOW TABLES LIKE '([^']*)'/", $query, $matches)) {
@@ -226,14 +248,18 @@ if (!function_exists('wp_remote_retrieve_body')) {
 }
 
 require_once __DIR__ . '/../src/Support/PartNumberNormalizer.php';
+require_once __DIR__ . '/../src/Support/PartNumberCandidateValidator.php';
 require_once __DIR__ . '/../src/Support/Settings.php';
 require_once __DIR__ . '/../src/Database/Database.php';
 require_once __DIR__ . '/../src/Service/ApifyClient.php';
+require_once __DIR__ . '/../src/Service/ProductScanner.php';
 require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
+use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
+use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
@@ -249,6 +275,25 @@ $normalizer = new PartNumberNormalizer();
 assert_same('1T0941329A', $normalizer->normalize('1T0 941 329 A'), 'normalizes spaces');
 assert_same('1T0941329A', $normalizer->normalize('1T0-941-329-A'), 'normalizes hyphens');
 assert_same('ABC123', $normalizer->normalize(' abc.123 '), 'normalizes dots and case');
+
+$validator = new PartNumberCandidateValidator($normalizer);
+foreach (['1T0941329A', '4F0422371E', '8R0867287B', '283426179R', 'A2044600143', '06K907425A', '8K0805607A'] as $validPartNumber) {
+    $candidate = $validator->validate($validPartNumber);
+    assert_same(true, $candidate['accepted'], 'validator accepts ' . $validPartNumber);
+    assert_same($normalizer->normalize($validPartNumber), $candidate['normalized'], 'validator normalized ' . $validPartNumber);
+}
+
+foreach (['BRAK', 'FOTELE', 'TCB', 'DXR', 'WGD od audiolcar', 'bt-cars-33123', 'Fotel fotele komplet Audi A3 8P LIFT 5D', '0GC300072H WGC 0FN409053C DNF DNFF DNF 264753'] as $invalidPartNumber) {
+    $candidate = $validator->validate($invalidPartNumber);
+    assert_same(false, $candidate['accepted'], 'validator rejects ' . $invalidPartNumber);
+}
+
+$multiCandidates = $validator->candidates('A2043302701 A2043302601');
+assert_same(2, count($multiCandidates), 'validator splits two valid OEM candidates');
+assert_same('A2043302701', $multiCandidates[0]['normalized'], 'validator first split candidate');
+assert_same('A2043302601', $multiCandidates[1]['normalized'], 'validator second split candidate');
+assert_same(true, $multiCandidates[0]['accepted'] && $multiCandidates[1]['accepted'], 'validator accepts split OEM candidates');
+assert_same(false, in_array('A2043302701A2043302601', array_column($multiCandidates, 'normalized'), true), 'validator does not concatenate multi-code candidates');
 
 $settings = new Settings();
 $client = new ApifyClient($settings);
@@ -363,13 +408,50 @@ assert_same(1, count($backfill['processed']), 'backfill processed cached part');
 assert_same(true, $backfill['processed'][0]['from_cache'], 'backfill uses cache first');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'backfill skips Apify for cached part');
 
+$GLOBALS['gps_test_http_calls'] = 0;
+$rejectedBackfill = $lookup->backfill(['BRAK', 'DXR']);
+assert_same(0, count($rejectedBackfill['processed']), 'backfill processes no rejected values');
+assert_same(2, $rejectedBackfill['rejected_before_lookup'], 'backfill counts rejected before lookup');
+assert_same(0, $rejectedBackfill['apify_lookup_attempted'], 'backfill attempts no Apify calls for rejected values');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'backfill rejected values do not call Apify');
+
+$scanWpdb = new FakeWpdb();
+$scanWpdb->tables[$scanWpdb->posts] = [
+    ['ID' => 10],
+    ['ID' => 11],
+    ['ID' => 12],
+    ['ID' => 13],
+];
+$GLOBALS['wpdb'] = $scanWpdb;
+$GLOBALS['gps_test_post_meta'] = [
+    10 => ['_part_number' => '1T0941329A', '_sku' => 'sku-10'],
+    11 => ['_part_number' => 'FOTELE', '_sku' => 'sku-11'],
+    12 => ['_part_number' => 'A2043302701 A2043302601', '_sku' => 'sku-12'],
+    13 => ['_part_number' => '0GC300072H WGC 0FN409053C DNF DNFF DNF 264753', '_sku' => 'sku-13'],
+];
+$scanDatabase = new Database($normalizer);
+$scanner = new ProductScanner($scanDatabase, $normalizer, $settings, $validator);
+$scan = $scanner->scan(10, 0, true);
+assert_same(4, $scan['total_scanned_products'], 'scanner counts scanned products');
+assert_same(4, $scan['products_with_raw_part_number'], 'scanner counts raw part number products');
+assert_same(2, $scan['accepted_products'], 'scanner counts accepted products');
+assert_same(2, $scan['rejected_products'], 'scanner counts rejected products');
+assert_same(3, $scan['unique_accepted_part_numbers'], 'scanner counts unique accepted part numbers');
+assert_same(2, $scan['rejected_count'], 'scanner counts rejected candidate rows');
+assert_same(2, $scan['suspicious_count'], 'scanner counts split multi-code warnings');
+assert_same(['1T0941329A', 'A2043302701', 'A2043302601'], array_keys($scan['unique_part_numbers']), 'scanner accepted unique keys only');
+assert_same(3, count($scanWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'scanner persists accepted product map rows only');
+
+$GLOBALS['wpdb'] = $wpdb;
+$GLOBALS['gps_test_post_meta'] = [];
+
 $failedWpdb = new FakeWpdb();
 $failedWpdb->failInsertsFor['wp_gps_fitment_part_cache'] = true;
 $GLOBALS['wpdb'] = $failedWpdb;
 $failedDatabase = new Database($normalizer);
 $failedLookup = new FitmentLookupService($failedDatabase, $client, $normalizer, $settings);
 $GLOBALS['gps_test_http_calls'] = 0;
-$failed = $failedLookup->lookup('FAIL-INSERT', true, false);
+$failed = $failedLookup->lookup('FAIL-123-A', true, false);
 assert_same(false, $failed['saved'], 'failed part insert is not marked saved');
 assert_same(null, $failed['cache_part_cache_id'], 'failed part insert has no cache id');
 assert_same('Simulated insert failure for wp_gps_fitment_part_cache', $failed['save_debug']['last_db_error'] ?? '', 'failed part insert exposes DB error');

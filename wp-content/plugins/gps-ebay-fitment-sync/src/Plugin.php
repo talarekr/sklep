@@ -9,6 +9,7 @@ use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
+use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
@@ -37,10 +38,11 @@ final class Plugin
         Database::maybe_upgrade();
 
         $normalizer = new PartNumberNormalizer();
+        $validator = new PartNumberCandidateValidator($normalizer);
         $database = new Database($normalizer);
         $client = new ApifyClient($settings);
-        $lookup = new FitmentLookupService($database, $client, $normalizer, $settings);
-        $scanner = new ProductScanner($database, $normalizer, $settings);
+        $lookup = new FitmentLookupService($database, $client, $normalizer, $settings, $validator);
+        $scanner = new ProductScanner($database, $normalizer, $settings, $validator);
 
         (new AdminPage($settings, $lookup, $scanner, $database))->hooks();
     }

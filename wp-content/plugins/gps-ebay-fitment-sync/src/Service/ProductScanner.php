@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GPS_Ebay_Fitment_Sync\Service;
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
+use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
@@ -13,12 +14,14 @@ final class ProductScanner
     private Database $database;
     private PartNumberNormalizer $normalizer;
     private Settings $settings;
+    private PartNumberCandidateValidator $validator;
 
-    public function __construct(Database $database, PartNumberNormalizer $normalizer, Settings $settings)
+    public function __construct(Database $database, PartNumberNormalizer $normalizer, Settings $settings, ?PartNumberCandidateValidator $validator = null)
     {
         $this->database = $database;
         $this->normalizer = $normalizer;
         $this->settings = $settings;
+        $this->validator = $validator ?: new PartNumberCandidateValidator($normalizer);
     }
 
     public function meta_keys(): array
@@ -51,28 +54,56 @@ final class ProductScanner
             $params
         )) ?: [];
 
-        $rows = [];
+        $acceptedRows = [];
+        $rejectedRows = [];
+        $suspiciousRows = [];
         $unique = [];
+        $productsWithRaw = 0;
+        $acceptedProducts = [];
+        $rejectedProducts = [];
         foreach ($ids as $productId) {
             $resolved = $this->resolve_product_part_number((int) $productId);
             if (!$resolved) {
                 continue;
             }
-            $normalized = $this->normalizer->normalize($resolved['part_number_raw']);
-            if ($normalized === '') {
-                continue;
+            $productsWithRaw++;
+            $productAccepted = false;
+            $productRejected = false;
+            foreach ($this->validator->candidates($resolved['part_number_raw']) as $candidate) {
+                $base = [
+                    'product_id' => (int) $productId,
+                    'sku' => (string) get_post_meta((int) $productId, '_sku', true),
+                    'part_number_raw' => (string) $candidate['raw'],
+                    'part_number_normalized' => (string) $candidate['normalized'],
+                    'source_field' => $resolved['source_field'],
+                    'source_raw' => $resolved['part_number_raw'],
+                    'warnings' => $candidate['warnings'] ?? [],
+                ];
+
+                if (!empty($candidate['accepted'])) {
+                    $acceptedRows[] = $base;
+                    $unique[$base['part_number_normalized']] = $base['part_number_raw'];
+                    $productAccepted = true;
+                    if (!empty($base['warnings'])) {
+                        $suspiciousRows[] = $base;
+                    }
+                    if ($persistMap) {
+                        $this->database->upsert_product_map($base);
+                    }
+                    continue;
+                }
+
+                $rejectedRows[] = array_merge($base, [
+                    'rejection_reason' => (string) ($candidate['rejection_reason'] ?? 'rejected'),
+                ]);
+                $productRejected = true;
             }
-            $row = [
-                'product_id' => (int) $productId,
-                'sku' => (string) get_post_meta((int) $productId, '_sku', true),
-                'part_number_raw' => $resolved['part_number_raw'],
-                'part_number_normalized' => $normalized,
-                'source_field' => $resolved['source_field'],
-            ];
-            $rows[] = $row;
-            $unique[$normalized] = $resolved['part_number_raw'];
-            if ($persistMap) {
-                $this->database->upsert_product_map($row);
+
+            if ($productAccepted) {
+                $acceptedProducts[(int) $productId] = true;
+            }
+            if (!$productAccepted && $productRejected) {
+                $rejectedProducts[(int) $productId] = true;
             }
         }
 
@@ -80,14 +111,25 @@ final class ProductScanner
 
         return [
             'total_scanned_products' => count($ids),
-            'products_with_part_number' => count($rows),
-            'unique_normalized_part_numbers' => count($unique),
+            'products_with_raw_part_number' => $productsWithRaw,
+            'accepted_products' => count($acceptedProducts),
+            'rejected_products' => count($rejectedProducts),
+            'unique_accepted_part_numbers' => count($unique),
             'already_cached_count' => $cached,
             'not_cached_count' => max(0, count($unique) - $cached),
-            'sample' => array_slice($rows, 0, 25),
+            'rejected_count' => count($rejectedRows),
+            'suspicious_count' => count($suspiciousRows),
+            'accepted_sample' => array_slice($acceptedRows, 0, 25),
+            'rejected_sample' => array_slice($rejectedRows, 0, 25),
+            'suspicious_sample' => array_slice($suspiciousRows, 0, 25),
             'unique_part_numbers' => $unique,
+            'unique_accepted_part_number_values' => array_keys($unique),
             'persisted_product_map' => $persistMap,
             'batch_size' => (int) $this->settings->get('batch_size'),
+            // Backward-compatible aliases for older admin result consumers.
+            'products_with_part_number' => count($acceptedRows),
+            'unique_normalized_part_numbers' => count($unique),
+            'sample' => array_slice($acceptedRows, 0, 25),
         ];
     }
 
