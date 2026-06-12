@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GPS_Ebay_Fitment_Sync\Admin;
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
+use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
@@ -15,13 +16,15 @@ final class AdminPage
     private FitmentLookupService $lookup;
     private ProductScanner $scanner;
     private Database $database;
+    private AuditCsvExporter $auditCsvExporter;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
         $this->scanner = $scanner;
         $this->database = $database;
+        $this->auditCsvExporter = $auditCsvExporter;
     }
 
     public function hooks(): void
@@ -69,7 +72,13 @@ final class AdminPage
         $limit = isset($_POST['limit']) ? (int) $_POST['limit'] : 100;
         $offset = isset($_POST['offset']) ? (int) $_POST['offset'] : 0;
         $persist = isset($_POST['persist_map']);
+        $exportCsv = isset($_POST['export_csv']);
         $result = $this->scanner->scan($limit, $offset, $persist);
+        if ($exportCsv) {
+            $result = array_merge($result, $this->auditCsvExporter->export_scan_preview($result, $offset, $limit));
+        } else {
+            $result = array_merge($result, $this->empty_csv_result());
+        }
         $this->store_result(['type' => 'scan', 'result' => $result]);
     }
 
@@ -80,6 +89,7 @@ final class AdminPage
         $offset = isset($_POST['offset']) ? (int) $_POST['offset'] : 0;
         $scan = $this->scanner->scan($limit, $offset, true);
         $result = $this->lookup->backfill(array_values($scan['unique_part_numbers']));
+        $result = array_merge($result, $this->auditCsvExporter->export_backfill($scan, $result, $offset, $limit));
         $this->store_result(['type' => 'backfill', 'scan' => $scan, 'result' => $result]);
     }
 
@@ -167,6 +177,7 @@ final class AdminPage
                     <label><?php echo esc_html__('Limit', 'gps-ebay-fitment-sync'); ?> <input name="limit" type="number" value="100" min="1" max="500"></label>
                     <label><?php echo esc_html__('Offset', 'gps-ebay-fitment-sync'); ?> <input name="offset" type="number" value="0" min="0"></label>
                     <label><input type="checkbox" name="persist_map" value="1"> <?php echo esc_html__('Persist product map rows (no Apify calls)', 'gps-ebay-fitment-sync'); ?></label>
+                    <label><input type="checkbox" name="export_csv" value="1"> <?php echo esc_html__('Export scan preview CSV (no Apify calls)', 'gps-ebay-fitment-sync'); ?></label>
                 </p>
                 <p><button class="button button-primary" type="submit"><?php echo esc_html__('Preview scan', 'gps-ebay-fitment-sync'); ?></button></p>
             </form>
@@ -229,7 +240,43 @@ final class AdminPage
             return;
         }
 
+        if (isset($last['result']) && is_array($last['result'])) {
+            $this->render_csv_summary($last['result']);
+        }
+
         echo '<pre style="max-height: 420px; overflow:auto; background:#fff; padding:12px; border:1px solid #ccd0d4;">' . esc_html(wp_json_encode($last, JSON_PRETTY_PRINT)) . '</pre>';
+    }
+
+    private function render_csv_summary(array $result): void
+    {
+        echo '<h3>' . esc_html__('Audit CSV', 'gps-ebay-fitment-sync') . '</h3>';
+        echo '<table class="widefat striped"><tbody>';
+        $this->row('CSV generated', !empty($result['csv_generated']) ? 'yes' : 'no');
+        $this->row('CSV file path', (string) ($result['csv_path'] ?? ''));
+        $url = (string) ($result['csv_url'] ?? '');
+        if ($url !== '') {
+            echo '<tr><th scope="row">' . esc_html__('CSV download link', 'gps-ebay-fitment-sync') . '</th><td><a href="' . esc_url($url) . '">' . esc_html($url) . '</a></td></tr>';
+        } else {
+            $this->row('CSV download link', '');
+        }
+        $this->row('CSV row count', isset($result['csv_row_count']) ? (string) $result['csv_row_count'] : '');
+        $this->row('Run ID', (string) ($result['run_id'] ?? ''));
+        if (!empty($result['csv_error'])) {
+            $this->row('CSV error', (string) $result['csv_error']);
+        }
+        echo '</tbody></table>';
+    }
+
+    private function empty_csv_result(): array
+    {
+        return [
+            'csv_generated' => false,
+            'csv_path' => '',
+            'csv_url' => '',
+            'csv_row_count' => 0,
+            'run_id' => '',
+            'csv_error' => '',
+        ];
     }
 
     private function row(string $label, string $value): void

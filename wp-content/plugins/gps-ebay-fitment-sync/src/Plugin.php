@@ -7,6 +7,7 @@ namespace GPS_Ebay_Fitment_Sync;
 use GPS_Ebay_Fitment_Sync\Admin\AdminPage;
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
+use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
@@ -43,8 +44,9 @@ final class Plugin
         $client = new ApifyClient($settings);
         $lookup = new FitmentLookupService($database, $client, $normalizer, $settings, $validator);
         $scanner = new ProductScanner($database, $normalizer, $settings, $validator);
+        $auditCsvExporter = new AuditCsvExporter($database);
 
-        (new AdminPage($settings, $lookup, $scanner, $database))->hooks();
+        (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter))->hooks();
     }
 
     public static function deactivate(): void
