@@ -113,16 +113,21 @@ final class Database
         return $wpdb->prefix . 'gps_fitment_' . $name;
     }
 
-    public function get_part_cache(string $normalized): ?array
+    public function get_part_cache(string $partNumber): ?array
     {
         global $wpdb;
+        $normalized = $this->normalizer->normalize($partNumber);
+        if ($normalized === '') {
+            return null;
+        }
+
         $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $this->table('part_cache') . ' WHERE part_number_normalized = %s', $normalized), ARRAY_A);
         return is_array($row) ? $row : null;
     }
 
-    public function get_cached_result(string $normalized): ?array
+    public function get_cached_result(string $partNumber): ?array
     {
-        $part = $this->get_part_cache($normalized);
+        $part = $this->get_part_cache($partNumber);
         if (!$part) {
             return null;
         }
@@ -143,7 +148,10 @@ final class Database
     {
         global $wpdb;
 
-        $normalized = $this->normalizer->normalize($raw);
+        $normalized = $this->normalizer->normalize((string) ($result['part_number_normalized'] ?? $raw));
+        if ($normalized === '') {
+            return 0;
+        }
         $now = current_time('mysql');
         $status = $result['status'] ?? 'error';
         $articles = $result['articles'] ?? [];
@@ -244,7 +252,7 @@ final class Database
     public function count_cached(array $normalizedPartNumbers): int
     {
         global $wpdb;
-        $normalizedPartNumbers = array_values(array_unique(array_filter($normalizedPartNumbers)));
+        $normalizedPartNumbers = array_values(array_unique(array_filter(array_map(fn($partNumber): string => $this->normalizer->normalize((string) $partNumber), $normalizedPartNumbers))));
         if (!$normalizedPartNumbers) {
             return 0;
         }

@@ -43,7 +43,7 @@ final class AdminPage
         $partNumber = isset($_POST['part_number']) ? sanitize_text_field(wp_unslash($_POST['part_number'])) : '';
         $save = isset($_POST['lookup_save']);
         $forceLive = isset($_POST['force_live']);
-        $result = $this->lookup->lookup($partNumber, $save, $forceLive || $save);
+        $result = $this->lookup->lookup($partNumber, $save, $forceLive);
         $this->store_result(['type' => 'manual_lookup', 'result' => $result]);
     }
 
@@ -169,6 +169,10 @@ final class AdminPage
             $this->row('Status', $result['status'] ?? '');
             $this->row('Came from cache', !empty($result['from_cache']) ? 'yes' : 'no');
             $this->row('Saved', !empty($result['saved']) ? 'yes' : 'no');
+            $this->row('Cache lookup key', (string) ($result['cache_lookup_key'] ?? ''));
+            $this->row('Cache part cache ID', isset($result['cache_part_cache_id']) && $result['cache_part_cache_id'] !== null ? (string) $result['cache_part_cache_id'] : '');
+            $this->row('Cache hit', !empty($result['cache_hit']) ? 'true' : 'false');
+            $this->row('Force live', !empty($result['force_live']) ? 'true' : 'false');
             $this->row('Step 1 articles found', (string) count($result['articles'] ?? []));
             $this->row('Step 2 compatible vehicle count', (string) count($result['unique_vehicle_ids'] ?? []));
             $this->row('Unique KTypes / vehicleIds', implode(', ', array_slice($result['unique_vehicle_ids'] ?? [], 0, 100)));
