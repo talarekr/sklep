@@ -6,8 +6,13 @@ if (!defined('ARRAY_A')) {
     define('ARRAY_A', 'ARRAY_A');
 }
 
+$GLOBALS['gps_test_options'] = [];
+
 if (!function_exists('get_option')) {
     function get_option($option, $default = false) {
+        if (array_key_exists((string) $option, $GLOBALS['gps_test_options'])) {
+            return $GLOBALS['gps_test_options'][(string) $option];
+        }
         if ($option === GPS_Ebay_Fitment_Sync\Support\Settings::OPTION) {
             return [
                 'apify_token' => 'test-token',
@@ -19,6 +24,12 @@ if (!function_exists('get_option')) {
             ];
         }
         return $default;
+    }
+}
+if (!function_exists('update_option')) {
+    function update_option($option, $value, $autoload = null): bool {
+        $GLOBALS['gps_test_options'][(string) $option] = $value;
+        return true;
     }
 }
 if (!function_exists('apply_filters')) {
@@ -272,11 +283,13 @@ require_once __DIR__ . '/../src/Service/ApifyClient.php';
 require_once __DIR__ . '/../src/Service/AuditCsvExporter.php';
 require_once __DIR__ . '/../src/Service/ProductScanner.php';
 require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
+require_once __DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
+use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
@@ -630,3 +643,218 @@ assert_same('not_run', $previewRows[1]['lookup_status'], 'scan preview cached ca
 assert_same('hit', $previewRows[1]['cache_status'], 'scan preview cached candidate shows cache hit');
 assert_same('no', $previewRows[1]['lookup_attempted'], 'scan preview cached candidate does not call Apify');
 assert_same('rejected', $previewRows[0]['lookup_status'], 'scan preview rejected candidate marked rejected');
+
+
+$autoWpdb = new FakeWpdb();
+$autoWpdb->tables[$autoWpdb->posts] = [
+    ['ID' => 100],
+    ['ID' => 101],
+    ['ID' => 102],
+];
+$autoWpdb->tables['wp_gps_fitment_part_cache'] = [[
+    'id' => 901,
+    'part_number_raw' => '1T0941329A',
+    'part_number_normalized' => '1T0941329A',
+    'status' => 'found',
+    'article_count' => 1,
+    'vehicle_count' => 1,
+    'error_message' => null,
+]];
+$autoWpdb->tables['wp_gps_fitment_article_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 901,
+    'article_no' => 'AUTO-CACHED-ART',
+    'supplier_name' => 'Auto Cached Supplier',
+]];
+$autoWpdb->tables['wp_gps_fitment_vehicle_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 901,
+    'vehicle_id' => 777,
+]];
+$GLOBALS['wpdb'] = $autoWpdb;
+$GLOBALS['gps_test_post_meta'] = [
+    100 => ['_part_number' => '1T0941329A', '_sku' => 'auto-cached'],
+    101 => ['_part_number' => 'BRAK', '_sku' => 'auto-rejected'],
+    102 => ['_part_number' => '8K0805607A', '_sku' => 'auto-live'],
+];
+$autoDatabase = new Database($normalizer);
+$autoScanner = new ProductScanner($autoDatabase, $normalizer, $settings, $validator);
+$autoLookup = new FitmentLookupService($autoDatabase, $client, $normalizer, $settings, $validator);
+$autoExporter = new AuditCsvExporter($autoDatabase);
+$autoRunner = new KTypeBackfillAutoRunner($autoScanner, $autoLookup, $autoDatabase, $autoExporter);
+
+$confirmationFailed = $autoRunner->run_batch([
+    'offset' => 0,
+    'batch_limit' => 10,
+    'dry_run' => false,
+    'confirmation' => 'WRONG',
+]);
+assert_same(false, $confirmationFailed['success'], 'auto-runner requires exact live confirmation');
+assert_same('confirmation_required', $confirmationFailed['stopped_reason'], 'auto-runner confirmation failure stop reason');
+
+$GLOBALS['gps_test_http_calls'] = 0;
+$autoBatch = $autoRunner->run_batch([
+    'run_id' => 'test-auto-run',
+    'offset' => 0,
+    'batch_limit' => 99,
+    'batch_number' => 1,
+    'max_batches' => 0,
+    'export_csv' => true,
+    'persist_product_map' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $autoBatch['success'], 'auto-runner one batch succeeds');
+assert_same(50, $autoBatch['batch_limit'], 'auto-runner caps batch limit at 50');
+assert_same(50, $autoBatch['next_offset'], 'auto-runner advances offset by capped batch limit');
+assert_same(3, $autoBatch['counters']['total_scanned_products'], 'auto-runner scans one product batch');
+assert_same(1, $autoBatch['counters']['rejected_before_lookup'], 'auto-runner counts rejected rows before lookup');
+assert_same(1, $autoBatch['counters']['skipped_cached'], 'auto-runner skips cached rows');
+assert_same(1, $autoBatch['counters']['apify_lookup_attempted'], 'auto-runner calls Apify only for accepted uncached rows');
+assert_same(5, $GLOBALS['gps_test_http_calls'], 'auto-runner rejected and cached rows do not call Apify');
+assert_same(true, $autoBatch['csv_generated'], 'auto-runner generates batch CSV');
+assert_same(true, str_contains($autoBatch['csv_path'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner batch CSV path safety');
+assert_same(2, count($autoWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'auto-runner persists accepted product map rows only');
+$autoCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
+assert_same('test-auto-run', $autoCheckpoint['run_id'] ?? '', 'auto-runner checkpoint stores run id after successful batch');
+assert_same('running', $autoCheckpoint['status'] ?? '', 'auto-runner checkpoint status remains running after non-terminal batch');
+assert_same(50, $autoCheckpoint['next_offset'] ?? null, 'auto-runner checkpoint saves next offset after successful batch');
+assert_same(0, $autoCheckpoint['last_completed_offset'] ?? null, 'auto-runner checkpoint saves last completed offset after successful batch');
+assert_same(1, $autoCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint counts completed batches');
+assert_same(1, $autoCheckpoint['aggregate_counters']['apify_lookup_attempted'] ?? null, 'auto-runner checkpoint aggregates counters');
+
+$GLOBALS['gps_test_http_calls'] = 0;
+$dryRunBatch = $autoRunner->run_batch([
+    'run_id' => 'test-dry-run',
+    'offset' => 0,
+    'batch_limit' => 10,
+    'dry_run' => true,
+    'export_csv' => false,
+    'persist_product_map' => true,
+]);
+assert_same(true, $dryRunBatch['success'], 'auto-runner dry-run works without confirmation');
+assert_same(0, $dryRunBatch['counters']['apify_lookup_attempted'], 'auto-runner dry-run makes no Apify attempts');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner dry-run makes no HTTP calls');
+
+$summaryResult = $autoRunner->final_summary([
+    'run_id' => 'test-auto-run',
+    'started_at' => '2026-06-12T00:00:00Z',
+    'finished_at' => '2026-06-12T00:01:00Z',
+    'stopped_reason' => 'completed',
+    'start_offset' => 0,
+    'final_offset' => 50,
+    'batch_limit' => 50,
+    'max_batches' => 0,
+    'total_batches' => 1,
+    'total_scanned_products' => 3,
+    'products_with_raw_part_number' => 3,
+    'accepted_products' => 2,
+    'rejected_products' => 1,
+    'skipped_cached' => 1,
+    'apify_lookup_attempted' => 1,
+    'found' => 2,
+    'not_found' => 0,
+    'errors' => 0,
+    'csv_files_count' => 1,
+    'batch_csv_urls' => [$autoBatch['csv_url']],
+]);
+assert_same(true, $summaryResult['summary_csv_generated'], 'auto-runner final summary CSV generated');
+assert_same(true, str_contains($summaryResult['summary_csv_path'], '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner summary CSV path safety');
+$summaryHandle = fopen($summaryResult['summary_csv_path'], 'rb');
+$summaryHeaders = fgetcsv($summaryHandle);
+$summaryRow = fgetcsv($summaryHandle);
+fclose($summaryHandle);
+assert_same('run_id', $summaryHeaders[0], 'auto-runner summary CSV starts with run_id');
+assert_same('test-auto-run', $summaryRow[0], 'auto-runner summary CSV stores run id');
+
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$resumeWpdb = new FakeWpdb();
+$resumeWpdb->tables[$resumeWpdb->posts] = [
+    ['ID' => 200],
+    ['ID' => 201],
+];
+$resumeWpdb->tables['wp_gps_fitment_part_cache'] = [[
+    'id' => 1001,
+    'part_number_raw' => '1T0941329A',
+    'part_number_normalized' => '1T0941329A',
+    'status' => 'found',
+    'article_count' => 1,
+    'vehicle_count' => 1,
+    'error_message' => null,
+]];
+$resumeWpdb->tables['wp_gps_fitment_article_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 1001,
+    'article_no' => 'RESUME-CACHED-ART',
+    'supplier_name' => 'Resume Cached Supplier',
+]];
+$resumeWpdb->tables['wp_gps_fitment_vehicle_cache'] = [[
+    'id' => 1,
+    'part_cache_id' => 1001,
+    'vehicle_id' => 888,
+]];
+$GLOBALS['wpdb'] = $resumeWpdb;
+$GLOBALS['gps_test_post_meta'] = [
+    200 => ['_part_number' => '8K0805607A', '_sku' => 'resume-live'],
+    201 => ['_part_number' => '1T0941329A', '_sku' => 'resume-cached'],
+];
+$resumeDatabase = new Database($normalizer);
+$resumeRunner = new KTypeBackfillAutoRunner(
+    new ProductScanner($resumeDatabase, $normalizer, $settings, $validator),
+    new FitmentLookupService($resumeDatabase, $client, $normalizer, $settings, $validator),
+    $resumeDatabase,
+    new AuditCsvExporter($resumeDatabase)
+);
+$GLOBALS['gps_test_http_calls'] = 0;
+$resumeFirst = $resumeRunner->run_batch([
+    'run_id' => 'resume-run',
+    'offset' => 0,
+    'batch_limit' => 1,
+    'export_csv' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $resumeFirst['success'], 'auto-runner resume scenario first batch succeeds');
+assert_same(1, $resumeFirst['next_offset'], 'auto-runner resume scenario first checkpoint next offset');
+assert_same(5, $GLOBALS['gps_test_http_calls'], 'auto-runner resume scenario first uncached batch calls Apify');
+$stoppedCheckpoint = $resumeRunner->stop('manual_stop');
+assert_same('stopped', $stoppedCheckpoint['status'] ?? '', 'auto-runner manual stop persists stopped status');
+assert_same(1, $stoppedCheckpoint['next_offset'] ?? null, 'auto-runner stopped checkpoint keeps next offset');
+$GLOBALS['gps_test_http_calls'] = 0;
+$resumeSecond = $resumeRunner->run_batch([
+    'offset' => 0,
+    'batch_limit' => 1,
+    'resume' => true,
+    'export_csv' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $resumeSecond['success'], 'auto-runner resume batch succeeds');
+assert_same(1, $resumeSecond['offset'], 'auto-runner resume starts from stored next offset instead of zero');
+assert_same(2, $resumeSecond['next_offset'], 'auto-runner resume advances from stored next offset');
+assert_same(1, $resumeSecond['counters']['skipped_cached'], 'auto-runner resume uses cache for cached value');
+assert_same(0, $resumeSecond['counters']['apify_lookup_attempted'], 'auto-runner resume does not send cached value to Apify');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner cached values are not sent to Apify again on resume');
+$resumeCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
+assert_same(2, $resumeCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint aggregates resumed batch count');
+assert_same(2, $resumeCheckpoint['aggregate_counters']['total_scanned_products'] ?? null, 'auto-runner checkpoint aggregates resumed scanned products');
+$resumeSummary = $resumeRunner->final_summary([
+    'run_id' => 'resume-run',
+    'finished_at' => '2026-06-12T00:02:00Z',
+    'stopped_reason' => 'completed',
+]);
+$resumeSummaryHandle = fopen($resumeSummary['summary_csv_path'], 'rb');
+$resumeSummaryHeaders = fgetcsv($resumeSummaryHandle);
+$resumeSummaryRow = fgetcsv($resumeSummaryHandle);
+fclose($resumeSummaryHandle);
+$resumeSummaryValues = array_combine($resumeSummaryHeaders, $resumeSummaryRow);
+assert_same('2', $resumeSummaryValues['total_batches'], 'auto-runner final summary includes resumed batches');
+assert_same('2', $resumeSummaryValues['total_scanned_products'], 'auto-runner final summary includes resumed aggregate scanned products');
+assert_same(true, str_contains((string) (get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['final_summary_csv_url'] ?? ''), '/wp-content/uploads/gps-ebay-fitment-sync/audit/'), 'auto-runner checkpoint stores final summary CSV URL');
+
+$autoRunnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
+assert_same(false, str_contains($autoRunnerSource, 'ReviseInventoryStatus') || str_contains($autoRunnerSource, 'ReviseFixedPriceItem') || str_contains($autoRunnerSource, 'Trading API') || str_contains($autoRunnerSource, 'offerId'), 'auto-runner adds no eBay write code');
+
+$GLOBALS['wpdb'] = $wpdb;
+$GLOBALS['gps_test_post_meta'] = [];
