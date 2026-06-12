@@ -179,6 +179,12 @@ final class FakeWpdb
             return $rows;
         }
 
+        if (preg_match("/SELECT \* FROM (\S+) WHERE run_id = '([^']*)' AND part_number_normalized = '([^']*)' ORDER BY id ASC/", $query, $matches)) {
+            return array_values(array_filter($this->tables[$matches[1]] ?? [], static function (array $row) use ($matches): bool {
+                return (string) ($row['run_id'] ?? '') === $matches[2] && (string) ($row['part_number_normalized'] ?? '') === $matches[3];
+            }));
+        }
+
         return [];
     }
 
@@ -241,11 +247,29 @@ final class FakeHttpResponse
 }
 
 $GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_async_empty_articles'] = [];
+$GLOBALS['gps_test_async_fail_starts'] = [];
 
 if (!function_exists('wp_remote_post')) {
     function wp_remote_post($url, array $args) {
         $GLOBALS['gps_test_http_calls']++;
         $payload = json_decode((string) $args['body'], true);
+        if (str_contains((string) $url, '/runs?')) {
+            if (!empty($payload['endpoint_partsSearchArticlesByOem']) && !empty($GLOBALS['gps_test_async_fail_starts'][(string) ($payload['parts_articleOemNo_29'] ?? '')])) { return new FakeHttpResponse(500, json_encode(['error' => 'simulated start failure'])); }
+            $runId = !empty($payload['endpoint_partsSearchArticlesByOem'])
+                ? 'run-articles-' . preg_replace('/[^A-Za-z0-9]/', '', (string) ($payload['parts_articleOemNo_29'] ?? ''))
+                : 'run-vehicles-' . preg_replace('/[^A-Za-z0-9]/', '', (string) ($payload['parts_articleNo_21'] ?? '')) . '-' . (int) ($payload['parts_supplierId_21'] ?? 0);
+            $datasetId = str_replace('run-', 'dataset-', $runId);
+            $GLOBALS['gps_test_apify_datasets'][$datasetId] = (!empty($payload['endpoint_partsSearchArticlesByOem']) && !empty($GLOBALS['gps_test_async_empty_articles'][(string) ($payload['parts_articleOemNo_29'] ?? '')]))
+                ? []
+                : (!empty($payload['endpoint_partsSearchArticlesByOem'])
+                ? [[ 'articles' => [
+                    ['articleId' => 101, 'articleNo' => 'A1', 'supplierId' => 1, 'supplierName' => 'S1'],
+                    ['articleId' => 102, 'articleNo' => 'A2', 'supplierId' => 2, 'supplierName' => 'S2'],
+                ]]]
+                : [[ 'compatibleCars' => [['vehicleId' => (int) ($payload['parts_supplierId_21'] ?? 0), 'manufacturerName' => 'VW', 'modelName' => 'Touran']] ]]);
+            return new FakeHttpResponse(201, json_encode(['data' => ['id' => $runId, 'status' => 'RUNNING', 'defaultDatasetId' => $datasetId]]));
+        }
         if (!empty($payload['endpoint_partsSearchArticlesByOem'])) {
             return new FakeHttpResponse(200, json_encode([[ 'articles' => [
                 ['articleId' => 101, 'articleNo' => 'A1', 'supplierId' => 1, 'supplierName' => 'S1'],
@@ -264,6 +288,19 @@ if (!function_exists('wp_remote_post')) {
         }
 
         return new FakeHttpResponse(200, json_encode([[ 'compatibleCars' => $cars ]]));
+    }
+}
+if (!function_exists('wp_remote_get')) {
+    function wp_remote_get($url, array $args = []) {
+        $GLOBALS['gps_test_http_calls']++;
+        if (preg_match('#/actor-runs/([^?]+)#', (string) $url, $matches)) {
+            $datasetId = str_replace('run-', 'dataset-', rawurldecode($matches[1]));
+            return new FakeHttpResponse(200, json_encode(['data' => ['id' => rawurldecode($matches[1]), 'status' => 'SUCCEEDED', 'defaultDatasetId' => $datasetId]]));
+        }
+        if (preg_match('#/datasets/([^/]+)/items#', (string) $url, $matches)) {
+            return new FakeHttpResponse(200, json_encode($GLOBALS['gps_test_apify_datasets'][rawurldecode($matches[1])] ?? []));
+        }
+        return new FakeHttpResponse(404, '{}');
     }
 }
 if (!function_exists('is_wp_error')) {
@@ -817,11 +854,25 @@ $resumeFirst = $resumeRunner->run_batch([
     'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
 ]);
 assert_same(true, $resumeFirst['success'], 'auto-runner resume scenario first batch succeeds');
-assert_same(1, $resumeFirst['next_offset'], 'auto-runner resume scenario first checkpoint next offset');
-assert_same(5, $GLOBALS['gps_test_http_calls'], 'auto-runner resume scenario first uncached batch calls Apify');
+assert_same(0, $resumeFirst['next_offset'], 'auto-runner async first uncached batch waits at current offset');
+assert_same('async_articles_running', $resumeFirst['processed_item']['status'], 'uncached candidate creates async Step 1 job and returns without waiting');
+assert_same(1, count($resumeWpdb->tables['wp_gps_fitment_apify_jobs'] ?? []), 'uncached candidate stores one async Apify job');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'auto-runner async first uncached batch only starts Apify run');
+$GLOBALS['gps_test_http_calls'] = 0;
+$resumeDuplicate = $resumeRunner->run_batch([
+    'run_id' => 'resume-run',
+    'offset' => 0,
+    'batch_limit' => 1,
+    'export_csv' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $resumeDuplicate['success'], 'auto-runner async polling batch succeeds');
+assert_same(3, count($resumeWpdb->tables['wp_gps_fitment_apify_jobs'] ?? []), 'polling succeeded Step 1 creates vehicle jobs without duplicate article job');
+assert_same('async_vehicles_running', $resumeDuplicate['processed_item']['status'], 'polling succeeded Step 1 queues Step 2 jobs');
 $stoppedCheckpoint = $resumeRunner->stop('manual_stop');
 assert_same('stopped', $stoppedCheckpoint['status'] ?? '', 'auto-runner manual stop persists stopped status');
-assert_same(1, $stoppedCheckpoint['next_offset'] ?? null, 'auto-runner stopped checkpoint keeps next offset');
+assert_same(0, $stoppedCheckpoint['next_offset'] ?? null, 'auto-runner stopped checkpoint keeps pending async offset');
 $GLOBALS['gps_test_http_calls'] = 0;
 $resumeSecond = $resumeRunner->run_batch([
     'offset' => 0,
@@ -832,13 +883,38 @@ $resumeSecond = $resumeRunner->run_batch([
     'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
 ]);
 assert_same(true, $resumeSecond['success'], 'auto-runner resume batch succeeds');
-assert_same(1, $resumeSecond['offset'], 'auto-runner resume starts from stored next offset instead of zero');
-assert_same(2, $resumeSecond['next_offset'], 'auto-runner resume advances from stored next offset');
-assert_same(1, $resumeSecond['counters']['skipped_cached'], 'auto-runner resume uses cache for cached value');
-assert_same(0, $resumeSecond['counters']['apify_lookup_attempted'], 'auto-runner resume does not send cached value to Apify');
+assert_same(0, $resumeSecond['offset'], 'auto-runner resume stays on pending async product');
+assert_same(0, $resumeSecond['next_offset'], 'auto-runner waits until Step 2 jobs complete');
+assert_same(3, count($resumeWpdb->tables['wp_gps_fitment_apify_jobs'] ?? []), 'resume does not duplicate jobs');
+$resumeThird = $resumeRunner->run_batch([
+    'offset' => 0,
+    'batch_limit' => 1,
+    'resume' => true,
+    'export_csv' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $resumeThird['success'], 'auto-runner second vehicle poll succeeds');
+assert_same(1, $resumeThird['next_offset'], 'all Step 2 complete finalizes found and advances offset');
+assert_same('found', $resumeThird['processed_item']['status'], 'polling Step 2 saves vehicles and finalizes found');
+assert_same(2, count($resumeWpdb->tables['wp_gps_fitment_part_cache'] ?? []), 'async finalization saves part cache');
+$GLOBALS['gps_test_http_calls'] = 0;
+$resumeFourth = $resumeRunner->run_batch([
+    'offset' => 0,
+    'batch_limit' => 1,
+    'resume' => true,
+    'export_csv' => true,
+    'dry_run' => false,
+    'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT,
+]);
+assert_same(true, $resumeFourth['success'], 'auto-runner resume cached batch succeeds');
+assert_same(1, $resumeFourth['offset'], 'auto-runner resume starts from finalized next offset');
+assert_same(2, $resumeFourth['next_offset'], 'auto-runner resume advances cached next offset');
+assert_same(1, $resumeFourth['counters']['skipped_cached'], 'auto-runner resume uses cache for cached value');
+assert_same(0, $resumeFourth['counters']['apify_lookup_attempted'], 'cache-first avoids Apify job creation');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner cached values are not sent to Apify again on resume');
 $resumeCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
-assert_same(2, $resumeCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint aggregates resumed batch count');
+assert_same(5, $resumeCheckpoint['total_batches_completed'] ?? null, 'auto-runner checkpoint aggregates resumed async ticks');
 
 // New resilience defaults and browser retry/backoff wiring.
 $settingsDefaults = $settings->defaults();
@@ -888,14 +964,20 @@ $singleBatch = $singleRunner->run_batch([
 ]);
 assert_same(true, $singleBatch['success'], 'one-item lookup request succeeds');
 assert_same(1, $singleBatch['counters']['total_scanned_products'], 'one-item lookup scans only one product');
-assert_same(1, $singleBatch['counters']['apify_lookup_attempted'], 'one-item lookup performs one Apify lookup');
-assert_same(5, $GLOBALS['gps_test_http_calls'], 'one-item lookup performs one Apify chain');
+assert_same(0, $singleBatch['counters']['apify_lookup_attempted'], 'one-item async start does not block for full Apify lookup');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'one-item async start only creates one Apify run');
+assert_same('async_articles_running', $singleBatch['processed_item']['status'], 'one-item lookup starts async article job');
 assert_same(false, array_key_exists('scan', $singleBatch), 'auto-runner response omits scan payload');
 assert_same(false, array_key_exists('backfill', $singleBatch), 'auto-runner response omits backfill payload');
 assert_same(false, array_key_exists('articles', $singleBatch['processed_item']), 'auto-runner processed item omits articles array');
 assert_same(false, array_key_exists('vehicles', $singleBatch['processed_item']), 'auto-runner processed item omits vehicles array');
 assert_same(false, $singleBatch['csv_generated'], 'auto-runner live loop does not generate per-request CSV');
-assert_same(1, get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['next_offset'] ?? null, 'one-item checkpoint advances by one');
+assert_same(0, get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['next_offset'] ?? null, 'one-item checkpoint waits on pending Apify job');
+$singleRunner->run_batch(['run_id' => 'single-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$singleRunner->run_batch(['run_id' => 'single-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$singleRunner->run_batch(['run_id' => 'single-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+assert_same(1, get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, [])['next_offset'] ?? null, 'one-item checkpoint advances after async finalization');
+
 
 assert_same(true, isset($singleBatch['processed_item']['product_id']), 'auto-runner small response includes product id');
 assert_same(true, isset($singleBatch['processed_item']['part_number_normalized']), 'auto-runner small response includes normalized part number');
@@ -906,6 +988,34 @@ $singleFinalHandle = fopen($singleSummary['final_csv_path'], 'rb');
 $singleFinalHeaders = fgetcsv($singleFinalHandle);
 fclose($singleFinalHandle);
 assert_same(true, in_array('product_id', $singleFinalHeaders, true) && in_array('part_number_normalized', $singleFinalHeaders, true), 'auto-runner final CSV includes required product columns');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$GLOBALS['gps_test_async_empty_articles'] = ['A2044600143' => true];
+$emptyWpdb = new FakeWpdb();
+$emptyWpdb->tables[$emptyWpdb->posts] = [['ID' => 400]];
+$GLOBALS['wpdb'] = $emptyWpdb;
+$GLOBALS['gps_test_post_meta'] = [400 => ['_part_number' => 'A2044600143', '_sku' => 'async-empty']];
+$emptyDatabase = new Database($normalizer);
+$emptyRunner = new KTypeBackfillAutoRunner(new ProductScanner($emptyDatabase, $normalizer, $settings, $validator), new FitmentLookupService($emptyDatabase, $client, $normalizer, $settings, $validator), $emptyDatabase, new AuditCsvExporter($emptyDatabase));
+$emptyRunner->run_batch(['run_id' => 'empty-run', 'offset' => 0, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$emptyFinal = $emptyRunner->run_batch(['run_id' => 'empty-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+assert_same('not_found', $emptyFinal['processed_item']['status'], 'no articles marks not_found');
+$GLOBALS['gps_test_async_empty_articles'] = [];
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$GLOBALS['gps_test_async_fail_starts'] = ['06K907425A' => true];
+$failWpdb = new FakeWpdb();
+$failWpdb->tables[$failWpdb->posts] = [['ID' => 401]];
+$GLOBALS['wpdb'] = $failWpdb;
+$GLOBALS['gps_test_post_meta'] = [401 => ['_part_number' => '06K907425A', '_sku' => 'async-fail']];
+$failDatabase = new Database($normalizer);
+$failRunner = new KTypeBackfillAutoRunner(new ProductScanner($failDatabase, $normalizer, $settings, $validator), new FitmentLookupService($failDatabase, $client, $normalizer, $settings, $validator), $failDatabase, new AuditCsvExporter($failDatabase));
+$failRunner->run_batch(['run_id' => 'fail-run', 'offset' => 0, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$failFinal = $failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+assert_same('error', $failFinal['processed_item']['status'], 'failed jobs retry then mark error');
+$GLOBALS['gps_test_async_fail_starts'] = [];
+
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
 $rejectWpdb = new FakeWpdb();

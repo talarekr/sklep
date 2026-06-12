@@ -15,6 +15,8 @@ final class KTypeBackfillAutoRunner
     public const DEFAULT_STALL_THRESHOLD_SECONDS = 300;
     public const CHECKPOINT_OPTION = 'gps_ebay_fitment_sync_ktype_backfill_checkpoint';
 
+    private const MAX_ASYNC_ATTEMPTS = 3;
+
     private const COUNTER_KEYS = [
         'total_scanned_products',
         'products_with_raw_part_number',
@@ -120,7 +122,7 @@ final class KTypeBackfillAutoRunner
         try {
             $scan = $this->scanner->scan(1, $offset, $isLive && !empty($options['persist_product_map']));
             $apifyStarted = microtime(true);
-            $item = $this->process_one_scan_result($scan, $isLive, !empty($options['persist_product_map']));
+            $item = $this->process_one_scan_result($scan, $isLive, !empty($options['persist_product_map']), $runId);
             $timing['apify_duration_seconds'] = round(microtime(true) - $apifyStarted, 3);
             $timing['total_batch_duration_seconds'] = round(microtime(true) - $requestStarted, 3);
             $timing['request_duration_seconds'] = $timing['total_batch_duration_seconds'];
@@ -150,16 +152,17 @@ final class KTypeBackfillAutoRunner
 
         $scanned = (int) ($scan['total_scanned_products'] ?? 0);
         $done = $scanned === 0;
-        $nextOffset = $done ? $offset : $offset + 1;
+        $pendingAsync = !empty($item['pending_async']);
+        $nextOffset = $done ? $offset : ($pendingAsync ? $offset : $offset + 1);
         $stoppedReason = $done ? 'no_products_scanned' : '';
         $status = $done ? 'completed' : 'running';
         $batchCounters = $this->batch_counters($scan, $item);
-        if (!$done && (int) $options['max_batches'] > 0 && ((int) ($checkpoint['total_batches_completed'] ?? 0) + 1) >= (int) $options['max_batches']) {
+        if (!$done && !$pendingAsync && (int) $options['max_batches'] > 0 && ((int) ($checkpoint['total_batches_completed'] ?? 0) + 1) >= (int) $options['max_batches']) {
             $done = true;
             $status = 'completed';
             $stoppedReason = 'max_batches_reached';
         }
-        if (!$done && !empty($options['stop_on_first_error']) && (int) $batchCounters['errors'] > 0) {
+        if (!$done && !$pendingAsync && !empty($options['stop_on_first_error']) && (int) $batchCounters['errors'] > 0) {
             $done = true;
             $status = 'stopped';
             $stoppedReason = 'stop_on_first_error';
@@ -256,7 +259,7 @@ final class KTypeBackfillAutoRunner
     /**
      * @return array<string, mixed>
      */
-    private function process_one_scan_result(array $scan, bool $isLive, bool $persistProductMap): array
+    private function process_one_scan_result(array $scan, bool $isLive, bool $persistProductMap, string $runId): array
     {
         $acceptedRows = array_values(array_filter((array) ($scan['accepted_rows'] ?? []), 'is_array'));
         $rejectedRows = array_values(array_filter((array) ($scan['rejected_rows'] ?? []), 'is_array'));
@@ -271,8 +274,7 @@ final class KTypeBackfillAutoRunner
             } elseif (!$isLive) {
                 $item = $this->small_item($candidate, 'not_run', 0, 0, 0, '', null, false);
             } else {
-                $result = $this->lookup->lookup($raw, true, false);
-                $item = $this->small_item_from_result($candidate, $result, (string) ($result['status'] ?? 'error'));
+                $item = $this->process_async_live_lookup($candidate, $runId);
             }
 
             if ($persistProductMap) {
@@ -305,6 +307,318 @@ final class KTypeBackfillAutoRunner
             'error_message' => '',
             'part_cache_id' => null,
             'from_cache' => false,
+        ];
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function process_async_live_lookup(array $candidate, string $runId): array
+    {
+        $raw = (string) ($candidate['part_number_raw'] ?? '');
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $cached = $this->database->get_cached_result($normalized);
+        if ($cached) {
+            return $this->small_item_from_result($candidate, $this->cached_result($raw, $normalized, $cached), 'skipped_cached');
+        }
+
+        $active = $this->database->next_active_apify_job($runId, $normalized);
+        if (!$active) {
+            $existingJobs = $this->database->apify_jobs_for_part($runId, $normalized);
+            if (!$existingJobs) {
+                return $this->start_articles_job($candidate, $runId);
+            }
+            return $this->finalize_async_if_ready($candidate, $runId, 'No active Apify job remains before cache finalization.');
+        }
+
+        return $this->poll_async_job($candidate, $runId, $active);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function start_articles_job(array $candidate, string $runId): array
+    {
+        $raw = (string) ($candidate['part_number_raw'] ?? '');
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $job = $this->database->find_active_apify_job($runId, $normalized, 'articles');
+        if ($job) {
+            return $this->async_item($candidate, 'async_articles_running', $job, 'Reused existing async article job.');
+        }
+
+        $started = $this->lookup->start_async_run($this->lookup->article_search_payload($normalized));
+        $status = !empty($started['success']) ? 'running' : 'failed';
+        $job = $this->database->create_apify_job([
+            'run_id' => $runId,
+            'product_id' => (int) ($candidate['product_id'] ?? 0),
+            'part_number_raw' => $raw,
+            'part_number_normalized' => $normalized,
+            'step' => 'articles',
+            'status' => $status,
+            'apify_run_id' => (string) ($started['run_id'] ?? ''),
+            'apify_dataset_id' => (string) ($started['dataset_id'] ?? ''),
+            'attempts' => 1,
+            'last_error' => empty($started['success']) ? (string) ($started['error'] ?? 'Apify async article run start failed.') : null,
+        ]);
+        if ($status === 'failed') {
+            return $this->handle_failed_job($candidate, $runId, $job, (string) ($started['error'] ?? 'Apify async article run start failed.'));
+        }
+
+        return $this->async_item($candidate, 'async_articles_running', $job, 'Started async Apify article lookup.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function poll_async_job(array $candidate, string $runId, array $job): array
+    {
+        if ((string) ($job['status'] ?? '') === 'pending') {
+            return $this->async_item($candidate, 'async_' . (string) ($job['step'] ?? 'job') . '_running', $job, 'Apify job is pending.');
+        }
+        if ((string) ($job['status'] ?? '') === 'failed' && (int) ($job['attempts'] ?? 0) < self::MAX_ASYNC_ATTEMPTS) {
+            return $this->handle_failed_job($candidate, $runId, $job, (string) ($job['last_error'] ?? 'Apify job failed before polling.'));
+        }
+
+        $run = $this->lookup->get_async_run((string) ($job['apify_run_id'] ?? ''));
+        $this->database->update_apify_job((int) $job['id'], ['last_checked_at' => current_time('mysql')]);
+        if (empty($run['success'])) {
+            return $this->handle_failed_job($candidate, $runId, $job, (string) ($run['error'] ?? 'Apify run status check failed.'));
+        }
+
+        $apifyStatus = strtoupper((string) ($run['status'] ?? ''));
+        $datasetId = (string) ($run['dataset_id'] ?? ($job['apify_dataset_id'] ?? ''));
+        if (in_array($apifyStatus, ['READY', 'RUNNING'], true)) {
+            return $this->async_item($candidate, 'async_' . (string) ($job['step'] ?? 'job') . '_running', array_merge($job, ['apify_dataset_id' => $datasetId]), 'Apify job is still running.');
+        }
+        if ($apifyStatus !== 'SUCCEEDED') {
+            return $this->handle_failed_job($candidate, $runId, $job, 'Apify run ended with status ' . $apifyStatus . '.');
+        }
+
+        $items = $this->lookup->get_async_dataset_items($datasetId);
+        if (empty($items['success'])) {
+            return $this->handle_failed_job($candidate, $runId, $job, (string) ($items['error'] ?? 'Apify dataset fetch failed.'));
+        }
+
+        $this->database->update_apify_job((int) $job['id'], [
+            'status' => 'succeeded',
+            'apify_dataset_id' => $datasetId,
+            'last_error' => null,
+            'last_checked_at' => current_time('mysql'),
+        ]);
+
+        if ((string) ($job['step'] ?? '') === 'articles') {
+            return $this->process_succeeded_articles_job($candidate, $runId, $items['items']);
+        }
+        return $this->process_succeeded_vehicles_job($candidate, $runId, $job, $items['items']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function process_succeeded_articles_job(array $candidate, string $runId, array $items): array
+    {
+        $articles = ApifyClient::parse_articles($items);
+        $raw = (string) ($candidate['part_number_raw'] ?? '');
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        if (!$articles) {
+            $result = $this->lookup_result($raw, $normalized, 'not_found', [], [], ['No TecDoc articles found for this OEM/part number.']);
+            $partId = $this->database->save_lookup($raw, $result);
+            $result['cache_part_cache_id'] = $partId > 0 ? $partId : null;
+            $this->database->upsert_product_map($candidate);
+            return $this->small_item_from_result($candidate, $result, 'not_found');
+        }
+
+        foreach ($articles as $article) {
+            $articleNo = (string) ($article['articleNo'] ?? '');
+            $supplierId = (int) ($article['supplierId'] ?? 0);
+            if ($articleNo === '' || $supplierId <= 0 || $this->database->find_active_apify_job($runId, $normalized, 'vehicles', $articleNo, $supplierId)) {
+                continue;
+            }
+            $started = $this->lookup->start_async_run($this->lookup->compatible_vehicles_payload($articleNo, $supplierId));
+            $this->database->create_apify_job([
+                'run_id' => $runId,
+                'product_id' => (int) ($candidate['product_id'] ?? 0),
+                'part_number_raw' => $raw,
+                'part_number_normalized' => $normalized,
+                'step' => 'vehicles',
+                'status' => !empty($started['success']) ? 'running' : 'failed',
+                'apify_run_id' => (string) ($started['run_id'] ?? ''),
+                'apify_dataset_id' => (string) ($started['dataset_id'] ?? ''),
+                'article_no' => $articleNo,
+                'supplier_id' => $supplierId,
+                'attempts' => 1,
+                'last_error' => empty($started['success']) ? (string) ($started['error'] ?? 'Apify async vehicle run start failed.') : null,
+            ]);
+        }
+
+        return $this->async_item($candidate, 'async_vehicles_running', $this->database->next_active_apify_job($runId, $normalized) ?: [], 'Article lookup succeeded; vehicle jobs queued.', count($articles));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function process_succeeded_vehicles_job(array $candidate, string $runId, array $job, array $items): array
+    {
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $vehicles = ApifyClient::parse_vehicles($items);
+        if ($vehicles) {
+            foreach ($vehicles as &$vehicle) {
+                $vehicle['_articleNo'] = (string) ($job['article_no'] ?? '');
+                $vehicle['_supplierId'] = (int) ($job['supplier_id'] ?? 0);
+            }
+            unset($vehicle);
+        }
+
+        return $this->finalize_async_if_ready($candidate, $runId, 'Vehicle job succeeded.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function finalize_async_if_ready(array $candidate, string $runId, string $message): array
+    {
+        $raw = (string) ($candidate['part_number_raw'] ?? '');
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $jobs = $this->database->apify_jobs_for_part($runId, $normalized);
+        foreach ($jobs as $job) {
+            $jobStatus = (string) ($job['status'] ?? '');
+            if (in_array($jobStatus, ['pending', 'running'], true) || ($jobStatus === 'failed' && (int) ($job['attempts'] ?? 0) < self::MAX_ASYNC_ATTEMPTS)) {
+                return $this->async_item($candidate, 'async_' . (string) ($job['step'] ?? 'job') . '_running', $job, $message);
+            }
+        }
+
+        $articleJobs = array_values(array_filter($jobs, static fn(array $job): bool => (string) ($job['step'] ?? '') === 'articles' && (string) ($job['status'] ?? '') === 'succeeded'));
+        $vehicleJobs = array_values(array_filter($jobs, static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles'));
+        $failed = array_values(array_filter($jobs, static fn(array $job): bool => in_array((string) ($job['status'] ?? ''), ['failed', 'timed_out'], true)));
+        if (!$articleJobs) {
+            $error = $failed ? (string) ($failed[0]['last_error'] ?? 'Apify article lookup failed.') : 'No article job succeeded.';
+            return $this->save_async_final($candidate, $raw, $normalized, 'error', [], [], [$error]);
+        }
+        if ($failed) {
+            return $this->save_async_final($candidate, $raw, $normalized, 'error', [], [], [(string) ($failed[0]['last_error'] ?? 'Apify vehicle lookup failed.')]);
+        }
+
+        $articles = [];
+        foreach ($vehicleJobs as $vehicleJob) {
+            $articles[] = ['articleNo' => (string) ($vehicleJob['article_no'] ?? ''), 'supplierId' => (int) ($vehicleJob['supplier_id'] ?? 0), 'supplierName' => ''];
+        }
+        $vehicles = [];
+        foreach ($vehicleJobs as $vehicleJob) {
+            if ((string) ($vehicleJob['status'] ?? '') !== 'succeeded') {
+                continue;
+            }
+            $dataset = $this->lookup->get_async_dataset_items((string) ($vehicleJob['apify_dataset_id'] ?? ''));
+            if (empty($dataset['success'])) {
+                return $this->save_async_final($candidate, $raw, $normalized, 'error', [], [], [(string) ($dataset['error'] ?? 'Apify vehicle dataset fetch failed during finalization.')]);
+            }
+            foreach (ApifyClient::parse_vehicles($dataset['items']) as $vehicle) {
+                $vehicle['_articleNo'] = (string) ($vehicleJob['article_no'] ?? '');
+                $vehicle['_supplierId'] = (int) ($vehicleJob['supplier_id'] ?? 0);
+                $vehicles[] = $vehicle;
+            }
+        }
+        $status = $vehicles ? 'found' : 'not_found';
+        $errors = $vehicles ? [] : ['TecDoc article was found, but compatibleCars was empty.'];
+        return $this->save_async_final($candidate, $raw, $normalized, $status, $articles, $vehicles, $errors);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function save_async_final(array $candidate, string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors): array
+    {
+        $result = $this->lookup_result($raw, $normalized, $status, $articles, $vehicles, $errors);
+        $partId = $this->database->save_lookup($raw, $result);
+        $result['cache_part_cache_id'] = $partId > 0 ? $partId : null;
+        $this->database->upsert_product_map($candidate);
+        return $this->small_item_from_result($candidate, $result, $status);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function handle_failed_job(array $candidate, string $runId, array $job, string $error): array
+    {
+        $attempts = (int) ($job['attempts'] ?? 0);
+        if ($attempts < self::MAX_ASYNC_ATTEMPTS) {
+            $payload = (string) ($job['step'] ?? '') === 'vehicles'
+                ? $this->lookup->compatible_vehicles_payload((string) ($job['article_no'] ?? ''), (int) ($job['supplier_id'] ?? 0))
+                : $this->lookup->article_search_payload((string) ($job['part_number_normalized'] ?? ''));
+            $started = $this->lookup->start_async_run($payload);
+            $this->database->update_apify_job((int) $job['id'], [
+                'status' => !empty($started['success']) ? 'running' : 'failed',
+                'apify_run_id' => (string) ($started['run_id'] ?? ''),
+                'apify_dataset_id' => (string) ($started['dataset_id'] ?? ''),
+                'attempts' => $attempts + 1,
+                'last_error' => empty($started['success']) ? (string) ($started['error'] ?? $error) : null,
+                'last_checked_at' => current_time('mysql'),
+            ]);
+            return $this->async_item($candidate, 'async_' . (string) ($job['step'] ?? 'job') . '_running', array_merge($job, ['attempts' => $attempts + 1]), 'Retrying Apify job after error: ' . $error);
+        }
+
+        $this->database->update_apify_job((int) $job['id'], ['status' => 'failed', 'last_error' => $error, 'last_checked_at' => current_time('mysql')]);
+        return $this->finalize_async_if_ready($candidate, $runId, $error);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function async_item(array $candidate, string $status, array $job, string $message, int $articlesFound = 0): array
+    {
+        $item = $this->small_item($candidate, $status, $articlesFound, 0, 0, $message, null, false);
+        $item['pending_async'] = true;
+        $item['active_apify_job_id'] = isset($job['apify_run_id']) ? (string) $job['apify_run_id'] : '';
+        $item['active_job_step'] = (string) ($job['step'] ?? '');
+        $item['active_job_status'] = (string) ($job['status'] ?? '');
+        $item['vehicle_jobs_completed'] = $this->vehicle_job_count($candidate, true);
+        $item['vehicle_jobs_total'] = $this->vehicle_job_count($candidate, false);
+        $item['finalized_status'] = '';
+        return $item;
+    }
+
+    private function vehicle_job_count(array $candidate, bool $completed): int
+    {
+        $checkpoint = $this->checkpoint();
+        $jobs = $this->database->apify_jobs_for_part((string) ($checkpoint['run_id'] ?? ''), (string) ($candidate['part_number_normalized'] ?? ''));
+        $count = 0;
+        foreach ($jobs as $job) {
+            if ((string) ($job['step'] ?? '') !== 'vehicles') {
+                continue;
+            }
+            if (!$completed || (string) ($job['status'] ?? '') === 'succeeded') {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function lookup_result(string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors): array
+    {
+        $vehicleIds = [];
+        foreach ($vehicles as $vehicle) {
+            if (is_array($vehicle)) {
+                $id = (string) ($vehicle['vehicleId'] ?? $vehicle['vehicle_id'] ?? '');
+                if ($id !== '') {
+                    $vehicleIds[] = $id;
+                }
+            }
+        }
+        return [
+            'part_number_raw' => $raw,
+            'part_number_normalized' => $normalized,
+            'status' => $status,
+            'articles' => $articles,
+            'vehicles' => $vehicles,
+            'unique_vehicle_ids' => array_values(array_unique($vehicleIds)),
+            'errors' => $errors,
+            'from_cache' => false,
+            'saved' => false,
+            'cache_part_cache_id' => null,
+            'force_live' => false,
         ];
     }
 
@@ -434,8 +748,10 @@ final class KTypeBackfillAutoRunner
         $checkpoint['status'] = $status;
         $checkpoint['current_offset'] = $offset;
         $checkpoint['next_offset'] = $nextOffset;
-        $checkpoint['last_completed_offset'] = $offset;
-        $checkpoint['last_successful_offset'] = $offset;
+        if (empty($item['pending_async'])) {
+            $checkpoint['last_completed_offset'] = $offset;
+            $checkpoint['last_successful_offset'] = $offset;
+        }
         $checkpoint['batch_limit'] = 1;
         $checkpoint['total_batches_completed'] = (int) ($checkpoint['total_batches_completed'] ?? 0) + 1;
         $checkpoint['last_successful_batch_number'] = (int) $checkpoint['total_batches_completed'];
