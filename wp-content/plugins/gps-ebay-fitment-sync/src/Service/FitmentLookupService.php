@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GPS_Ebay_Fitment_Sync\Service;
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
+use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
@@ -14,20 +15,23 @@ final class FitmentLookupService
     private ApifyClient $client;
     private PartNumberNormalizer $normalizer;
     private Settings $settings;
+    private PartNumberCandidateValidator $validator;
 
-    public function __construct(Database $database, ApifyClient $client, PartNumberNormalizer $normalizer, Settings $settings)
+    public function __construct(Database $database, ApifyClient $client, PartNumberNormalizer $normalizer, Settings $settings, ?PartNumberCandidateValidator $validator = null)
     {
         $this->database = $database;
         $this->client = $client;
         $this->normalizer = $normalizer;
         $this->settings = $settings;
+        $this->validator = $validator ?: new PartNumberCandidateValidator($normalizer);
     }
 
     public function lookup(string $partNumber, bool $save = false, bool $forceLive = false): array
     {
-        $normalized = $this->normalizer->normalize($partNumber);
-        if ($normalized === '') {
-            return $this->result($partNumber, $normalized, 'error', [], [], ['Part number is empty after normalization.'], false, null, $forceLive);
+        $validation = $this->validator->validate($partNumber);
+        $normalized = (string) $validation['normalized'];
+        if (empty($validation['accepted'])) {
+            return $this->result($partNumber, $normalized, 'rejected', [], [], ['Rejected before lookup: ' . (string) $validation['rejection_reason']], false, null, $forceLive);
         }
 
         $existingPart = $this->database->get_part_cache($normalized);
@@ -97,11 +101,59 @@ final class FitmentLookupService
     {
         $limit = (int) $this->settings->get('batch_size');
         $processed = [];
-        foreach (array_slice(array_values(array_unique($partNumbers)), 0, $limit) as $partNumber) {
-            $processed[] = $this->lookup((string) $partNumber, true, false);
+        $rejected = [];
+        $seen = [];
+        $counters = [
+            'accepted_lookup_candidates' => 0,
+            'rejected_before_lookup' => 0,
+            'skipped_cached' => 0,
+            'apify_lookup_attempted' => 0,
+            'found' => 0,
+            'not_found' => 0,
+            'errors' => 0,
+        ];
+
+        foreach ($partNumbers as $partNumber) {
+            foreach ($this->validator->candidates((string) $partNumber) as $candidate) {
+                if (empty($candidate['accepted'])) {
+                    $counters['rejected_before_lookup']++;
+                    $rejected[] = $candidate;
+                    continue;
+                }
+
+                $normalized = (string) $candidate['normalized'];
+                if (isset($seen[$normalized])) {
+                    continue;
+                }
+                $seen[$normalized] = true;
+                $counters['accepted_lookup_candidates']++;
+
+                if (count($processed) >= $limit) {
+                    continue 2;
+                }
+
+                $cached = $this->database->get_cached_result($normalized);
+                if ($cached) {
+                    $counters['skipped_cached']++;
+                    $result = $this->cached_result((string) $candidate['raw'], $normalized, $cached, false);
+                } else {
+                    $counters['apify_lookup_attempted']++;
+                    $result = $this->lookup((string) $candidate['raw'], true, false);
+                }
+
+                if ($result['status'] === 'found') {
+                    $counters['found']++;
+                } elseif ($result['status'] === 'not_found') {
+                    $counters['not_found']++;
+                } elseif ($result['status'] === 'error' || $result['status'] === 'rejected') {
+                    $counters['errors']++;
+                }
+
+                $processed[] = $result;
+            }
         }
 
-        return ['processed' => $processed, 'limit' => $limit];
+        return array_merge(['processed' => $processed, 'rejected' => $rejected, 'limit' => $limit], $counters);
     }
 
     private function cached_result(string $raw, string $normalized, array $cached, bool $forceLive): array
