@@ -57,9 +57,9 @@ final class AuditCsvExporter
     /**
      * @return array<string, mixed>
      */
-    public function export_backfill(array $scan, array $backfill, int $offset, int $limit): array
+    public function export_backfill(array $scan, array $backfill, int $offset, int $limit, ?string $runId = null): array
     {
-        $runId = $this->run_id('backfill');
+        $runId = $runId ?: $this->run_id('backfill');
         $resultsByPart = [];
         foreach (($backfill['processed'] ?? []) as $result) {
             if (is_array($result) && isset($result['part_number_normalized'])) {
@@ -110,6 +110,73 @@ final class AuditCsvExporter
         $filename = sprintf('gps-fitment-scan-preview-audit-%s-offset-%d-limit-%d.csv', gmdate('Ymd-His'), max(0, $offset), max(1, $limit));
 
         return $this->write($filename, $rows, $runId);
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function export_final_summary(array $summary): array
+    {
+        $runId = (string) ($summary['run_id'] ?? $this->run_id('ktype_backfill_summary'));
+        $columns = [
+            'run_id',
+            'started_at',
+            'finished_at',
+            'stopped_reason',
+            'start_offset',
+            'final_offset',
+            'batch_limit',
+            'max_batches',
+            'total_batches',
+            'total_scanned_products',
+            'products_with_raw_part_number',
+            'accepted_products',
+            'rejected_products',
+            'skipped_cached',
+            'apify_lookup_attempted',
+            'found',
+            'not_found',
+            'errors',
+            'csv_files_count',
+            'batch_csv_urls',
+            'previous_run_id',
+        ];
+        $row = [];
+        foreach ($columns as $column) {
+            $value = $summary[$column] ?? '';
+            if (is_array($value)) {
+                $value = implode("\n", array_map('strval', $value));
+            }
+            $row[$column] = (string) $value;
+        }
+
+        $directory = $this->audit_directory();
+        if ($directory === '') {
+            return $this->failed_summary_result($runId, 'Unable to resolve WordPress uploads directory.');
+        }
+        if (!is_dir($directory) && !wp_mkdir_p($directory)) {
+            return $this->failed_summary_result($runId, 'Unable to create audit CSV directory.');
+        }
+
+        $filename = sanitize_file_name(sprintf('gps-fitment-backfill-summary-%s-%s.csv', gmdate('Ymd-His'), $runId));
+        $path = $directory . '/' . $filename;
+        $handle = fopen($path, 'wb');
+        if (!$handle) {
+            return $this->failed_summary_result($runId, 'Unable to open summary CSV file for writing.');
+        }
+        fputcsv($handle, $columns);
+        fputcsv($handle, array_map(static fn(string $column): string => (string) ($row[$column] ?? ''), $columns));
+        fclose($handle);
+
+        return [
+            'summary_csv_generated' => true,
+            'summary_csv_path' => $path,
+            'summary_csv_url' => $this->audit_url(basename($path)),
+            'summary_csv_row_count' => 1,
+            'run_id' => $runId,
+            'summary_csv_error' => '',
+        ];
     }
 
     /**
@@ -407,6 +474,21 @@ final class AuditCsvExporter
             'csv_row_count' => $rowCount,
             'run_id' => $runId,
             'csv_error' => $error,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function failed_summary_result(string $runId, string $error): array
+    {
+        return [
+            'summary_csv_generated' => false,
+            'summary_csv_path' => '',
+            'summary_csv_url' => '',
+            'summary_csv_row_count' => 0,
+            'run_id' => $runId,
+            'summary_csv_error' => $error,
         ];
     }
 
