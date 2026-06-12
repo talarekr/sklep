@@ -27,42 +27,35 @@ final class FitmentLookupService
     {
         $normalized = $this->normalizer->normalize($partNumber);
         if ($normalized === '') {
-            return $this->result($partNumber, $normalized, 'error', [], [], ['Part number is empty after normalization.'], false);
+            return $this->result($partNumber, $normalized, 'error', [], [], ['Part number is empty after normalization.'], false, null, $forceLive);
         }
 
-        if (!$forceLive) {
+        $existingPart = $this->database->get_part_cache($normalized);
+        if (!$forceLive && $existingPart) {
             $cached = $this->database->get_cached_result($normalized);
             if ($cached) {
-                return [
-                    'part_number_raw' => $partNumber,
-                    'part_number_normalized' => $normalized,
-                    'status' => $cached['part_cache']['status'],
-                    'articles' => $cached['articles'],
-                    'vehicles' => $cached['vehicles'],
-                    'unique_vehicle_ids' => $cached['unique_vehicle_ids'],
-                    'errors' => $cached['part_cache']['error_message'] ? explode("\n", (string) $cached['part_cache']['error_message']) : [],
-                    'from_cache' => true,
-                    'saved' => false,
-                ];
+                return $this->cached_result($partNumber, $normalized, $cached, $forceLive);
             }
         }
 
         $articleResponse = $this->client->search_articles($normalized);
         if (!$articleResponse['success']) {
-            $live = $this->result($partNumber, $normalized, 'error', [], [], [(string) $articleResponse['error']], false);
+            $live = $this->result($partNumber, $normalized, 'error', [], [], [(string) $articleResponse['error']], false, $existingPart ? (int) $existingPart['id'] : null, $forceLive);
             if ($save) {
-                $this->database->save_lookup($partNumber, $live);
-                $live['saved'] = true;
+                $partId = $this->database->save_lookup($partNumber, $live);
+                $live['saved'] = $partId > 0;
+                $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
             }
             return $live;
         }
 
         $articles = $articleResponse['articles'];
         if (!$articles) {
-            $live = $this->result($partNumber, $normalized, 'not_found', [], [], ['No TecDoc articles found for this OEM/part number.'], false);
+            $live = $this->result($partNumber, $normalized, 'not_found', [], [], ['No TecDoc articles found for this OEM/part number.'], false, $existingPart ? (int) $existingPart['id'] : null, $forceLive);
             if ($save) {
-                $this->database->save_lookup($partNumber, $live);
-                $live['saved'] = true;
+                $partId = $this->database->save_lookup($partNumber, $live);
+                $live['saved'] = $partId > 0;
+                $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
             }
             return $live;
         }
@@ -87,10 +80,11 @@ final class FitmentLookupService
             $errors[] = 'TecDoc article was found, but compatibleCars was empty.';
         }
 
-        $live = $this->result($partNumber, $normalized, $status, $articles, $vehicles, $errors, false);
+        $live = $this->result($partNumber, $normalized, $status, $articles, $vehicles, $errors, false, $existingPart ? (int) $existingPart['id'] : null, $forceLive);
         if ($save) {
-            $this->database->save_lookup($partNumber, $live);
-            $live['saved'] = true;
+            $partId = $this->database->save_lookup($partNumber, $live);
+            $live['saved'] = $partId > 0;
+            $live['cache_part_cache_id'] = $partId > 0 ? $partId : null;
         }
 
         return $live;
@@ -107,7 +101,26 @@ final class FitmentLookupService
         return ['processed' => $processed, 'limit' => $limit];
     }
 
-    private function result(string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors, bool $fromCache): array
+    private function cached_result(string $raw, string $normalized, array $cached, bool $forceLive): array
+    {
+        return [
+            'part_number_raw' => $raw,
+            'part_number_normalized' => $normalized,
+            'status' => (string) $cached['part_cache']['status'],
+            'articles' => $cached['articles'],
+            'vehicles' => $cached['vehicles'],
+            'unique_vehicle_ids' => $cached['unique_vehicle_ids'],
+            'errors' => $cached['part_cache']['error_message'] ? explode("\n", (string) $cached['part_cache']['error_message']) : [],
+            'from_cache' => true,
+            'saved' => false,
+            'cache_lookup_key' => $normalized,
+            'cache_part_cache_id' => (int) $cached['part_cache']['id'],
+            'cache_hit' => true,
+            'force_live' => $forceLive,
+        ];
+    }
+
+    private function result(string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors, bool $fromCache, ?int $partCacheId, bool $forceLive): array
     {
         $vehicleIds = [];
         foreach ($vehicles as $vehicle) {
@@ -128,6 +141,10 @@ final class FitmentLookupService
             'errors' => $errors,
             'from_cache' => $fromCache,
             'saved' => false,
+            'cache_lookup_key' => $normalized,
+            'cache_part_cache_id' => $partCacheId,
+            'cache_hit' => $fromCache,
+            'force_live' => $forceLive,
         ];
     }
 }
