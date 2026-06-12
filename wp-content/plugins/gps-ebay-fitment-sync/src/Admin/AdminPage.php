@@ -276,13 +276,19 @@ final class AdminPage
     {
         $nonce = wp_create_nonce('gps_ebay_fitment_ktype_backfill');
         $checkpoint = $this->autoRunner->checkpoint();
+        $stallThresholdSeconds = KTypeBackfillAutoRunner::DEFAULT_STALL_THRESHOLD_SECONDS;
+        $progressAt = strtotime((string) ($checkpoint['last_progress_at'] ?? '')) ?: strtotime((string) ($checkpoint['updated_at'] ?? '')) ?: 0;
+        $isStaleRunning = !empty($checkpoint) && (string) ($checkpoint['status'] ?? '') === 'running' && $progressAt > 0 && (time() - $progressAt) > $stallThresholdSeconds;
         $checkpointJson = wp_json_encode($checkpoint);
         ?>
             <hr>
             <h2><?php echo esc_html__('KType Backfill Auto Runner', 'gps-ebay-fitment-sync'); ?></h2>
-            <div id="gps-ktype-backfill-runner" class="gps-auto-runner" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>" data-checkpoint="<?php echo esc_attr((string) $checkpointJson); ?>">
+            <div id="gps-ktype-backfill-runner" class="gps-auto-runner" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>" data-checkpoint="<?php echo esc_attr((string) $checkpointJson); ?>" data-stall-threshold-seconds="<?php echo esc_attr((string) $stallThresholdSeconds); ?>" data-request-timeout-seconds="180">
                 <p><strong><?php echo esc_html__('Cost warning:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('This can call paid Apify lookups for accepted not-cached part numbers.', 'gps-ebay-fitment-sync'); ?></p>
                 <p><strong><?php echo esc_html__('503/load warning:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('Use a lower batch size and a higher delay (recommended live settings: batch limit 10, delay 5000–10000 ms, max Apify lookups 5) to reduce admin-ajax/server 503 errors.', 'gps-ebay-fitment-sync'); ?></p>
+                <?php if ($isStaleRunning): ?>
+                <div class="notice notice-warning inline"><p><strong><?php echo esc_html__('Stale running detected.', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html__('The last checkpoint has not progressed within the stall threshold. Use Resume last run to continue from the saved next offset, or Mark as stopped to clear running status.', 'gps-ebay-fitment-sync'); ?></p></div>
+                <?php endif; ?>
                 <p><?php echo esc_html__('Browser-based automation follows the existing eBay auto-runner pattern, but progress is also checkpointed server-side after each completed batch so refreshes, timeouts, and manual stops can resume from the stored next offset.', 'gps-ebay-fitment-sync'); ?></p>
                 <h3><?php echo esc_html__('Last server checkpoint', 'gps-ebay-fitment-sync'); ?></h3>
                 <table class="widefat striped" style="max-width:980px;"><tbody>
@@ -291,6 +297,12 @@ final class AdminPage
                     <tr><th><?php echo esc_html__('Last completed offset', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_completed_offset"><?php echo esc_html(isset($checkpoint['last_completed_offset']) ? (string) $checkpoint['last_completed_offset'] : ''); ?></td></tr>
                     <tr><th><?php echo esc_html__('Next offset', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="next_offset"><?php echo esc_html(isset($checkpoint['next_offset']) ? (string) $checkpoint['next_offset'] : ''); ?></td></tr>
                     <tr><th><?php echo esc_html__('Last error', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_error"><?php echo esc_html((string) ($checkpoint['last_error'] ?? '')); ?></td></tr>
+                    <tr><th><?php echo esc_html__('Last batch started', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_batch_started_at"><?php echo esc_html((string) ($checkpoint['last_batch_started_at'] ?? '')); ?></td></tr>
+                    <tr><th><?php echo esc_html__('Last batch finished', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_batch_finished_at"><?php echo esc_html((string) ($checkpoint['last_batch_finished_at'] ?? '')); ?></td></tr>
+                    <tr><th><?php echo esc_html__('Last progress', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_progress_at"><?php echo esc_html((string) ($checkpoint['last_progress_at'] ?? '')); ?></td></tr>
+                    <tr><th><?php echo esc_html__('In flight since', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="in_flight_since"><?php echo esc_html((string) ($checkpoint['in_flight_since'] ?? '')); ?></td></tr>
+                    <tr><th><?php echo esc_html__('Last request duration', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="last_request_duration_seconds"><?php echo esc_html(isset($checkpoint['last_request_duration_seconds']) ? (string) $checkpoint['last_request_duration_seconds'] : ''); ?></td></tr>
+                    <tr><th><?php echo esc_html__('Last successful batch/offset', 'gps-ebay-fitment-sync'); ?></th><td><span data-ktype-checkpoint="last_successful_batch_number"><?php echo esc_html(isset($checkpoint['last_successful_batch_number']) ? (string) $checkpoint['last_successful_batch_number'] : ''); ?></span> / <span data-ktype-checkpoint="last_successful_offset"><?php echo esc_html(isset($checkpoint['last_successful_offset']) ? (string) $checkpoint['last_successful_offset'] : ''); ?></span></td></tr>
                     <tr><th><?php echo esc_html__('Final summary CSV', 'gps-ebay-fitment-sync'); ?></th><td data-ktype-checkpoint="final_summary_csv_url"><?php $summaryUrl = (string) ($checkpoint['final_summary_csv_url'] ?? ''); echo $summaryUrl !== '' ? '<a href="' . esc_url($summaryUrl) . '">' . esc_html($summaryUrl) . '</a>' : ''; ?></td></tr>
                 </tbody></table>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0;">
@@ -308,9 +320,9 @@ final class AdminPage
                     <label><input id="gps-ktype-dry-run" type="checkbox" value="1"> <?php echo esc_html__('Dry-run / preview only mode (no Apify calls and no cache writes)', 'gps-ebay-fitment-sync'); ?></label>
                 </p>
                 <p><label><?php echo esc_html__('Confirmation', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-confirmation" type="text" class="regular-text" placeholder="RUN KTYPE BACKFILL"></label> <code>RUN KTYPE BACKFILL</code></p>
-                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button></p>
+                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-mark-stopped" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Mark as stopped', 'gps-ebay-fitment-sync'); ?></button></p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;max-width:980px;">
-                    <?php foreach (['state','current_offset','last_completed_offset','next_offset','batch_number','total_batches','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','retry_delay_seconds','stopped_reason'] as $counter): ?>
+                    <?php foreach (['state','current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'] as $counter): ?>
                         <div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html($counter); ?></span><br><strong data-ktype-counter="<?php echo esc_attr($counter); ?>">0</strong></div>
                     <?php endforeach; ?>
                 </div>
@@ -329,6 +341,7 @@ final class AdminPage
                 const startButton = $('gps-ktype-start');
                 const resumeButton = $('gps-ktype-resume');
                 const stopButton = $('gps-ktype-stop');
+                const markStoppedButton = $('gps-ktype-mark-stopped');
                 const confirmationInput = $('gps-ktype-confirmation');
                 const dryRunInput = $('gps-ktype-dry-run');
                 const fields = {};
@@ -337,7 +350,10 @@ final class AdminPage
                 runner.querySelectorAll('[data-ktype-checkpoint]').forEach(function (node) { checkpointFields[node.getAttribute('data-ktype-checkpoint')] = node; });
                 let serverCheckpoint = {};
                 try { serverCheckpoint = JSON.parse(runner.dataset.checkpoint || '{}') || {}; } catch (e) { serverCheckpoint = {}; }
-                const state = { running:false, stopped:false, inFlight:false, delayTimer:0, abortController:null, resume:false, run_id:'', started_at:'', start_offset:0, current_offset:0, last_completed_offset:-1, next_offset:0, batch_limit:10, max_batches:0, max_apify_lookups_per_batch:5, total_batches:0, total_scanned_products:0, products_with_raw_part_number:0, accepted_products:0, rejected_products:0, skipped_cached:0, apify_lookup_attempted:0, found:0, not_found:0, errors:0, deferred_due_to_lookup_cap:0, transient_retry_count:0, last_http_error:'-', retry_delay_seconds:0, csvUrls:[], stopped_reason:'-' };
+                const STALL_THRESHOLD_SECONDS = parseInt(runner.dataset.stallThresholdSeconds || '300', 10) || 300;
+                const REQUEST_TIMEOUT_SECONDS = parseInt(runner.dataset.requestTimeoutSeconds || '180', 10) || 180;
+                const MAX_TRANSIENT_RETRIES = 3;
+                const state = { running:false, stopped:false, inFlight:false, delayTimer:0, stallTimer:0, abortController:null, resume:false, run_id:'', started_at:'', start_offset:0, current_offset:0, last_completed_offset:-1, next_offset:0, batch_limit:10, max_batches:0, max_apify_lookups_per_batch:5, total_batches:0, total_scanned_products:0, products_with_raw_part_number:0, accepted_products:0, rejected_products:0, skipped_cached:0, apify_lookup_attempted:0, found:0, not_found:0, errors:0, deferred_due_to_lookup_cap:0, transient_retry_count:0, last_http_error:'-', retry_delay_seconds:0, csvUrls:[], stopped_reason:'-', last_batch_started_at:'-', last_batch_finished_at:'-', last_progress_at:'-', in_flight_since:'-', last_request_duration_seconds:0, last_successful_batch_number:0, last_successful_offset:-1, total_batch_duration_seconds:0, apify_duration_seconds:0, csv_duration_seconds:0, summary_duration_seconds:0, request_duration_seconds:0, delay_duration_seconds:0, next_retry_time:'-' };
                 function numberInput(id, fallback, min, max) { const value = parseInt(($(id) || {}).value || String(fallback), 10); return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback; }
                 function setField(name, value) { if (fields[name]) { fields[name].textContent = String(value); } }
                 function safeText(value) { return String(value || '').replace(/</g, '&lt;'); }
@@ -356,23 +372,36 @@ final class AdminPage
                     state.max_batches = parseInt(checkpoint.max_batches || 0, 10) || 0;
                     state.max_apify_lookups_per_batch = parseInt(checkpoint.max_apify_lookups_per_batch || state.max_apify_lookups_per_batch, 10) || state.max_apify_lookups_per_batch;
                     state.total_batches = parseInt(checkpoint.total_batches_completed || 0, 10) || 0;
+                    state.last_batch_started_at = checkpoint.last_batch_started_at || '-';
+                    state.last_batch_finished_at = checkpoint.last_batch_finished_at || '-';
+                    state.last_progress_at = checkpoint.last_progress_at || checkpoint.updated_at || '-';
+                    state.in_flight_since = checkpoint.in_flight_since || '-';
+                    state.last_request_duration_seconds = parseFloat(checkpoint.last_request_duration_seconds || 0) || 0;
+                    state.last_successful_batch_number = parseInt(checkpoint.last_successful_batch_number || 0, 10) || 0;
+                    state.last_successful_offset = parseInt(checkpoint.last_successful_offset || -1, 10);
+                    const timing = checkpoint.last_timing || {};
+                    ['total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds'].forEach(function (name) { state[name] = parseFloat(timing[name] || 0) || 0; });
                     ['total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap'].forEach(function (name) { state[name] = parseInt(aggregate[name] || 0, 10) || 0; });
                     state.csvUrls = Array.isArray(checkpoint.batch_csv_urls) ? checkpoint.batch_csv_urls.slice() : [];
                     state.stopped_reason = checkpoint.status || '-';
                     if (checkpointFields.run_id) { checkpointFields.run_id.textContent = checkpoint.run_id || ''; }
-                    ['status','last_completed_offset','next_offset','last_error'].forEach(function (name) { if (checkpointFields[name]) { checkpointFields[name].textContent = checkpoint[name] || ''; } });
+                    ['status','last_completed_offset','next_offset','last_error','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset'].forEach(function (name) { if (checkpointFields[name]) { checkpointFields[name].textContent = checkpoint[name] || ''; } });
                     if (checkpointFields.final_summary_csv_url) { checkpointFields.final_summary_csv_url.innerHTML = link(checkpoint.final_summary_csv_url || ''); }
                 }
                 function refresh(lastBatch) {
-                    ['current_offset','last_completed_offset','next_offset','batch_number','total_batches','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','retry_delay_seconds','stopped_reason'].forEach(function (name) { setField(name, state[name] ?? 0); });
-                    setField('state', state.running ? 'running' : (state.stopped ? 'stopped' : 'idle'));
+                    ['current_offset','last_completed_offset','next_offset','batch_number','total_batches','last_batch_started_at','last_batch_finished_at','last_progress_at','in_flight_since','last_request_duration_seconds','last_successful_batch_number','last_successful_offset','total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds','total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap','transient_retry_count','last_http_error','next_retry_time','retry_delay_seconds','stopped_reason'].forEach(function (name) { setField(name, state[name] ?? 0); });
+                    setField('state', state.retry_delay_seconds > 0 ? 'retry_backoff' : (state.inFlight ? 'request_in_flight' : (state.running ? 'running' : (state.stopped ? 'stopped' : 'idle'))));
                     if (fields.last_batch_result) { fields.last_batch_result.textContent = lastBatch ? JSON.stringify(lastBatch, null, 2) : '-'; }
                     if (fields.latest_csv) { fields.latest_csv.innerHTML = link(state.csvUrls[state.csvUrls.length - 1] || ''); }
                     if (fields.batch_csv_links) { fields.batch_csv_links.innerHTML = state.csvUrls.map(function (url) { return '<li>' + link(url) + '</li>'; }).join(''); }
                     startButton.disabled = state.running || (!dryRunInput.checked && confirmationInput.value !== 'RUN KTYPE BACKFILL');
                     resumeButton.disabled = state.running || !serverCheckpoint.run_id || (!dryRunInput.checked && confirmationInput.value !== 'RUN KTYPE BACKFILL');
+                    if (markStoppedButton) { markStoppedButton.disabled = state.running || !serverCheckpoint.run_id; }
                 }
-                function wait(ms) { return new Promise(function (resolve) { state.delayTimer = window.setTimeout(function () { state.delayTimer = 0; resolve(); }, ms); }); }
+                function wait(ms) { const started = Date.now(); return new Promise(function (resolve) { state.delayTimer = window.setTimeout(function () { state.delayTimer = 0; state.delay_duration_seconds = Math.round((Date.now() - started) / 100) / 10; resolve(); }, ms); }); }
+                function minutesSinceProgress() { const ms = Date.now() - Date.parse(state.last_progress_at && state.last_progress_at !== '-' ? state.last_progress_at : state.started_at); return Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 60000)) : Math.ceil(STALL_THRESHOLD_SECONDS / 60); }
+                async function stopForStall() { if (!state.running || state.stopped) { return; } state.stopped_reason = 'stalled_no_progress'; state.last_http_error = 'stalled_no_progress'; if (state.abortController) { state.abortController.abort(); } const minutes = minutesSinceProgress(); state.running = false; state.stopped = true; if (state.stallTimer) { window.clearTimeout(state.stallTimer); state.stallTimer = 0; } refresh(); try { const checkpoint = await post('gps_ebay_fitment_ktype_backfill_stop', { reason:'stalled_no_progress' }); applyCheckpoint(checkpoint); } catch (e) {} if (fields.last_batch_result) { fields.last_batch_result.textContent = 'Runner stalled with no completed batch for ' + minutes + ' minutes. Resume from offset ' + state.next_offset + '.'; } refresh(); }
+                function armStallTimer() { if (state.stallTimer) { window.clearTimeout(state.stallTimer); } if (!state.running) { return; } state.stallTimer = window.setTimeout(stopForStall, STALL_THRESHOLD_SECONDS * 1000); }
                 function transientDelaySeconds(attempt) { return [30, 60, 120][Math.max(0, Math.min(2, attempt - 1))]; }
                 function isTransientRequestError(error) {
                     const message = error && error.message ? String(error.message) : '';
@@ -387,10 +416,13 @@ final class AdminPage
                     state.inFlight = true;
                     let timeoutId = 0;
                     try {
-                        timeoutId = window.setTimeout(function () { if (state.abortController) { state.abortController.abort(); } }, 300000);
+                        timeoutId = window.setTimeout(function () { if (state.abortController) { state.abortController.abort(); } }, REQUEST_TIMEOUT_SECONDS * 1000);
+                        const requestStarted = Date.now();
                         const response = await fetch(runner.dataset.ajaxUrl, { method:'POST', credentials:'same-origin', body:formData, signal:state.abortController.signal });
+                        state.request_duration_seconds = Math.round((Date.now() - requestStarted) / 100) / 10; state.last_request_duration_seconds = state.request_duration_seconds;
                         if (!response.ok) { const error = new Error('request_failed_http_' + response.status); error.httpStatus = response.status; if ([503,502,504,429].indexOf(response.status) !== -1) { error.transient = true; } throw error; }
                         const result = await response.json();
+                        state.request_duration_seconds = Math.round((Date.now() - requestStarted) / 100) / 10; state.last_request_duration_seconds = state.request_duration_seconds;
                         if (result && result.success && result.data) { return result.data; }
                         throw new Error((result && result.data && result.data.error) || 'request_failed');
                     } catch (error) {
@@ -400,20 +432,21 @@ final class AdminPage
                     } finally { if (timeoutId) { window.clearTimeout(timeoutId); } state.inFlight = false; state.abortController = null; }
                 }
                 async function postBatchWithTransientRetries(data) {
-                    for (let attempt = 0; attempt <= 3; attempt++) {
+                    for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
                         try {
                             if (attempt === 0) { state.retry_delay_seconds = 0; }
                             const result = await post('gps_ebay_fitment_ktype_backfill_batch', data);
                             state.last_http_error = '-'; state.retry_delay_seconds = 0; refresh(result);
                             return result;
                         } catch (error) {
-                            if (!isTransientRequestError(error) || attempt >= 3 || state.stopped) { throw error; }
+                            if (!isTransientRequestError(error) || attempt >= MAX_TRANSIENT_RETRIES || state.stopped) { throw error; }
                             const nextAttempt = attempt + 1;
                             const delaySeconds = transientDelaySeconds(nextAttempt);
                             state.transient_retry_count += 1;
                             state.last_http_error = error && error.message ? error.message : 'request_failed_transient';
                             state.retry_delay_seconds = delaySeconds;
-                            state.stopped_reason = 'transient error, retry ' + nextAttempt + '/3 in ' + delaySeconds + 's';
+                            state.stopped_reason = 'transient error, retry ' + nextAttempt + '/' + MAX_TRANSIENT_RETRIES + ' in ' + delaySeconds + 's';
+                            state.next_retry_time = new Date(Date.now() + delaySeconds * 1000).toISOString();
                             refresh();
                             await wait(delaySeconds * 1000);
                         }
@@ -424,6 +457,7 @@ final class AdminPage
                     state.stopped = true; state.running = false; state.stopped_reason = reason || 'manual_stop';
                     if (state.delayTimer) { window.clearTimeout(state.delayTimer); state.delayTimer = 0; }
                     if (state.abortController) { state.abortController.abort(); state.abortController = null; }
+                    if (state.stallTimer) { window.clearTimeout(state.stallTimer); state.stallTimer = 0; }
                     refresh();
                     try { const checkpoint = await post('gps_ebay_fitment_ktype_backfill_stop', { reason: state.stopped_reason }); applyCheckpoint(checkpoint); refresh(); } catch (e) {}
                 }
@@ -439,22 +473,25 @@ final class AdminPage
                     if (resume && serverCheckpoint.run_id) {
                         applyCheckpoint(serverCheckpoint);
                     } else {
-                        state.started_at = (new Date()).toISOString(); state.run_id = 'ktype-backfill-' + Date.now().toString(36); state.start_offset = numberInput('gps-ktype-start-offset', 0, 0, 999999999); state.current_offset = state.start_offset; state.next_offset = state.start_offset; state.last_completed_offset = -1; state.batch_limit = numberInput('gps-ktype-batch-limit', 10, 1, 50); state.max_batches = numberInput('gps-ktype-max-batches', 0, 0, 999999); state.max_apify_lookups_per_batch = numberInput('gps-ktype-max-apify-lookups', 5, 1, 10); state.total_batches = 0; state.total_scanned_products = 0; state.products_with_raw_part_number = 0; state.accepted_products = 0; state.rejected_products = 0; state.skipped_cached = 0; state.apify_lookup_attempted = 0; state.found = 0; state.not_found = 0; state.errors = 0; state.deferred_due_to_lookup_cap = 0; state.transient_retry_count = 0; state.last_http_error = '-'; state.retry_delay_seconds = 0; state.csvUrls = []; state.stopped_reason = '-';
+                        state.started_at = (new Date()).toISOString(); state.last_progress_at = state.started_at; state.run_id = 'ktype-backfill-' + Date.now().toString(36); state.start_offset = numberInput('gps-ktype-start-offset', 0, 0, 999999999); state.current_offset = state.start_offset; state.next_offset = state.start_offset; state.last_completed_offset = -1; state.batch_limit = numberInput('gps-ktype-batch-limit', 10, 1, 50); state.max_batches = numberInput('gps-ktype-max-batches', 0, 0, 999999); state.max_apify_lookups_per_batch = numberInput('gps-ktype-max-apify-lookups', 5, 1, 10); state.total_batches = 0; state.total_scanned_products = 0; state.products_with_raw_part_number = 0; state.accepted_products = 0; state.rejected_products = 0; state.skipped_cached = 0; state.apify_lookup_attempted = 0; state.found = 0; state.not_found = 0; state.errors = 0; state.deferred_due_to_lookup_cap = 0; state.transient_retry_count = 0; state.last_http_error = '-'; state.retry_delay_seconds = 0; state.csvUrls = []; state.stopped_reason = '-'; state.last_batch_started_at = '-'; state.last_batch_finished_at = '-'; state.in_flight_since = '-'; state.last_request_duration_seconds = 0; state.last_successful_batch_number = 0; state.last_successful_offset = -1; state.next_retry_time = '-';
                     }
                     refresh();
                     try {
                         while (state.running && !state.stopped) {
+                            armStallTimer();
                             const batchNumber = state.total_batches + 1;
-                            const result = await postBatchWithTransientRetries({ run_id:state.run_id, started_at:state.started_at, offset:state.current_offset, start_offset:state.start_offset, batch_limit:state.batch_limit, batch_number:batchNumber, max_batches:state.max_batches, max_apify_lookups_per_batch:state.max_apify_lookups_per_batch, export_csv:$('gps-ktype-export-csv').checked ? '1' : '', persist_product_map:$('gps-ktype-persist-map').checked ? '1' : '', dry_run:dryRunInput.checked ? '1' : '', resume:state.resume ? '1' : '', stop_on_first_error:$('gps-ktype-stop-on-error').checked ? '1' : '', confirmation:confirmationInput.value });
+                            state.last_batch_started_at = (new Date()).toISOString(); state.in_flight_since = state.last_batch_started_at; refresh();
+                            const result = await postBatchWithTransientRetries({ run_id:state.run_id, started_at:state.started_at, offset:state.current_offset, start_offset:state.start_offset, batch_limit:state.batch_limit, batch_number:batchNumber, max_batches:state.max_batches, max_apify_lookups_per_batch:state.max_apify_lookups_per_batch, export_csv:$('gps-ktype-export-csv').checked ? '1' : '', persist_product_map:$('gps-ktype-persist-map').checked ? '1' : '', dry_run:dryRunInput.checked ? '1' : '', resume:state.resume ? '1' : '', stop_on_first_error:$('gps-ktype-stop-on-error').checked ? '1' : '', confirmation:confirmationInput.value, last_request_duration_seconds:state.last_request_duration_seconds });
                             state.resume = false;
                             if (result.success === false) { throw new Error(result.error || result.stopped_reason || 'batch_failed'); }
+                            if (result.timing) { ['total_batch_duration_seconds','apify_duration_seconds','csv_duration_seconds','summary_duration_seconds','request_duration_seconds','delay_duration_seconds'].forEach(function (name) { state[name] = parseFloat(result.timing[name] || state[name] || 0) || 0; }); }
                             if (result.checkpoint) { applyCheckpoint(result.checkpoint); } else {
                                 const counters = result.counters || {};
                                 state.total_batches += 1; state.current_offset = result.next_offset || (state.current_offset + state.batch_limit); state.next_offset = state.current_offset; state.last_completed_offset = result.last_completed_offset || result.offset || state.last_completed_offset;
                                 ['total_scanned_products','products_with_raw_part_number','accepted_products','rejected_products','skipped_cached','apify_lookup_attempted','found','not_found','errors','deferred_due_to_lookup_cap'].forEach(function (name) { state[name] += parseInt(counters[name] || 0, 10); });
                                 if (result.csv_url) { state.csvUrls.push(result.csv_url); }
                             }
-                            refresh(result);
+                            state.last_progress_at = (new Date()).toISOString(); armStallTimer(); refresh(result);
                             if (result.done) { state.stopped_reason = result.stopped_reason || 'completed'; break; }
                             await wait(numberInput('gps-ktype-delay', 5000, 0, 600000));
                         }
@@ -467,7 +504,7 @@ final class AdminPage
                             }
                         }
                     }
-                    state.running = false; state.stopped = true; refresh();
+                    state.running = false; state.stopped = true; if (state.stallTimer) { window.clearTimeout(state.stallTimer); state.stallTimer = 0; } refresh();
                     try { await writeSummary(state.stopped_reason); } catch (error) { if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'summary_failed: ' + (error && error.message ? error.message : error); } }
                 }
                 applyCheckpoint(serverCheckpoint);
@@ -476,6 +513,7 @@ final class AdminPage
                 startButton.addEventListener('click', function () { start(false); });
                 resumeButton.addEventListener('click', function () { start(true); });
                 stopButton.addEventListener('click', function () { stop('manual_stop'); });
+                if (markStoppedButton) { markStoppedButton.addEventListener('click', function () { stop('manual_mark_stopped'); }); }
                 window.addEventListener('beforeunload', function () { if (state.running) { stop('page_unload'); } });
                 refresh();
             }());

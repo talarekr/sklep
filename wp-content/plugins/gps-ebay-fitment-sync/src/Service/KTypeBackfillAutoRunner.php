@@ -12,6 +12,7 @@ final class KTypeBackfillAutoRunner
     public const MAX_BATCH_LIMIT = 50;
     public const DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH = 5;
     public const MAX_APIFY_LOOKUPS_PER_BATCH = 10;
+    public const DEFAULT_STALL_THRESHOLD_SECONDS = 300;
     public const CHECKPOINT_OPTION = 'gps_ebay_fitment_sync_ktype_backfill_checkpoint';
 
     private const COUNTER_KEYS = [
@@ -61,6 +62,7 @@ final class KTypeBackfillAutoRunner
             'stop_on_first_error' => !empty($options['stop_on_first_error']),
             'confirmation' => (string) ($options['confirmation'] ?? ''),
             'max_apify_lookups_per_batch' => max(0, min(self::MAX_APIFY_LOOKUPS_PER_BATCH, (int) ($options['max_apify_lookups_per_batch'] ?? self::DEFAULT_MAX_APIFY_LOOKUPS_PER_BATCH))),
+            'last_request_duration_seconds' => max(0.0, (float) ($options['last_request_duration_seconds'] ?? 0)),
         ];
     }
 
@@ -101,20 +103,42 @@ final class KTypeBackfillAutoRunner
         $checkpoint['current_offset'] = $offset;
         $checkpoint['next_offset'] = $offset;
         $checkpoint['last_error'] = '';
+        $checkpoint['last_batch_started_at'] = gmdate('c');
+        $checkpoint['in_flight_since'] = $checkpoint['last_batch_started_at'];
+        $checkpoint['last_request_duration_seconds'] = (float) $options['last_request_duration_seconds'];
         $this->save_checkpoint($checkpoint);
+
+        $requestStarted = microtime(true);
+        $timing = [
+            'total_batch_duration_seconds' => 0.0,
+            'apify_duration_seconds' => 0.0,
+            'csv_duration_seconds' => 0.0,
+            'summary_duration_seconds' => 0.0,
+            'request_duration_seconds' => (float) $options['last_request_duration_seconds'],
+            'delay_duration_seconds' => 0.0,
+        ];
 
         try {
             $scan = $this->scanner->scan($limit, $offset, $isLive && !empty($options['persist_product_map']));
+            $apifyStarted = microtime(true);
             $backfill = $this->build_backfill_result($scan, $isLive, $maxApifyLookups);
+            $timing['apify_duration_seconds'] = round(microtime(true) - $apifyStarted, 3);
+            $csvStarted = microtime(true);
             $csv = !empty($options['export_csv'])
                 ? $this->auditCsvExporter->export_backfill($scan, $backfill, $offset, $limit, $runId)
                 : $this->empty_csv_result($runId);
+            $timing['csv_duration_seconds'] = round(microtime(true) - $csvStarted, 3);
+            $timing['total_batch_duration_seconds'] = round(microtime(true) - $requestStarted, 3);
+            $timing['request_duration_seconds'] = $timing['total_batch_duration_seconds'];
         } catch (\Throwable $throwable) {
             $nextOffset = $offset;
             $checkpoint['status'] = 'error';
             $checkpoint['current_offset'] = $offset;
             $checkpoint['next_offset'] = $nextOffset;
             $checkpoint['last_error'] = $throwable->getMessage();
+            $checkpoint['in_flight_since'] = '';
+            $checkpoint['last_batch_finished_at'] = gmdate('c');
+            $checkpoint['last_request_duration_seconds'] = round(microtime(true) - $requestStarted, 3);
             $this->save_checkpoint($checkpoint);
 
             return [
@@ -131,7 +155,8 @@ final class KTypeBackfillAutoRunner
             ];
         }
 
-        $nextOffset = $offset + $limit;
+        $hasDeferredLookupCap = (int) ($backfill['deferred_due_to_lookup_cap'] ?? 0) > 0;
+        $nextOffset = $hasDeferredLookupCap ? $offset : $offset + $limit;
         $done = ((int) ($scan['total_scanned_products'] ?? 0)) === 0;
         $stoppedReason = $done ? 'no_products_scanned' : '';
         $batchCounters = $this->batch_counters($scan, $backfill);
@@ -147,7 +172,7 @@ final class KTypeBackfillAutoRunner
             $stoppedReason = 'stop_on_first_error';
         }
 
-        $checkpoint = $this->checkpoint_after_successful_batch($checkpoint, $offset, $nextOffset, $limit, $status, $batchCounters, $csv, $stoppedReason);
+        $checkpoint = $this->checkpoint_after_successful_batch($checkpoint, $offset, $nextOffset, $limit, $status, $batchCounters, $csv, $stoppedReason, $timing);
         $this->save_checkpoint($checkpoint);
 
         return array_merge([
@@ -167,6 +192,7 @@ final class KTypeBackfillAutoRunner
             'backfill' => $backfill,
             'counters' => $batchCounters,
             'aggregate_counters' => $checkpoint['aggregate_counters'],
+            'timing' => $timing,
             'checkpoint' => $checkpoint,
         ], $csv);
     }
@@ -209,7 +235,10 @@ final class KTypeBackfillAutoRunner
         if (!$checkpoint) {
             return [];
         }
-        $checkpoint['status'] = 'stopped';
+        $checkpoint['status'] = $reason === 'stalled_no_progress' || str_contains($reason, 'request_failed') ? 'error' : 'stopped';
+        $checkpoint['stopped_reason'] = $reason;
+        $checkpoint['in_flight_since'] = '';
+        $checkpoint['last_batch_finished_at'] = gmdate('c');
         $checkpoint['last_error'] = $reason === 'manual_stop' ? (string) ($checkpoint['last_error'] ?? '') : $reason;
         $this->save_checkpoint($checkpoint);
         return $checkpoint;
@@ -279,7 +308,7 @@ final class KTypeBackfillAutoRunner
      * @param array<string, mixed> $csv
      * @return array<string, mixed>
      */
-    private function checkpoint_after_successful_batch(array $checkpoint, int $offset, int $nextOffset, int $limit, string $status, array $batchCounters, array $csv, string $stoppedReason): array
+    private function checkpoint_after_successful_batch(array $checkpoint, int $offset, int $nextOffset, int $limit, string $status, array $batchCounters, array $csv, string $stoppedReason, array $timing): array
     {
         $checkpoint = $this->normalize_checkpoint($checkpoint);
         $aggregate = is_array($checkpoint['aggregate_counters'] ?? null) ? $checkpoint['aggregate_counters'] : $this->empty_counters();
@@ -291,9 +320,17 @@ final class KTypeBackfillAutoRunner
         $checkpoint['current_offset'] = $offset;
         $checkpoint['next_offset'] = $nextOffset;
         $checkpoint['last_completed_offset'] = $offset;
+        $checkpoint['last_successful_offset'] = $offset;
         $checkpoint['batch_limit'] = $limit;
         $checkpoint['total_batches_completed'] = (int) ($checkpoint['total_batches_completed'] ?? 0) + 1;
+        $checkpoint['last_successful_batch_number'] = (int) $checkpoint['total_batches_completed'];
         $checkpoint['aggregate_counters'] = $aggregate;
+        $checkpoint['last_batch_finished_at'] = gmdate('c');
+        $checkpoint['last_progress_at'] = $checkpoint['last_batch_finished_at'];
+        $checkpoint['in_flight_since'] = '';
+        $checkpoint['last_request_duration_seconds'] = (float) ($timing['request_duration_seconds'] ?? $timing['total_batch_duration_seconds'] ?? 0.0);
+        $checkpoint['last_timing'] = $timing;
+        $checkpoint['stopped_reason'] = $stoppedReason;
         $checkpoint['last_error'] = $stoppedReason === 'stop_on_first_error' ? 'Stopped after first batch with errors.' : '';
         if (!empty($csv['csv_url'])) {
             $urls = is_array($checkpoint['batch_csv_urls'] ?? null) ? $checkpoint['batch_csv_urls'] : [];
@@ -336,6 +373,12 @@ final class KTypeBackfillAutoRunner
             'csv_files_count' => count((array) ($checkpoint['batch_csv_urls'] ?? [])),
             'batch_csv_urls' => (array) ($checkpoint['batch_csv_urls'] ?? []),
             'previous_run_id' => (string) ($checkpoint['previous_run_id'] ?? ''),
+            'last_batch_started_at' => (string) ($checkpoint['last_batch_started_at'] ?? ''),
+            'last_batch_finished_at' => (string) ($checkpoint['last_batch_finished_at'] ?? ''),
+            'last_progress_at' => (string) ($checkpoint['last_progress_at'] ?? ''),
+            'last_successful_batch_number' => (int) ($checkpoint['last_successful_batch_number'] ?? 0),
+            'last_successful_offset' => (int) ($checkpoint['last_successful_offset'] ?? -1),
+            'last_request_duration_seconds' => (float) ($checkpoint['last_request_duration_seconds'] ?? 0.0),
         ]);
     }
 
@@ -373,6 +416,15 @@ final class KTypeBackfillAutoRunner
         $checkpoint['started_at'] = (string) ($checkpoint['started_at'] ?? gmdate('c'));
         $checkpoint['updated_at'] = (string) ($checkpoint['updated_at'] ?? gmdate('c'));
         $checkpoint['previous_run_id'] = self::safe_run_id((string) ($checkpoint['previous_run_id'] ?? ''));
+        $checkpoint['last_batch_started_at'] = (string) ($checkpoint['last_batch_started_at'] ?? '');
+        $checkpoint['last_batch_finished_at'] = (string) ($checkpoint['last_batch_finished_at'] ?? '');
+        $checkpoint['last_progress_at'] = (string) ($checkpoint['last_progress_at'] ?? '');
+        $checkpoint['in_flight_since'] = (string) ($checkpoint['in_flight_since'] ?? '');
+        $checkpoint['last_request_duration_seconds'] = max(0.0, (float) ($checkpoint['last_request_duration_seconds'] ?? 0));
+        $checkpoint['last_successful_batch_number'] = max(0, (int) ($checkpoint['last_successful_batch_number'] ?? 0));
+        $checkpoint['last_successful_offset'] = (int) ($checkpoint['last_successful_offset'] ?? -1);
+        $checkpoint['stopped_reason'] = (string) ($checkpoint['stopped_reason'] ?? '');
+        $checkpoint['last_timing'] = is_array($checkpoint['last_timing'] ?? null) ? $checkpoint['last_timing'] : [];
         return $checkpoint;
     }
 
