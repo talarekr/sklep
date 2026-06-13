@@ -46,7 +46,7 @@ final class Plugin
         $lookup = new FitmentLookupService($database, $client, $normalizer, $settings, $validator);
         $scanner = new ProductScanner($database, $normalizer, $settings, $validator);
         $auditCsvExporter = new AuditCsvExporter($database);
-        $autoRunner = new KTypeBackfillAutoRunner($scanner, $lookup, $database, $auditCsvExporter);
+        $autoRunner = new KTypeBackfillAutoRunner($scanner, $lookup, $database, $auditCsvExporter, $settings);
 
         (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner))->hooks();
     }

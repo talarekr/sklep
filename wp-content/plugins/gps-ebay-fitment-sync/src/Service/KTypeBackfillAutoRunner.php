@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GPS_Ebay_Fitment_Sync\Service;
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
+use GPS_Ebay_Fitment_Sync\Support\Settings;
 
 final class KTypeBackfillAutoRunner
 {
@@ -16,6 +17,8 @@ final class KTypeBackfillAutoRunner
     public const CHECKPOINT_OPTION = 'gps_ebay_fitment_sync_ktype_backfill_checkpoint';
 
     private const MAX_ASYNC_ATTEMPTS = 3;
+    private const DEFAULT_MAX_TECDOC_ARTICLES_PER_PART_FOR_VEHICLE_LOOKUP = 5;
+    private const MAX_TECDOC_ARTICLES_PER_PART_FOR_VEHICLE_LOOKUP = 10;
 
     private const COUNTER_KEYS = [
         'total_scanned_products',
@@ -35,13 +38,15 @@ final class KTypeBackfillAutoRunner
     private FitmentLookupService $lookup;
     private Database $database;
     private AuditCsvExporter $auditCsvExporter;
+    private Settings $settings;
 
-    public function __construct(ProductScanner $scanner, FitmentLookupService $lookup, Database $database, AuditCsvExporter $auditCsvExporter)
+    public function __construct(ProductScanner $scanner, FitmentLookupService $lookup, Database $database, AuditCsvExporter $auditCsvExporter, ?Settings $settings = null)
     {
         $this->scanner = $scanner;
         $this->lookup = $lookup;
         $this->database = $database;
         $this->auditCsvExporter = $auditCsvExporter;
+        $this->settings = $settings ?: new Settings();
     }
 
     /**
@@ -323,6 +328,7 @@ final class KTypeBackfillAutoRunner
             return $this->small_item_from_result($candidate, $this->cached_result($raw, $normalized, $cached), 'skipped_cached');
         }
 
+        $this->enforce_vehicle_article_limit($candidate, $runId);
         $active = $this->database->next_active_apify_job($runId, $normalized);
         if (!$active) {
             $existingJobs = $this->database->apify_jobs_for_part($runId, $normalized);
@@ -429,7 +435,8 @@ final class KTypeBackfillAutoRunner
             return $this->small_item_from_result($candidate, $result, 'not_found');
         }
 
-        foreach ($articles as $article) {
+        $limitedArticles = $this->select_articles_for_vehicle_lookup($articles, $raw, $normalized);
+        foreach ($limitedArticles as $article) {
             $articleNo = (string) ($article['articleNo'] ?? '');
             $supplierId = (int) ($article['supplierId'] ?? 0);
             if ($articleNo === '' || $supplierId <= 0 || $this->database->find_active_apify_job($runId, $normalized, 'vehicles', $articleNo, $supplierId)) {
@@ -451,8 +458,29 @@ final class KTypeBackfillAutoRunner
                 'last_error' => empty($started['success']) ? (string) ($started['error'] ?? 'Apify async vehicle run start failed.') : null,
             ]);
         }
+        foreach (array_slice($articles, count($limitedArticles)) as $article) {
+            $articleNo = (string) ($article['articleNo'] ?? '');
+            $supplierId = (int) ($article['supplierId'] ?? 0);
+            if ($articleNo === '' || $supplierId <= 0) {
+                continue;
+            }
+            $this->database->create_apify_job([
+                'run_id' => $runId,
+                'product_id' => (int) ($candidate['product_id'] ?? 0),
+                'part_number_raw' => $raw,
+                'part_number_normalized' => $normalized,
+                'step' => 'vehicles',
+                'status' => 'skipped_due_to_article_limit',
+                'article_no' => $articleNo,
+                'supplier_id' => $supplierId,
+                'attempts' => 0,
+                'last_error' => 'article_limit_applied',
+            ]);
+        }
 
-        return $this->async_item($candidate, 'async_vehicles_running', $this->database->next_active_apify_job($runId, $normalized) ?: [], 'Article lookup succeeded; vehicle jobs queued.', count($articles));
+        $limitDiagnostics = $this->article_limit_diagnostics(count($articles), count($limitedArticles));
+        $message = !empty($limitDiagnostics['article_limit_applied']) ? 'Article lookup succeeded; vehicle jobs queued with article_limit_applied warning.' : 'Article lookup succeeded; vehicle jobs queued.';
+        return $this->async_item($candidate, 'async_vehicles_running', $this->database->next_active_apify_job($runId, $normalized) ?: [], $message, count($articles), $limitDiagnostics);
     }
 
     /**
@@ -480,6 +508,7 @@ final class KTypeBackfillAutoRunner
     {
         $raw = (string) ($candidate['part_number_raw'] ?? '');
         $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $this->enforce_vehicle_article_limit($candidate, $runId);
         $jobs = $this->database->apify_jobs_for_part($runId, $normalized);
         foreach ($jobs as $job) {
             $jobStatus = (string) ($job['status'] ?? '');
@@ -490,6 +519,7 @@ final class KTypeBackfillAutoRunner
 
         $articleJobs = array_values(array_filter($jobs, static fn(array $job): bool => (string) ($job['step'] ?? '') === 'articles' && (string) ($job['status'] ?? '') === 'succeeded'));
         $vehicleJobs = array_values(array_filter($jobs, static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles'));
+        $activeVehicleJobs = array_values(array_filter($vehicleJobs, static fn(array $job): bool => (string) ($job['status'] ?? '') !== 'skipped_due_to_article_limit'));
         $failed = array_values(array_filter($jobs, static fn(array $job): bool => in_array((string) ($job['status'] ?? ''), ['failed', 'timed_out'], true)));
         if (!$articleJobs) {
             $error = $failed ? (string) ($failed[0]['last_error'] ?? 'Apify article lookup failed.') : 'No article job succeeded.';
@@ -500,11 +530,11 @@ final class KTypeBackfillAutoRunner
         }
 
         $articles = [];
-        foreach ($vehicleJobs as $vehicleJob) {
+        foreach ($activeVehicleJobs as $vehicleJob) {
             $articles[] = ['articleNo' => (string) ($vehicleJob['article_no'] ?? ''), 'supplierId' => (int) ($vehicleJob['supplier_id'] ?? 0), 'supplierName' => ''];
         }
         $vehicles = [];
-        foreach ($vehicleJobs as $vehicleJob) {
+        foreach ($activeVehicleJobs as $vehicleJob) {
             if ((string) ($vehicleJob['status'] ?? '') !== 'succeeded') {
                 continue;
             }
@@ -519,16 +549,93 @@ final class KTypeBackfillAutoRunner
             }
         }
         $status = $vehicles ? 'found' : 'not_found';
+        $limitDiagnostics = $this->article_limit_diagnostics(count($vehicleJobs), count($activeVehicleJobs));
         $errors = $vehicles ? [] : ['TecDoc article was found, but compatibleCars was empty.'];
-        return $this->save_async_final($candidate, $raw, $normalized, $status, $articles, $vehicles, $errors);
+        if (!empty($limitDiagnostics['article_limit_applied'])) {
+            $errors[] = 'article_limit_applied: only ' . (string) $limitDiagnostics['articles_used_for_vehicle_lookup'] . ' of ' . (string) $limitDiagnostics['articles_found_total'] . ' TecDoc articles were checked for vehicles.';
+        }
+        return $this->save_async_final($candidate, $raw, $normalized, $status, $articles, $vehicles, $errors, $limitDiagnostics);
+    }
+
+
+    /**
+     * @param array<int, array<string, mixed>> $articles
+     * @return array<int, array<string, mixed>>
+     */
+    private function select_articles_for_vehicle_lookup(array $articles, string $raw, string $normalized): array
+    {
+        $limit = $this->max_tecdoc_articles_per_part_for_vehicle_lookup();
+        $rawNorm = preg_replace('/[^A-Z0-9]/', '', strtoupper($raw)) ?: '';
+        $normalizedNorm = preg_replace('/[^A-Z0-9]/', '', strtoupper($normalized)) ?: '';
+        foreach ($articles as $index => &$article) {
+            $searchNo = preg_replace('/[^A-Z0-9]/', '', strtoupper((string) ($article['articleSearchNo'] ?? $article['articleNo'] ?? ''))) ?: '';
+            $article['_gps_original_index'] = $index;
+            $article['_gps_exact_match'] = $searchNo !== '' && ($searchNo === $rawNorm || $searchNo === $normalizedNorm) ? 1 : 0;
+        }
+        unset($article);
+        usort($articles, static function (array $left, array $right): int {
+            $exact = ((int) ($right['_gps_exact_match'] ?? 0)) <=> ((int) ($left['_gps_exact_match'] ?? 0));
+            if ($exact !== 0) {
+                return $exact;
+            }
+            return ((int) ($left['_gps_original_index'] ?? 0)) <=> ((int) ($right['_gps_original_index'] ?? 0));
+        });
+        return array_slice($articles, 0, $limit);
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function save_async_final(array $candidate, string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors): array
+    private function article_limit_diagnostics(int $total, int $used): array
     {
-        $result = $this->lookup_result($raw, $normalized, $status, $articles, $vehicles, $errors);
+        $skipped = max(0, $total - $used);
+        return [
+            'articles_found_total' => $total,
+            'articles_used_for_vehicle_lookup' => $used,
+            'articles_skipped_due_to_limit' => $skipped,
+            'article_limit_applied' => $skipped > 0,
+        ];
+    }
+
+    private function enforce_vehicle_article_limit(array $candidate, string $runId): void
+    {
+        $normalized = (string) ($candidate['part_number_normalized'] ?? '');
+        $vehicleJobs = array_values(array_filter(
+            $this->database->apify_jobs_for_part($runId, $normalized),
+            static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles'
+        ));
+        $limit = $this->max_tecdoc_articles_per_part_for_vehicle_lookup();
+        $kept = 0;
+        foreach ($vehicleJobs as $job) {
+            if ((string) ($job['status'] ?? '') === 'skipped_due_to_article_limit') {
+                continue;
+            }
+            $kept++;
+            if ($kept <= $limit) {
+                continue;
+            }
+            if (in_array((string) ($job['status'] ?? ''), ['pending', 'running'], true)) {
+                $this->database->update_apify_job((int) $job['id'], [
+                    'status' => 'skipped_due_to_article_limit',
+                    'last_error' => 'article_limit_applied',
+                    'last_checked_at' => current_time('mysql'),
+                ]);
+            }
+        }
+    }
+
+    private function max_tecdoc_articles_per_part_for_vehicle_lookup(): int
+    {
+        $value = (int) ($this->settings->get('max_tecdoc_articles_per_part_for_vehicle_lookup') ?? self::DEFAULT_MAX_TECDOC_ARTICLES_PER_PART_FOR_VEHICLE_LOOKUP);
+        return max(1, min(self::MAX_TECDOC_ARTICLES_PER_PART_FOR_VEHICLE_LOOKUP, $value));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function save_async_final(array $candidate, string $raw, string $normalized, string $status, array $articles, array $vehicles, array $errors, array $diagnostics = []): array
+    {
+        $result = array_merge($this->lookup_result($raw, $normalized, $status, $articles, $vehicles, $errors), $diagnostics);
         $partId = $this->database->save_lookup($raw, $result);
         $result['cache_part_cache_id'] = $partId > 0 ? $partId : null;
         $this->database->upsert_product_map($candidate);
@@ -564,33 +671,41 @@ final class KTypeBackfillAutoRunner
     /**
      * @return array<string, mixed>
      */
-    private function async_item(array $candidate, string $status, array $job, string $message, int $articlesFound = 0): array
+    private function async_item(array $candidate, string $status, array $job, string $message, int $articlesFound = 0, array $diagnostics = []): array
     {
         $item = $this->small_item($candidate, $status, $articlesFound, 0, 0, $message, null, false);
+        $item = array_merge($item, $diagnostics);
         $item['pending_async'] = true;
         $item['active_apify_job_id'] = isset($job['apify_run_id']) ? (string) $job['apify_run_id'] : '';
         $item['active_job_step'] = (string) ($job['step'] ?? '');
         $item['active_job_status'] = (string) ($job['status'] ?? '');
-        $item['vehicle_jobs_completed'] = $this->vehicle_job_count($candidate, true);
-        $item['vehicle_jobs_total'] = $this->vehicle_job_count($candidate, false);
+        $jobCounts = $this->vehicle_job_counts($candidate);
+        $item['vehicle_jobs_completed'] = $jobCounts['completed'];
+        $item['vehicle_jobs_total'] = $jobCounts['total_waited'];
+        $item['vehicle_jobs_skipped_due_to_article_limit'] = $jobCounts['skipped'];
         $item['finalized_status'] = '';
         return $item;
     }
 
-    private function vehicle_job_count(array $candidate, bool $completed): int
+    private function vehicle_job_counts(array $candidate): array
     {
         $checkpoint = $this->checkpoint();
         $jobs = $this->database->apify_jobs_for_part((string) ($checkpoint['run_id'] ?? ''), (string) ($candidate['part_number_normalized'] ?? ''));
-        $count = 0;
+        $counts = ['completed' => 0, 'total_waited' => 0, 'skipped' => 0];
         foreach ($jobs as $job) {
             if ((string) ($job['step'] ?? '') !== 'vehicles') {
                 continue;
             }
-            if (!$completed || (string) ($job['status'] ?? '') === 'succeeded') {
-                $count++;
+            if ((string) ($job['status'] ?? '') === 'skipped_due_to_article_limit') {
+                $counts['skipped']++;
+                continue;
+            }
+            $counts['total_waited']++;
+            if ((string) ($job['status'] ?? '') === 'succeeded') {
+                $counts['completed']++;
             }
         }
-        return $count;
+        return $counts;
     }
 
     /**
@@ -642,7 +757,7 @@ final class KTypeBackfillAutoRunner
             }
         }
         $errors = is_array($result['errors'] ?? null) ? array_map('strval', $result['errors']) : [];
-        return $this->small_item(
+        $item = $this->small_item(
             $candidate,
             $status,
             count($articles),
@@ -652,6 +767,12 @@ final class KTypeBackfillAutoRunner
             isset($result['cache_part_cache_id']) ? (int) $result['cache_part_cache_id'] : null,
             !empty($result['from_cache'])
         );
+        foreach (['articles_found_total', 'articles_used_for_vehicle_lookup', 'articles_skipped_due_to_limit', 'article_limit_applied'] as $key) {
+            if (array_key_exists($key, $result)) {
+                $item[$key] = $result[$key];
+            }
+        }
+        return $item;
     }
 
     /**

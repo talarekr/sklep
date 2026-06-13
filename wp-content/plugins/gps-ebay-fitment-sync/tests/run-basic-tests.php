@@ -249,6 +249,8 @@ final class FakeHttpResponse
 $GLOBALS['gps_test_http_calls'] = 0;
 $GLOBALS['gps_test_async_empty_articles'] = [];
 $GLOBALS['gps_test_async_fail_starts'] = [];
+$GLOBALS['gps_test_async_many_articles'] = [];
+$GLOBALS['gps_test_async_empty_vehicles'] = [];
 
 if (!function_exists('wp_remote_post')) {
     function wp_remote_post($url, array $args) {
@@ -260,14 +262,22 @@ if (!function_exists('wp_remote_post')) {
                 ? 'run-articles-' . preg_replace('/[^A-Za-z0-9]/', '', (string) ($payload['parts_articleOemNo_29'] ?? ''))
                 : 'run-vehicles-' . preg_replace('/[^A-Za-z0-9]/', '', (string) ($payload['parts_articleNo_21'] ?? '')) . '-' . (int) ($payload['parts_supplierId_21'] ?? 0);
             $datasetId = str_replace('run-', 'dataset-', $runId);
-            $GLOBALS['gps_test_apify_datasets'][$datasetId] = (!empty($payload['endpoint_partsSearchArticlesByOem']) && !empty($GLOBALS['gps_test_async_empty_articles'][(string) ($payload['parts_articleOemNo_29'] ?? '')]))
-                ? []
-                : (!empty($payload['endpoint_partsSearchArticlesByOem'])
-                ? [[ 'articles' => [
-                    ['articleId' => 101, 'articleNo' => 'A1', 'supplierId' => 1, 'supplierName' => 'S1'],
-                    ['articleId' => 102, 'articleNo' => 'A2', 'supplierId' => 2, 'supplierName' => 'S2'],
-                ]]]
-                : [[ 'compatibleCars' => [['vehicleId' => (int) ($payload['parts_supplierId_21'] ?? 0), 'manufacturerName' => 'VW', 'modelName' => 'Touran']] ]]);
+            if (!empty($payload['endpoint_partsSearchArticlesByOem']) && !empty($GLOBALS['gps_test_async_empty_articles'][(string) ($payload['parts_articleOemNo_29'] ?? '')])) {
+                $GLOBALS['gps_test_apify_datasets'][$datasetId] = [];
+            } elseif (!empty($payload['endpoint_partsSearchArticlesByOem']) && (!empty($GLOBALS['gps_test_async_many_articles'][(string) ($payload['parts_articleOemNo_29'] ?? '')]) || !empty($GLOBALS['gps_test_async_many_articles']['*']))) {
+                $many = [];
+                for ($i = 1; $i <= (int) ($GLOBALS['gps_test_async_many_articles'][(string) ($payload['parts_articleOemNo_29'] ?? '')] ?? $GLOBALS['gps_test_async_many_articles']['*']); $i++) {
+                    $many[] = ['articleId' => 1000 + $i, 'articleNo' => 'M' . $i, 'articleSearchNo' => $i === 3 ? (string) ($payload['parts_articleOemNo_29'] ?? '') : 'M' . $i, 'supplierId' => $i, 'supplierName' => 'Many ' . $i];
+                }
+                $GLOBALS['gps_test_apify_datasets'][$datasetId] = [[ 'articles' => $many ]];
+            } else {
+                $GLOBALS['gps_test_apify_datasets'][$datasetId] = !empty($payload['endpoint_partsSearchArticlesByOem'])
+                    ? [[ 'articles' => [
+                        ['articleId' => 101, 'articleNo' => 'A1', 'supplierId' => 1, 'supplierName' => 'S1'],
+                        ['articleId' => 102, 'articleNo' => 'A2', 'supplierId' => 2, 'supplierName' => 'S2'],
+                    ]]]
+                    : [[ 'compatibleCars' => !empty($GLOBALS['gps_test_async_empty_vehicles'][(string) ($payload['parts_articleNo_21'] ?? '')]) ? [] : [['vehicleId' => (int) ($payload['parts_supplierId_21'] ?? 0), 'manufacturerName' => 'VW', 'modelName' => 'Touran']] ]];
+            }
             return new FakeHttpResponse(201, json_encode(['data' => ['id' => $runId, 'status' => 'RUNNING', 'defaultDatasetId' => $datasetId]]));
         }
         if (!empty($payload['endpoint_partsSearchArticlesByOem'])) {
@@ -928,6 +938,84 @@ $adminSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 assert_same(true, str_contains($adminSource, "request_failed_http_(503|502|504|429)"), 'browser runner treats HTTP 503/502/504/429 as transient');
 assert_same(true, str_contains($adminSource, "transient error, retry ' + nextAttempt + '/' + MAX_TRANSIENT_RETRIES"), 'browser runner shows transient retry status');
 assert_same(true, str_contains($adminSource, 'REQUEST_TIMEOUT_SECONDS') && str_contains($adminSource, 'data-request-timeout-seconds="180"'), 'browser runner has 180 second request timeout');
+
+$sanitizedArticleLimitSettings = $settings->sanitize(['max_tecdoc_articles_per_part_for_vehicle_lookup' => 99]);
+assert_same(10, $sanitizedArticleLimitSettings['max_tecdoc_articles_per_part_for_vehicle_lookup'] ?? null, 'TecDoc article vehicle lookup limit is clamped to 10');
+assert_same(5, $settingsDefaults['max_tecdoc_articles_per_part_for_vehicle_lookup'] ?? null, 'TecDoc article vehicle lookup limit default is 5');
+assert_same(true, str_contains($adminSource, 'Max TecDoc articles per part for vehicle lookup'), 'settings UI includes TecDoc article vehicle lookup limit');
+
+// Step 2 article limiting avoids stalls when one OEM has many TecDoc articles.
+$GLOBALS['gps_test_options'][Settings::OPTION] = array_merge($settings->defaults(), ['apify_token' => 'test-token', 'max_tecdoc_articles_per_part_for_vehicle_lookup' => 5]);
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$GLOBALS['gps_test_async_many_articles'] = ['*' => 31];
+$GLOBALS['gps_test_async_empty_vehicles'] = [];
+$manyWpdb = new FakeWpdb();
+$manyWpdb->tables['wp_posts'] = [['ID' => 300, 'post_type' => 'product', 'post_status' => 'publish', 'post_title' => 'Many Articles']];
+$GLOBALS['wpdb'] = $manyWpdb;
+$GLOBALS['gps_test_post_meta'] = [300 => ['_part_number' => '06J121026P', '_sku' => 'many']];
+$manyDatabase = new Database($normalizer);
+$manyRunner = new KTypeBackfillAutoRunner(new ProductScanner($manyDatabase, $normalizer, $settings, $validator), new FitmentLookupService($manyDatabase, $client, $normalizer, $settings, $validator), $manyDatabase, new AuditCsvExporter($manyDatabase), $settings);
+$manyRunner->run_batch(['run_id' => 'many-run', 'offset' => 0, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyQueued = $manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyVehicleStatuses = array_count_values(array_map(static fn(array $job): string => (string) ($job['status'] ?? ''), array_filter($manyWpdb->tables['wp_gps_fitment_apify_jobs'] ?? [], static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles')));
+assert_same(5, $manyVehicleStatuses['running'] ?? 0, '31 Step 1 articles start only five Step 2 vehicle Apify jobs');
+assert_same(26, $manyVehicleStatuses['skipped_due_to_article_limit'] ?? 0, '31 Step 1 articles record skipped excess Step 2 jobs');
+assert_same(true, $manyQueued['processed_item']['article_limit_applied'] ?? false, 'article_limit_applied warning is set for 31 articles');
+assert_same(31, $manyQueued['processed_item']['articles_found_total'] ?? null, 'article limit reports total articles found');
+assert_same(5, $manyQueued['processed_item']['articles_used_for_vehicle_lookup'] ?? null, 'article limit reports selected articles used');
+assert_same(26, $manyQueued['processed_item']['articles_skipped_due_to_limit'] ?? null, 'article limit reports skipped articles');
+assert_same(5, $manyQueued['processed_item']['vehicle_jobs_total'] ?? null, 'runner waits on only selected vehicle jobs');
+$seenJobKeys = array_map(static fn(array $job): string => (string) ($job['article_no'] ?? '') . ':' . (string) ($job['supplier_id'] ?? ''), array_values(array_filter($manyWpdb->tables['wp_gps_fitment_apify_jobs'] ?? [], static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles')));
+assert_same(true, in_array('M3:3', $seenJobKeys, true), 'exact articleSearchNo match is prioritized into limited Step 2 jobs');
+$manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$manyFoundFinal = $manyRunner->run_batch(['run_id' => 'many-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+assert_same('found', $manyFoundFinal['processed_item']['status'], 'limited selected vehicle jobs finalize found when any selected vehicles exist');
+assert_same(1, $manyFoundFinal['next_offset'], 'limited vehicle jobs advance offset after selected jobs complete');
+assert_same(32, count($manyWpdb->tables['wp_gps_fitment_apify_jobs'] ?? []), 'resume does not duplicate limited or skipped vehicle jobs');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$GLOBALS['gps_test_async_many_articles'] = ['*' => 31];
+$GLOBALS['gps_test_async_empty_vehicles'] = ['M3' => true, 'M1' => true, 'M2' => true, 'M4' => true, 'M5' => true];
+$emptyVehiclesWpdb = new FakeWpdb();
+$emptyVehiclesWpdb->tables['wp_posts'] = [['ID' => 301, 'post_type' => 'product', 'post_status' => 'publish', 'post_title' => 'No Vehicles Many Articles']];
+$GLOBALS['wpdb'] = $emptyVehiclesWpdb;
+$GLOBALS['gps_test_post_meta'] = [301 => ['_part_number' => 'NO-VEHICLES-31', '_sku' => 'many-empty']];
+$emptyVehiclesDatabase = new Database($normalizer);
+$emptyVehiclesRunner = new KTypeBackfillAutoRunner(new ProductScanner($emptyVehiclesDatabase, $normalizer, $settings, $validator), new FitmentLookupService($emptyVehiclesDatabase, $client, $normalizer, $settings, $validator), $emptyVehiclesDatabase, new AuditCsvExporter($emptyVehiclesDatabase), $settings);
+$emptyVehiclesRunner->run_batch(['run_id' => 'many-empty-run', 'offset' => 0, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$emptyVehiclesRunner->run_batch(['run_id' => 'many-empty-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+for ($i = 0; $i < 5; $i++) { $emptyVehiclesFinal = $emptyVehiclesRunner->run_batch(['run_id' => 'many-empty-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]); }
+assert_same('not_found', $emptyVehiclesFinal['processed_item']['status'] ?? '', 'limited selected vehicle jobs finalize safely as not_found when selected jobs return no vehicles');
+assert_same(true, str_contains((string) ($emptyVehiclesFinal['processed_item']['error_message'] ?? ''), 'article_limit_applied'), 'not_found finalization warns that only limited articles were checked');
+
+$GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
+$GLOBALS['gps_test_async_many_articles'] = [];
+$GLOBALS['gps_test_async_empty_vehicles'] = [];
+$stuckWpdb = new FakeWpdb();
+$stuckWpdb->tables['wp_posts'] = [['ID' => 302, 'post_type' => 'product', 'post_status' => 'publish', 'post_title' => 'Existing Stuck']];
+$GLOBALS['wpdb'] = $stuckWpdb;
+$GLOBALS['gps_test_post_meta'] = [302 => ['_part_number' => '06J121026P', '_sku' => 'stuck']];
+$stuckDatabase = new Database($normalizer);
+$stuckDatabase->create_apify_job(['run_id' => 'stuck-run', 'product_id' => 302, 'part_number_raw' => '06J121026P', 'part_number_normalized' => '06J121026P', 'step' => 'articles', 'status' => 'succeeded', 'apify_run_id' => 'run-articles-stuck', 'apify_dataset_id' => 'dataset-articles-stuck', 'attempts' => 1]);
+for ($i = 1; $i <= 31; $i++) { $stuckDatabase->create_apify_job(['run_id' => 'stuck-run', 'product_id' => 302, 'part_number_raw' => '06J121026P', 'part_number_normalized' => '06J121026P', 'step' => 'vehicles', 'status' => $i === 1 ? 'succeeded' : 'running', 'apify_run_id' => 'run-vehicles-S' . $i . '-' . $i, 'apify_dataset_id' => 'dataset-vehicles-S' . $i . '-' . $i, 'article_no' => 'S' . $i, 'supplier_id' => $i, 'attempts' => 1]); }
+$GLOBALS['gps_test_apify_datasets']['dataset-vehicles-S1-1'] = [[ 'compatibleCars' => [['vehicleId' => 9001, 'manufacturerName' => 'VW']] ]];
+$stuckRunner = new KTypeBackfillAutoRunner(new ProductScanner($stuckDatabase, $normalizer, $settings, $validator), new FitmentLookupService($stuckDatabase, $client, $normalizer, $settings, $validator), $stuckDatabase, new AuditCsvExporter($stuckDatabase), $settings);
+$stuckPoll = $stuckRunner->run_batch(['run_id' => 'stuck-run', 'offset' => 0, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+$stuckStatuses = array_count_values(array_map(static fn(array $job): string => (string) ($job['status'] ?? ''), array_filter($stuckWpdb->tables['wp_gps_fitment_apify_jobs'] ?? [], static fn(array $job): bool => (string) ($job['step'] ?? '') === 'vehicles')));
+assert_same(26, $stuckStatuses['skipped_due_to_article_limit'] ?? 0, 'existing 31 vehicle jobs mark 26 excess jobs skipped_due_to_article_limit');
+assert_same(5, $stuckPoll['processed_item']['vehicle_jobs_total'] ?? null, 'existing excess vehicle jobs do not increase wait count');
+for ($i = 0; $i < 6; $i++) {
+    $stuckAttempt = $stuckRunner->run_batch(['run_id' => 'stuck-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
+    if (empty($stuckAttempt['processed_item']['pending_async'])) {
+        $stuckFinal = $stuckAttempt;
+        break;
+    }
+}
+assert_same('found', $stuckFinal['processed_item']['status'] ?? '', 'existing stuck part finalizes after only selected jobs complete');
+assert_same(1, $stuckFinal['next_offset'] ?? null, 'existing stuck part advances past offset after limited finalization');
 assert_same(true, str_contains($adminSource, 'stalled_no_progress') && str_contains($adminSource, 'DEFAULT_STALL_THRESHOLD_SECONDS'), 'browser runner detects no-progress stalls');
 assert_same(true, str_contains($adminSource, 'next_retry_time'), 'browser runner shows next retry time');
 assert_same(true, str_contains($adminSource, "postBatchWithTransientRetries"), 'browser runner retries the same batch request');
@@ -1015,6 +1103,8 @@ $failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => f
 $failFinal = $failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
 assert_same('error', $failFinal['processed_item']['status'], 'failed jobs retry then mark error');
 $GLOBALS['gps_test_async_fail_starts'] = [];
+$GLOBALS['gps_test_async_many_articles'] = [];
+$GLOBALS['gps_test_async_empty_vehicles'] = [];
 
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];

@@ -28,6 +28,7 @@ final class Settings
             'timeout' => 60,
             'batch_size' => 5,
             'max_apify_lookups_per_batch' => 5,
+            'max_tecdoc_articles_per_part_for_vehicle_lookup' => 5,
         ];
     }
 
@@ -58,6 +59,7 @@ final class Settings
             'timeout' => isset($value['timeout']) ? max(5, min(300, (int) $value['timeout'])) : 60,
             'batch_size' => isset($value['batch_size']) ? max(1, min(50, (int) $value['batch_size'])) : 5,
             'max_apify_lookups_per_batch' => isset($value['max_apify_lookups_per_batch']) ? max(1, min(10, (int) $value['max_apify_lookups_per_batch'])) : 5,
+            'max_tecdoc_articles_per_part_for_vehicle_lookup' => isset($value['max_tecdoc_articles_per_part_for_vehicle_lookup']) ? max(1, min(10, (int) $value['max_tecdoc_articles_per_part_for_vehicle_lookup'])) : 5,
         ];
     }
 
