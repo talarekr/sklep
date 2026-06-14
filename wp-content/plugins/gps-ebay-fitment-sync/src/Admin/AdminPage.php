@@ -413,7 +413,8 @@ final class AdminPage
     private function render_ebay_fitment_preview(): void
     {
         $args = $this->preview_request_args($_GET);
-        $preview = $this->ebayFitmentPreview->query($args);
+        $shouldLoadPreview = isset($_GET['gps_fitment_preview']) && (string) wp_unslash((string) $_GET['gps_fitment_preview']) === '1';
+        $preview = $shouldLoadPreview ? $this->ebayFitmentPreview->query($args) : ['rows' => [], 'counters' => [], 'diagnostics' => $this->ebayFitmentPreview->diagnostics(), 'limit' => $args['limit'], 'offset' => $args['offset']];
         $counters = $preview['counters'];
         $diagnostics = $preview['diagnostics'];
         ?>
@@ -427,6 +428,7 @@ final class AdminPage
             </p>
             <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
                 <input type="hidden" name="page" value="gps-ebay-fitment-sync">
+                <input type="hidden" name="gps_fitment_preview" value="1">
                 <label><?php echo esc_html__('Limit', 'gps-ebay-fitment-sync'); ?> <input name="limit" type="number" min="1" max="1000" value="<?php echo esc_attr((string) $preview['limit']); ?>"></label>
                 <label><?php echo esc_html__('Offset', 'gps-ebay-fitment-sync'); ?> <input name="offset" type="number" min="0" value="<?php echo esc_attr((string) $preview['offset']); ?>"></label>
                 <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="product_id" type="number" min="1" value="<?php echo esc_attr(!empty($args['product_id']) ? (string) $args['product_id'] : ''); ?>"></label>
@@ -444,6 +446,7 @@ final class AdminPage
             </form>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;max-width:1200px;">
                 <?php foreach ($counters as $key => $value): ?><div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html((string) $key); ?></span><br><strong><?php echo esc_html((string) $value); ?></strong></div><?php endforeach; ?>
+                <?php if (!$shouldLoadPreview): ?><div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><?php echo esc_html__('Preview counters load only after Apply preview filters.', 'gps-ebay-fitment-sync'); ?></div><?php endif; ?>
             </div>
             <div style="overflow:auto;margin-top:12px;"><table class="widefat striped"><thead><tr>
                 <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_de_listing_management_type','ebay_de_inventory_item_sku','ebay_de_offer_id','ebay_de_would_update_inventory_fitment','ebay_de_blocked_reason_inventory','ebay_fr_item_id','ebay_fr_status','ebay_fr_listing_management_type','ebay_fr_inventory_item_sku','ebay_fr_offer_id','ebay_fr_would_update_inventory_fitment','ebay_fr_blocked_reason_inventory','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
@@ -457,16 +460,18 @@ final class AdminPage
 
     private function render_inventory_fitment_preview(): void
     {
-        $productId = isset($_GET['inventory_product_id']) ? max(0, (int) $_GET['inventory_product_id']) : 2080;
+        $productId = isset($_GET['inventory_product_id']) ? max(0, (int) $_GET['inventory_product_id']) : 0;
         $marketplace = isset($_GET['inventory_marketplace']) ? sanitize_text_field(wp_unslash((string) $_GET['inventory_marketplace'])) : 'both';
         if (!in_array($marketplace, ['de', 'fr', 'both'], true)) { $marketplace = 'both'; }
-        $preview = $productId > 0 ? $this->ebayFitmentPreview->inventory_fitment_preview($productId, $marketplace) : ['results' => [], 'write_enabled' => false];
+        $shouldLoadInventoryPreview = isset($_GET['gps_inventory_preview']) && (string) wp_unslash((string) $_GET['gps_inventory_preview']) === '1';
+        $preview = ($shouldLoadInventoryPreview && $productId > 0) ? $this->ebayFitmentPreview->inventory_fitment_preview($productId, $marketplace) : ['results' => [], 'write_enabled' => false];
         ?>
             <hr>
             <h2><?php echo esc_html__('Inventory API Fitment Preview', 'gps-ebay-fitment-sync'); ?></h2>
             <p><?php echo esc_html__('Preview only. Builds the expected Sell Inventory API product compatibility payload from cached KTypes and existing listing IDs. Live Inventory API writes are available only in the dedicated auto-runner below after exact confirmation.', 'gps-ebay-fitment-sync'); ?></p>
             <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <input type="hidden" name="page" value="gps-ebay-fitment-sync">
+                <input type="hidden" name="gps_inventory_preview" value="1">
                 <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="inventory_product_id" type="number" min="1" value="<?php echo esc_attr((string) $productId); ?>"></label>
                 <label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select name="inventory_marketplace"><option value="de" <?php selected($marketplace, 'de'); ?>>DE only</option><option value="fr" <?php selected($marketplace, 'fr'); ?>>FR only</option><option value="both" <?php selected($marketplace, 'both'); ?>>DE + FR</option></select></label>
                 <button class="button button-primary"><?php echo esc_html__('Build inventory fitment preview', 'gps-ebay-fitment-sync'); ?></button>
