@@ -8,7 +8,7 @@ use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 
 final class Database
 {
-    private const DB_VERSION = '0.1.3';
+    private const DB_VERSION = '0.1.4';
     private const DB_OPTION = 'gps_ebay_fitment_sync_db_version';
 
     private PartNumberNormalizer $normalizer;
@@ -121,6 +121,11 @@ final class Database
             product_id bigint(20) unsigned NOT NULL,
             marketplace varchar(20) NOT NULL,
             ebay_item_id varchar(64) NOT NULL,
+            api_mode varchar(20) NULL,
+            endpoint varchar(255) NULL,
+            method varchar(10) NULL,
+            offer_id varchar(64) NULL,
+            inventory_item_sku varchar(191) NULL,
             part_number_normalized varchar(191) NOT NULL,
             part_cache_id bigint(20) unsigned NULL,
             ktype_count int(11) NOT NULL DEFAULT 0,

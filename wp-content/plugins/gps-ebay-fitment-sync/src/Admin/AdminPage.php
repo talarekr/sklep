@@ -216,7 +216,8 @@ final class AdminPage
         $marketplace = isset($_POST['live_marketplace']) ? sanitize_text_field(wp_unslash((string) $_POST['live_marketplace'])) : 'both';
         $dryRun = !empty($_POST['dry_run']);
         $confirmation = isset($_POST['live_confirmation']) ? sanitize_text_field(wp_unslash((string) $_POST['live_confirmation'])) : '';
-        $this->store_result(['type' => 'ebay_fitment_live_test', 'result' => $this->ebayFitmentLiveTest->run($productId, $marketplace, $dryRun, $confirmation)]);
+        $apiMode = isset($_POST['api_mode']) ? sanitize_text_field(wp_unslash((string) $_POST['api_mode'])) : 'trading';
+        $this->store_result(['type' => 'ebay_fitment_live_test', 'result' => $this->ebayFitmentLiveTest->run($productId, $marketplace, $dryRun, $confirmation, $apiMode)]);
     }
 
     public function ebay_fitment_preview_csv(): void
@@ -424,18 +425,19 @@ final class AdminPage
         ?>
             <hr>
             <h2><?php echo esc_html__('eBay Fitment Live Test', 'gps-ebay-fitment-sync'); ?></h2>
-            <p><?php echo esc_html__('One product only. Uses existing local KType cache and local eBay listing mappings. Dry-run is on by default and never calls eBay write APIs. Live uses Trading API ReviseFixedPriceItem only for Trading-managed listings; inventory-based listing errors are blocked with diagnostics instead of retrying.', 'gps-ebay-fitment-sync'); ?></p>
+            <p><?php echo esc_html__('One product only. Uses existing local KType cache and local eBay listing mappings. Dry-run is on by default and never calls eBay write APIs. Trading mode keeps guarded ReviseFixedPriceItem behavior. Inventory mode writes only FR via Sell Inventory product_compatibility.', 'gps-ebay-fitment-sync'); ?></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="gps-ebay-fitment-live-test-form">
                 <input type="hidden" name="action" value="gps_ebay_fitment_live_test">
                 <?php wp_nonce_field('gps_ebay_fitment_live_test'); ?>
                 <p><label><?php echo esc_html__('Woo product ID', 'gps-ebay-fitment-sync'); ?> <input id="gps-live-product-id" name="live_product_id" type="number" min="1" value="2080" required></label></p>
-                <p><label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select name="live_marketplace"><option value="de">DE only</option><option value="fr">FR only</option><option value="both" selected>DE + FR</option></select></label></p>
+                <p><label><?php echo esc_html__('API mode', 'gps-ebay-fitment-sync'); ?> <select id="gps-live-api-mode" name="api_mode"><option value="inventory" selected>Inventory API (FR only product_compatibility)</option><option value="trading">Trading API (guarded legacy)</option></select></label></p>
+                <p><label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select id="gps-live-marketplace" name="live_marketplace"><option value="fr" selected>FR only</option><option value="de">DE only (Trading mode only)</option><option value="both">DE + FR (Trading mode only)</option></select></label></p>
                 <p><label><input id="gps-live-dry-run" type="checkbox" name="dry_run" value="1" checked> <?php echo esc_html__('Dry-run / preview mode (no eBay write API call)', 'gps-ebay-fitment-sync'); ?></label></p>
-                <p><label><?php echo esc_html__('Live confirmation text', 'gps-ebay-fitment-sync'); ?> <input id="gps-live-confirmation" name="live_confirmation" type="text" class="regular-text" autocomplete="off" placeholder="UPDATE EBAY FITMENT"></label></p>
+                <p><label><?php echo esc_html__('Live confirmation text', 'gps-ebay-fitment-sync'); ?> <input id="gps-live-confirmation" name="live_confirmation" type="text" class="regular-text" autocomplete="off" placeholder="UPDATE EBAY INVENTORY FITMENT"></label></p>
                 <p><button id="gps-live-submit" class="button button-primary" type="submit"><?php echo esc_html__('Run one-product fitment test', 'gps-ebay-fitment-sync'); ?></button></p>
             </form>
             <script>
-            (function(){const f=document.getElementById('gps-ebay-fitment-live-test-form'); if(!f)return; const p=document.getElementById('gps-live-product-id'), d=document.getElementById('gps-live-dry-run'), c=document.getElementById('gps-live-confirmation'), b=document.getElementById('gps-live-submit'); function u(){b.disabled=!d.checked && (!(p.value||'').trim() || c.value !== 'UPDATE EBAY FITMENT');} [p,d,c].forEach(function(e){e.addEventListener('input',u); e.addEventListener('change',u);}); u();})();
+            (function(){const f=document.getElementById('gps-ebay-fitment-live-test-form'); if(!f)return; const p=document.getElementById('gps-live-product-id'), d=document.getElementById('gps-live-dry-run'), c=document.getElementById('gps-live-confirmation'), b=document.getElementById('gps-live-submit'), m=document.getElementById('gps-live-api-mode'), market=document.getElementById('gps-live-marketplace'); function expected(){return m.value==='inventory'?'UPDATE EBAY INVENTORY FITMENT':'UPDATE EBAY FITMENT';} function u(){if(m.value==='inventory'){market.value='fr';} c.placeholder=expected(); b.disabled=!d.checked && (!(p.value||'').trim() || !market.value || c.value !== expected());} [p,d,c,m,market].forEach(function(e){e.addEventListener('input',u); e.addEventListener('change',u);}); u();})();
             </script>
         <?php
     }

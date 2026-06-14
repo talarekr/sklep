@@ -380,6 +380,12 @@ if (!function_exists('wp_remote_request')) {
         $GLOBALS['gps_test_http_calls']++;
         $call = (string) ($args['headers']['X-EBAY-API-CALL-NAME'] ?? '');
         $body = (string) ($args['body'] ?? '');
+        if (str_contains((string) $url, '/sell/inventory/v1/inventory_item/')) {
+            $decoded = json_decode((string) ($args['body'] ?? ''), true);
+            $GLOBALS['gps_test_last_inventory_request'] = ['url'=>(string)$url,'method'=>(string)($args['method'] ?? ''),'body'=>$decoded,'headers'=>$args['headers'] ?? []];
+            if (!empty($GLOBALS['gps_test_inventory_api_error'])) { return new FakeHttpResponse(400, json_encode(['errors'=>[['message'=>'Inventory compatibility failed']]])); }
+            return new FakeHttpResponse(204, '');
+        }
         if ($call === 'GetItem') {
             preg_match('/<ItemID>([^<]+)<\/ItemID>/', $body, $m);
             $item = $m[1] ?? '';
@@ -1346,7 +1352,9 @@ $previewWpdb->tables['wp_marketplace_mappings'] = [
     ['woo_product_id' => 303, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE303', 'status' => 'active'],
     ['woo_product_id' => 303, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR303', 'status' => 'active'],
     ['woo_product_id' => 304, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE304', 'remote_offer_id' => '', 'remote_inventory_id' => 'SKU-DE304', 'marketplace_id' => 'EBAY_DE', 'sku' => 'SKU-DE304', 'status' => 'active'],
+    ['woo_product_id' => 304, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR304', 'remote_offer_id' => '', 'remote_inventory_id' => 'SKU-FR304', 'marketplace_id' => 'EBAY_FR', 'sku' => 'SKU-FR304', 'status' => 'active'],
     ['woo_product_id' => 305, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE305', 'remote_offer_id' => 'OFFER-DE305', 'remote_inventory_id' => '', 'marketplace_id' => 'EBAY_DE', 'sku' => '', 'status' => 'active'],
+    ['woo_product_id' => 305, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR305', 'remote_offer_id' => 'OFFER-FR305', 'remote_inventory_id' => '', 'marketplace_id' => 'EBAY_FR', 'sku' => '', 'status' => 'active'],
     ['woo_product_id' => 2080, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE2080', 'remote_offer_id' => 'OFFER-DE2080', 'remote_inventory_id' => 'SKU-DE2080', 'marketplace_id' => 'EBAY_DE', 'sku' => 'SKU-DE2080', 'status' => 'ended'],
     ['woo_product_id' => 2080, 'marketplace' => 'ebay_fr', 'remote_listing_id' => '800119101706', 'remote_offer_id' => 'OFFER-FR2080', 'remote_inventory_id' => 'SKU-FR2080', 'marketplace_id' => 'EBAY_FR', 'sku' => 'SKU-FR2080', 'status' => 'active'],
 ];
@@ -1372,7 +1380,7 @@ assert_same('', $readyPreviewRow['blocked_reason_fr'] ?? '', 'ready preview row 
 assert_same('inventory', $readyPreviewRow['ebay_de_listing_management_type'] ?? '', 'preview exposes DE listing management type from offer/inventory IDs');
 assert_same('SKU-DE300', $readyPreviewRow['ebay_de_inventory_item_sku'] ?? '', 'preview exposes DE inventory item SKU');
 assert_same('OFFER-FR300', $readyPreviewRow['ebay_fr_offer_id'] ?? '', 'preview exposes FR offer ID');
-assert_same(2, $emptyPartPreview['counters']['ready_for_both'] ?? 0, 'ready_for_both counter follows row would_update flags');
+assert_same(4, $emptyPartPreview['counters']['ready_for_both'] ?? 0, 'ready_for_both counter follows row would_update flags');
 $mixedPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 302, 'part_number' => '']);
 assert_same('yes', $mixedPreview['rows'][0]['would_update_de'] ?? '', 'mixed preview row can be ready for DE');
 assert_same('no', $mixedPreview['rows'][0]['would_update_fr'] ?? '', 'mixed preview row can be blocked for FR');
@@ -1465,6 +1473,31 @@ $noKtype = $liveTest->run(302, 'fr', true, '');
 assert_same('blocked', $noKtype['results']['EBAY_FR']['status'] ?? '', 'product without eBay item ID is blocked');
 assert_same('no_ebay_fr_listing', $noKtype['results']['EBAY_FR']['error'] ?? '', 'missing FR listing gives blocked reason');
 
+$inventoryDryRun = $liveTest->run(2080, 'fr', true, '', 'inventory');
+assert_same('preview', $inventoryDryRun['results']['EBAY_FR']['status'] ?? '', 'inventory dry-run builds FR product compatibility preview');
+assert_same('PUT /sell/inventory/v1/inventory_item/SKU-FR2080/product_compatibility', $inventoryDryRun['results']['EBAY_FR']['endpoint'] ?? '', 'inventory dry-run exposes exact product compatibility endpoint');
+assert_same('EBAY_FR', $inventoryDryRun['results']['EBAY_FR']['payload']['marketplaceId'] ?? '', 'inventory dry-run uses EBAY_FR marketplaceId');
+assert_same(82, count($inventoryDryRun['results']['EBAY_FR']['payload']['compatibleProducts'] ?? []), 'inventory dry-run uses all cached KTypes for product 2080');
+assert_same(false, $inventoryDryRun['results']['EBAY_FR']['attempted'] ?? true, 'inventory dry-run does not call eBay write API');
+$inventoryMissingOffer = $liveTest->run(304, 'de', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('blocked', $inventoryMissingOffer['results']['EBAY_FR']['status'] ?? '', 'inventory live blocks non-FR selection before write');
+$inventoryMissingOffer = $liveTest->run(304, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('missing_offer_id', $inventoryMissingOffer['results']['EBAY_FR']['blocked_reason'] ?? '', 'inventory live blocks missing offer_id');
+$inventoryMissingSku = $liveTest->run(305, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('missing_inventory_item_sku', $inventoryMissingSku['results']['EBAY_FR']['blocked_reason'] ?? '', 'inventory live blocks missing inventory_item_sku');
+$inventoryBadConfirm = $liveTest->run(2080, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION, 'inventory');
+assert_same('live_confirmation_required', $inventoryBadConfirm['results']['EBAY_FR']['error'] ?? '', 'inventory live requires exact UPDATE EBAY INVENTORY FITMENT confirmation');
+$GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_last_inventory_request'] = [];
+$inventoryLive = $liveTest->run(2080, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('success', $inventoryLive['results']['EBAY_FR']['status'] ?? '', 'inventory live treats 2xx product compatibility response as success');
+assert_same(true, $inventoryLive['results']['EBAY_FR']['attempted'] ?? false, 'inventory live attempts write after identifiers and confirmation pass');
+assert_same('PUT', $GLOBALS['gps_test_last_inventory_request']['method'] ?? '', 'inventory live uses PUT method');
+assert_same('EBAY_FR', $GLOBALS['gps_test_last_inventory_request']['body']['marketplaceId'] ?? '', 'inventory live sends EBAY_FR marketplaceId');
+assert_same(82, count($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'] ?? []), 'inventory live sends all cached KTypes');
+assert_same(true, str_contains($inventoryLive['results']['EBAY_FR']['merge_strategy'] ?? '', 'not sent or overwritten'), 'inventory live merge strategy preserves existing offer/inventory fields');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory live makes one Inventory API write and no Apify calls');
+
 
 $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
@@ -1482,5 +1515,6 @@ assert_same(false, str_contains($previewSource, 'update_post_meta') || str_conta
 assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_contains($previewSource, 'AddFixedPriceItem') || str_contains($previewSource, 'Trading API'), 'preview adds no eBay write code');
 assert_same(true, str_contains($liveTestSource, 'ReviseFixedPriceItem'), 'live test uses Trading API ReviseFixedPriceItem');
 assert_same(true, str_contains($liveTestSource, 'inventory_based_listing_not_supported_by_trading_api'), 'live test blocks inventory-based Trading API errors');
+assert_same(true, str_contains($liveTestSource, 'product_compatibility') && str_contains($liveTestSource, 'UPDATE EBAY INVENTORY FITMENT'), 'live test contains Inventory API product compatibility mode');
 assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains($liveTestSource, 'api.apify.com'), 'live test contains no Apify client calls');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');
