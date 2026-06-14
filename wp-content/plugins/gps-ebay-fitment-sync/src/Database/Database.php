@@ -600,6 +600,37 @@ final class Database
         return (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM ' . $this->table('part_cache') . " WHERE part_number_normalized IN ({$placeholders})", $normalizedPartNumbers));
     }
 
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function product_map_page_for_export(int $lastId, int $limit): array
+    {
+        global $wpdb;
+        $limit = max(1, min(500, $limit));
+        $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . $this->table('product_map') . ' WHERE id > %d ORDER BY id ASC LIMIT %d', max(0, $lastId), $limit), ARRAY_A) ?: [];
+        return array_values(array_filter($rows, 'is_array'));
+    }
+
+    public function product_map_count_for_export(): int
+    {
+        global $wpdb;
+        return (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $this->table('product_map'));
+    }
+
+    /**
+     * @return string[]
+     */
+    public function vehicle_ids_for_part_cache(int $partCacheId): array
+    {
+        global $wpdb;
+        if ($partCacheId <= 0) {
+            return [];
+        }
+        $ids = $wpdb->get_col($wpdb->prepare('SELECT DISTINCT vehicle_id FROM ' . $this->table('vehicle_cache') . ' WHERE part_cache_id = %d ORDER BY vehicle_id ASC', $partCacheId)) ?: [];
+        return array_values(array_map('strval', $ids));
+    }
+
     private function vehicle_field(array $vehicle, array $keys): ?string
     {
         foreach ($keys as $key) {

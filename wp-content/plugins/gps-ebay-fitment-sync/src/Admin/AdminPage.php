@@ -42,6 +42,8 @@ final class AdminPage
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_batch', [$this, 'ajax_ktype_backfill_batch']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_summary', [$this, 'ajax_ktype_backfill_summary']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_stop', [$this, 'ajax_ktype_backfill_stop']);
+        add_action('wp_ajax_gps_ebay_fitment_ktype_final_export_start', [$this, 'ajax_ktype_final_export_start']);
+        add_action('wp_ajax_gps_ebay_fitment_ktype_final_export_chunk', [$this, 'ajax_ktype_final_export_chunk']);
     }
 
     public function admin_menu(): void
@@ -109,11 +111,7 @@ final class AdminPage
             $runId = (string) $checkpoint['run_id'];
         }
 
-        $result = $this->autoRunner->final_summary([
-            'run_id' => $runId,
-            'finished_at' => gmdate('c'),
-            'stopped_reason' => $this->checkpoint_report_reason($checkpoint),
-        ]);
+        $result = $this->auditCsvExporter->start_final_export($runId, 250);
 
         $this->store_result(['type' => 'ktype_final_report', 'result' => $result]);
     }
@@ -183,6 +181,23 @@ final class AdminPage
         $this->ajax_guard('gps_ebay_fitment_ktype_backfill');
         $reason = isset($_POST['reason']) ? sanitize_text_field(wp_unslash($_POST['reason'])) : 'manual_stop';
         wp_send_json_success($this->autoRunner->stop($reason));
+    }
+
+
+    public function ajax_ktype_final_export_start(): void
+    {
+        $this->ajax_guard('gps_ebay_fitment_ktype_backfill');
+        $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash($_POST['run_id'])) : '';
+        $chunkSize = isset($_POST['chunk_size']) ? (int) $_POST['chunk_size'] : 250;
+        wp_send_json_success($this->auditCsvExporter->start_final_export($runId, $chunkSize));
+    }
+
+    public function ajax_ktype_final_export_chunk(): void
+    {
+        $this->ajax_guard('gps_ebay_fitment_ktype_backfill');
+        $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash($_POST['run_id'])) : '';
+        $chunkSize = isset($_POST['chunk_size']) ? (int) $_POST['chunk_size'] : 250;
+        wp_send_json_success($this->auditCsvExporter->process_final_export_chunk($runId, $chunkSize));
     }
 
     public function render(): void
@@ -526,12 +541,15 @@ final class AdminPage
                 }
                 async function writeSummary(reason, force) {
                     if (!force && !$('gps-ktype-final-summary').checked) { return; }
-                    if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'Generating final report...'; }
+                    if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'Generating final report... Starting chunked final export.'; }
                     const reportRunId = state.run_id || serverCheckpoint.run_id || '';
-                    const result = await post('gps_ebay_fitment_ktype_backfill_summary', { run_id:reportRunId, finished_at:(new Date()).toISOString(), stopped_reason:reason || state.stopped_reason, transient_retry_count:state.transient_retry_count, last_http_error:state.last_http_error === '-' ? '' : state.last_http_error, retry_delay_seconds:state.retry_delay_seconds, deferred_due_to_lookup_cap:state.deferred_due_to_lookup_cap });
-                    if (!state.run_id && reportRunId) { state.run_id = reportRunId; }
+                    let result = await post('gps_ebay_fitment_ktype_final_export_start', { run_id:reportRunId, chunk_size:250 });
                     renderReportResult(result);
-                    if (serverCheckpoint.run_id) { serverCheckpoint.final_summary_csv_url = result.summary_csv_url || ''; applyCheckpoint(serverCheckpoint); }
+                    while (result && result.status === 'running') {
+                        if (fields.final_summary_csv) { fields.final_summary_csv.innerHTML = 'Export running: ' + (result.offset || 0) + ' / ' + (result.total_rows || 0) + '<br>Full rows: ' + ((result.row_counts && result.row_counts.final) || 0) + '<br>Found-only rows: ' + ((result.row_counts && result.row_counts.found_only) || 0); }
+                        result = await post('gps_ebay_fitment_ktype_final_export_chunk', { run_id:result.export_run_id || reportRunId, chunk_size:250 });
+                    }
+                    renderReportResult({ run_id:result.export_run_id, final_csv_url:result.files && result.files.final ? result.files.final.url : '', found_only_csv_url:result.files && result.files.found_only ? result.files.found_only.url : '', final_csv_row_count:result.row_counts ? result.row_counts.final : 0, found_only_csv_row_count:result.row_counts ? result.row_counts.found_only : 0, final_csv_error:result.last_error || '' });
                 }
                 async function start(resume) {
                     if (state.running || state.inFlight) { return; }
