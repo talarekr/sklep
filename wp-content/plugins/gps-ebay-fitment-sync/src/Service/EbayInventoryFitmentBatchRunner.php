@@ -12,8 +12,9 @@ final class EbayInventoryFitmentBatchRunner
     private const METHOD = 'PUT';
     private const PATH_TEMPLATE = '/sell/inventory/v1/inventory_item/{inventory_item_sku}/product_compatibility';
     private const CHECKPOINT_OPTION = 'gps_ebay_inventory_fitment_batch_checkpoint';
+    private const REMAP_BLOCK_REASON = 'stale_or_unconfirmed_listing_mapping';
 
-    public function __construct(private EbayFitmentPreview $preview) {}
+    public function __construct(private EbayFitmentPreview $preview, private ?EbayInventoryRemapAudit $remapAudit = null) {}
 
     public function run_batch(array $args): array
     {
@@ -90,8 +91,13 @@ final class EbayInventoryFitmentBatchRunner
         elseif ($itemId === '') { $blocked = $market === 'EBAY_FR' ? 'missing_fr_mapping' : 'missing_de_mapping'; }
         elseif ($offerId === '') { $blocked = 'missing_offer_id'; }
         elseif ($sku === '') { $blocked = 'missing_inventory_item_sku'; }
+        $remapValidation = null;
+        if ($blocked === '' && $mode === 'live' && $this->remapAudit) {
+            $remapValidation = $this->remapAudit->validate_before_write($row, $market);
+            if (empty($remapValidation['ok'])) { $blocked = self::REMAP_BLOCK_REASON; }
+        }
         $payload = $this->payload($kt);
-        $base = ['run_id'=>$runId,'product_id'=>$productId,'marketplace'=>$market,'item_id'=>$itemId,'offer_id'=>$offerId,'inventory_item_sku'=>$sku,'part_number_normalized'=>(string)$row['part_number_normalized'],'ktype_count'=>count($kt),'sample_ktypes'=>implode(',', array_slice($kt,0,10)),'endpoint'=>$endpoint,'method'=>self::METHOD,'api_mode'=>'inventory','mode'=>$mode,'headers_summary'=>$this->headers_summary($market),'would_update'=>$blocked === '' ? 'yes' : 'no','blocked_reason'=>$blocked,'payload_summary'=>'compatibleProducts=' . count($kt) . '; productIdentifier.ktype only','attempted'=>'false','status'=>$blocked === '' ? 'preview' : ($blocked === 'already_processed' ? 'already_processed' : 'blocked'),'http_status'=>0,'warnings'=>'','error_message'=>'','response_summary'=>'','created_at'=>current_time('mysql')];
+        $base = ['run_id'=>$runId,'product_id'=>$productId,'marketplace'=>$market,'item_id'=>$itemId,'offer_id'=>$offerId,'inventory_item_sku'=>$sku,'part_number_normalized'=>(string)$row['part_number_normalized'],'ktype_count'=>count($kt),'sample_ktypes'=>implode(',', array_slice($kt,0,10)),'endpoint'=>$endpoint,'method'=>self::METHOD,'api_mode'=>'inventory','mode'=>$mode,'headers_summary'=>$this->headers_summary($market),'would_update'=>$blocked === '' ? 'yes' : 'no','blocked_reason'=>$blocked,'payload_summary'=>'compatibleProducts=' . count($kt) . '; productIdentifier.ktype only','attempted'=>'false','status'=>$blocked === '' ? 'preview' : ($blocked === 'already_processed' ? 'already_processed' : 'blocked'),'http_status'=>0,'warnings'=>'','error_message'=>'','response_summary'=>$remapValidation ? $this->summary(['remap_audit'=>$remapValidation['audit'] ?? []]) : '','created_at'=>current_time('mysql')];
         if ($blocked !== '' || $mode === 'dry_run') { $this->insert_log($base); return $base; }
         $response = $this->inventory_request($market, $sku, $payload);
         $http = (int) ($response['http_status'] ?? 0);
