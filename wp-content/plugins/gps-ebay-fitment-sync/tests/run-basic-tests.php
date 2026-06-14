@@ -1072,10 +1072,38 @@ assert_same(true, isset($singleBatch['processed_item']['part_number_normalized']
 $singleSummary = $singleRunner->final_summary(['run_id' => 'single-run', 'finished_at' => gmdate('c'), 'stopped_reason' => 'completed']);
 assert_same(true, $singleSummary['final_csv_generated'], 'auto-runner final CSV generated from persisted state');
 assert_same(true, $singleSummary['found_only_csv_generated'], 'auto-runner found-only CSV generated from persisted state');
+assert_same(true, !empty($singleSummary['summary_csv_url']) && !empty($singleSummary['final_csv_url']) && !empty($singleSummary['found_only_csv_url']), 'final report returns summary, full, and found-only URLs');
 $singleFinalHandle = fopen($singleSummary['final_csv_path'], 'rb');
 $singleFinalHeaders = fgetcsv($singleFinalHandle);
+$singleFinalRow = fgetcsv($singleFinalHandle);
 fclose($singleFinalHandle);
 assert_same(true, in_array('product_id', $singleFinalHeaders, true) && in_array('part_number_normalized', $singleFinalHeaders, true), 'auto-runner final CSV includes required product columns');
+$lookupStatusIndex = array_search('lookup_status', $singleFinalHeaders, true);
+assert_same(true, $lookupStatusIndex !== false && in_array($singleFinalRow[$lookupStatusIndex] ?? '', ['found', 'skipped_cached'], true), 'full final CSV includes found rows from local persisted state');
+$singleFoundHandle = fopen($singleSummary['found_only_csv_path'], 'rb');
+$singleFoundHeaders = fgetcsv($singleFoundHandle);
+$singleFoundRows = [];
+while (($row = fgetcsv($singleFoundHandle)) !== false) {
+    $singleFoundRows[] = array_combine($singleFoundHeaders, $row);
+}
+fclose($singleFoundHandle);
+assert_same($singleSummary['found_only_csv_row_count'], count($singleFoundRows), 'found-only CSV row count matches file rows');
+assert_same(true, count($singleFoundRows) > 0, 'found-only CSV has found rows');
+assert_same(true, count(array_filter($singleFoundRows, static fn($row): bool => (int) ($row['ktype_count'] ?? 0) <= 0)) === 0, 'found-only CSV contains only rows with KTypes');
+$httpCallsBeforeFinalReport = $GLOBALS['gps_test_http_calls'];
+$idleCompletedCheckpoint = get_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, []);
+$idleCompletedCheckpoint['status'] = 'idle';
+$idleCompletedCheckpoint['stopped_reason'] = 'completed';
+update_option(KTypeBackfillAutoRunner::CHECKPOINT_OPTION, $idleCompletedCheckpoint);
+$idleCompletedSummary = $singleRunner->final_summary(['finished_at' => gmdate('c')]);
+assert_same(true, $idleCompletedSummary['final_csv_generated'], 'final report endpoint works for idle checkpoint with completed stopped_reason');
+assert_same($httpCallsBeforeFinalReport, $GLOBALS['gps_test_http_calls'], 'final report generation does not call Apify');
+$adminPageSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
+assert_same(true, strpos($adminPageSource, "add_action('admin_post_gps_ebay_fitment_ktype_generate_report'") !== false, 'admin-post fallback action is registered');
+assert_same(true, strpos($adminPageSource, "add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_summary'") !== false, 'AJAX final report action is registered');
+assert_same(true, strpos($adminPageSource, "id=\"gps-ktype-generate-report\"") !== false && strpos($adminPageSource, "writeSummary('manual_report', true)") !== false, 'Generate final CSV/report button is wired to forced report generation');
+assert_same(true, strpos($adminPageSource, 'Generating final report...') !== false, 'Generate final CSV/report button shows visible progress feedback');
+assert_same(true, strpos($adminPageSource, 'Generate final report via admin-post') !== false, 'admin-post fallback button exists');
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
 $GLOBALS['gps_test_async_empty_articles'] = ['A2044600143' => true];
@@ -1102,6 +1130,13 @@ $failRunner->run_batch(['run_id' => 'fail-run', 'offset' => 0, 'dry_run' => fals
 $failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
 $failFinal = $failRunner->run_batch(['run_id' => 'fail-run', 'resume' => true, 'dry_run' => false, 'confirmation' => KTypeBackfillAutoRunner::CONFIRMATION_TEXT]);
 assert_same('error', $failFinal['processed_item']['status'], 'failed jobs retry then mark error');
+$failSummary = $failRunner->final_summary(['run_id' => 'fail-run', 'finished_at' => gmdate('c'), 'stopped_reason' => 'stopped']);
+$failHandle = fopen($failSummary['final_csv_path'], 'rb');
+$failHeaders = fgetcsv($failHandle);
+$failRow = fgetcsv($failHandle);
+fclose($failHandle);
+$failLookupStatusIndex = array_search('lookup_status', $failHeaders, true);
+assert_same('error', $failRow[$failLookupStatusIndex] ?? '', 'full final CSV includes error rows when available');
 $GLOBALS['gps_test_async_fail_starts'] = [];
 $GLOBALS['gps_test_async_many_articles'] = [];
 $GLOBALS['gps_test_async_empty_vehicles'] = [];
@@ -1131,6 +1166,13 @@ assert_same(1, $rejectBatch['counters']['rejected_before_lookup'], 'auto-runner 
 assert_same(0, $rejectBatch['counters']['apify_lookup_attempted'], 'auto-runner rejected candidate does not call Apify');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'auto-runner rejected candidate makes no HTTP calls');
 assert_same(0, count($rejectWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'auto-runner rejected candidate does not create product map cache row');
+$rejectSummary = $rejectRunner->final_summary(['run_id' => 'reject-run', 'finished_at' => gmdate('c'), 'stopped_reason' => 'stopped']);
+$rejectHandle = fopen($rejectSummary['final_csv_path'], 'rb');
+$rejectHeaders = fgetcsv($rejectHandle);
+$rejectRow = fgetcsv($rejectHandle);
+fclose($rejectHandle);
+$rejectLookupStatusIndex = array_search('lookup_status', $rejectHeaders, true);
+assert_same('rejected', $rejectRow[$rejectLookupStatusIndex] ?? '', 'full final CSV includes rejected rows when available');
 
 $runnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
 assert_same(false, str_contains($runnerSource, 'update_post_meta'), 'auto-runner adds no Woo product meta writes');
