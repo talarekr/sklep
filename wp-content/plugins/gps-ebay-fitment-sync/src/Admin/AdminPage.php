@@ -12,6 +12,8 @@ use GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner;
 use GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
+use GPS_Ebay_Fitment_Sync\Service\KTypeMissAudit;
+use GPS_Ebay_Fitment_Sync\Service\OemKtypeEbayCoverageAudit;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
@@ -27,8 +29,10 @@ final class AdminPage
     private EbayFitmentLiveTest $ebayFitmentLiveTest;
     private EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner;
     private EbayInventoryRemapAudit $ebayInventoryRemapAudit;
+    private OemKtypeEbayCoverageAudit $oemKtypeEbayCoverageAudit;
+    private KTypeMissAudit $ktypeMissAudit;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner, EbayInventoryRemapAudit $ebayInventoryRemapAudit)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner, EbayInventoryRemapAudit $ebayInventoryRemapAudit, OemKtypeEbayCoverageAudit $oemKtypeEbayCoverageAudit, KTypeMissAudit $ktypeMissAudit)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -40,6 +44,8 @@ final class AdminPage
         $this->ebayFitmentLiveTest = $ebayFitmentLiveTest;
         $this->ebayInventoryFitmentBatchRunner = $ebayInventoryFitmentBatchRunner;
         $this->ebayInventoryRemapAudit = $ebayInventoryRemapAudit;
+        $this->oemKtypeEbayCoverageAudit = $oemKtypeEbayCoverageAudit;
+        $this->ktypeMissAudit = $ktypeMissAudit;
     }
 
     public function hooks(): void
@@ -65,6 +71,10 @@ final class AdminPage
         add_action('admin_post_gps_ebay_inventory_fitment_csv', [$this, 'inventory_fitment_csv']);
         add_action('wp_ajax_gps_ebay_inventory_remap_audit', [$this, 'ajax_inventory_remap_audit']);
         add_action('wp_ajax_gps_ebay_inventory_remap_audit_stop', [$this, 'ajax_inventory_remap_audit_stop']);
+        add_action('admin_post_gps_oem_ktype_ebay_coverage_audit', [$this, 'oem_ktype_ebay_coverage_audit']);
+        add_action('admin_post_gps_oem_ktype_ebay_coverage_csv', [$this, 'oem_ktype_ebay_coverage_csv']);
+        add_action('admin_post_gps_ktype_miss_audit', [$this, 'ktype_miss_audit']);
+        add_action('admin_post_gps_ktype_miss_audit_csv', [$this, 'ktype_miss_audit_csv']);
     }
 
     public function admin_menu(): void
@@ -300,6 +310,32 @@ final class AdminPage
         exit;
     }
 
+    public function oem_ktype_ebay_coverage_audit(): void
+    {
+        $this->guard('gps_oem_ktype_ebay_coverage_audit');
+        $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash((string) $_POST['run_id'])) : OemKtypeEbayCoverageAudit::DEFAULT_RUN_ID;
+        $this->store_result(['type' => 'oem_ktype_ebay_coverage_audit', 'result' => $this->oemKtypeEbayCoverageAudit->run($runId)]);
+    }
+
+    public function oem_ktype_ebay_coverage_csv(): void
+    {
+        $this->guard('gps_oem_ktype_ebay_coverage_csv');
+        $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash((string) $_POST['run_id'])) : OemKtypeEbayCoverageAudit::DEFAULT_RUN_ID;
+        $this->store_result(['type' => 'oem_ktype_ebay_coverage_csv', 'result' => $this->oemKtypeEbayCoverageAudit->export_csv($runId)]);
+    }
+
+    public function ktype_miss_audit(): void
+    {
+        $this->guard('gps_ktype_miss_audit');
+        $this->store_result(['type' => 'ktype_miss_audit', 'result' => $this->ktypeMissAudit->run()]);
+    }
+
+    public function ktype_miss_audit_csv(): void
+    {
+        $this->guard('gps_ktype_miss_audit_csv');
+        $this->store_result(['type' => 'ktype_miss_audit_csv', 'result' => $this->ktypeMissAudit->export_csv()]);
+    }
+
     public function ebay_fitment_live_test(): void
     {
         $this->guard('gps_ebay_fitment_live_test');
@@ -431,6 +467,8 @@ final class AdminPage
 
             <?php $this->render_ebay_fitment_preview(); ?>
 
+            <?php $this->render_oem_ktype_ebay_coverage_audit(); ?>
+            <?php $this->render_ktype_miss_audit(); ?>
             <?php $this->render_inventory_fitment_preview(); ?>
             <?php $this->render_inventory_remap_audit(); ?>
             <?php $this->render_inventory_fitment_batch_runner(); ?>
@@ -595,6 +633,49 @@ final class AdminPage
     {
         $url = admin_url('admin-post.php?action=gps_ebay_inventory_fitment_csv&run_id=' . rawurlencode($runId));
         return wp_nonce_url($url, 'gps_ebay_inventory_fitment_csv');
+    }
+
+
+    private function render_oem_ktype_ebay_coverage_audit(): void
+    {
+        $runId = OemKtypeEbayCoverageAudit::DEFAULT_RUN_ID;
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('OEM/KType/eBay Fitment Coverage Audit', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Read-only local audit from Woo product meta, local KType cache, local eBay mappings, and the local inventory fitment run log. No Apify calls, no eBay API calls, and no Woo product writes.', 'gps-ebay-fitment-sync'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;">
+                <input type="hidden" name="action" value="gps_oem_ktype_ebay_coverage_audit">
+                <?php wp_nonce_field('gps_oem_ktype_ebay_coverage_audit'); ?>
+                <label><?php echo esc_html__('Run ID', 'gps-ebay-fitment-sync'); ?> <input name="run_id" type="text" class="regular-text" value="<?php echo esc_attr($runId); ?>"></label>
+                <button class="button button-primary" type="submit"><?php echo esc_html__('Run coverage audit', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
+                <input type="hidden" name="action" value="gps_oem_ktype_ebay_coverage_csv">
+                <?php wp_nonce_field('gps_oem_ktype_ebay_coverage_csv'); ?>
+                <input name="run_id" type="hidden" value="<?php echo esc_attr($runId); ?>">
+                <button class="button" type="submit"><?php echo esc_html__('Export coverage CSV', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+        <?php
+    }
+
+
+    private function render_ktype_miss_audit(): void
+    {
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('KType Miss Audit', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Read-only audit for Woo products with OEM data that are missing local KType cache. Reads local product meta, local KType cache, local product map, and local eBay mapping indicators only. No Apify jobs, TecDoc live calls, eBay calls, Woo writes, or mapping writes are performed.', 'gps-ebay-fitment-sync'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;">
+                <input type="hidden" name="action" value="gps_ktype_miss_audit">
+                <?php wp_nonce_field('gps_ktype_miss_audit'); ?>
+                <button class="button button-primary" type="submit"><?php echo esc_html__('Run KType miss audit', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
+                <input type="hidden" name="action" value="gps_ktype_miss_audit_csv">
+                <?php wp_nonce_field('gps_ktype_miss_audit_csv'); ?>
+                <button class="button" type="submit"><?php echo esc_html__('Export KType miss CSV', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+        <?php
     }
 
     private function render_ebay_fitment_live_test(): void
