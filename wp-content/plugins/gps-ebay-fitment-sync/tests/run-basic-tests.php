@@ -1278,40 +1278,67 @@ $previewWpdb = new FakeWpdb();
 $previewWpdb->tables['wp_posts'] = [
     ['ID' => 300, 'post_title' => 'Preview Product 300', 'post_status' => 'publish'],
     ['ID' => 301, 'post_title' => 'Preview Product 301', 'post_status' => 'publish'],
+    ['ID' => 302, 'post_title' => 'Preview Product 302', 'post_status' => 'publish'],
 ];
 $previewWpdb->tables['wp_gps_fitment_part_cache'] = [
     ['id' => 1300, 'part_number_normalized' => 'PREVIEW300', 'vehicle_count' => 2],
     ['id' => 1301, 'part_number_normalized' => 'PREVIEW301', 'vehicle_count' => 1],
+    ['id' => 1302, 'part_number_normalized' => 'PREVIEW302', 'vehicle_count' => 1],
+    ['id' => 1303, 'part_number_normalized' => 'MISSING303', 'vehicle_count' => 1],
 ];
 $previewWpdb->tables['wp_gps_fitment_vehicle_cache'] = [
     ['id' => 1, 'part_cache_id' => 1300, 'vehicle_id' => 10001],
     ['id' => 2, 'part_cache_id' => 1300, 'vehicle_id' => 10002],
     ['id' => 3, 'part_cache_id' => 1301, 'vehicle_id' => 10003],
+    ['id' => 4, 'part_cache_id' => 1302, 'vehicle_id' => 10004],
+    ['id' => 5, 'part_cache_id' => 1303, 'vehicle_id' => 10005],
 ];
 $previewWpdb->tables['wp_gps_fitment_product_map'] = [
     ['id' => 1, 'product_id' => 300, 'sku' => 'preview-300', 'part_number_normalized' => 'PREVIEW300', 'part_cache_id' => 1300],
     ['id' => 2, 'product_id' => 301, 'sku' => 'preview-301', 'part_number_normalized' => 'PREVIEW301', 'part_cache_id' => 1301],
+    ['id' => 3, 'product_id' => 302, 'sku' => 'preview-302', 'part_number_normalized' => 'PREVIEW302', 'part_cache_id' => 1302],
+    ['id' => 4, 'product_id' => 303, 'sku' => 'missing-303', 'part_number_normalized' => 'MISSING303', 'part_cache_id' => 1303],
 ];
 $previewWpdb->tables['wp_marketplace_mappings'] = [
     ['woo_product_id' => 300, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE300', 'status' => 'active'],
     ['woo_product_id' => 300, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR300', 'status' => 'active'],
     ['woo_product_id' => 301, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE301', 'status' => 'active'],
     ['woo_product_id' => 301, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR301', 'status' => 'active'],
+    ['woo_product_id' => 302, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE302', 'status' => 'active'],
+    ['woo_product_id' => 303, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE303', 'status' => 'active'],
+    ['woo_product_id' => 303, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR303', 'status' => 'active'],
 ];
 $GLOBALS['wpdb'] = $previewWpdb;
 $GLOBALS['gps_test_http_calls'] = 0;
 $previewService = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview();
 $emptyProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
-assert_same(2, count($emptyProductPreview['rows']), 'preview with empty product_id returns rows');
+assert_same(4, count($emptyProductPreview['rows']), 'preview with empty product_id returns rows');
 assert_same('300', $emptyProductPreview['rows'][0]['product_id'] ?? '', 'preview with empty product_id starts at first matching product');
 $filteredProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 301, 'part_number' => '']);
 assert_same(1, count($filteredProductPreview['rows']), 'preview with product_id filters correctly');
 assert_same('301', $filteredProductPreview['rows'][0]['product_id'] ?? '', 'preview product_id filter returns requested product');
 $emptyPartPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
-assert_same(2, count($emptyPartPreview['rows']), 'empty part number does not filter preview');
-assert_same(2, $emptyPartPreview['counters']['products_with_ktype'] ?? 0, 'preview counters still work');
+assert_same(4, count($emptyPartPreview['rows']), 'empty part number does not filter preview');
+assert_same(4, $emptyPartPreview['counters']['products_with_ktype'] ?? 0, 'preview counters still work');
+$readyPreviewRow = $emptyPartPreview['rows'][0];
+assert_same('yes', $readyPreviewRow['would_update_de'] ?? '', 'ready preview row would update DE');
+assert_same('yes', $readyPreviewRow['would_update_fr'] ?? '', 'ready preview row would update FR');
+assert_same('', $readyPreviewRow['blocked_reason'] ?? '', 'ready preview row has no contradictory product_not_found blocker');
+assert_same('', $readyPreviewRow['blocked_reason_de'] ?? '', 'ready preview row has no DE blocker');
+assert_same('', $readyPreviewRow['blocked_reason_fr'] ?? '', 'ready preview row has no FR blocker');
+assert_same(2, $emptyPartPreview['counters']['ready_for_both'] ?? 0, 'ready_for_both counter follows row would_update flags');
+$mixedPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 302, 'part_number' => '']);
+assert_same('yes', $mixedPreview['rows'][0]['would_update_de'] ?? '', 'mixed preview row can be ready for DE');
+assert_same('no', $mixedPreview['rows'][0]['would_update_fr'] ?? '', 'mixed preview row can be blocked for FR');
+assert_same('', $mixedPreview['rows'][0]['blocked_reason_de'] ?? '', 'mixed preview row DE reason is empty');
+assert_same('no_ebay_fr_listing', $mixedPreview['rows'][0]['blocked_reason_fr'] ?? '', 'mixed preview row FR reason is separate');
+assert_same('no_ebay_fr_listing', $mixedPreview['rows'][0]['blocked_reason'] ?? '', 'mixed preview overall reason does not contradict DE readiness');
+$missingProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 303, 'part_number' => '']);
+assert_same('no', $missingProductPreview['rows'][0]['would_update_de'] ?? '', 'missing product row is not ready for DE');
+assert_same('no', $missingProductPreview['rows'][0]['would_update_fr'] ?? '', 'missing product row is not ready for FR');
+assert_same('product_not_found', $missingProductPreview['rows'][0]['blocked_reason'] ?? '', 'product_not_found only appears when product title cannot be resolved');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'preview makes no Apify calls');
-assert_same(2, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
+assert_same(4, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
 
 $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');

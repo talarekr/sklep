@@ -16,7 +16,7 @@ final class EbayFitmentPreview
     public const FR_STATUS_META = '_wei_fr_ebay_listing_status';
 
     /** @var string[] */
-    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason'];
+    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'];
 
     public function query(array $args = []): array
     {
@@ -92,19 +92,17 @@ final class EbayFitmentPreview
         $vehicles = $this->vehicle_ids((int) ($row['part_cache_id'] ?? 0));
         $de = $this->listing($productId, 'de');
         $fr = $this->listing($productId, 'fr');
-        $deReady = $ktypeCount > 0 && $de['item_id'] !== '' && $this->status_ready($de['status']);
-        $frReady = $ktypeCount > 0 && $fr['item_id'] !== '' && $this->status_ready($fr['status']);
-        $blocked = [];
-        if ((string) ($row['post_title'] ?? '') === '') { $blocked[] = 'product_not_found'; }
-        if ($ktypeCount <= 0) { $blocked[] = 'no_ktype'; }
-        if ($de['item_id'] === '') { $blocked[] = 'no_ebay_de_listing'; }
-        if ($fr['item_id'] === '') { $blocked[] = 'no_ebay_fr_listing'; }
-        if ($de['item_id'] !== '' && !$this->status_ready($de['status'])) { $blocked[] = 'listing_status_not_active'; }
-        if ($fr['item_id'] !== '' && !$this->status_ready($fr['status'])) { $blocked[] = 'listing_status_not_active'; }
+        $productTitle = trim((string) ($row['product_title'] ?? ''));
+        $productExists = $productId > 0 && $productTitle !== '';
+        $deBlocked = $this->market_blocked_reasons($productExists, $ktypeCount, $de, 'de');
+        $frBlocked = $this->market_blocked_reasons($productExists, $ktypeCount, $fr, 'fr');
+        $deReady = $deBlocked === [];
+        $frReady = $frBlocked === [];
+        $blocked = $this->overall_blocked_reasons($deBlocked, $frBlocked, $deReady, $frReady);
 
         return [
             'product_id' => (string) $productId,
-            'product_title' => (string) ($row['product_title'] ?? ''),
+            'product_title' => $productTitle,
             'sku' => (string) ($row['sku'] !== '' ? $row['sku'] : get_post_meta($productId, '_sku', true)),
             'part_number_normalized' => (string) ($row['part_number_normalized'] ?? ''),
             'part_cache_id' => (string) ($row['part_cache_id'] ?? ''),
@@ -117,8 +115,28 @@ final class EbayFitmentPreview
             'ebay_fr_status' => $fr['status'],
             'would_update_de' => $deReady ? 'yes' : 'no',
             'would_update_fr' => $frReady ? 'yes' : 'no',
+            'blocked_reason_de' => $deBlocked ? implode('|', array_values(array_unique($deBlocked))) : '',
+            'blocked_reason_fr' => $frBlocked ? implode('|', array_values(array_unique($frBlocked))) : '',
             'blocked_reason' => $blocked ? implode('|', array_values(array_unique($blocked))) : '',
         ];
+    }
+
+    private function market_blocked_reasons(bool $productExists, int $ktypeCount, array $listing, string $market): array
+    {
+        $blocked = [];
+        if (!$productExists) { $blocked[] = 'product_not_found'; }
+        if ($ktypeCount <= 0) { $blocked[] = 'no_ktype'; }
+        if ((string) ($listing['item_id'] ?? '') === '') { $blocked[] = $market === 'fr' ? 'no_ebay_fr_listing' : 'no_ebay_de_listing'; }
+        if ((string) ($listing['item_id'] ?? '') !== '' && !$this->status_ready((string) ($listing['status'] ?? ''))) { $blocked[] = 'listing_status_not_active'; }
+        return array_values(array_unique($blocked));
+    }
+
+    private function overall_blocked_reasons(array $deBlocked, array $frBlocked, bool $deReady, bool $frReady): array
+    {
+        if ($deReady || $frReady) {
+            return array_values(array_unique(array_merge($deReady ? [] : $deBlocked, $frReady ? [] : $frBlocked)));
+        }
+        return array_values(array_unique(array_merge($deBlocked, $frBlocked)));
     }
 
     private function row_matches(array $row, array $filters): bool
