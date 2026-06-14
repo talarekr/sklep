@@ -151,6 +151,37 @@ final class FakeWpdb
 
     public function get_row(string $query, $output = null)
     {
+        if (preg_match("/COUNT\(DISTINCT product_id\) AS scanned_products,.*FROM (\S+) WHERE run_id='([^']*)' AND api_mode='inventory'/s", $query, $matches)
+            || preg_match("/COUNT\(DISTINCT product_id\) AS scanned_products,.*FROM (\S+) WHERE run_id = '([^']*)' AND api_mode='inventory'/s", $query, $matches)) {
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2] && (string) ($row['api_mode'] ?? '') === 'inventory'));
+            $count = static fn(callable $predicate): int => count(array_filter($rows, $predicate));
+            $products = array_unique(array_map(static fn(array $row): int => (int) ($row['product_id'] ?? 0), $rows));
+            return [
+                'scanned_products' => count($products),
+                'marketplace_attempts' => count($rows),
+                'eligible' => $count(static fn(array $row): bool => (string) ($row['blocked_reason'] ?? '') === ''),
+                'preview' => $count(static fn(array $row): bool => (string) ($row['status'] ?? '') === 'preview'),
+                'attempted' => $count(static fn(array $row): bool => (int) ($row['attempted'] ?? 0) === 1),
+                'success' => $count(static fn(array $row): bool => (string) ($row['status'] ?? '') === 'success'),
+                'warning_success' => $count(static fn(array $row): bool => (string) ($row['status'] ?? '') === 'warning_success'),
+                'blocked' => $count(static fn(array $row): bool => (string) ($row['status'] ?? '') === 'blocked'),
+                'skipped' => $count(static fn(array $row): bool => in_array((string) ($row['status'] ?? ''), ['skipped', 'already_processed'], true)),
+                'errors' => $count(static fn(array $row): bool => (string) ($row['status'] ?? '') === 'error'),
+                'preview_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (string) ($row['status'] ?? '') === 'preview'),
+                'attempted_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (int) ($row['attempted'] ?? 0) === 1),
+                'success_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (string) ($row['status'] ?? '') === 'success'),
+                'warning_success_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (string) ($row['status'] ?? '') === 'warning_success'),
+                'errors_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (string) ($row['status'] ?? '') === 'error'),
+                'blocked_fr' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_FR' && (string) ($row['status'] ?? '') === 'blocked'),
+                'preview_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'preview'),
+                'attempted_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (int) ($row['attempted'] ?? 0) === 1),
+                'success_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'success'),
+                'warning_success_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'warning_success'),
+                'errors_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'error'),
+                'blocked_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'blocked'),
+            ];
+        }
+
         if (preg_match("/FROM (\S+) WHERE marketplace='([^']*)' AND woo_product_id=(\d+)/", $query, $matches)) {
             foreach ($this->tables[$matches[1]] ?? [] as $row) {
                 if ((string) ($row['marketplace'] ?? '') === $matches[2] && (int) ($row['woo_product_id'] ?? 0) === (int) $matches[3]) {
@@ -325,6 +356,16 @@ final class FakeWpdb
                     return $row['id'];
                 }
             }
+        }
+
+        if (preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id='([^']*)' AND product_id=(\d+) AND marketplace='([^']*)' AND api_mode='inventory' AND mode='live' AND status IN \('success','warning_success'\)/", $query, $matches)
+            || preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id = '([^']*)' AND product_id = (\d+) AND marketplace = '([^']*)' AND api_mode='inventory' AND mode='live' AND status IN \('success','warning_success'\)/", $query, $matches)) {
+            return count(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2]
+                && (int) ($row['product_id'] ?? 0) === (int) $matches[3]
+                && (string) ($row['marketplace'] ?? '') === $matches[4]
+                && (string) ($row['api_mode'] ?? '') === 'inventory'
+                && (string) ($row['mode'] ?? '') === 'live'
+                && in_array((string) ($row['status'] ?? ''), ['success', 'warning_success'], true)));
         }
 
         return null;
@@ -1433,14 +1474,35 @@ $batchResult = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'dry_
 assert_same(5, $batchResult['diagnostics']['candidate_products_loaded'] ?? 0, 'batch size 5 loads max 5 Woo products');
 assert_same(10, $batchResult['diagnostics']['marketplace_attempts_built'] ?? 0, 'batch size 5 builds at most 10 marketplace attempts for DE+FR');
 assert_same(10, count($batchResult['rows'] ?? []), 'batch dry-run writes log rows for current chunk only');
+assert_same(2, $batchResult['counters']['preview'] ?? 0, 'batch dry-run eligible rows are counted as preview');
+assert_same(0, $batchResult['counters']['skipped'] ?? -1, 'batch dry-run preview rows do not increment skipped');
+assert_same('preview', $batchResult['rows'][0]['status'] ?? '', 'batch dry-run eligible FR row is logged as preview');
+assert_same('false', $batchResult['rows'][0]['attempted'] ?? '', 'batch dry-run eligible row is not attempted');
+assert_same(0, $batchResult['rows'][0]['http_status'] ?? -1, 'batch dry-run eligible row has HTTP status 0');
+assert_same('', $batchResult['rows'][0]['blocked_reason'] ?? 'blocked', 'batch dry-run eligible row has empty blocked reason');
+assert_same('', $batchResult['rows'][0]['error_message'] ?? 'error', 'batch dry-run eligible row has empty error message');
+assert_same(10, $batchResult['checkpoint']['attempt_offset'] ?? 0, 'checkpoint advances after dry-run preview rows');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'batch dry-run makes no Apify or eBay API calls');
 assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'batch runner does not modify Woo/product-map data');
 assert_same(true, isset($batchResult['diagnostics']['memory_usage_start'], $batchResult['diagnostics']['memory_usage_end'], $batchResult['diagnostics']['peak_memory_usage']), 'batch runner returns memory diagnostics');
+$batchSizeTenDryRun = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'dry_run', 'batch_size' => 10, 'offset' => 0, 'run_id' => 'batch-size-ten-dry']);
+$batchSizeTenEligible = array_values(array_filter($batchSizeTenDryRun['rows'] ?? [], static fn(array $row): bool => ($row['would_update'] ?? '') === 'yes'));
+assert_same(true, count($batchSizeTenDryRun['rows'] ?? []) <= 20, 'batch dry-run DE+FR batch size 10 logs up to 20 rows');
+assert_same(true, count($batchSizeTenEligible) > 0, 'batch dry-run batch size 10 fixture includes eligible rows');
+assert_same(true, count(array_filter($batchSizeTenEligible, static fn(array $row): bool => ($row['status'] ?? '') === 'preview')) === count($batchSizeTenEligible), 'batch dry-run DE+FR batch size 10 logs eligible rows as preview');
+assert_same(0, $batchSizeTenDryRun['counters']['skipped'] ?? -1, 'batch dry-run DE+FR batch size 10 preview rows do not increment skipped');
 $badLiveBatch = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-live-bad', 'confirmation' => 'WRONG']);
 assert_same(false, $badLiveBatch['ok'] ?? true, 'batch live mode with wrong confirmation is blocked');
 assert_same('live_confirmation_required', $badLiveBatch['error'] ?? '', 'batch live mode returns visible confirmation error');
 $GLOBALS['gps_test_options']['wei_ebay_settings'] = ['access_token' => 'de-token', 'expires_at' => time() + 3600];
 $GLOBALS['gps_test_options']['wei_fr_ebay_settings'] = ['access_token' => 'fr-token', 'expires_at' => time() + 3600];
+$GLOBALS['gps_test_http_calls'] = 0;
+$liveAfterDryRun = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'run_id' => 'batch-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(2, $liveAfterDryRun['counters']['attempted'] ?? 0, 'dry-run preview rows do not block later live run with same run_id');
+assert_same(2, $GLOBALS['gps_test_http_calls'], 'live after dry-run preview makes Inventory API calls and no Apify calls');
+$duplicateLive = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'run_id' => 'batch-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(2, $duplicateLive['counters']['skipped'] ?? 0, 'duplicate protection skips only previous live success/warning_success rows in same run');
+assert_same(2, $GLOBALS['gps_test_http_calls'], 'duplicate live batch does not add Inventory API calls');
 $GLOBALS['gps_test_http_calls'] = 0;
 $liveBatch = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-live-ok', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
 assert_same(true, $liveBatch['ok'] ?? false, 'batch live mode with exact confirmation invokes runner');
