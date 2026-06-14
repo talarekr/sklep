@@ -16,7 +16,7 @@ final class EbayFitmentPreview
     public const FR_STATUS_META = '_wei_fr_ebay_listing_status';
 
     /** @var string[] */
-    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'];
+    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason','live_checked_revisable_de','live_checked_revisable_fr','local_active_but_live_ended_de','local_active_but_live_ended_fr'];
 
     public function query(array $args = []): array
     {
@@ -124,6 +124,10 @@ final class EbayFitmentPreview
             'blocked_reason_de' => $deBlocked ? implode('|', array_values(array_unique($deBlocked))) : '',
             'blocked_reason_fr' => $frBlocked ? implode('|', array_values(array_unique($frBlocked))) : '',
             'blocked_reason' => $blocked ? implode('|', array_values(array_unique($blocked))) : '',
+            'live_checked_revisable_de' => '',
+            'live_checked_revisable_fr' => '',
+            'local_active_but_live_ended_de' => '',
+            'local_active_but_live_ended_fr' => '',
         ];
     }
 

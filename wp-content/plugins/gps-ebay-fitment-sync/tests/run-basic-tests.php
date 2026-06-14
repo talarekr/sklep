@@ -50,6 +50,9 @@ if (!function_exists('current_time')) {
 if (!function_exists('wp_json_encode')) {
     function wp_json_encode($value, $flags = 0, $depth = 512) { return json_encode($value, $flags, $depth); }
 }
+if (!function_exists('wp_strip_all_tags')) {
+    function wp_strip_all_tags($text) { return strip_tags((string) $text); }
+}
 
 if (!function_exists('wp_upload_dir')) {
     function wp_upload_dir($time = null, $create_dir = true) {
@@ -370,6 +373,26 @@ if (!function_exists('wp_remote_post')) {
         }
 
         return new FakeHttpResponse(200, json_encode([[ 'compatibleCars' => $cars ]]));
+    }
+}
+if (!function_exists('wp_remote_request')) {
+    function wp_remote_request($url, array $args = []) {
+        $GLOBALS['gps_test_http_calls']++;
+        $call = (string) ($args['headers']['X-EBAY-API-CALL-NAME'] ?? '');
+        $body = (string) ($args['body'] ?? '');
+        if ($call === 'GetItem') {
+            preg_match('/<ItemID>([^<]+)<\/ItemID>/', $body, $m);
+            $item = $m[1] ?? '';
+            $status = $GLOBALS['gps_test_ebay_getitem_status'][$item] ?? 'Active';
+            $end = $status === 'Completed' ? '2026-01-01T00:00:00.000Z' : '2030-01-01T00:00:00.000Z';
+            return new FakeHttpResponse(200, '<GetItemResponse><Ack>Success</Ack><Item><SellingStatus><ListingStatus>' . $status . '</ListingStatus></SellingStatus><ListingDetails><EndTime>' . $end . '</EndTime></ListingDetails></Item></GetItemResponse>');
+        }
+        if ($call === 'ReviseFixedPriceItem') {
+            if (!empty($GLOBALS['gps_test_ebay_revise_error'])) { return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Failure</Ack><Errors><ShortMessage>Bad</ShortMessage><LongMessage>Fatal revise error</LongMessage><ErrorCode>219</ErrorCode><SeverityCode>Error</SeverityCode></Errors></ReviseFixedPriceItemResponse>'); }
+            if (!empty($GLOBALS['gps_test_ebay_revise_warning'])) { return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Warning</Ack><Errors><ShortMessage>Funds pending</ShortMessage><LongMessage>Payment funds may be unavailable</LongMessage><ErrorCode>123</ErrorCode><SeverityCode>Warning</SeverityCode></Errors></ReviseFixedPriceItemResponse>'); }
+            return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Success</Ack></ReviseFixedPriceItemResponse>');
+        }
+        return new FakeHttpResponse(404, '{}');
     }
 }
 if (!function_exists('wp_remote_get')) {
@@ -1360,6 +1383,31 @@ assert_same(0, $GLOBALS['gps_test_http_calls'], 'live test dry-run does not call
 $badConfirmation = $liveTest->run(300, 'de', false, 'WRONG');
 assert_same('blocked', $badConfirmation['results']['EBAY_DE']['status'] ?? '', 'live requires exact confirmation text');
 assert_same('live_confirmation_required', $badConfirmation['results']['EBAY_DE']['error'] ?? '', 'bad live confirmation is blocked');
+
+$GLOBALS['gps_test_options']['wei_ebay_settings'] = ['access_token' => 'de-token', 'expires_at' => time() + 3600];
+$GLOBALS['gps_test_options']['wei_fr_ebay_settings'] = ['access_token' => 'fr-token', 'expires_at' => time() + 3600];
+$GLOBALS['gps_test_ebay_getitem_status'] = ['DE300' => 'Completed', 'FR300' => 'Active'];
+$GLOBALS['gps_test_ebay_revise_warning'] = true;
+$GLOBALS['gps_test_http_calls'] = 0;
+$liveEnded = $liveTest->run(300, 'de', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION);
+assert_same('blocked', $liveEnded['results']['EBAY_DE']['status'] ?? '', 'ended listing validation blocks ReviseFixedPriceItem');
+assert_same('ebay_listing_ended', $liveEnded['results']['EBAY_DE']['error'] ?? '', 'local active but live ended returns ebay_listing_ended');
+assert_same(false, $liveEnded['results']['EBAY_DE']['attempted'] ?? true, 'ended listing is not attempted for revise');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'ended validation only calls GetItem and skips ReviseFixedPriceItem');
+$GLOBALS['gps_test_http_calls'] = 0;
+$liveWarning = $liveTest->run(300, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION);
+assert_same('warning_success', $liveWarning['results']['EBAY_FR']['status'] ?? '', 'Ack Warning with Warning severity is non-fatal');
+assert_same('Warning', $liveWarning['results']['EBAY_FR']['ack'] ?? '', 'Ack is preserved for warning success');
+assert_same(true, count($liveWarning['results']['EBAY_FR']['warnings'] ?? []) === 1, 'warnings array is populated');
+assert_same(2, $GLOBALS['gps_test_http_calls'], 'live valid listing calls GetItem then ReviseFixedPriceItem');
+$GLOBALS['gps_test_ebay_revise_warning'] = false;
+$GLOBALS['gps_test_ebay_revise_error'] = true;
+$liveFailure = $liveTest->run(300, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION);
+assert_same('error', $liveFailure['results']['EBAY_FR']['status'] ?? '', 'Ack Failure or Error severity is fatal');
+assert_same('Fatal revise error', $liveFailure['results']['EBAY_FR']['error'] ?? '', 'fatal eBay error message is returned');
+$GLOBALS['gps_test_ebay_revise_error'] = false;
+$GLOBALS['gps_test_ebay_getitem_status'] = [];
+
 $noKtype = $liveTest->run(302, 'fr', true, '');
 assert_same('blocked', $noKtype['results']['EBAY_FR']['status'] ?? '', 'product without eBay item ID is blocked');
 assert_same('no_ebay_fr_listing', $noKtype['results']['EBAY_FR']['error'] ?? '', 'missing FR listing gives blocked reason');
