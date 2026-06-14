@@ -136,6 +136,70 @@ final class ProductScanner
         ];
     }
 
+    public function analyze_product_part_numbers(int $productId): array
+    {
+        $rawFields = [];
+        foreach ($this->meta_keys() as $key) {
+            $value = get_post_meta($productId, (string) $key, true);
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                $rawFields[(string) $key] = trim((string) $value);
+            }
+        }
+
+        $accepted = [];
+        $rejected = [];
+        $normalized = [];
+        $normalizationChanged = false;
+        foreach ($rawFields as $sourceField => $rawValue) {
+            foreach ($this->validator->candidates((string) $rawValue) as $candidate) {
+                $row = [
+                    'source_field' => (string) $sourceField,
+                    'raw' => (string) ($candidate['raw'] ?? ''),
+                    'normalized' => (string) ($candidate['normalized'] ?? ''),
+                    'warnings' => $candidate['warnings'] ?? [],
+                    'rejection_reason' => (string) ($candidate['rejection_reason'] ?? ''),
+                ];
+                if (!empty($candidate['accepted'])) {
+                    $accepted[] = $row;
+                    $normalized[] = $row['normalized'];
+                    if ($row['raw'] !== $row['normalized']) { $normalizationChanged = true; }
+                } else {
+                    $rejected[] = $row;
+                }
+            }
+        }
+
+        return [
+            'has_raw_oem' => $rawFields !== [],
+            'raw_fields' => $rawFields,
+            'accepted_candidates' => $accepted,
+            'rejected_candidates' => $rejected,
+            'normalized_values' => array_values(array_unique(array_filter($normalized))),
+            'accepted_count' => count($accepted),
+            'rejected_count' => count($rejected),
+            'normalization_changed' => $normalizationChanged,
+        ];
+    }
+
+    public function accepted_product_part_number(int $productId): ?array
+    {
+        $resolved = $this->resolve_product_part_number($productId);
+        if (!$resolved) { return null; }
+        foreach ($this->validator->candidates($resolved['part_number_raw']) as $candidate) {
+            if (empty($candidate['accepted'])) { continue; }
+            return [
+                'product_id' => $productId,
+                'sku' => (string) get_post_meta($productId, '_sku', true),
+                'part_number_raw' => (string) $candidate['raw'],
+                'part_number_normalized' => (string) $candidate['normalized'],
+                'source_field' => $resolved['source_field'],
+                'source_raw' => $resolved['part_number_raw'],
+                'warnings' => $candidate['warnings'] ?? [],
+            ];
+        }
+        return null;
+    }
+
     public function resolve_product_part_number(int $productId): ?array
     {
         foreach ($this->meta_keys() as $key) {
