@@ -6,6 +6,7 @@ namespace GPS_Ebay_Fitment_Sync\Admin;
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
+use GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
@@ -19,8 +20,9 @@ final class AdminPage
     private Database $database;
     private AuditCsvExporter $auditCsvExporter;
     private KTypeBackfillAutoRunner $autoRunner;
+    private EbayFitmentPreview $ebayFitmentPreview;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -28,6 +30,7 @@ final class AdminPage
         $this->database = $database;
         $this->auditCsvExporter = $auditCsvExporter;
         $this->autoRunner = $autoRunner;
+        $this->ebayFitmentPreview = $ebayFitmentPreview;
     }
 
     public function hooks(): void
@@ -39,6 +42,7 @@ final class AdminPage
         add_action('admin_post_gps_ebay_fitment_scan', [$this, 'scan_products']);
         add_action('admin_post_gps_ebay_fitment_backfill', [$this, 'backfill']);
         add_action('admin_post_gps_ebay_fitment_ktype_generate_report', [$this, 'ktype_generate_report']);
+        add_action('admin_post_gps_ebay_fitment_preview_csv', [$this, 'ebay_fitment_preview_csv']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_batch', [$this, 'ajax_ktype_backfill_batch']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_summary', [$this, 'ajax_ktype_backfill_summary']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_stop', [$this, 'ajax_ktype_backfill_stop']);
@@ -200,6 +204,13 @@ final class AdminPage
         wp_send_json_success($this->auditCsvExporter->process_final_export_chunk($runId, $chunkSize));
     }
 
+    public function ebay_fitment_preview_csv(): void
+    {
+        $this->guard('gps_ebay_fitment_preview_csv');
+        $this->ebayFitmentPreview->stream_csv($this->preview_request_args($_POST));
+        exit;
+    }
+
     public function render(): void
     {
         if (!current_user_can('manage_woocommerce')) {
@@ -311,9 +322,71 @@ final class AdminPage
 
             <?php $this->render_ktype_auto_runner(); ?>
 
+            <?php $this->render_ebay_fitment_preview(); ?>
+
             <?php $this->render_result($last); ?>
         </div>
         <?php
+    }
+
+
+    private function render_ebay_fitment_preview(): void
+    {
+        $args = $this->preview_request_args($_GET);
+        $preview = $this->ebayFitmentPreview->query($args);
+        $counters = $preview['counters'];
+        $diagnostics = $preview['diagnostics'];
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('eBay Fitment Preview', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Local preview only. Reads canonical KType cache plus local eBay DE/FR listing mappings. No eBay, Apify, TecDoc, or Woo product writes are performed.', 'gps-ebay-fitment-sync'); ?></p>
+            <p><strong><?php echo esc_html__('Mapping diagnostics:', 'gps-ebay-fitment-sync'); ?></strong> <?php echo esc_html((string) $diagnostics['note']); ?><br>
+                <?php echo esc_html__('DE:', 'gps-ebay-fitment-sync'); ?> <code><?php echo esc_html(implode(', ', (array) $diagnostics['de_sources'])); ?></code><br>
+                <?php echo esc_html__('FR:', 'gps-ebay-fitment-sync'); ?> <code><?php echo esc_html(implode(', ', (array) $diagnostics['fr_sources'])); ?></code><br>
+                <?php echo esc_html__('Shared mapping table exists:', 'gps-ebay-fitment-sync'); ?> <code><?php echo !empty($diagnostics['mapping_table_exists']) ? 'yes' : 'no'; ?></code>
+            </p>
+            <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+                <input type="hidden" name="page" value="gps-ebay-fitment-sync">
+                <label><?php echo esc_html__('Limit', 'gps-ebay-fitment-sync'); ?> <input name="limit" type="number" min="1" max="1000" value="<?php echo esc_attr((string) $preview['limit']); ?>"></label>
+                <label><?php echo esc_html__('Offset', 'gps-ebay-fitment-sync'); ?> <input name="offset" type="number" min="0" value="<?php echo esc_attr((string) $preview['offset']); ?>"></label>
+                <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="product_id" type="number" min="1" value="<?php echo esc_attr((string) ($args['product_id'] ?? '')); ?>"></label>
+                <label><?php echo esc_html__('Part number', 'gps-ebay-fitment-sync'); ?> <input name="part_number" type="text" value="<?php echo esc_attr((string) ($args['part_number'] ?? '')); ?>"></label>
+                <?php foreach (['only_with_ktype' => 'only products with KType', 'missing_de' => 'only missing eBay DE listing', 'missing_fr' => 'only missing eBay FR listing', 'ready_de' => 'only ready for DE update', 'ready_fr' => 'only ready for FR update'] as $key => $label): ?>
+                    <label><input type="checkbox" name="<?php echo esc_attr($key); ?>" value="1" <?php checked(!empty($args[$key])); ?>> <?php echo esc_html($label); ?></label>
+                <?php endforeach; ?>
+                <button class="button button-primary"><?php echo esc_html__('Apply preview filters', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:10px 0;">
+                <input type="hidden" name="action" value="gps_ebay_fitment_preview_csv">
+                <?php wp_nonce_field('gps_ebay_fitment_preview_csv'); ?>
+                <?php foreach ($args as $key => $value): if (is_scalar($value) && (string) $value !== ''): ?><input type="hidden" name="<?php echo esc_attr((string) $key); ?>" value="<?php echo esc_attr((string) $value); ?>"><?php endif; endforeach; ?>
+                <button class="button"><?php echo esc_html__('Export preview CSV', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;max-width:1200px;">
+                <?php foreach ($counters as $key => $value): ?><div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html((string) $key); ?></span><br><strong><?php echo esc_html((string) $value); ?></strong></div><?php endforeach; ?>
+            </div>
+            <div style="overflow:auto;margin-top:12px;"><table class="widefat striped"><thead><tr>
+                <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
+            </tr></thead><tbody>
+                <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
+                <?php if (!$preview['rows']): ?><tr><td colspan="13"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
+            </tbody></table></div>
+        <?php
+    }
+
+    private function preview_request_args(array $source): array
+    {
+        $bools = ['only_with_ktype','missing_de','missing_fr','ready_de','ready_fr'];
+        $args = [
+            'limit' => isset($source['limit']) ? (int) $source['limit'] : 50,
+            'offset' => isset($source['offset']) ? (int) $source['offset'] : 0,
+            'product_id' => isset($source['product_id']) ? (int) $source['product_id'] : 0,
+            'part_number' => isset($source['part_number']) ? sanitize_text_field(wp_unslash((string) $source['part_number'])) : '',
+        ];
+        foreach ($bools as $key) {
+            $args[$key] = !empty($source[$key]) ? 1 : 0;
+        }
+        return $args;
     }
 
 
