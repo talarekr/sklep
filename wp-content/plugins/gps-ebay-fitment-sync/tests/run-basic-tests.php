@@ -24,6 +24,7 @@ if (!function_exists('get_option')) {
                 'max_apify_lookups_per_batch' => 5,
             ];
         }
+        if (in_array((string) $option, ['wei_ebay_settings','wei_fr_ebay_settings'], true)) { return ['access_token'=>'test-ebay-token','expires_at'=>time()+3600]; }
         return $default;
     }
 }
@@ -446,6 +447,20 @@ if (!function_exists('wp_remote_request')) {
         $GLOBALS['gps_test_http_calls']++;
         $call = (string) ($args['headers']['X-EBAY-API-CALL-NAME'] ?? '');
         $body = (string) ($args['body'] ?? '');
+        if (str_contains((string) $url, '/sell/inventory/v1/offer?')) {
+            $GLOBALS['gps_test_inventory_read_calls'][] = ['url'=>(string)$url,'method'=>(string)($args['method'] ?? '')];
+            $sku = ''; parse_str(parse_url((string)$url, PHP_URL_QUERY) ?: '', $q); $sku = (string)($q['sku'] ?? '');
+            return new FakeHttpResponse(200, json_encode(['offers'=>$GLOBALS['gps_test_inventory_offers_by_sku'][$sku] ?? []]));
+        }
+        if (preg_match('#/sell/inventory/v1/offer/([^/?]+)#', (string) $url, $m)) {
+            $GLOBALS['gps_test_inventory_read_calls'][] = ['url'=>(string)$url,'method'=>(string)($args['method'] ?? '')];
+            $offer = $GLOBALS['gps_test_inventory_offers_by_id'][rawurldecode($m[1])] ?? null;
+            return $offer ? new FakeHttpResponse(200, json_encode($offer)) : new FakeHttpResponse(404, '{}');
+        }
+        if (str_contains((string) $url, '/sell/inventory/v1/inventory_item/') && (string)($args['method'] ?? '') === 'GET') {
+            $GLOBALS['gps_test_inventory_read_calls'][] = ['url'=>(string)$url,'method'=>(string)($args['method'] ?? '')];
+            return new FakeHttpResponse(200, json_encode(['sku'=>basename(parse_url((string)$url, PHP_URL_PATH) ?: '')]));
+        }
         if (str_contains((string) $url, '/sell/inventory/v1/inventory_item/')) {
             $decoded = json_decode((string) ($args['body'] ?? ''), true);
             $GLOBALS['gps_test_last_inventory_request'] = ['url'=>(string)$url,'method'=>(string)($args['method'] ?? ''),'body'=>$decoded,'headers'=>$args['headers'] ?? []];
@@ -503,6 +518,7 @@ require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 require_once __DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentPreview.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentLiveTest.php';
+require_once __DIR__ . '/../src/Service/EbayInventoryRemapAudit.php';
 require_once __DIR__ . '/../src/Service/EbayInventoryFitmentBatchRunner.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
@@ -1689,3 +1705,21 @@ assert_same(true, str_contains($previewSource, 'GROUP_CONCAT(DISTINCT vc.vehicle
 assert_same(true, str_contains($previewSource, 'marketplace_mappings'), 'inventory candidate loader uses direct SQL for marketplace mappings');
 assert_same(true, str_contains($batchRunnerSource, 'memory_warning') && str_contains($batchRunnerSource, 'high_memory_usage'), 'batch runner returns high memory warning diagnostic');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');
+
+// Inventory remap audit source-level guard checks.
+$remapSource = file_get_contents(__DIR__ . '/../src/Service/EbayInventoryRemapAudit.php');
+$adminSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
+assert_same(true, str_contains($adminSource, 'eBay Inventory Listing Remap Audit'), 'admin exposes remap audit section');
+assert_same(true, str_contains($remapSource, 'GET') && str_contains($remapSource, '/sell/inventory/v1/offer/') && str_contains($remapSource, '/sell/inventory/v1/inventory_item/'), 'remap audit uses read-only Sell Inventory methods');
+assert_same(true, str_contains($remapSource, 'update_mapping_to_live_listing'), 'stale local item_id plus live current item_id detected');
+assert_same(true, str_contains($remapSource, 'ok_current_mapping'), 'current mapping OK detected');
+assert_same(true, str_contains($remapSource, 'missing_inventory_sku'), 'missing SKU blocked');
+assert_same(true, str_contains($remapSource, 'current_listing_not_found'), 'current listing not found detected');
+assert_same(false, str_contains($remapSource, 'product_compatibility'), 'remap audit makes no compatibility PUT calls');
+assert_same(false, str_contains($remapSource, 'ApifyClient') || str_contains($remapSource, 'api.apify.com'), 'remap audit makes no Apify calls');
+assert_same(false, str_contains($remapSource, 'update_post_meta') || str_contains($remapSource, 'wp_update_post'), 'remap audit makes no Woo product modifications');
+assert_same(false, str_contains($remapSource, 'woo-ebay-integration'), 'remap audit makes no eBay plugin modifications');
+assert_same(true, str_contains($remapSource, 'suggested_current_item_id') && str_contains($remapSource, 'suggested_current_offer_id'), 'remap CSV contains suggested_current_item_id / suggested_current_offer_id');
+assert_same(true, str_contains($batchRunnerSource, 'stale_or_unconfirmed_listing_mapping'), 'fitment runner blocks stale/unconfirmed mappings before live writes');
+
+echo 'Remap audit tests passed.' . PHP_EOL;

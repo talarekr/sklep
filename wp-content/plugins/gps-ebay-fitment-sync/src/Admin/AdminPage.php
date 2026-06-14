@@ -9,6 +9,7 @@ use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview;
 use GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest;
 use GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner;
+use GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
@@ -25,8 +26,9 @@ final class AdminPage
     private EbayFitmentPreview $ebayFitmentPreview;
     private EbayFitmentLiveTest $ebayFitmentLiveTest;
     private EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner;
+    private EbayInventoryRemapAudit $ebayInventoryRemapAudit;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner, EbayInventoryRemapAudit $ebayInventoryRemapAudit)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -37,6 +39,7 @@ final class AdminPage
         $this->ebayFitmentPreview = $ebayFitmentPreview;
         $this->ebayFitmentLiveTest = $ebayFitmentLiveTest;
         $this->ebayInventoryFitmentBatchRunner = $ebayInventoryFitmentBatchRunner;
+        $this->ebayInventoryRemapAudit = $ebayInventoryRemapAudit;
     }
 
     public function hooks(): void
@@ -60,6 +63,8 @@ final class AdminPage
         add_action('wp_ajax_gps_ebay_inventory_fitment_stop', [$this, 'ajax_inventory_fitment_stop']);
         add_action('wp_ajax_gps_ebay_inventory_fitment_reset', [$this, 'ajax_inventory_fitment_reset']);
         add_action('admin_post_gps_ebay_inventory_fitment_csv', [$this, 'inventory_fitment_csv']);
+        add_action('wp_ajax_gps_ebay_inventory_remap_audit', [$this, 'ajax_inventory_remap_audit']);
+        add_action('wp_ajax_gps_ebay_inventory_remap_audit_stop', [$this, 'ajax_inventory_remap_audit_stop']);
     }
 
     public function admin_menu(): void
@@ -132,6 +137,24 @@ final class AdminPage
         $this->store_result(['type' => 'ktype_final_report', 'result' => $result]);
     }
 
+
+    public function ajax_inventory_remap_audit(): void
+    {
+        $this->ajax_guard('gps_ebay_inventory_remap_audit');
+        $result = $this->ebayInventoryRemapAudit->run_batch([
+            'marketplace' => isset($_POST['marketplace']) ? sanitize_text_field(wp_unslash($_POST['marketplace'])) : 'de',
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 10,
+            'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
+            'run_id' => isset($_POST['run_id']) ? sanitize_text_field(wp_unslash($_POST['run_id'])) : '',
+        ]);
+        wp_send_json_success($result);
+    }
+
+    public function ajax_inventory_remap_audit_stop(): void
+    {
+        $this->ajax_guard('gps_ebay_inventory_remap_audit');
+        wp_send_json_success(['ok' => true, 'status' => 'stopped']);
+    }
 
     public function ajax_ktype_backfill_batch(): void
     {
@@ -401,6 +424,7 @@ final class AdminPage
             <?php $this->render_ebay_fitment_preview(); ?>
 
             <?php $this->render_inventory_fitment_preview(); ?>
+            <?php $this->render_inventory_remap_audit(); ?>
             <?php $this->render_inventory_fitment_batch_runner(); ?>
             <?php $this->render_ebay_fitment_live_test(); ?>
 
@@ -483,6 +507,29 @@ final class AdminPage
                 <?php foreach ((array) ($preview['results'] ?? []) as $result): ?><tr><?php foreach (['marketplace','listing_management_type','item_id','listing_status','offer_id','inventory_item_sku','ktype_count','sample_ktypes','would_update_inventory_fitment','blocked_reason_inventory','method','endpoint','payload_summary','live_write_enabled'] as $column): ?><td><?php echo esc_html((string) ($result[$column] ?? '')); ?></td><?php endforeach; ?></tr><tr><td colspan="14"><details><summary><?php echo esc_html__('Raw compatibility payload JSON', 'gps-ebay-fitment-sync'); ?></summary><pre style="white-space:pre-wrap;max-height:260px;overflow:auto;"><?php echo esc_html((string) ($result['payload_json'] ?? '')); ?></pre></details></td></tr><?php endforeach; ?>
                 <?php if (empty($preview['results'])): ?><tr><td colspan="14"><?php echo esc_html__('No inventory preview rows.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
             </tbody></table></div>
+        <?php
+    }
+
+
+    private function render_inventory_remap_audit(): void
+    {
+        $nonce = wp_create_nonce('gps_ebay_inventory_remap_audit');
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('eBay Inventory Listing Remap Audit', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Read-only audit before fitment sync. It checks cached KTypes and local eBay mappings against live Sell Inventory offers/listings and never updates marketplace_mappings or Woo products.', 'gps-ebay-fitment-sync'); ?></p>
+            <div id="gps-ebay-inventory-remap-audit" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>">
+                <p><label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select id="gps-remap-marketplace"><option value="de" selected>DE only</option><option value="fr">FR only</option><option value="both">DE + FR</option></select></label>
+                <label><?php echo esc_html__('Batch size', 'gps-ebay-fitment-sync'); ?> <input id="gps-remap-batch-size" type="number" min="1" max="50" value="10"></label>
+                <label><?php echo esc_html__('Offset / resume', 'gps-ebay-fitment-sync'); ?> <input id="gps-remap-offset" type="number" min="0" value="0"></label></p>
+                <p><button type="button" class="button button-primary" id="gps-remap-start"><?php echo esc_html__('Start audit', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-remap-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-remap-export"><?php echo esc_html__('Export CSV', 'gps-ebay-fitment-sync'); ?></button></p>
+                <div id="gps-remap-status" class="notice notice-info inline" style="display:none;padding:8px 12px;"></div>
+                <p>run_id: <code id="gps-remap-run-id"></code> CSV: <span id="gps-remap-csv">-</span></p>
+                <div style="overflow:auto"><table class="widefat striped"><thead><tr><?php foreach (EbayInventoryRemapAudit::COLUMNS as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?></tr></thead><tbody id="gps-remap-rows"><tr><td colspan="<?php echo esc_attr((string) count(EbayInventoryRemapAudit::COLUMNS)); ?>">No rows yet.</td></tr></tbody></table></div>
+            </div>
+            <script>
+            (function(){const root=document.getElementById('gps-ebay-inventory-remap-audit'); if(!root)return; const ajax=root.dataset.ajaxUrl, nonce=root.dataset.nonce, status=document.getElementById('gps-remap-status'), rowsEl=document.getElementById('gps-remap-rows'), cols=<?php echo wp_json_encode(EbayInventoryRemapAudit::COLUMNS); ?>; let stopped=false, lastRun=''; function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));} function setStatus(t,c){status.style.display='block';status.className='notice inline '+(c||'notice-info');status.innerHTML=t;} async function post(action,data){const body=new URLSearchParams(Object.assign({action:action,_ajax_nonce:nonce},data)); const r=await fetch(ajax,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}); if(!r.ok)throw new Error('HTTP '+r.status+' '+await r.text()); return await r.json();} function render(res){const d=res.data||res; if(d.run_id){lastRun=d.run_id;document.getElementById('gps-remap-run-id').textContent=d.run_id;} if(d.csv&&d.csv.url)document.getElementById('gps-remap-csv').innerHTML='<a href="'+esc(d.csv.url)+'">'+esc(d.csv.url)+'</a>'; const rows=d.rows||[]; rowsEl.innerHTML=rows.length?rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="'+cols.length+'">No rows.</td></tr>'; setStatus('Audit batch complete. Rows: '+rows.length+' next offset: '+esc(d.next_offset),'notice-success'); document.getElementById('gps-remap-offset').value=d.next_offset||0;} document.getElementById('gps-remap-start').onclick=async()=>{stopped=false; setStatus('Running read-only remap audit...','notice-info'); try{render(await post('gps_ebay_inventory_remap_audit',{marketplace:document.getElementById('gps-remap-marketplace').value,batch_size:document.getElementById('gps-remap-batch-size').value,offset:document.getElementById('gps-remap-offset').value,run_id:lastRun}));}catch(e){setStatus('AJAX failed: '+esc(e.message),'notice-error');}}; document.getElementById('gps-remap-stop').onclick=()=>{stopped=true; post('gps_ebay_inventory_remap_audit_stop',{}).then(()=>setStatus('Stopped.','notice-warning')).catch(e=>setStatus('AJAX failed: '+esc(e.message),'notice-error'));}; document.getElementById('gps-remap-export').onclick=()=>{const a=document.querySelector('#gps-remap-csv a'); if(a) location.href=a.href;};})();
+            </script>
         <?php
     }
 
