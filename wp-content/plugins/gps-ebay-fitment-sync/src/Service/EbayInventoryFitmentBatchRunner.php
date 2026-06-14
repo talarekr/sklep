@@ -64,6 +64,7 @@ final class EbayInventoryFitmentBatchRunner
         $cp = $this->checkpoint();
         if ($stop) { $cp['status'] = 'completed'; $cp['updated_at'] = current_time('mysql'); $this->save_checkpoint($cp); }
         $diagnostics = ['memory_usage_start'=>$memoryStart,'memory_usage_end'=>memory_get_usage(true),'peak_memory_usage'=>memory_get_peak_usage(true),'candidate_products_loaded'=>count($candidates),'marketplace_attempts_built'=>$attemptsBuilt];
+        if ($diagnostics['peak_memory_usage'] > 180 * 1024 * 1024) { $diagnostics['memory_warning'] = 'high_memory_usage'; }
         return $this->progress_response($runId, $mode, $selection, $batchSize, $totalAttempts, $rows, $diagnostics, $counters);
     }
 
@@ -130,7 +131,8 @@ final class EbayInventoryFitmentBatchRunner
 
     private function progress_response(string $runId, string $mode, array $selection, int $batchSize, int $totalAttempts, array $rows, array $diagnostics, array $tickCounters = []): array
     {
-        $csv = $this->export_csv($runId);
+        $csvUrl = function_exists('admin_url') ? admin_url('admin-post.php?action=gps_ebay_inventory_fitment_csv&run_id=' . rawurlencode($runId)) : '';
+        $csv = $runId !== '' ? ['url' => $csvUrl, 'streamed' => true] : [];
         $checkpoint = $this->checkpoint();
         $aggregate = $this->aggregate_counters($runId);
         if ($tickCounters && (int) ($aggregate['marketplace_attempts'] ?? 0) === 0) {
@@ -147,26 +149,27 @@ final class EbayInventoryFitmentBatchRunner
         if ($runId === '') { return $c; }
         global $wpdb;
         $table = Database::table_names()['ebay_sync_log'];
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT product_id, marketplace, attempted, status, blocked_reason FROM {$table} WHERE run_id=%s AND api_mode='inventory' ORDER BY id ASC", $runId), ARRAY_A) ?: [];
-        $products = [];
-        foreach ($rows as $r) {
-            $products[(string)($r['product_id'] ?? '')] = true;
-            $status = (string)($r['status'] ?? '');
-            $market = (string)($r['marketplace'] ?? '');
-            $c['marketplace_attempts']++;
-            if (($r['blocked_reason'] ?? '') === '') { $c['eligible']++; }
-            if (!empty($r['attempted'])) { $c['attempted']++; }
-            if ($status === 'success') { $c['success']++; } elseif ($status === 'warning_success') { $c['warning_success']++; } elseif ($status === 'blocked') { $c['blocked']++; } elseif ($status === 'skipped' || $status === 'already_processed') { $c['skipped']++; } elseif ($status === 'error') { $c['errors']++; }
-            $suffix = $market === 'EBAY_FR' ? 'fr' : ($market === 'EBAY_DE' ? 'de' : '');
-            if ($suffix !== '') {
-                if (!empty($r['attempted'])) { $c['attempted_'.$suffix]++; }
-                if ($status === 'success') { $c['success_'.$suffix]++; }
-                if ($status === 'warning_success') { $c['warning_success_'.$suffix]++; }
-                if ($status === 'error') { $c['errors_'.$suffix]++; }
-                if ($status === 'blocked') { $c['blocked_'.$suffix]++; }
-            }
-        }
-        $c['scanned_products'] = count($products);
+        $summary = $wpdb->get_row($wpdb->prepare("SELECT COUNT(DISTINCT product_id) AS scanned_products,
+                COUNT(*) AS marketplace_attempts,
+                SUM(CASE WHEN blocked_reason='' THEN 1 ELSE 0 END) AS eligible,
+                SUM(CASE WHEN attempted=1 THEN 1 ELSE 0 END) AS attempted,
+                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+                SUM(CASE WHEN status='warning_success' THEN 1 ELSE 0 END) AS warning_success,
+                SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) AS blocked,
+                SUM(CASE WHEN status IN ('skipped','already_processed') THEN 1 ELSE 0 END) AS skipped,
+                SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors,
+                SUM(CASE WHEN marketplace='EBAY_FR' AND attempted=1 THEN 1 ELSE 0 END) AS attempted_fr,
+                SUM(CASE WHEN marketplace='EBAY_FR' AND status='success' THEN 1 ELSE 0 END) AS success_fr,
+                SUM(CASE WHEN marketplace='EBAY_FR' AND status='warning_success' THEN 1 ELSE 0 END) AS warning_success_fr,
+                SUM(CASE WHEN marketplace='EBAY_FR' AND status='error' THEN 1 ELSE 0 END) AS errors_fr,
+                SUM(CASE WHEN marketplace='EBAY_FR' AND status='blocked' THEN 1 ELSE 0 END) AS blocked_fr,
+                SUM(CASE WHEN marketplace='EBAY_DE' AND attempted=1 THEN 1 ELSE 0 END) AS attempted_de,
+                SUM(CASE WHEN marketplace='EBAY_DE' AND status='success' THEN 1 ELSE 0 END) AS success_de,
+                SUM(CASE WHEN marketplace='EBAY_DE' AND status='warning_success' THEN 1 ELSE 0 END) AS warning_success_de,
+                SUM(CASE WHEN marketplace='EBAY_DE' AND status='error' THEN 1 ELSE 0 END) AS errors_de,
+                SUM(CASE WHEN marketplace='EBAY_DE' AND status='blocked' THEN 1 ELSE 0 END) AS blocked_de
+            FROM {$table} WHERE run_id=%s AND api_mode='inventory'", $runId), ARRAY_A) ?: [];
+        foreach ($c as $key => $_) { $c[$key] = (int) ($summary[$key] ?? 0); }
         return $c;
     }
 

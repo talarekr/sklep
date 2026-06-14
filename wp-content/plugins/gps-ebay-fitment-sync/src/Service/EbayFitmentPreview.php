@@ -51,16 +51,42 @@ final class EbayFitmentPreview
      */
     public function inventory_batch_candidates(string $selection = 'both', int $offset = 0, int $limit = 25): array
     {
+        global $wpdb;
         $limit = max(1, min(100, $limit));
         $offset = max(0, $offset);
         $markets = $selection === 'fr' ? ['fr'] : ($selection === 'de' ? ['de'] : ['fr', 'de']);
-        $rows = $this->base_rows($limit, $offset, ['only_with_ktype' => true, 'product_id' => null, 'part_number' => '']);
+        $tables = Database::table_names();
+        $mappingTable = $wpdb->prefix . 'marketplace_mappings';
+        $mappingJoin = $this->table_exists($mappingTable)
+            ? "LEFT JOIN {$mappingTable} mm_fr ON mm_fr.woo_product_id = pm.product_id AND mm_fr.marketplace = 'ebay_fr'
+               LEFT JOIN {$mappingTable} mm_de ON mm_de.woo_product_id = pm.product_id AND mm_de.marketplace = 'ebay'"
+            : "";
+        $mappingSelect = $this->table_exists($mappingTable)
+            ? "mm_fr.remote_listing_id AS ebay_fr_item_id, mm_fr.remote_offer_id AS ebay_fr_offer_id, mm_fr.remote_inventory_id AS ebay_fr_inventory_item_sku, mm_fr.status AS ebay_fr_status,
+               mm_de.remote_listing_id AS ebay_de_item_id, mm_de.remote_offer_id AS ebay_de_offer_id, mm_de.remote_inventory_id AS ebay_de_inventory_item_sku, mm_de.status AS ebay_de_status"
+            : "'' AS ebay_fr_item_id, '' AS ebay_fr_offer_id, '' AS ebay_fr_inventory_item_sku, '' AS ebay_fr_status,
+               '' AS ebay_de_item_id, '' AS ebay_de_offer_id, '' AS ebay_de_inventory_item_sku, '' AS ebay_de_status";
+
+        $sql = "SELECT pm.product_id, pm.sku, pm.part_number_normalized, pm.part_cache_id,
+                   p.post_title AS product_title,
+                   GROUP_CONCAT(DISTINCT vc.vehicle_id ORDER BY vc.vehicle_id ASC SEPARATOR ',') AS vehicle_ids,
+                   {$mappingSelect}
+            FROM {$tables['product_map']} pm
+            LEFT JOIN {$tables['part_cache']} pc ON pc.id = pm.part_cache_id
+            LEFT JOIN {$tables['vehicle_cache']} vc ON vc.part_cache_id = pm.part_cache_id
+            LEFT JOIN {$wpdb->posts} p ON p.ID = pm.product_id
+            {$mappingJoin}
+            WHERE pm.part_cache_id IS NOT NULL AND pc.vehicle_count > 0
+            GROUP BY pm.product_id, pm.sku, pm.part_number_normalized, pm.part_cache_id, p.post_title
+            ORDER BY pm.product_id ASC
+            LIMIT %d OFFSET %d";
+        $dbRows = $wpdb->get_results($wpdb->prepare($sql, $limit, $offset), ARRAY_A) ?: [];
         $candidates = [];
-        foreach (array_slice($rows, 0, $limit) as $row) {
-            $productId = (int) ($row['product_id'] ?? 0);
-            $vehicles = $this->vehicle_ids((int) ($row['part_cache_id'] ?? 0));
+        foreach ($dbRows as $row) {
+            $vehicles = $this->vehicle_ids_from_row(['vehicle_ids' => (string) ($row['vehicle_ids'] ?? '')]);
+            if (!$vehicles) { $vehicles = $this->vehicle_ids((int) ($row['part_cache_id'] ?? 0)); }
             $candidate = [
-                'product_id' => (string) $productId,
+                'product_id' => (string) (int) ($row['product_id'] ?? 0),
                 'product_title' => trim((string) ($row['product_title'] ?? '')),
                 'sku' => (string) ($row['sku'] ?? ''),
                 'part_number_normalized' => (string) ($row['part_number_normalized'] ?? ''),
@@ -71,12 +97,12 @@ final class EbayFitmentPreview
             ];
             foreach ($markets as $market) {
                 $prefix = $market === 'fr' ? 'ebay_fr' : 'ebay_de';
-                $listing = $this->listing($productId, $market);
-                $candidate[$prefix . '_item_id'] = $listing['item_id'];
-                $candidate[$prefix . '_status'] = $listing['status'];
-                $candidate[$prefix . '_listing_management_type'] = $listing['listing_management_type'];
-                $candidate[$prefix . '_inventory_item_sku'] = $listing['inventory_item_sku'];
-                $candidate[$prefix . '_offer_id'] = $listing['offer_id'];
+                $mapping = $this->mapping_listing((int) ($row['product_id'] ?? 0), $market);
+                $candidate[$prefix . '_item_id'] = trim((string) (($row[$prefix . '_item_id'] ?? '') ?: $mapping['item_id']));
+                $candidate[$prefix . '_status'] = trim((string) (($row[$prefix . '_status'] ?? '') ?: $mapping['status']));
+                $candidate[$prefix . '_offer_id'] = trim((string) (($row[$prefix . '_offer_id'] ?? '') ?: $mapping['offer_id']));
+                $candidate[$prefix . '_inventory_item_sku'] = trim((string) (($row[$prefix . '_inventory_item_sku'] ?? '') ?: $mapping['inventory_item_sku']));
+                $candidate[$prefix . '_listing_management_type'] = ($candidate[$prefix . '_offer_id'] !== '' || $candidate[$prefix . '_inventory_item_sku'] !== '') ? 'inventory' : ($candidate[$prefix . '_item_id'] !== '' ? 'trading' : 'unknown');
             }
             $candidates[] = $candidate;
         }
@@ -329,6 +355,21 @@ final class EbayFitmentPreview
         global $wpdb;
         $table = Database::table_names()['vehicle_cache'];
         return array_map('strval', $wpdb->get_col($wpdb->prepare("SELECT DISTINCT vehicle_id FROM {$table} WHERE part_cache_id = %d ORDER BY vehicle_id ASC", $partCacheId)) ?: []);
+    }
+
+
+    private function mapping_listing(int $productId, string $market): array
+    {
+        global $wpdb;
+        $mappingTable = $wpdb->prefix . 'marketplace_mappings';
+        $marketplace = $market === 'fr' ? 'ebay_fr' : 'ebay';
+        $mapping = $this->table_exists($mappingTable) ? $wpdb->get_row($wpdb->prepare("SELECT remote_listing_id, remote_offer_id, remote_inventory_id, marketplace_id, sku, status FROM {$mappingTable} WHERE marketplace=%s AND woo_product_id=%d ORDER BY updated_at DESC LIMIT 1", $marketplace, $productId), ARRAY_A) : [];
+        return [
+            'item_id' => trim((string) ($mapping['remote_listing_id'] ?? '')),
+            'offer_id' => trim((string) ($mapping['remote_offer_id'] ?? '')),
+            'inventory_item_sku' => trim((string) (($mapping['remote_inventory_id'] ?? '') ?: ($mapping['sku'] ?? ''))),
+            'status' => trim((string) ($mapping['status'] ?? '')),
+        ];
     }
 
     private function listing(int $productId, string $market): array

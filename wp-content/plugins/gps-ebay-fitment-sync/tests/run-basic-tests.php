@@ -1619,4 +1619,11 @@ assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains(
 assert_same(false, str_contains($batchRunnerSource, 'ApifyClient') || str_contains($batchRunnerSource, 'api.apify.com'), 'batch runner contains no Apify calls');
 assert_same(false, str_contains($batchRunnerSource, 'update_post_meta') || str_contains($batchRunnerSource, 'wp_update_post'), 'batch runner contains no Woo product modifications');
 assert_same(false, str_contains($batchRunnerSource, 'ReviseFixedPriceItem'), 'batch runner never uses Trading API ReviseFixedPriceItem');
+assert_same(true, str_contains($adminSource, 'wp_ajax_gps_ebay_inventory_fitment_batch'), 'inventory auto tick uses a dedicated AJAX endpoint');
+assert_same(false, str_contains($adminSource, '$this->ebayFitmentPreview->query($args);'), 'admin page render does not eagerly run full preview query');
+assert_same(true, str_contains($adminSource, 'gps_fitment_preview'), 'full preview query is gated behind explicit preview request');
+assert_same(false, str_contains($batchRunnerSource, 'wc_get_product') || str_contains($batchRunnerSource, 'WP_Query') || str_contains($batchRunnerSource, 'get_posts') || str_contains($batchRunnerSource, 'get_post_meta'), 'auto runner batch code avoids Woo product CRUD, WP_Query/get_posts, and post meta APIs');
+assert_same(true, str_contains($previewSource, 'GROUP_CONCAT(DISTINCT vc.vehicle_id'), 'inventory candidate loader uses direct SQL for cached KTypes');
+assert_same(true, str_contains($previewSource, 'marketplace_mappings'), 'inventory candidate loader uses direct SQL for marketplace mappings');
+assert_same(true, str_contains($batchRunnerSource, 'memory_warning') && str_contains($batchRunnerSource, 'high_memory_usage'), 'batch runner returns high memory warning diagnostic');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');
