@@ -1252,6 +1252,10 @@ assert_same($httpCallsBeforeFinalReport, $GLOBALS['gps_test_http_calls'], 'final
 $adminPageSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 assert_same(true, strpos($adminPageSource, "add_action('admin_post_gps_ebay_fitment_ktype_generate_report'") !== false, 'admin-post fallback action is registered');
 assert_same(true, strpos($adminPageSource, "add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_summary'") !== false, 'AJAX final report action is registered');
+assert_same(true, strpos($adminPageSource, "add_action('admin_post_gps_ebay_inventory_fitment_batch'") !== false, 'inventory batch admin-post fallback action is registered');
+assert_same(true, strpos($adminPageSource, 'Exact confirmation required:') !== false, 'inventory batch UI shows exact confirmation error');
+assert_same(true, strpos($adminPageSource, 'AJAX failed') !== false && strpos($adminPageSource, 'HTTP ') !== false, 'inventory batch UI exposes AJAX HTTP failure details');
+assert_same(true, strpos($adminPageSource, 'Starting batch...') !== false && strpos($adminPageSource, 'confirmation_valid') !== false, 'inventory batch UI renders click diagnostics');
 assert_same(true, strpos($adminPageSource, "id=\"gps-ktype-generate-report\"") !== false && strpos($adminPageSource, "writeSummary('manual_report', true)") !== false, 'Generate final CSV/report button is wired to forced report generation');
 assert_same(true, strpos($adminPageSource, 'Generating final report...') !== false, 'Generate final CSV/report button shows visible progress feedback');
 assert_same(true, strpos($adminPageSource, 'Generate final report via admin-post') !== false, 'admin-post fallback button exists');
@@ -1432,6 +1436,19 @@ assert_same(10, count($batchResult['rows'] ?? []), 'batch dry-run writes log row
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'batch dry-run makes no Apify or eBay API calls');
 assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'batch runner does not modify Woo/product-map data');
 assert_same(true, isset($batchResult['diagnostics']['memory_usage_start'], $batchResult['diagnostics']['memory_usage_end'], $batchResult['diagnostics']['peak_memory_usage']), 'batch runner returns memory diagnostics');
+$badLiveBatch = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-live-bad', 'confirmation' => 'WRONG']);
+assert_same(false, $badLiveBatch['ok'] ?? true, 'batch live mode with wrong confirmation is blocked');
+assert_same('live_confirmation_required', $badLiveBatch['error'] ?? '', 'batch live mode returns visible confirmation error');
+$GLOBALS['gps_test_options']['wei_ebay_settings'] = ['access_token' => 'de-token', 'expires_at' => time() + 3600];
+$GLOBALS['gps_test_options']['wei_fr_ebay_settings'] = ['access_token' => 'fr-token', 'expires_at' => time() + 3600];
+$GLOBALS['gps_test_http_calls'] = 0;
+$liveBatch = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-live-ok', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(true, $liveBatch['ok'] ?? false, 'batch live mode with exact confirmation invokes runner');
+assert_same(10, $liveBatch['diagnostics']['marketplace_attempts_built'] ?? 0, 'DE + FR live creates up to batch_size times 2 attempts');
+assert_same(2, $liveBatch['counters']['attempted'] ?? 0, 'eligible DE + FR live invokes inventory compatibility writes without exceeding batch attempts');
+assert_same(2, $GLOBALS['gps_test_http_calls'], 'batch live makes only eBay Inventory API calls for eligible attempts and no Apify calls');
+assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'batch live runner does not modify Woo/product-map data');
+$GLOBALS['gps_test_http_calls'] = 0;
 
 $inventoryPreview = $previewService->inventory_fitment_preview(300, 'both');
 assert_same('yes', $inventoryPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'inventory preview builds DE update when offer and inventory SKU exist');
