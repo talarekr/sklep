@@ -349,7 +349,7 @@ final class AdminPage
                 <input type="hidden" name="page" value="gps-ebay-fitment-sync">
                 <label><?php echo esc_html__('Limit', 'gps-ebay-fitment-sync'); ?> <input name="limit" type="number" min="1" max="1000" value="<?php echo esc_attr((string) $preview['limit']); ?>"></label>
                 <label><?php echo esc_html__('Offset', 'gps-ebay-fitment-sync'); ?> <input name="offset" type="number" min="0" value="<?php echo esc_attr((string) $preview['offset']); ?>"></label>
-                <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="product_id" type="number" min="1" value="<?php echo esc_attr((string) ($args['product_id'] ?? '')); ?>"></label>
+                <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="product_id" type="number" min="1" value="<?php echo esc_attr(!empty($args['product_id']) ? (string) $args['product_id'] : ''); ?>"></label>
                 <label><?php echo esc_html__('Part number', 'gps-ebay-fitment-sync'); ?> <input name="part_number" type="text" value="<?php echo esc_attr((string) ($args['part_number'] ?? '')); ?>"></label>
                 <?php foreach (['only_with_ktype' => 'only products with KType', 'missing_de' => 'only missing eBay DE listing', 'missing_fr' => 'only missing eBay FR listing', 'ready_de' => 'only ready for DE update', 'ready_fr' => 'only ready for FR update'] as $key => $label): ?>
                     <label><input type="checkbox" name="<?php echo esc_attr($key); ?>" value="1" <?php checked(!empty($args[$key])); ?>> <?php echo esc_html($label); ?></label>
@@ -380,7 +380,7 @@ final class AdminPage
         $args = [
             'limit' => isset($source['limit']) ? (int) $source['limit'] : 50,
             'offset' => isset($source['offset']) ? (int) $source['offset'] : 0,
-            'product_id' => isset($source['product_id']) ? (int) $source['product_id'] : 0,
+            'product_id' => isset($source['product_id']) && trim((string) wp_unslash((string) $source['product_id'])) !== '' ? max(0, (int) wp_unslash((string) $source['product_id'])) : null,
             'part_number' => isset($source['part_number']) ? sanitize_text_field(wp_unslash((string) $source['part_number'])) : '',
         ];
         foreach ($bools as $key) {

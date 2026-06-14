@@ -97,6 +97,11 @@ final class FakeWpdb
         return $query;
     }
 
+    public function esc_like(string $text): string
+    {
+        return addcslashes($text, '_%\\');
+    }
+
     public function insert(string $table, array $data): bool
     {
         if (!empty($this->failInsertsFor[$table])) {
@@ -132,6 +137,14 @@ final class FakeWpdb
 
     public function get_row(string $query, $output = null)
     {
+        if (preg_match("/FROM (\S+) WHERE marketplace='([^']*)' AND woo_product_id=(\d+)/", $query, $matches)) {
+            foreach ($this->tables[$matches[1]] ?? [] as $row) {
+                if ((string) ($row['marketplace'] ?? '') === $matches[2] && (int) ($row['woo_product_id'] ?? 0) === (int) $matches[3]) {
+                    return $row;
+                }
+            }
+        }
+
         if (preg_match("/FROM (\S+) WHERE part_number_normalized = '([^']*)'/", $query, $matches)) {
             foreach ($this->tables[$matches[1]] ?? [] as $row) {
                 if ((string) $row['part_number_normalized'] === $matches[2]) {
@@ -183,6 +196,49 @@ final class FakeWpdb
                 usort($rows, fn(array $a, array $b): int => (int) $a['id'] <=> (int) $b['id']);
             }
             return $rows;
+        }
+
+        if (preg_match('/FROM (wp_gps_fitment_product_map) pm\s+LEFT JOIN (wp_gps_fitment_part_cache) pc.*LIMIT (\d+) OFFSET (\d+)/s', $query, $matches)) {
+            $rows = [];
+            foreach ($this->tables[$matches[1]] ?? [] as $map) {
+                $part = null;
+                foreach ($this->tables[$matches[2]] ?? [] as $candidatePart) {
+                    if ((int) ($candidatePart['id'] ?? 0) === (int) ($map['part_cache_id'] ?? 0)) {
+                        $part = $candidatePart;
+                        break;
+                    }
+                }
+                if (!$part || (int) ($map['part_cache_id'] ?? 0) <= 0) {
+                    continue;
+                }
+                if (str_contains($query, 'pc.vehicle_count > 0') && (int) ($part['vehicle_count'] ?? 0) <= 0) {
+                    continue;
+                }
+                if (preg_match('/pm\.product_id = (\d+)/', $query, $productMatch) && (int) ($map['product_id'] ?? 0) !== (int) $productMatch[1]) {
+                    continue;
+                }
+                if (preg_match("/pm\.part_number_normalized LIKE '%([^']*)%'/", $query, $partMatch) && !str_contains((string) ($map['part_number_normalized'] ?? ''), $partMatch[1])) {
+                    continue;
+                }
+                $post = [];
+                foreach ($this->tables[$this->posts] ?? [] as $candidatePost) {
+                    if ((int) ($candidatePost['ID'] ?? 0) === (int) ($map['product_id'] ?? 0)) {
+                        $post = $candidatePost;
+                        break;
+                    }
+                }
+                $rows[] = [
+                    'product_id' => $map['product_id'],
+                    'sku' => $map['sku'] ?? '',
+                    'part_number_normalized' => $map['part_number_normalized'],
+                    'part_cache_id' => $map['part_cache_id'],
+                    'ktype_count' => $part['vehicle_count'] ?? 0,
+                    'product_title' => $post['post_title'] ?? '',
+                    'post_status' => $post['post_status'] ?? '',
+                ];
+            }
+            usort($rows, fn(array $a, array $b): int => (int) $a['product_id'] <=> (int) $b['product_id']);
+            return array_slice($rows, (int) $matches[4], (int) $matches[3]);
         }
 
         if (preg_match("/SELECT \* FROM (\S+) WHERE run_id = '([^']*)' AND part_number_normalized = '([^']*)' ORDER BY id ASC/", $query, $matches)) {
@@ -348,6 +404,7 @@ require_once __DIR__ . '/../src/Service/AuditCsvExporter.php';
 require_once __DIR__ . '/../src/Service/ProductScanner.php';
 require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 require_once __DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php';
+require_once __DIR__ . '/../src/Service/EbayFitmentPreview.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
@@ -1216,6 +1273,45 @@ assert_same('rejected', $rejectRow[$rejectLookupStatusIndex] ?? '', 'full final 
 $runnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
 assert_same(false, str_contains($runnerSource, 'update_post_meta'), 'auto-runner adds no Woo product meta writes');
 assert_same(false, str_contains($runnerSource, 'ReviseFixedPriceItem') || str_contains($runnerSource, 'AddFixedPriceItem'), 'auto-runner adds no eBay write API calls');
+
+$previewWpdb = new FakeWpdb();
+$previewWpdb->tables['wp_posts'] = [
+    ['ID' => 300, 'post_title' => 'Preview Product 300', 'post_status' => 'publish'],
+    ['ID' => 301, 'post_title' => 'Preview Product 301', 'post_status' => 'publish'],
+];
+$previewWpdb->tables['wp_gps_fitment_part_cache'] = [
+    ['id' => 1300, 'part_number_normalized' => 'PREVIEW300', 'vehicle_count' => 2],
+    ['id' => 1301, 'part_number_normalized' => 'PREVIEW301', 'vehicle_count' => 1],
+];
+$previewWpdb->tables['wp_gps_fitment_vehicle_cache'] = [
+    ['id' => 1, 'part_cache_id' => 1300, 'vehicle_id' => 10001],
+    ['id' => 2, 'part_cache_id' => 1300, 'vehicle_id' => 10002],
+    ['id' => 3, 'part_cache_id' => 1301, 'vehicle_id' => 10003],
+];
+$previewWpdb->tables['wp_gps_fitment_product_map'] = [
+    ['id' => 1, 'product_id' => 300, 'sku' => 'preview-300', 'part_number_normalized' => 'PREVIEW300', 'part_cache_id' => 1300],
+    ['id' => 2, 'product_id' => 301, 'sku' => 'preview-301', 'part_number_normalized' => 'PREVIEW301', 'part_cache_id' => 1301],
+];
+$previewWpdb->tables['wp_marketplace_mappings'] = [
+    ['woo_product_id' => 300, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE300', 'status' => 'active'],
+    ['woo_product_id' => 300, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR300', 'status' => 'active'],
+    ['woo_product_id' => 301, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE301', 'status' => 'active'],
+    ['woo_product_id' => 301, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR301', 'status' => 'active'],
+];
+$GLOBALS['wpdb'] = $previewWpdb;
+$GLOBALS['gps_test_http_calls'] = 0;
+$previewService = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview();
+$emptyProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
+assert_same(2, count($emptyProductPreview['rows']), 'preview with empty product_id returns rows');
+assert_same('300', $emptyProductPreview['rows'][0]['product_id'] ?? '', 'preview with empty product_id starts at first matching product');
+$filteredProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 301, 'part_number' => '']);
+assert_same(1, count($filteredProductPreview['rows']), 'preview with product_id filters correctly');
+assert_same('301', $filteredProductPreview['rows'][0]['product_id'] ?? '', 'preview product_id filter returns requested product');
+$emptyPartPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
+assert_same(2, count($emptyPartPreview['rows']), 'empty part number does not filter preview');
+assert_same(2, $emptyPartPreview['counters']['products_with_ktype'] ?? 0, 'preview counters still work');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'preview makes no Apify calls');
+assert_same(2, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
 
 $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
