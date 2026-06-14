@@ -831,6 +831,26 @@ fclose($summaryHandle);
 assert_same('run_id', $summaryHeaders[0], 'auto-runner summary CSV starts with run_id');
 assert_same('test-auto-run', $summaryRow[0], 'auto-runner summary CSV stores run id');
 
+$GLOBALS['gps_test_options'][AuditCsvExporter::FINAL_EXPORT_OPTION] = [];
+$httpCallsBeforeChunkedExport = $GLOBALS['gps_test_http_calls'];
+$postsBeforeChunkedExport = $autoWpdb->tables[$autoWpdb->posts];
+$chunkedStart = $autoExporter->start_final_export('chunked-test-run', 1);
+assert_same('start', $chunkedStart['action_called'] ?? '', 'start export returns debug action marker');
+assert_same('running', $chunkedStart['status'] ?? '', 'start export returns running checkpoint');
+assert_same(0, $chunkedStart['offset'] ?? null, 'start export begins at offset zero');
+$chunkedResume = $autoExporter->start_final_export('chunked-test-run', 1);
+assert_same(true, $chunkedResume['resumed_existing_checkpoint'] ?? false, 'existing running checkpoint resumes instead of restarting');
+$chunkedFirst = $autoExporter->process_final_export_chunk('chunked-test-run', 1);
+assert_same('chunk', $chunkedFirst['action_called'] ?? '', 'manual chunk endpoint uses chunk action marker');
+assert_same(1, $chunkedFirst['rows_processed_in_chunk'] ?? null, 'manual chunk endpoint processes exactly one chunk');
+assert_same(1, $chunkedFirst['offset_after'] ?? null, 'chunk advances offset');
+assert_same(true, $chunkedFirst['headers_written']['final'] ?? false, 'chunk writes final CSV headers');
+assert_same(true, $chunkedFirst['headers_written']['found_only'] ?? false, 'chunk writes found-only CSV headers');
+$chunkedCompleted = $autoExporter->process_final_export_chunk('chunked-test-run', 1);
+assert_same('completed', $chunkedCompleted['status'] ?? '', 'repeated chunks reach completed');
+assert_same(true, !empty($chunkedCompleted['files']['final']['url']) && !empty($chunkedCompleted['files']['found_only']['url']), 'completed response includes final and found-only URLs');
+assert_same($httpCallsBeforeChunkedExport, $GLOBALS['gps_test_http_calls'], 'chunked final export does not call Apify');
+assert_same($postsBeforeChunkedExport, $autoWpdb->tables[$autoWpdb->posts], 'chunked final export does not modify Woo products');
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
 $resumeWpdb = new FakeWpdb();
@@ -1120,6 +1140,9 @@ assert_same(true, strpos($adminPageSource, "add_action('wp_ajax_gps_ebay_fitment
 assert_same(true, strpos($adminPageSource, "id=\"gps-ktype-generate-report\"") !== false && strpos($adminPageSource, "writeSummary('manual_report', true)") !== false, 'Generate final CSV/report button is wired to forced report generation');
 assert_same(true, strpos($adminPageSource, 'Generating final report...') !== false, 'Generate final CSV/report button shows visible progress feedback');
 assert_same(true, strpos($adminPageSource, 'Generate final report via admin-post') !== false, 'admin-post fallback button exists');
+assert_same(true, strpos($adminPageSource, 'id="gps-ktype-process-final-chunk"') !== false && strpos($adminPageSource, 'Process next final export chunk') !== false, 'manual final export chunk fallback button exists');
+assert_same(true, strpos($adminPageSource, 'gps_ebay_fitment_ktype_final_export_chunk') !== false && strpos($adminPageSource, 'processOneFinalChunk') !== false, 'manual final export chunk fallback is wired');
+assert_same(true, strpos($adminPageSource, 'responseText') !== false && strpos($adminPageSource, 'request_failed_http_') !== false, 'AJAX errors include HTTP status and response text');
 
 $GLOBALS['gps_test_options'][KTypeBackfillAutoRunner::CHECKPOINT_OPTION] = [];
 $GLOBALS['gps_test_async_empty_articles'] = ['A2044600143' => true];
