@@ -351,7 +351,7 @@ final class AuditCsvExporter
 
         $row['cache_status'] = $fromCache ? 'hit' : ($saved ? 'saved' : 'miss');
         $row['lookup_attempted'] = ($markLookup && !$fromCache) ? 'yes' : 'no';
-        $row['lookup_status'] = $fromCache ? 'skipped_cached' : $status;
+        $row['lookup_status'] = $fromCache && $status === 'found' ? 'skipped_cached' : $status;
         $row['article_count'] = count($articles);
         $row['vehicle_count'] = count($vehicleIds);
         $row['unique_vehicle_ids'] = implode(',', $vehicleIds);
