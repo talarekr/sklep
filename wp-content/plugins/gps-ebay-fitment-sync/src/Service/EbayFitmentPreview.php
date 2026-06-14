@@ -256,7 +256,7 @@ final class EbayFitmentPreview
             'target' => $inventorySku !== '' ? $inventorySku : $offerId,
             'payload' => $payload,
             'payload_json' => wp_json_encode($payload, JSON_UNESCAPED_SLASHES),
-            'payload_summary' => 'compatibleProducts=' . count($payload['compatibleProducts']) . '; kTypeValue sample=' . implode(',', array_slice($vehicleIds, 0, 10)),
+            'payload_summary' => 'compatibleProducts=' . count($payload['compatibleProducts']) . '; productIdentifier.ktype sample=' . implode(',', array_slice($vehicleIds, 0, 10)),
             'would_update_inventory_fitment' => $blocked === [] ? 'yes' : 'no',
             'blocked_reason_inventory' => $blocked ? implode('|', array_values(array_unique($blocked))) : '',
             'live_write_enabled' => 'no',
@@ -266,8 +266,7 @@ final class EbayFitmentPreview
     private function inventory_compatibility_payload(string $marketplace, array $vehicleIds): array
     {
         return [
-            'marketplaceId' => $marketplace,
-            'compatibleProducts' => array_map(static fn(string $ktype): array => ['kTypeValue' => $ktype], array_values(array_map('strval', $vehicleIds))),
+            'compatibleProducts' => array_map(static fn(string $ktype): array => ['productIdentifier' => ['ktype' => $ktype]], array_values(array_map('strval', $vehicleIds))),
         ];
     }
 

@@ -80,7 +80,7 @@ final class EbayFitmentLiveTest
         $sku = trim((string) ($row['ebay_fr_inventory_item_sku'] ?? ''));
         $marketplaceId = trim((string) ($row['ebay_fr_inventory_marketplace'] ?? 'EBAY_FR')) ?: 'EBAY_FR';
         $endpoint = self::INVENTORY_METHOD . ' /sell/inventory/v1/inventory_item/' . ($sku !== '' ? rawurlencode($sku) : '{inventory_item_sku}') . '/product_compatibility';
-        $payload = $this->inventory_payload($marketplaceId, $vehicleIds);
+        $payload = $this->inventory_payload($vehicleIds);
         $base = ['api_mode'=>'inventory','marketplace'=>$market,'item_id'=>$itemId,'itemId'=>$itemId,'offer_id'=>$offerId,'inventory_item_sku'=>$sku,'endpoint'=>$endpoint,'method'=>self::INVENTORY_METHOD,'payload'=>$payload,'count'=>count($vehicleIds),'ktype_count'=>count($vehicleIds),'merge_strategy'=>'Dedicated product_compatibility endpoint replaces only compatibility data; offer/inventory item details are not sent or overwritten.','attempted'=>false,'http_status'=>0,'warnings'=>[],'ack'=>''];
         $block = '';
         if ($itemId === '') { $block = 'missing_item_id'; }
@@ -109,9 +109,14 @@ final class EbayFitmentLiveTest
         return array_merge($base, ['attempted'=>true,'status'=>$status,'http_status'=>$http,'warnings'=>$warnings,'blocked_reason'=>'','error'=>'','logId'=>$logId,'log_id'=>$logId,'response_summary'=>$summary]);
     }
 
-    private function inventory_payload(string $marketplaceId, array $vehicleIds): array
+    private function inventory_payload(array $vehicleIds): array
     {
-        return ['marketplaceId' => $marketplaceId, 'compatibleProducts' => array_map(static fn(string $id): array => ['kTypeValue' => $id], array_values(array_map('strval', $vehicleIds)))];
+        return ['compatibleProducts' => array_map(static fn(string $id): array => ['productIdentifier' => ['ktype' => $id]], array_values(array_map('strval', $vehicleIds)))];
+    }
+
+    private function content_language_for_marketplace(string $marketplaceId): string
+    {
+        return ['EBAY_FR' => 'fr-FR', 'EBAY_DE' => 'de-DE'][$marketplaceId] ?? 'en-US';
     }
 
     private function inventory_request(string $sku, array $payload): array
@@ -119,7 +124,7 @@ final class EbayFitmentLiveTest
         $token = $this->access_token('EBAY_FR');
         if ($token === '') { return ['error' => 'safe_client_reuse_unavailable_or_missing_access_token', 'http_status' => 0, 'warnings' => []]; }
         $path = '/sell/inventory/v1/inventory_item/' . rawurlencode($sku) . '/product_compatibility';
-        $res = wp_remote_request('https://api.ebay.com' . $path, ['method'=>self::INVENTORY_METHOD,'timeout'=>25,'headers'=>['Authorization'=>'Bearer '.$token,'Content-Type'=>'application/json','Accept'=>'application/json','Content-Language'=>'fr-FR','X-EBAY-C-MARKETPLACE-ID'=>'EBAY_FR'], 'body'=>wp_json_encode($payload)]);
+        $res = wp_remote_request('https://api.ebay.com' . $path, ['method'=>self::INVENTORY_METHOD,'timeout'=>25,'headers'=>['Authorization'=>'Bearer '.$token,'Content-Type'=>'application/json','Accept'=>'application/json','Content-Language'=>$this->content_language_for_marketplace('EBAY_FR'),'X-EBAY-C-MARKETPLACE-ID'=>'EBAY_FR'], 'body'=>wp_json_encode($payload)]);
         if (is_wp_error($res)) { return ['error'=>$res->get_error_message(),'http_status'=>0,'warnings'=>[]]; }
         $code = (int) wp_remote_retrieve_response_code($res); $body = (string) wp_remote_retrieve_body($res); $decoded = json_decode($body, true); $warnings = $this->response_messages(is_array($decoded) ? $decoded : []);
         if ($code < 200 || $code >= 300) { return ['error'=>$warnings[0] ?? ('eBay Inventory API HTTP '.$code),'http_status'=>$code,'warnings'=>$warnings,'body'=>is_array($decoded)?$decoded:$body]; }
