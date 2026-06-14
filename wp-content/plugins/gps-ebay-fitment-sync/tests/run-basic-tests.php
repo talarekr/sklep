@@ -1608,11 +1608,11 @@ assert_same(true, str_contains($liveTestSource, 'product_compatibility') && str_
 assert_same(false, str_contains($batchRunnerSource, '->query('), 'batch runner does not call full preview query method');
 assert_same(true, str_contains($batchRunnerSource, 'inventory_batch_candidates'), 'batch runner uses lightweight candidate loader');
 assert_same(true, str_contains($batchRunnerSource, 'id > %d') && str_contains($batchRunnerSource, 'LIMIT %d'), 'batch CSV export streams log rows incrementally');
-assert_same(true, str_contains($batchRunnerSource, 'RUN EBAY INVENTORY FITMENT BATCH'), 'batch live requires exact RUN EBAY INVENTORY FITMENT BATCH confirmation');
+assert_same(true, str_contains($batchRunnerSource, 'RUN EBAY INVENTORY FITMENT AUTO'), 'auto live requires exact RUN EBAY INVENTORY FITMENT AUTO confirmation');
 assert_same(true, str_contains($batchRunnerSource, "['EBAY_FR','EBAY_DE']") || str_contains($batchRunnerSource, "['EBAY_FR', 'EBAY_DE']"), 'DE + FR creates separate marketplace attempts');
 assert_same(true, str_contains($batchRunnerSource, "'fr-FR'") && str_contains($batchRunnerSource, "'de-DE'") && str_contains($batchRunnerSource, "X-EBAY-C-MARKETPLACE-ID"), 'FR and DE headers are explicit');
 assert_same(true, str_contains($batchRunnerSource, "compatibleProducts") && str_contains($batchRunnerSource, "productIdentifier") && str_contains($batchRunnerSource, "ktype"), 'batch payload only sends productIdentifier ktype shape');
-assert_same(true, str_contains($batchRunnerSource, '$mode === \'live\' ? 25 : 100') && str_contains($batchRunnerSource, '$mode === \'live\' ? 5 : 25'), 'batch live/dry-run limits are enforced');
+assert_same(true, str_contains($batchRunnerSource, '$mode === \'live\' ? 25 : 100') && str_contains($batchRunnerSource, '$mode === \'live\' ? 10 : 25'), 'batch live/dry-run limits are enforced');
 assert_same(true, str_contains($batchRunnerSource, "status'=>'running'") && str_contains($batchRunnerSource, "'attempt_offset'=>") && str_contains($batchRunnerSource, '$absoluteAttempt + 1'), 'checkpoint advances after each marketplace attempt');
 assert_same(true, str_contains($batchRunnerSource, "'warning_success'") && str_contains($batchRunnerSource, "'error'"), 'warning_success and error status handling exists');
 assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains($liveTestSource, 'api.apify.com'), 'live test contains no Apify client calls');
