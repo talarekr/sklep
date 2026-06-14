@@ -8,6 +8,7 @@ use GPS_Ebay_Fitment_Sync\Admin\AdminPage;
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
+use GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
@@ -47,8 +48,9 @@ final class Plugin
         $scanner = new ProductScanner($database, $normalizer, $settings, $validator);
         $auditCsvExporter = new AuditCsvExporter($database);
         $autoRunner = new KTypeBackfillAutoRunner($scanner, $lookup, $database, $auditCsvExporter, $settings);
+        $ebayFitmentPreview = new EbayFitmentPreview();
 
-        (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner))->hooks();
+        (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner, $ebayFitmentPreview))->hooks();
     }
 
     public static function deactivate(): void

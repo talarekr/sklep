@@ -1216,3 +1216,17 @@ assert_same('rejected', $rejectRow[$rejectLookupStatusIndex] ?? '', 'full final 
 $runnerSource = file_get_contents(__DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php');
 assert_same(false, str_contains($runnerSource, 'update_post_meta'), 'auto-runner adds no Woo product meta writes');
 assert_same(false, str_contains($runnerSource, 'ReviseFixedPriceItem') || str_contains($runnerSource, 'AddFixedPriceItem'), 'auto-runner adds no eBay write API calls');
+
+$previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
+$adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
+$pluginPreviewSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
+assert_same(true, str_contains($pluginPreviewSource, 'new EbayFitmentPreview()'), 'eBay fitment preview service is wired');
+assert_same(true, str_contains($adminPreviewSource, 'eBay Fitment Preview') && str_contains($adminPreviewSource, 'Export preview CSV'), 'admin page exposes eBay Fitment Preview and CSV export');
+assert_same(true, str_contains($previewSource, "'_wei_ebay_listing_id'") && str_contains($previewSource, "'_wei_ebay_item_id'"), 'DE item_id detection reads known DE listing/item meta');
+assert_same(true, str_contains($previewSource, "'_wei_fr_ebay_listing_id'") && str_contains($previewSource, "'_wei_fr_ebay_item_id'"), 'FR item_id detection reads known FR listing/item meta');
+assert_same(true, str_contains($previewSource, "marketplace=%s") && str_contains($previewSource, "'ebay'") && str_contains($previewSource, "'ebay_fr'"), 'DE/FR mapping reads shared marketplace_mappings table marketplaces');
+assert_same(true, str_contains($previewSource, "Database::table_names()['vehicle_cache']") && str_contains($previewSource, 'vehicle_ids((int) ($row'), 'same KTypes are loaded once from canonical vehicle cache for DE and FR preview');
+assert_same(true, str_contains($previewSource, "'no_ktype'") && str_contains($previewSource, "'no_ebay_de_listing'") && str_contains($previewSource, "'no_ebay_fr_listing'"), 'preview blocked reasons cover no KType and missing marketplace listings');
+assert_same(false, str_contains($previewSource, 'update_post_meta') || str_contains($previewSource, 'wp_update_post'), 'preview adds no Woo product modification');
+assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_contains($previewSource, 'AddFixedPriceItem') || str_contains($previewSource, 'Trading API'), 'preview adds no eBay write code');
+assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');
