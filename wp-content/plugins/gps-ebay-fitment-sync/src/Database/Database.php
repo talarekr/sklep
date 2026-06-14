@@ -8,7 +8,7 @@ use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 
 final class Database
 {
-    private const DB_VERSION = '0.1.4';
+    private const DB_VERSION = '0.1.5';
     private const DB_OPTION = 'gps_ebay_fitment_sync_db_version';
 
     private PartNumberNormalizer $normalizer;
@@ -118,10 +118,16 @@ final class Database
 
         dbDelta("CREATE TABLE {$ebayLog} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            run_id varchar(191) NULL,
             product_id bigint(20) unsigned NOT NULL,
             marketplace varchar(20) NOT NULL,
             ebay_item_id varchar(64) NOT NULL,
             api_mode varchar(20) NULL,
+            mode varchar(20) NULL,
+            attempted tinyint(1) NOT NULL DEFAULT 0,
+            http_status int(11) NULL,
+            blocked_reason varchar(191) NULL,
+            warnings longtext NULL,
             endpoint varchar(255) NULL,
             method varchar(10) NULL,
             offer_id varchar(64) NULL,
@@ -135,6 +141,7 @@ final class Database
             error_message text NULL,
             created_at datetime NOT NULL,
             PRIMARY KEY  (id),
+            KEY run_product_market (run_id, product_id, marketplace),
             KEY product_market_created (product_id, marketplace, created_at),
             KEY status (status)
         ) {$charset};");

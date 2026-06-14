@@ -437,6 +437,7 @@ require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 require_once __DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentPreview.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentLiveTest.php';
+require_once __DIR__ . '/../src/Service/EbayInventoryFitmentBatchRunner.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
@@ -1533,6 +1534,7 @@ $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 $pluginPreviewSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
 $liveTestSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentLiveTest.php');
+$batchRunnerSource = file_get_contents(__DIR__ . '/../src/Service/EbayInventoryFitmentBatchRunner.php');
 assert_same(true, str_contains($pluginPreviewSource, 'new EbayFitmentPreview()'), 'eBay fitment preview service is wired');
 assert_same(true, str_contains($adminPreviewSource, 'eBay Fitment Preview') && str_contains($adminPreviewSource, 'Export preview CSV'), 'admin page exposes eBay Fitment Preview and CSV export');
 assert_same(true, str_contains($adminPreviewSource, 'DE only</option>') && str_contains($adminPreviewSource, 'DE + FR not yet supported for Inventory API'), 'admin live Inventory API marketplace dropdown supports DE only and labels DE+FR unsupported');
@@ -1548,5 +1550,15 @@ assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_c
 assert_same(true, str_contains($liveTestSource, 'ReviseFixedPriceItem'), 'live test uses Trading API ReviseFixedPriceItem');
 assert_same(true, str_contains($liveTestSource, 'inventory_based_listing_not_supported_by_trading_api'), 'live test blocks inventory-based Trading API errors');
 assert_same(true, str_contains($liveTestSource, 'product_compatibility') && str_contains($liveTestSource, 'UPDATE EBAY INVENTORY FITMENT'), 'live test contains Inventory API product compatibility mode');
+assert_same(true, str_contains($batchRunnerSource, 'RUN EBAY INVENTORY FITMENT BATCH'), 'batch live requires exact RUN EBAY INVENTORY FITMENT BATCH confirmation');
+assert_same(true, str_contains($batchRunnerSource, "['EBAY_FR','EBAY_DE']") || str_contains($batchRunnerSource, "['EBAY_FR', 'EBAY_DE']"), 'DE + FR creates separate marketplace attempts');
+assert_same(true, str_contains($batchRunnerSource, "'fr-FR'") && str_contains($batchRunnerSource, "'de-DE'") && str_contains($batchRunnerSource, "X-EBAY-C-MARKETPLACE-ID"), 'FR and DE headers are explicit');
+assert_same(true, str_contains($batchRunnerSource, "compatibleProducts") && str_contains($batchRunnerSource, "productIdentifier") && str_contains($batchRunnerSource, "ktype"), 'batch payload only sends productIdentifier ktype shape');
+assert_same(true, str_contains($batchRunnerSource, '$mode === \'live\' ? 25 : 100') && str_contains($batchRunnerSource, '$mode === \'live\' ? 5 : 25'), 'batch live/dry-run limits are enforced');
+assert_same(true, str_contains($batchRunnerSource, "status'=>'running'") && str_contains($batchRunnerSource, "'attempt_offset'=>") && str_contains($batchRunnerSource, '$absoluteAttempt + 1'), 'checkpoint advances after each marketplace attempt');
+assert_same(true, str_contains($batchRunnerSource, "'warning_success'") && str_contains($batchRunnerSource, "'error'"), 'warning_success and error status handling exists');
 assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains($liveTestSource, 'api.apify.com'), 'live test contains no Apify client calls');
+assert_same(false, str_contains($batchRunnerSource, 'ApifyClient') || str_contains($batchRunnerSource, 'api.apify.com'), 'batch runner contains no Apify calls');
+assert_same(false, str_contains($batchRunnerSource, 'update_post_meta') || str_contains($batchRunnerSource, 'wp_update_post'), 'batch runner contains no Woo product modifications');
+assert_same(false, str_contains($batchRunnerSource, 'ReviseFixedPriceItem'), 'batch runner never uses Trading API ReviseFixedPriceItem');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');

@@ -8,6 +8,7 @@ use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview;
 use GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest;
+use GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
@@ -23,8 +24,9 @@ final class AdminPage
     private KTypeBackfillAutoRunner $autoRunner;
     private EbayFitmentPreview $ebayFitmentPreview;
     private EbayFitmentLiveTest $ebayFitmentLiveTest;
+    private EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -34,6 +36,7 @@ final class AdminPage
         $this->autoRunner = $autoRunner;
         $this->ebayFitmentPreview = $ebayFitmentPreview;
         $this->ebayFitmentLiveTest = $ebayFitmentLiveTest;
+        $this->ebayInventoryFitmentBatchRunner = $ebayInventoryFitmentBatchRunner;
     }
 
     public function hooks(): void
@@ -52,6 +55,10 @@ final class AdminPage
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_stop', [$this, 'ajax_ktype_backfill_stop']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_final_export_start', [$this, 'ajax_ktype_final_export_start']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_final_export_chunk', [$this, 'ajax_ktype_final_export_chunk']);
+        add_action('wp_ajax_gps_ebay_inventory_fitment_batch', [$this, 'ajax_inventory_fitment_batch']);
+        add_action('wp_ajax_gps_ebay_inventory_fitment_stop', [$this, 'ajax_inventory_fitment_stop']);
+        add_action('wp_ajax_gps_ebay_inventory_fitment_reset', [$this, 'ajax_inventory_fitment_reset']);
+        add_action('admin_post_gps_ebay_inventory_fitment_csv', [$this, 'inventory_fitment_csv']);
     }
 
     public function admin_menu(): void
@@ -209,6 +216,43 @@ final class AdminPage
     }
 
 
+
+    public function ajax_inventory_fitment_batch(): void
+    {
+        $this->ajax_guard('gps_ebay_inventory_fitment_batch');
+        wp_send_json_success($this->ebayInventoryFitmentBatchRunner->run_batch([
+            'marketplace' => isset($_POST['marketplace']) ? sanitize_text_field(wp_unslash((string) $_POST['marketplace'])) : 'both',
+            'mode' => isset($_POST['mode']) ? sanitize_text_field(wp_unslash((string) $_POST['mode'])) : 'dry_run',
+            'batch_size' => isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 0,
+            'offset' => isset($_POST['offset']) ? (int) $_POST['offset'] : 0,
+            'attempt_offset' => isset($_POST['attempt_offset']) ? (int) $_POST['attempt_offset'] : 0,
+            'resume' => !empty($_POST['resume']),
+            'retry_errors' => !empty($_POST['retry_errors']),
+            'confirmation' => isset($_POST['confirmation']) ? sanitize_text_field(wp_unslash((string) $_POST['confirmation'])) : '',
+        ]));
+    }
+
+    public function ajax_inventory_fitment_stop(): void
+    {
+        $this->ajax_guard('gps_ebay_inventory_fitment_batch');
+        wp_send_json_success($this->ebayInventoryFitmentBatchRunner->stop('manual_stop'));
+    }
+
+    public function ajax_inventory_fitment_reset(): void
+    {
+        $this->ajax_guard('gps_ebay_inventory_fitment_batch');
+        wp_send_json_success($this->ebayInventoryFitmentBatchRunner->reset());
+    }
+
+    public function inventory_fitment_csv(): void
+    {
+        $this->guard('gps_ebay_inventory_fitment_csv');
+        $runId = isset($_GET['run_id']) ? sanitize_text_field(wp_unslash((string) $_GET['run_id'])) : '';
+        $csv = $this->ebayInventoryFitmentBatchRunner->export_csv($runId);
+        wp_safe_redirect((string) ($csv['url'] ?? admin_url('admin.php?page=gps-ebay-fitment-sync')));
+        exit;
+    }
+
     public function ebay_fitment_live_test(): void
     {
         $this->guard('gps_ebay_fitment_live_test');
@@ -341,6 +385,7 @@ final class AdminPage
             <?php $this->render_ebay_fitment_preview(); ?>
 
             <?php $this->render_inventory_fitment_preview(); ?>
+            <?php $this->render_inventory_fitment_batch_runner(); ?>
             <?php $this->render_ebay_fitment_live_test(); ?>
 
             <?php $this->render_result($last); ?>
@@ -417,6 +462,35 @@ final class AdminPage
                 <?php foreach ((array) ($preview['results'] ?? []) as $result): ?><tr><?php foreach (['marketplace','listing_management_type','item_id','listing_status','offer_id','inventory_item_sku','ktype_count','sample_ktypes','would_update_inventory_fitment','blocked_reason_inventory','method','endpoint','payload_summary','live_write_enabled'] as $column): ?><td><?php echo esc_html((string) ($result[$column] ?? '')); ?></td><?php endforeach; ?></tr><tr><td colspan="14"><details><summary><?php echo esc_html__('Raw compatibility payload JSON', 'gps-ebay-fitment-sync'); ?></summary><pre style="white-space:pre-wrap;max-height:260px;overflow:auto;"><?php echo esc_html((string) ($result['payload_json'] ?? '')); ?></pre></details></td></tr><?php endforeach; ?>
                 <?php if (empty($preview['results'])): ?><tr><td colspan="14"><?php echo esc_html__('No inventory preview rows.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
             </tbody></table></div>
+        <?php
+    }
+
+
+    private function render_inventory_fitment_batch_runner(): void
+    {
+        $nonce = wp_create_nonce('gps_ebay_inventory_fitment_batch');
+        $checkpoint = $this->ebayInventoryFitmentBatchRunner->checkpoint();
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('eBay Inventory Fitment Batch Runner', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Safe batch runner for cached KType compatibility. Uses only the Sell Inventory product_compatibility endpoint and never sends title, price, description, quantity, images, shipping, policies, category, aspects, offers, or Woo product writes.', 'gps-ebay-fitment-sync'); ?></p>
+            <div id="gps-ebay-inventory-fitment-batch" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>">
+                <p><label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select id="gps-inv-marketplace"><option value="fr">FR only</option><option value="de">DE only</option><option value="both" selected>DE + FR</option></select></label>
+                <label><?php echo esc_html__('Mode', 'gps-ebay-fitment-sync'); ?> <select id="gps-inv-mode"><option value="dry_run" selected>Dry-run</option><option value="live">Live</option></select></label>
+                <label><?php echo esc_html__('Batch size', 'gps-ebay-fitment-sync'); ?> <input id="gps-inv-batch-size" type="number" min="1" max="100" value="25"></label>
+                <label><?php echo esc_html__('Offset / resume checkpoint', 'gps-ebay-fitment-sync'); ?> <input id="gps-inv-offset" type="number" min="0" value="<?php echo esc_attr((string) ($checkpoint['product_offset'] ?? 0)); ?>"></label></p>
+                <p><strong id="gps-inv-attempt-note">25 products may create up to 50 marketplace updates.</strong> <?php echo esc_html__('Live default/max: 5/25 products. Dry-run default/max: 25/100 products. In DE + FR mode, batch size means Woo products.', 'gps-ebay-fitment-sync'); ?></p>
+                <p><label><?php echo esc_html__('Live confirmation text', 'gps-ebay-fitment-sync'); ?> <input id="gps-inv-confirmation" type="text" class="regular-text" autocomplete="off"></label> <code>RUN EBAY INVENTORY FITMENT BATCH</code></p>
+                <p><button type="button" class="button button-primary" id="gps-inv-start">Start batch</button> <button type="button" class="button" id="gps-inv-resume">Resume</button> <button type="button" class="button" id="gps-inv-stop">Stop</button> <button type="button" class="button" id="gps-inv-reset">Reset checkpoint</button> <button type="button" class="button" id="gps-inv-export">Export CSV</button> <label><input id="gps-inv-retry-errors" type="checkbox" value="1"> <?php echo esc_html__('Retry errors later', 'gps-ebay-fitment-sync'); ?></label></p>
+                <h3><?php echo esc_html__('Progress', 'gps-ebay-fitment-sync'); ?></h3>
+                <p>run_id: <code data-inv="run_id"><?php echo esc_html((string) ($checkpoint['run_id'] ?? '')); ?></code> checkpoint: <code data-inv="attempt_offset"><?php echo esc_html((string) ($checkpoint['attempt_offset'] ?? 0)); ?></code> current product: <code data-inv="current_product_id"><?php echo esc_html((string) ($checkpoint['current_product_id'] ?? '')); ?></code> current marketplace: <code data-inv="current_marketplace"><?php echo esc_html((string) ($checkpoint['current_marketplace'] ?? '')); ?></code></p>
+                <div id="gps-inv-counters" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;max-width:1200px;"></div>
+                <p>CSV: <span id="gps-inv-csv">-</span></p>
+                <div style="overflow:auto"><table class="widefat striped"><thead><tr><th>product_id</th><th>marketplace</th><th>item_id</th><th>offer_id</th><th>inventory_item_sku</th><th>ktype_count</th><th>attempted</th><th>status</th><th>http_status</th><th>blocked_reason</th><th>error_message</th><th>created_at</th></tr></thead><tbody id="gps-inv-last-rows"><tr><td colspan="12">No rows yet.</td></tr></tbody></table></div>
+            </div>
+            <script>
+            (function(){const root=document.getElementById('gps-ebay-inventory-fitment-batch'); if(!root)return; const ajax=root.dataset.ajaxUrl, nonce=root.dataset.nonce, market=document.getElementById('gps-inv-marketplace'), mode=document.getElementById('gps-inv-mode'), size=document.getElementById('gps-inv-batch-size'), offset=document.getElementById('gps-inv-offset'), conf=document.getElementById('gps-inv-confirmation'), note=document.getElementById('gps-inv-attempt-note'), start=document.getElementById('gps-inv-start'); let lastRun=''; function upd(){const live=mode.value==='live', both=market.value==='both'; size.max=live?25:100; if(!size.value)size.value=live?5:25; if(+size.value>+size.max)size.value=size.max; note.textContent=size.value+' products may create up to '+(+size.value*(both?2:1))+' marketplace updates.'; start.disabled=live && conf.value!=='RUN EBAY INVENTORY FITMENT BATCH';} [market,mode,size,conf].forEach(e=>{e.addEventListener('input',upd);e.addEventListener('change',upd);}); upd(); function post(action, extra){const fd=new FormData(); fd.append('action',action); fd.append('_ajax_nonce',nonce); Object.entries(extra||{}).forEach(([k,v])=>fd.append(k,v)); return fetch(ajax,{method:'POST',credentials:'same-origin',body:fd}).then(r=>r.json());} function render(res){const d=res.data||res; if(d.run_id)lastRun=d.run_id; ['run_id','attempt_offset','current_product_id','current_marketplace'].forEach(k=>{const e=root.querySelector('[data-inv="'+k+'"]'); if(e)e.textContent=(d.checkpoint&&d.checkpoint[k])||d[k]||'';}); const counters=d.counters||{}; document.getElementById('gps-inv-counters').innerHTML=Object.keys(counters).map(k=>'<div style="border:1px solid #c3c4c7;background:#fff;padding:8px"><span>'+k+'</span><br><strong>'+counters[k]+'</strong></div>').join(''); if(d.csv&&d.csv.url)document.getElementById('gps-inv-csv').innerHTML='<a href="'+d.csv.url+'">'+d.csv.url+'</a>'; const rows=d.last_rows||d.rows||[]; document.getElementById('gps-inv-last-rows').innerHTML=rows.length?rows.map(r=>'<tr>'+['product_id','marketplace','ebay_item_id','offer_id','inventory_item_sku','ktype_count','attempted','status','http_status','blocked_reason','error_message','created_at'].map(k=>'<td>'+((r[k]!==undefined?r[k]:'')+'').replace(/[&<>]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[s]))+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="12">No rows.</td></tr>'; } function batch(resume){post('gps_ebay_inventory_fitment_batch',{marketplace:market.value,mode:mode.value,batch_size:size.value,offset:offset.value,resume:resume?'1':'',retry_errors:document.getElementById('gps-inv-retry-errors').checked?'1':'',confirmation:conf.value}).then(render);} start.onclick=()=>batch(false); document.getElementById('gps-inv-resume').onclick=()=>batch(true); document.getElementById('gps-inv-stop').onclick=()=>post('gps_ebay_inventory_fitment_stop',{}).then(render); document.getElementById('gps-inv-reset').onclick=()=>post('gps_ebay_inventory_fitment_reset',{}).then(render); document.getElementById('gps-inv-export').onclick=()=>{if(lastRun) location.href='<?php echo esc_url(admin_url('admin-post.php?action=gps_ebay_inventory_fitment_csv&_wpnonce=' . wp_create_nonce('gps_ebay_inventory_fitment_csv') . '&run_id=')); ?>'+encodeURIComponent(lastRun);};})();
+            </script>
         <?php
     }
 
