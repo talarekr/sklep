@@ -59,7 +59,7 @@ final class EbayFitmentPreview
             'missing_fr' => !empty($args['missing_fr']),
             'ready_de' => !empty($args['ready_de']),
             'ready_fr' => !empty($args['ready_fr']),
-            'product_id' => max(0, (int) ($args['product_id'] ?? 0)),
+            'product_id' => isset($args['product_id']) && trim((string) $args['product_id']) !== '' ? max(0, (int) $args['product_id']) : null,
             'part_number' => trim((string) ($args['part_number'] ?? '')),
         ];
     }
@@ -71,7 +71,7 @@ final class EbayFitmentPreview
         $where = ['pm.part_cache_id IS NOT NULL'];
         $params = [];
         if (!empty($filters['only_with_ktype'])) { $where[] = 'pc.vehicle_count > 0'; }
-        if ((int) $filters['product_id'] > 0) { $where[] = 'pm.product_id = %d'; $params[] = (int) $filters['product_id']; }
+        if ($filters['product_id'] !== null && (int) $filters['product_id'] > 0) { $where[] = 'pm.product_id = %d'; $params[] = (int) $filters['product_id']; }
         if ((string) $filters['part_number'] !== '') { $where[] = 'pm.part_number_normalized LIKE %s'; $params[] = '%' . $wpdb->esc_like((string) $filters['part_number']) . '%'; }
         $sql = "SELECT pm.product_id, pm.sku, pm.part_number_normalized, pm.part_cache_id, pc.vehicle_count AS ktype_count, p.post_title AS product_title, p.post_status
             FROM {$tables['product_map']} pm
@@ -132,7 +132,7 @@ final class EbayFitmentPreview
 
     private function counters(array $filters): array
     {
-        $rows = array_map(fn(array $row): array => $this->decorate_row($row), $this->base_rows(100000, 0, ['only_with_ktype' => true, 'product_id' => 0, 'part_number' => '']));
+        $rows = array_map(fn(array $row): array => $this->decorate_row($row), $this->base_rows(100000, 0, ['only_with_ktype' => true, 'product_id' => null, 'part_number' => '']));
         return [
             'products_with_ktype' => count($rows),
             'products_with_de_listing' => count(array_filter($rows, fn($r) => $r['ebay_de_item_id'] !== '')),
