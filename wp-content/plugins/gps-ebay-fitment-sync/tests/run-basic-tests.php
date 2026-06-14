@@ -405,6 +405,7 @@ require_once __DIR__ . '/../src/Service/ProductScanner.php';
 require_once __DIR__ . '/../src/Service/FitmentLookupService.php';
 require_once __DIR__ . '/../src/Service/KTypeBackfillAutoRunner.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentPreview.php';
+require_once __DIR__ . '/../src/Service/EbayFitmentLiveTest.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
@@ -1340,9 +1341,34 @@ assert_same('product_not_found', $missingProductPreview['rows'][0]['blocked_reas
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'preview makes no Apify calls');
 assert_same(4, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
 
+$liveTest = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest($previewService);
+$liveDryRun = $liveTest->run(300, 'both', true, '');
+assert_same('preview', $liveDryRun['results']['EBAY_DE']['status'] ?? '', 'live test dry-run builds DE preview');
+assert_same('preview', $liveDryRun['results']['EBAY_FR']['status'] ?? '', 'live test dry-run builds FR preview');
+assert_same('DE300', $liveDryRun['results']['EBAY_DE']['itemId'] ?? '', 'live test uses DE item id');
+assert_same('FR300', $liveDryRun['results']['EBAY_FR']['itemId'] ?? '', 'live test uses FR item id');
+assert_same(false, $liveDryRun['results']['EBAY_DE']['attempted'] ?? true, 'dry-run does not attempt DE eBay write');
+assert_same(false, $liveDryRun['results']['EBAY_FR']['attempted'] ?? true, 'dry-run does not attempt FR eBay write');
+assert_same(2, $liveDryRun['results']['EBAY_DE']['count'] ?? 0, 'DE payload KType count correct');
+assert_same(2, $liveDryRun['results']['EBAY_FR']['count'] ?? 0, 'FR payload KType count correct');
+$deCompat = $liveDryRun['results']['EBAY_DE']['payload']['ReviseFixedPriceItemRequest']['Item']['ItemCompatibilityList']['Compatibility'] ?? [];
+$frCompat = $liveDryRun['results']['EBAY_FR']['payload']['ReviseFixedPriceItemRequest']['Item']['ItemCompatibilityList']['Compatibility'] ?? [];
+assert_same($deCompat, $frCompat, 'same KType compatibility list is used for DE and FR');
+assert_same('KType', $deCompat[0]['NameValueList'][0]['Name'] ?? '', 'payload uses Trading API KType NameValueList');
+assert_same('10001', $deCompat[0]['NameValueList'][0]['Value'][0] ?? '', 'payload uses cached vehicle_id value');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'live test dry-run does not call Apify or eBay write API');
+$badConfirmation = $liveTest->run(300, 'de', false, 'WRONG');
+assert_same('blocked', $badConfirmation['results']['EBAY_DE']['status'] ?? '', 'live requires exact confirmation text');
+assert_same('live_confirmation_required', $badConfirmation['results']['EBAY_DE']['error'] ?? '', 'bad live confirmation is blocked');
+$noKtype = $liveTest->run(302, 'fr', true, '');
+assert_same('blocked', $noKtype['results']['EBAY_FR']['status'] ?? '', 'product without eBay item ID is blocked');
+assert_same('no_ebay_fr_listing', $noKtype['results']['EBAY_FR']['error'] ?? '', 'missing FR listing gives blocked reason');
+
+
 $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
 $pluginPreviewSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
+$liveTestSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentLiveTest.php');
 assert_same(true, str_contains($pluginPreviewSource, 'new EbayFitmentPreview()'), 'eBay fitment preview service is wired');
 assert_same(true, str_contains($adminPreviewSource, 'eBay Fitment Preview') && str_contains($adminPreviewSource, 'Export preview CSV'), 'admin page exposes eBay Fitment Preview and CSV export');
 assert_same(true, str_contains($previewSource, "'_wei_ebay_listing_id'") && str_contains($previewSource, "'_wei_ebay_item_id'"), 'DE item_id detection reads known DE listing/item meta');
@@ -1352,4 +1378,6 @@ assert_same(true, str_contains($previewSource, "Database::table_names()['vehicle
 assert_same(true, str_contains($previewSource, "'no_ktype'") && str_contains($previewSource, "'no_ebay_de_listing'") && str_contains($previewSource, "'no_ebay_fr_listing'"), 'preview blocked reasons cover no KType and missing marketplace listings');
 assert_same(false, str_contains($previewSource, 'update_post_meta') || str_contains($previewSource, 'wp_update_post'), 'preview adds no Woo product modification');
 assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_contains($previewSource, 'AddFixedPriceItem') || str_contains($previewSource, 'Trading API'), 'preview adds no eBay write code');
+assert_same(true, str_contains($liveTestSource, 'ReviseFixedPriceItem'), 'live test uses Trading API ReviseFixedPriceItem');
+assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains($liveTestSource, 'api.apify.com'), 'live test contains no Apify client calls');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');

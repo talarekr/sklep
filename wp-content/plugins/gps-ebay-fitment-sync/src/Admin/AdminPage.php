@@ -7,6 +7,7 @@ namespace GPS_Ebay_Fitment_Sync\Admin;
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
 use GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview;
+use GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest;
 use GPS_Ebay_Fitment_Sync\Service\FitmentLookupService;
 use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
@@ -21,8 +22,9 @@ final class AdminPage
     private AuditCsvExporter $auditCsvExporter;
     private KTypeBackfillAutoRunner $autoRunner;
     private EbayFitmentPreview $ebayFitmentPreview;
+    private EbayFitmentLiveTest $ebayFitmentLiveTest;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -31,6 +33,7 @@ final class AdminPage
         $this->auditCsvExporter = $auditCsvExporter;
         $this->autoRunner = $autoRunner;
         $this->ebayFitmentPreview = $ebayFitmentPreview;
+        $this->ebayFitmentLiveTest = $ebayFitmentLiveTest;
     }
 
     public function hooks(): void
@@ -43,6 +46,7 @@ final class AdminPage
         add_action('admin_post_gps_ebay_fitment_backfill', [$this, 'backfill']);
         add_action('admin_post_gps_ebay_fitment_ktype_generate_report', [$this, 'ktype_generate_report']);
         add_action('admin_post_gps_ebay_fitment_preview_csv', [$this, 'ebay_fitment_preview_csv']);
+        add_action('admin_post_gps_ebay_fitment_live_test', [$this, 'ebay_fitment_live_test']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_batch', [$this, 'ajax_ktype_backfill_batch']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_summary', [$this, 'ajax_ktype_backfill_summary']);
         add_action('wp_ajax_gps_ebay_fitment_ktype_backfill_stop', [$this, 'ajax_ktype_backfill_stop']);
@@ -204,6 +208,17 @@ final class AdminPage
         wp_send_json_success($this->auditCsvExporter->process_final_export_chunk($runId, $chunkSize));
     }
 
+
+    public function ebay_fitment_live_test(): void
+    {
+        $this->guard('gps_ebay_fitment_live_test');
+        $productId = isset($_POST['live_product_id']) ? (int) $_POST['live_product_id'] : 0;
+        $marketplace = isset($_POST['live_marketplace']) ? sanitize_text_field(wp_unslash((string) $_POST['live_marketplace'])) : 'both';
+        $dryRun = !empty($_POST['dry_run']);
+        $confirmation = isset($_POST['live_confirmation']) ? sanitize_text_field(wp_unslash((string) $_POST['live_confirmation'])) : '';
+        $this->store_result(['type' => 'ebay_fitment_live_test', 'result' => $this->ebayFitmentLiveTest->run($productId, $marketplace, $dryRun, $confirmation)]);
+    }
+
     public function ebay_fitment_preview_csv(): void
     {
         $this->guard('gps_ebay_fitment_preview_csv');
@@ -324,6 +339,8 @@ final class AdminPage
 
             <?php $this->render_ebay_fitment_preview(); ?>
 
+            <?php $this->render_ebay_fitment_live_test(); ?>
+
             <?php $this->render_result($last); ?>
         </div>
         <?php
@@ -371,6 +388,28 @@ final class AdminPage
                 <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
                 <?php if (!$preview['rows']): ?><tr><td colspan="15"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
             </tbody></table></div>
+        <?php
+    }
+
+
+    private function render_ebay_fitment_live_test(): void
+    {
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('eBay Fitment Live Test', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('One product only. Uses existing local KType cache and local eBay listing mappings. Dry-run is on by default and never calls eBay write APIs. Live uses Trading API ReviseFixedPriceItem to send only ItemID plus ItemCompatibilityList.', 'gps-ebay-fitment-sync'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="gps-ebay-fitment-live-test-form">
+                <input type="hidden" name="action" value="gps_ebay_fitment_live_test">
+                <?php wp_nonce_field('gps_ebay_fitment_live_test'); ?>
+                <p><label><?php echo esc_html__('Woo product ID', 'gps-ebay-fitment-sync'); ?> <input id="gps-live-product-id" name="live_product_id" type="number" min="1" value="2080" required></label></p>
+                <p><label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select name="live_marketplace"><option value="de">DE only</option><option value="fr">FR only</option><option value="both" selected>DE + FR</option></select></label></p>
+                <p><label><input id="gps-live-dry-run" type="checkbox" name="dry_run" value="1" checked> <?php echo esc_html__('Dry-run / preview mode (no eBay write API call)', 'gps-ebay-fitment-sync'); ?></label></p>
+                <p><label><?php echo esc_html__('Live confirmation text', 'gps-ebay-fitment-sync'); ?> <input id="gps-live-confirmation" name="live_confirmation" type="text" class="regular-text" autocomplete="off" placeholder="UPDATE EBAY FITMENT"></label></p>
+                <p><button id="gps-live-submit" class="button button-primary" type="submit"><?php echo esc_html__('Run one-product fitment test', 'gps-ebay-fitment-sync'); ?></button></p>
+            </form>
+            <script>
+            (function(){const f=document.getElementById('gps-ebay-fitment-live-test-form'); if(!f)return; const p=document.getElementById('gps-live-product-id'), d=document.getElementById('gps-live-dry-run'), c=document.getElementById('gps-live-confirmation'), b=document.getElementById('gps-live-submit'); function u(){b.disabled=!d.checked && (!(p.value||'').trim() || c.value !== 'UPDATE EBAY FITMENT');} [p,d,c].forEach(function(e){e.addEventListener('input',u); e.addEventListener('change',u);}); u();})();
+            </script>
         <?php
     }
 
