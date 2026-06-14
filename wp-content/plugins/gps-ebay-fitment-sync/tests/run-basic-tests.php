@@ -169,6 +169,12 @@ final class FakeWpdb
             }));
         }
 
+        if (preg_match('/SELECT \* FROM (\S+) WHERE id > (\d+) ORDER BY id ASC LIMIT (\d+)/', $query, $matches)) {
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], fn(array $row): bool => (int) ($row['id'] ?? 0) > (int) $matches[2]));
+            usort($rows, fn(array $a, array $b): int => (int) $a['id'] <=> (int) $b['id']);
+            return array_slice($rows, 0, (int) $matches[3]);
+        }
+
         if (preg_match('/FROM (\S+) WHERE part_cache_id = (\d+)/', $query, $matches)) {
             $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], fn(array $row): bool => (int) $row['part_cache_id'] === (int) $matches[2]));
             if (str_contains($query, 'ORDER BY vehicle_id')) {
@@ -190,6 +196,12 @@ final class FakeWpdb
 
     public function get_col(string $query): array
     {
+        if (preg_match('/SELECT DISTINCT vehicle_id FROM (\S+) WHERE part_cache_id = (\d+) ORDER BY vehicle_id ASC/', $query, $matches)) {
+            $ids = [];
+            foreach ($this->tables[$matches[1]] ?? [] as $row) { if ((int) ($row['part_cache_id'] ?? 0) === (int) $matches[2]) { $ids[] = (string) $row['vehicle_id']; } }
+            $ids = array_values(array_unique($ids)); sort($ids); return $ids;
+        }
+
         if (preg_match('/SELECT ID FROM \S+ .* LIMIT (\d+) OFFSET (\d+)/', $query, $matches)) {
             $limit = (int) $matches[1];
             $offset = (int) $matches[2];
@@ -203,6 +215,10 @@ final class FakeWpdb
 
     public function get_var(string $query)
     {
+        if (preg_match('/SELECT COUNT\(\*\) FROM (\S+)$/', $query, $matches)) {
+            return count($this->tables[$matches[1]] ?? []);
+        }
+
         if (preg_match("/SHOW TABLES LIKE '([^']*)'/", $query, $matches)) {
             return (isset($this->schemas[$matches[1]]) || isset($this->tables[$matches[1]])) ? $matches[1] : null;
         }

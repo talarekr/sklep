@@ -9,6 +9,7 @@ use GPS_Ebay_Fitment_Sync\Database\Database;
 final class AuditCsvExporter
 {
     public const AUDIT_SUBDIR = 'gps-ebay-fitment-sync/audit';
+    public const FINAL_EXPORT_OPTION = 'gps_ebay_fitment_sync_final_export_checkpoint';
 
     private const COLUMNS = [
         'run_id',
@@ -191,50 +192,143 @@ final class AuditCsvExporter
     public function export_auto_runner_final(array $checkpoint, ProductScanner $scanner): array
     {
         $runId = (string) ($checkpoint['run_id'] ?? $this->run_id('ktype_backfill_final'));
-        $startOffset = max(0, (int) ($checkpoint['start_offset'] ?? 0));
-        $finalOffset = max($startOffset, (int) ($checkpoint['next_offset'] ?? $startOffset));
-        $rows = [];
-
-        for ($offset = $startOffset; $offset < $finalOffset; $offset++) {
-            $scan = $scanner->scan(1, $offset, false);
-            if ((int) ($scan['total_scanned_products'] ?? 0) === 0) {
-                break;
-            }
-            foreach (($scan['accepted_rows'] ?? []) as $candidate) {
-                if (is_array($candidate)) {
-                    $rows[] = $this->row_from_accepted_candidate($runId, 'ktype_auto_runner_final', $candidate, null);
-                }
-            }
-            foreach (($scan['rejected_rows'] ?? []) as $candidate) {
-                if (is_array($candidate)) {
-                    $rows[] = $this->row_from_rejected_candidate($runId, 'ktype_auto_runner_final', $candidate);
-                }
+        $export = $this->final_export_checkpoint($runId);
+        if (!$export) {
+            $export = $this->start_final_export($runId, 250);
+            $export = $this->process_final_export_chunk($runId, 250);
+            if ((string) ($export['status'] ?? '') === 'completed') {
+                $this->append_rejected_rows_from_scanner($export, $checkpoint, $scanner, $runId);
+                $export = $this->save_final_export_checkpoint($export);
             }
         }
 
-        $final = $this->write(
-            sprintf('gps-fitment-ktype-final-%s-%s.csv', gmdate('Ymd-His'), $runId),
-            $rows,
-            $runId
-        );
-        $foundOnly = $this->write_found_only(
-            sprintf('gps-fitment-ktype-found-only-%s-%s.csv', gmdate('Ymd-His'), $runId),
-            $rows,
-            $runId
-        );
-
         return [
-            'final_csv_generated' => (bool) ($final['csv_generated'] ?? false),
-            'final_csv_path' => (string) ($final['csv_path'] ?? ''),
-            'final_csv_url' => (string) ($final['csv_url'] ?? ''),
-            'final_csv_row_count' => (int) ($final['csv_row_count'] ?? 0),
-            'final_csv_error' => (string) ($final['csv_error'] ?? ''),
-            'found_only_csv_generated' => (bool) ($foundOnly['csv_generated'] ?? false),
-            'found_only_csv_path' => (string) ($foundOnly['csv_path'] ?? ''),
-            'found_only_csv_url' => (string) ($foundOnly['csv_url'] ?? ''),
-            'found_only_csv_row_count' => (int) ($foundOnly['csv_row_count'] ?? 0),
-            'found_only_csv_error' => (string) ($foundOnly['csv_error'] ?? ''),
+            'final_csv_generated' => (string) ($export['status'] ?? '') === 'completed',
+            'final_csv_path' => (string) ($export['files']['final']['path'] ?? ''),
+            'final_csv_url' => (string) ($export['files']['final']['url'] ?? ''),
+            'final_csv_row_count' => (int) ($export['row_counts']['final'] ?? 0),
+            'final_csv_error' => (string) ($export['last_error'] ?? ''),
+            'found_only_csv_generated' => (string) ($export['status'] ?? '') === 'completed',
+            'found_only_csv_path' => (string) ($export['files']['found_only']['path'] ?? ''),
+            'found_only_csv_url' => (string) ($export['files']['found_only']['url'] ?? ''),
+            'found_only_csv_row_count' => (int) ($export['row_counts']['found_only'] ?? 0),
+            'found_only_csv_error' => (string) ($export['last_error'] ?? ''),
         ];
+    }
+
+    /** @return array<string, mixed> */
+    public function start_final_export(string $runId, int $chunkSize = 250): array
+    {
+        $runId = $runId !== '' ? $runId : $this->run_id('ktype_backfill_final');
+        $directory = $this->audit_directory();
+        if ($directory === '' || (!is_dir($directory) && !wp_mkdir_p($directory))) {
+            return $this->save_final_export_checkpoint(['export_run_id' => $runId, 'status' => 'error', 'last_error' => 'Unable to create audit CSV directory.']);
+        }
+        $stamp = gmdate('Ymd-His');
+        $files = [
+            'final' => $this->export_file($directory, sprintf('gps-fitment-ktype-final-%s-%s.csv', $stamp, $runId)),
+            'found_only' => $this->export_file($directory, sprintf('gps-fitment-ktype-found-only-%s-%s.csv', $stamp, $runId)),
+        ];
+        $state = [
+            'export_run_id' => $runId, 'status' => 'running', 'offset' => 0, 'last_processed_id' => 0,
+            'total_rows' => $this->database->product_map_count_for_export(), 'chunk_size' => max(1, min(500, $chunkSize)),
+            'files' => $files, 'row_counts' => ['final' => 0, 'found_only' => 0],
+            'headers_written' => ['final' => false, 'found_only' => false],
+            'started_at' => gmdate('c'), 'updated_at' => gmdate('c'), 'last_error' => '',
+        ];
+        return $this->save_final_export_checkpoint($state);
+    }
+
+    /** @return array<string, mixed> */
+    public function process_final_export_chunk(string $runId = '', int $chunkSize = 250): array
+    {
+        $state = $this->final_export_checkpoint($runId);
+        if (!$state || (string) ($state['status'] ?? '') === 'completed') { return $state ?: $this->start_final_export($runId, $chunkSize); }
+        if ((string) ($state['status'] ?? '') === 'error') { return $state; }
+        try {
+            $limit = max(1, min(500, (int) ($chunkSize ?: ($state['chunk_size'] ?? 250))));
+            $rows = $this->database->product_map_page_for_export((int) ($state['last_processed_id'] ?? 0), $limit);
+            $this->append_headers_once($state);
+            foreach ($rows as $map) {
+                $currentId = (int) ($map['id'] ?? 0);
+                $partCacheId = (int) ($map['part_cache_id'] ?? 0);
+                $vehicleIds = $partCacheId > 0 ? $this->database->vehicle_ids_for_part_cache($partCacheId) : [];
+                $full = $this->row_from_product_map($runId ?: (string) $state['export_run_id'], $map, $vehicleIds);
+                $this->append_csv_row((string) $state['files']['final']['path'], self::COLUMNS, $full);
+                $state['row_counts']['final']++;
+                if ($vehicleIds && in_array((string) ($map['status'] ?? ''), ['found', 'skipped_cached'], true)) {
+                    $this->append_csv_row((string) $state['files']['found_only']['path'], ['product_id','part_number_normalized','ktype_count','vehicle_ids'], [
+                        'product_id' => (string) ($map['product_id'] ?? ''), 'part_number_normalized' => (string) ($map['part_number_normalized'] ?? ''), 'ktype_count' => (string) count($vehicleIds), 'vehicle_ids' => implode(',', $vehicleIds),
+                    ]);
+                    $state['row_counts']['found_only']++;
+                }
+                $state['last_processed_id'] = $currentId; $state['offset']++;
+            }
+            if (count($rows) < $limit) { $state['status'] = 'completed'; }
+            $state['updated_at'] = gmdate('c'); $state['memory_usage'] = memory_get_usage(true);
+        } catch (\Throwable $e) {
+            $state['status'] = 'error'; $state['last_error'] = $e->getMessage(); $state['memory_usage'] = memory_get_usage(true); $state['updated_at'] = gmdate('c');
+            error_log('GPS final export failed at offset ' . (int) ($state['offset'] ?? 0) . ': ' . $e->getMessage());
+        }
+        return $this->save_final_export_checkpoint($state);
+    }
+
+
+    /** @param array<string,mixed> $state @param array<string,mixed> $checkpoint */
+    private function append_rejected_rows_from_scanner(array &$state, array $checkpoint, ProductScanner $scanner, string $runId): void
+    {
+        $startOffset = max(0, (int) ($checkpoint['start_offset'] ?? 0));
+        $finalOffset = max($startOffset, (int) ($checkpoint['next_offset'] ?? $startOffset));
+        for ($offset = $startOffset; $offset < $finalOffset; $offset++) {
+            $scan = $scanner->scan(1, $offset, false);
+            foreach (($scan['rejected_rows'] ?? []) as $candidate) {
+                if (!is_array($candidate)) { continue; }
+                $this->append_csv_row((string) $state['files']['final']['path'], self::COLUMNS, $this->row_from_rejected_candidate($runId, 'ktype_auto_runner_final', $candidate));
+                $state['row_counts']['final']++;
+            }
+        }
+    }
+
+    /** @return array<string, mixed> */
+    public function final_export_checkpoint(string $runId = ''): array
+    {
+        $state = get_option(self::FINAL_EXPORT_OPTION, []);
+        if (!is_array($state)) { return []; }
+        if ($runId !== '' && (string) ($state['export_run_id'] ?? '') !== $runId) { return []; }
+        return $state;
+    }
+
+    /** @param array<string,mixed> $state @return array<string,mixed> */
+    private function save_final_export_checkpoint(array $state): array
+    { update_option(self::FINAL_EXPORT_OPTION, $state, false); return $state; }
+
+    /** @return array<string,string> */
+    private function export_file(string $directory, string $filename): array
+    { $basename = sanitize_file_name($filename); return ['path' => $directory . '/' . $basename, 'url' => $this->audit_url($basename)]; }
+
+    /** @param array<string,mixed> $state */
+    private function append_headers_once(array &$state): void
+    {
+        if (empty($state['headers_written']['final'])) { $this->append_csv_row((string) $state['files']['final']['path'], self::COLUMNS, array_combine(self::COLUMNS, self::COLUMNS) ?: []); $state['headers_written']['final'] = true; }
+        if (empty($state['headers_written']['found_only'])) { $cols=['product_id','part_number_normalized','ktype_count','vehicle_ids']; $this->append_csv_row((string) $state['files']['found_only']['path'], $cols, array_combine($cols, $cols) ?: []); $state['headers_written']['found_only'] = true; }
+    }
+
+    /** @param string[] $columns @param array<string,mixed> $row */
+    private function append_csv_row(string $path, array $columns, array $row): void
+    { $h = fopen($path, 'ab'); if (!$h) { throw new \RuntimeException('Unable to open CSV file for append: ' . $path); } fputcsv($h, array_map(static fn(string $c): string => (string) ($row[$c] ?? ''), $columns)); fclose($h); }
+
+    /** @param string[] $vehicleIds @return array<string,string|int|bool|null> */
+    private function row_from_product_map(string $runId, array $map, array $vehicleIds): array
+    {
+        $row = $this->empty_row($runId, 'ktype_auto_runner_final', [
+            'product_id' => (int) ($map['product_id'] ?? 0), 'sku' => (string) ($map['sku'] ?? ''), 'source_field' => (string) ($map['source_field'] ?? ''),
+            'source_raw' => (string) ($map['part_number_raw'] ?? ''), 'part_number_raw' => (string) ($map['part_number_raw'] ?? ''), 'part_number_normalized' => (string) ($map['part_number_normalized'] ?? ''), 'warnings' => [],
+        ]);
+        $status = (string) ($map['status'] ?? 'pending');
+        $row['validation_status'] = 'accepted'; $row['cache_status'] = $status === 'pending' ? 'miss' : 'hit'; $row['lookup_status'] = $status;
+        $row['vehicle_count'] = count($vehicleIds); $row['unique_vehicle_ids'] = implode(',', $vehicleIds); $row['ktype_count'] = count($vehicleIds);
+        $row['from_cache'] = $status === 'pending' ? 'no' : 'yes'; $row['part_cache_id'] = (int) ($map['part_cache_id'] ?? 0) ?: '';
+        return $row;
     }
 
     /**
