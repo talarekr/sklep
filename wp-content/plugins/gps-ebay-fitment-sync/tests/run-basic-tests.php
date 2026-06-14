@@ -228,6 +228,12 @@ final class FakeWpdb
             }));
         }
 
+        if (preg_match("/SELECT \* FROM (\S+) WHERE run_id='([^']*)' AND id > (\d+) ORDER BY id ASC LIMIT (\d+)/", $query, $matches)) {
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2] && (int) ($row['id'] ?? 0) > (int) $matches[3]));
+            usort($rows, fn(array $a, array $b): int => (int) $a['id'] <=> (int) $b['id']);
+            return array_slice($rows, 0, (int) $matches[4]);
+        }
+
         if (preg_match('/SELECT \* FROM (\S+) WHERE id > (\d+) ORDER BY id ASC LIMIT (\d+)/', $query, $matches)) {
             $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], fn(array $row): bool => (int) ($row['id'] ?? 0) > (int) $matches[2]));
             usort($rows, fn(array $a, array $b): int => (int) $a['id'] <=> (int) $b['id']);
@@ -1522,6 +1528,100 @@ assert_same(4, $duplicateLive['checkpoint']['attempt_offset'] ?? 0, 'repeated li
 assert_same(2, $GLOBALS['gps_test_http_calls'], 'repeated live tick does not add Inventory API calls when next product is blocked before write');
 $validatedBatchRunner = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner($previewService, new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService));
 $GLOBALS['gps_test_http_calls'] = 0;
+$liveTest = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest($previewService);
+$GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_last_inventory_request'] = [];
+$inventoryLive = $liveTest->run(2080, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('success', $inventoryLive['results']['EBAY_FR']['status'] ?? '', 'inventory live treats 2xx product compatibility response as success');
+assert_same(true, $inventoryLive['results']['EBAY_FR']['attempted'] ?? false, 'inventory live attempts write after identifiers and confirmation pass');
+assert_same('PUT', $GLOBALS['gps_test_last_inventory_request']['method'] ?? '', 'inventory live uses PUT method');
+assert_same(false, array_key_exists('marketplaceId', $GLOBALS['gps_test_last_inventory_request']['body'] ?? []), 'inventory live payload does not include marketplaceId');
+assert_same('fr-FR', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Language'] ?? '', 'inventory live sends fr-FR Content-Language for EBAY_FR');
+assert_same('EBAY_FR', $GLOBALS['gps_test_last_inventory_request']['headers']['X-EBAY-C-MARKETPLACE-ID'] ?? '', 'inventory live sends EBAY_FR marketplace header');
+assert_same('application/json', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Type'] ?? '', 'inventory live sends application/json Content-Type');
+assert_same('Bearer fr-token', $GLOBALS['gps_test_last_inventory_request']['headers']['Authorization'] ?? '', 'inventory live sends bearer authorization');
+assert_same('20001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory live sends productIdentifier.ktype KTypes');
+assert_same(false, array_key_exists('kTypeValue', $GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0] ?? []), 'inventory live does not use old kTypeValue shape');
+assert_same(82, count($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'] ?? []), 'inventory live sends all cached KTypes');
+assert_same(true, str_contains($inventoryLive['results']['EBAY_FR']['merge_strategy'] ?? '', 'not sent or overwritten'), 'inventory live merge strategy preserves existing offer/inventory fields');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory live makes one Inventory API write and no Apify calls');
+$GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_last_inventory_request'] = [];
+$inventoryDeLive = $liveTest->run(300, 'de', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
+assert_same('success', $inventoryDeLive['results']['EBAY_DE']['status'] ?? '', 'inventory DE live treats 2xx product compatibility response as success');
+assert_same('de-DE', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Language'] ?? '', 'inventory DE live sends de-DE Content-Language');
+assert_same('EBAY_DE', $GLOBALS['gps_test_last_inventory_request']['headers']['X-EBAY-C-MARKETPLACE-ID'] ?? '', 'inventory DE live sends EBAY_DE marketplace header');
+assert_same('Bearer de-token', $GLOBALS['gps_test_last_inventory_request']['headers']['Authorization'] ?? '', 'inventory DE live sends DE bearer authorization');
+assert_same('10001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory DE live sends productIdentifier.ktype KTypes');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory DE live makes one Inventory API write and no Apify calls');
+
+
+
+// Inventory remap validation decision tests.
+$remapAudit = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService);
+$GLOBALS['gps_test_inventory_offers_by_id'] = [
+    '180394514011' => ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
+    '163638154011' => ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
+    'OFFER-ENDED' => ['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']],
+];
+$GLOBALS['gps_test_inventory_offers_by_sku'] = [
+    'GPSW-2177' => [
+        ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
+        ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
+    ],
+    'SKU-ENDED' => [['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']]],
+];
+$fr2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_fr_item_id'=>'800119556464','ebay_fr_offer_id'=>'180394514011','ebay_fr_inventory_item_sku'=>'GPSW-2177','ebay_fr_status'=>'active'];
+$GLOBALS['gps_test_inventory_read_calls'] = [];
+$frAudit = $remapAudit->audit_row($fr2177, 'EBAY_FR');
+$frReadUrls = implode(' ', array_map(static fn(array $call): string => $call['url'] ?? '', $GLOBALS['gps_test_inventory_read_calls'] ?? []));
+assert_same(true, str_contains($frReadUrls, '/sell/inventory/v1/offer/180394514011') && str_contains($frReadUrls, '/sell/inventory/v1/offer?sku=GPSW-2177') && str_contains($frReadUrls, 'marketplace_id=EBAY_FR'), 'remap validation compares GET offer by offer_id with GET offer by sku and marketplace');
+assert_same('800119556464', $frAudit['live_listing_id'] ?? '', 'remap uses Inventory API listingId as public item ID, not offer_id');
+assert_same('180394514011', $frAudit['live_offer_id'] ?? '', 'remap keeps offer_id separate from public item ID');
+assert_same('https://www.ebay.fr/itm/800119556464', $frAudit['live_listing_url'] ?? '', 'FR public listing URL uses listingId/item_id');
+assert_same('writable', $frAudit['validation_decision'] ?? '', 'active published FR listing passes validation');
+assert_same(true, str_contains($frAudit['validation_detail'] ?? '', 'listingId 800119556464'), 'successful validation detail names the confirmed listingId');
+assert_same(false, ($frAudit['live_listing_id'] ?? '') === ($frAudit['live_offer_id'] ?? ''), 'offer_id is never treated as public item_id');
+$de2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_de_item_id'=>'389993640108','ebay_de_offer_id'=>'163638154011','ebay_de_inventory_item_sku'=>'GPSW-2177','ebay_de_status'=>'active'];
+$deAudit = $remapAudit->audit_row($de2177, 'EBAY_DE');
+assert_same('https://www.ebay.de/itm/389993640108', $deAudit['live_listing_url'] ?? '', 'DE public listing URL uses listingId/item_id');
+assert_same('writable', $deAudit['validation_decision'] ?? '', 'active published DE listing passes validation');
+$staleFr = $fr2177; $staleFr['ebay_fr_item_id'] = '180394514011';
+$staleValidation = $remapAudit->validate_before_write($staleFr, 'EBAY_FR');
+assert_same(false, $staleValidation['ok'] ?? true, 'stale mapping blocks validation');
+assert_same('stale_or_unconfirmed_listing_mapping', $staleValidation['blocked_reason'] ?? '', 'stale mapping returns expected block reason');
+assert_same(true, str_contains($staleValidation['audit']['validation_detail'] ?? '', 'listing_id mismatch local=180394514011 live=800119556464'), 'stale mapping detail explains exact item/listing mismatch');
+$endedAudit = $remapAudit->audit_row(['product_id'=>400,'product_title'=>'ended','part_number_normalized'=>'END','ktype_count'=>'1','ebay_de_item_id'=>'DE-ENDED','ebay_de_offer_id'=>'OFFER-ENDED','ebay_de_inventory_item_sku'=>'SKU-ENDED','ebay_de_status'=>'active'], 'EBAY_DE');
+assert_same('blocked', $endedAudit['validation_decision'] ?? '', 'ended listings remain blocked');
+assert_same('current_listing_not_found', $endedAudit['suggested_action'] ?? '', 'ended listings report current listing not found');
+assert_same(true, str_contains($endedAudit['validation_detail'] ?? '', 'not active/published'), 'ended listing detail explains inactive listing');
+
+$fr2080 = ['product_id'=>2080,'product_title'=>'2080','part_number_normalized'=>'GPSW','ktype_count'=>'82','vehicle_ids'=>'10001,10002','ebay_fr_item_id'=>'800119101706','ebay_fr_offer_id'=>'180353008011','ebay_fr_inventory_item_sku'=>'GPSW-2080','ebay_fr_status'=>'active'];
+$GLOBALS['gps_test_inventory_offers_by_id']['180353008011'] = ['offerId'=>'180353008011','sku'=>'GPSW-2080','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119101706','listingStatus'=>'ACTIVE'],'availableQuantity'=>9];
+$GLOBALS['gps_test_inventory_offers_by_sku']['GPSW-2080'] = [['offerId'=>'180353008011','sku'=>'GPSW-2080','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','availableQuantity'=>9]];
+$GLOBALS['gps_test_inventory_read_calls'] = [];
+$fr2080Audit = $remapAudit->audit_row($fr2080, 'EBAY_FR');
+$fr2080ReadUrls = implode(' ', array_map(static fn(array $call): string => $call['url'] ?? '', $GLOBALS['gps_test_inventory_read_calls'] ?? []));
+assert_same(true, str_contains($fr2080ReadUrls, '/sell/inventory/v1/offer/180353008011') && str_contains($fr2080ReadUrls, '/sell/inventory/v1/offer?sku=GPSW-2080') && str_contains($fr2080ReadUrls, '/sell/inventory/v1/inventory_item/GPSW-2080'), '2080-style FR validation reads offer id, sku/marketplace offers, and inventory item');
+assert_same('writable', $fr2080Audit['validation_decision'] ?? '', '2080-style FR active published listing passes validation when direct offer confirms listingId');
+assert_same('800119101706', $fr2080Audit['live_listing_id'] ?? '', '2080-style FR live listingId is preserved from direct offer');
+assert_same('180353008011', $fr2080Audit['live_offer_id'] ?? '', '2080-style FR live offer id stays separate from listingId');
+assert_same('EBAY_FR', $fr2080Audit['live_marketplace_id'] ?? '', '2080-style FR live marketplace is exported');
+$de2080 = ['product_id'=>2080,'product_title'=>'2080','part_number_normalized'=>'GPSW','ktype_count'=>'82','ebay_de_item_id'=>'389993224459','ebay_de_offer_id'=>'163579464011','ebay_de_inventory_item_sku'=>'GPSW-2080','ebay_de_status'=>'active'];
+$GLOBALS['gps_test_inventory_offers_by_id']['163579464011'] = ['offerId'=>'163579464011','sku'=>'GPSW-2080','marketplaceId'=>'EBAY_DE','status'=>'UNPUBLISHED','listing'=>['listingId'=>'389993224459','listingStatus'=>'UNPUBLISHED']];
+$GLOBALS['gps_test_inventory_offers_by_sku']['GPSW-2080'][] = ['offerId'=>'163579464011','sku'=>'GPSW-2080','marketplaceId'=>'EBAY_DE','status'=>'UNPUBLISHED','listing'=>['listingId'=>'389993224459','listingStatus'=>'UNPUBLISHED']];
+$de2080Audit = $remapAudit->audit_row($de2080, 'EBAY_DE');
+assert_same('blocked', $de2080Audit['validation_decision'] ?? '', '2080-style DE unpublished listing remains blocked');
+assert_same(true, ($de2080Audit['validation_detail'] ?? '') !== '' && str_contains($de2080Audit['validation_detail'] ?? '', 'UNPUBLISHED'), 'stale_or_unconfirmed diagnostics include exact unpublished detail');
+$runnerForCsv = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner($previewService, $remapAudit);
+$csvValidation = $runnerForCsv->run_batch(['mode'=>'live','confirmation'=>GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION,'marketplace'=>'de','batch_size'=>1,'run_id'=>'csv-debug-regression','reset'=>1]);
+$csvResult = $runnerForCsv->export_csv('csv-debug-regression');
+$csvHandle = fopen($csvResult['path'], 'rb');
+$csvHeaders = fgetcsv($csvHandle); fclose($csvHandle);
+foreach (['local_item_id','local_offer_id','local_sku','local_listing_status','live_item_id','live_listing_id','live_offer_id','live_offer_status','live_listing_status','live_listing_url','live_available_quantity','live_marketplace_id','validation_decision','validation_detail'] as $debugColumn) {
+    assert_same(true, in_array($debugColumn, $csvHeaders, true), 'auto-runner CSV includes validation debug column ' . $debugColumn);
+}
+
 $GLOBALS['gps_test_inventory_offers_by_id'] = [];
 $GLOBALS['gps_test_inventory_offers_by_sku'] = [];
 $blockedTickOne = $validatedBatchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'run_id' => 'blocked-repeat-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
@@ -1658,72 +1758,7 @@ $inventoryMissingSku = $liveTest->run(305, 'fr', false, GPS_Ebay_Fitment_Sync\Se
 assert_same('missing_inventory_item_sku', $inventoryMissingSku['results']['EBAY_FR']['blocked_reason'] ?? '', 'inventory live blocks missing inventory_item_sku');
 $inventoryBadConfirm = $liveTest->run(2080, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION, 'inventory');
 assert_same('live_confirmation_required', $inventoryBadConfirm['results']['EBAY_FR']['error'] ?? '', 'inventory live requires exact UPDATE EBAY INVENTORY FITMENT confirmation');
-$GLOBALS['gps_test_http_calls'] = 0;
-$GLOBALS['gps_test_last_inventory_request'] = [];
-$inventoryLive = $liveTest->run(2080, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
-assert_same('success', $inventoryLive['results']['EBAY_FR']['status'] ?? '', 'inventory live treats 2xx product compatibility response as success');
-assert_same(true, $inventoryLive['results']['EBAY_FR']['attempted'] ?? false, 'inventory live attempts write after identifiers and confirmation pass');
-assert_same('PUT', $GLOBALS['gps_test_last_inventory_request']['method'] ?? '', 'inventory live uses PUT method');
-assert_same(false, array_key_exists('marketplaceId', $GLOBALS['gps_test_last_inventory_request']['body'] ?? []), 'inventory live payload does not include marketplaceId');
-assert_same('fr-FR', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Language'] ?? '', 'inventory live sends fr-FR Content-Language for EBAY_FR');
-assert_same('EBAY_FR', $GLOBALS['gps_test_last_inventory_request']['headers']['X-EBAY-C-MARKETPLACE-ID'] ?? '', 'inventory live sends EBAY_FR marketplace header');
-assert_same('application/json', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Type'] ?? '', 'inventory live sends application/json Content-Type');
-assert_same('Bearer fr-token', $GLOBALS['gps_test_last_inventory_request']['headers']['Authorization'] ?? '', 'inventory live sends bearer authorization');
-assert_same('20001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory live sends productIdentifier.ktype KTypes');
-assert_same(false, array_key_exists('kTypeValue', $GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0] ?? []), 'inventory live does not use old kTypeValue shape');
-assert_same(82, count($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'] ?? []), 'inventory live sends all cached KTypes');
-assert_same(true, str_contains($inventoryLive['results']['EBAY_FR']['merge_strategy'] ?? '', 'not sent or overwritten'), 'inventory live merge strategy preserves existing offer/inventory fields');
-assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory live makes one Inventory API write and no Apify calls');
-$GLOBALS['gps_test_http_calls'] = 0;
-$GLOBALS['gps_test_last_inventory_request'] = [];
-$inventoryDeLive = $liveTest->run(300, 'de', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
-assert_same('success', $inventoryDeLive['results']['EBAY_DE']['status'] ?? '', 'inventory DE live treats 2xx product compatibility response as success');
-assert_same('de-DE', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Language'] ?? '', 'inventory DE live sends de-DE Content-Language');
-assert_same('EBAY_DE', $GLOBALS['gps_test_last_inventory_request']['headers']['X-EBAY-C-MARKETPLACE-ID'] ?? '', 'inventory DE live sends EBAY_DE marketplace header');
-assert_same('Bearer de-token', $GLOBALS['gps_test_last_inventory_request']['headers']['Authorization'] ?? '', 'inventory DE live sends DE bearer authorization');
-assert_same('10001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory DE live sends productIdentifier.ktype KTypes');
-assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory DE live makes one Inventory API write and no Apify calls');
 
-
-
-// Inventory remap validation decision tests.
-$remapAudit = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService);
-$GLOBALS['gps_test_inventory_offers_by_id'] = [
-    '180394514011' => ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
-    '163638154011' => ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
-    'OFFER-ENDED' => ['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']],
-];
-$GLOBALS['gps_test_inventory_offers_by_sku'] = [
-    'GPSW-2177' => [
-        ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
-        ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
-    ],
-    'SKU-ENDED' => [['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']]],
-];
-$fr2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_fr_item_id'=>'800119556464','ebay_fr_offer_id'=>'180394514011','ebay_fr_inventory_item_sku'=>'GPSW-2177','ebay_fr_status'=>'active'];
-$GLOBALS['gps_test_inventory_read_calls'] = [];
-$frAudit = $remapAudit->audit_row($fr2177, 'EBAY_FR');
-$frReadUrls = implode(' ', array_map(static fn(array $call): string => $call['url'] ?? '', $GLOBALS['gps_test_inventory_read_calls'] ?? []));
-assert_same(true, str_contains($frReadUrls, '/sell/inventory/v1/offer/180394514011') && str_contains($frReadUrls, '/sell/inventory/v1/offer?sku=GPSW-2177') && str_contains($frReadUrls, 'marketplace_id=EBAY_FR'), 'remap validation compares GET offer by offer_id with GET offer by sku and marketplace');
-assert_same('800119556464', $frAudit['live_listing_id'] ?? '', 'remap uses Inventory API listingId as public item ID, not offer_id');
-assert_same('180394514011', $frAudit['live_offer_id'] ?? '', 'remap keeps offer_id separate from public item ID');
-assert_same('https://www.ebay.fr/itm/800119556464', $frAudit['live_listing_url'] ?? '', 'FR public listing URL uses listingId/item_id');
-assert_same('writable', $frAudit['validation_decision'] ?? '', 'active published FR listing passes validation');
-assert_same(true, str_contains($frAudit['validation_detail'] ?? '', 'listingId 800119556464'), 'successful validation detail names the confirmed listingId');
-assert_same(false, ($frAudit['live_listing_id'] ?? '') === ($frAudit['live_offer_id'] ?? ''), 'offer_id is never treated as public item_id');
-$de2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_de_item_id'=>'389993640108','ebay_de_offer_id'=>'163638154011','ebay_de_inventory_item_sku'=>'GPSW-2177','ebay_de_status'=>'active'];
-$deAudit = $remapAudit->audit_row($de2177, 'EBAY_DE');
-assert_same('https://www.ebay.de/itm/389993640108', $deAudit['live_listing_url'] ?? '', 'DE public listing URL uses listingId/item_id');
-assert_same('writable', $deAudit['validation_decision'] ?? '', 'active published DE listing passes validation');
-$staleFr = $fr2177; $staleFr['ebay_fr_item_id'] = '180394514011';
-$staleValidation = $remapAudit->validate_before_write($staleFr, 'EBAY_FR');
-assert_same(false, $staleValidation['ok'] ?? true, 'stale mapping blocks validation');
-assert_same('stale_or_unconfirmed_listing_mapping', $staleValidation['blocked_reason'] ?? '', 'stale mapping returns expected block reason');
-assert_same(true, str_contains($staleValidation['audit']['validation_detail'] ?? '', 'listing_id mismatch local=180394514011 live=800119556464'), 'stale mapping detail explains exact item/listing mismatch');
-$endedAudit = $remapAudit->audit_row(['product_id'=>400,'product_title'=>'ended','part_number_normalized'=>'END','ktype_count'=>'1','ebay_de_item_id'=>'DE-ENDED','ebay_de_offer_id'=>'OFFER-ENDED','ebay_de_inventory_item_sku'=>'SKU-ENDED','ebay_de_status'=>'active'], 'EBAY_DE');
-assert_same('blocked', $endedAudit['validation_decision'] ?? '', 'ended listings remain blocked');
-assert_same('current_listing_not_found', $endedAudit['suggested_action'] ?? '', 'ended listings report current listing not found');
-assert_same(true, str_contains($endedAudit['validation_detail'] ?? '', 'not active/published'), 'ended listing detail explains inactive listing');
 $GLOBALS['gps_test_inventory_offers_by_id'] = [];
 $GLOBALS['gps_test_inventory_offers_by_sku'] = [];
 
