@@ -80,13 +80,18 @@ final class EbayFitmentPreview
             GROUP BY pm.product_id, pm.sku, pm.part_number_normalized, pm.part_cache_id, p.post_title
             ORDER BY pm.product_id ASC
             LIMIT %d OFFSET %d";
-        $dbRows = $wpdb->get_results($wpdb->prepare($sql, $limit, $offset), ARRAY_A) ?: [];
+        $queryLimit = $limit * 3;
+        $dbRows = $wpdb->get_results($wpdb->prepare($sql, $queryLimit, $offset), ARRAY_A) ?: [];
         $candidates = [];
+        $seenProducts = [];
         foreach ($dbRows as $row) {
+            $productId = (int) ($row['product_id'] ?? 0);
+            if ($productId <= 0 || isset($seenProducts[$productId])) { continue; }
+            $seenProducts[$productId] = true;
             $vehicles = $this->vehicle_ids_from_row(['vehicle_ids' => (string) ($row['vehicle_ids'] ?? '')]);
             if (!$vehicles) { $vehicles = $this->vehicle_ids((int) ($row['part_cache_id'] ?? 0)); }
             $candidate = [
-                'product_id' => (string) (int) ($row['product_id'] ?? 0),
+                'product_id' => (string) $productId,
                 'product_title' => trim((string) ($row['product_title'] ?? '')),
                 'sku' => (string) ($row['sku'] ?? ''),
                 'part_number_normalized' => (string) ($row['part_number_normalized'] ?? ''),
@@ -97,7 +102,7 @@ final class EbayFitmentPreview
             ];
             foreach ($markets as $market) {
                 $prefix = $market === 'fr' ? 'ebay_fr' : 'ebay_de';
-                $mapping = $this->mapping_listing((int) ($row['product_id'] ?? 0), $market);
+                $mapping = $this->mapping_listing($productId, $market);
                 $candidate[$prefix . '_item_id'] = trim((string) (($row[$prefix . '_item_id'] ?? '') ?: $mapping['item_id']));
                 $candidate[$prefix . '_status'] = trim((string) (($row[$prefix . '_status'] ?? '') ?: $mapping['status']));
                 $candidate[$prefix . '_offer_id'] = trim((string) (($row[$prefix . '_offer_id'] ?? '') ?: $mapping['offer_id']));
@@ -105,6 +110,7 @@ final class EbayFitmentPreview
                 $candidate[$prefix . '_listing_management_type'] = ($candidate[$prefix . '_offer_id'] !== '' || $candidate[$prefix . '_inventory_item_sku'] !== '') ? 'inventory' : ($candidate[$prefix . '_item_id'] !== '' ? 'trading' : 'unknown');
             }
             $candidates[] = $candidate;
+            if (count($candidates) >= $limit) { break; }
         }
 
         return [

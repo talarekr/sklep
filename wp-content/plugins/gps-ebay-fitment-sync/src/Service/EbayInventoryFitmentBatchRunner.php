@@ -48,15 +48,26 @@ final class EbayInventoryFitmentBatchRunner
         $counters = $this->empty_counters();
         $totalAttempts = $batchSize * count($selection);
         $loaded = $this->preview->inventory_batch_candidates($marketplaceArg, $productOffset, $batchSize);
-        $candidates = $loaded['rows'] ?? [];
+        $candidates = $this->dedupe_candidates_by_product($loaded['rows'] ?? []);
         $attemptsBuilt = 0;
+        $attemptKeys = [];
+        $skipExistingRunAttempts = empty($args['reset']);
         foreach ($candidates as $candidateIndex => $row) {
             foreach ($selection as $marketIndex => $market) {
                 if ($candidateIndex === 0 && $marketIndex < $marketStart) { continue; }
                 if ($attemptsBuilt >= $totalAttempts || $stop) { break 2; }
+                $productId = (int) ($row['product_id'] ?? 0);
+                $attemptKey = $productId . '|' . $market;
+                if (isset($attemptKeys[$attemptKey])) { continue; }
+                $attemptKeys[$attemptKey] = true;
                 $absoluteAttempt = $attemptOffset + $attemptsBuilt;
                 $counters['scanned_products'] = max($counters['scanned_products'], $productOffset + $candidateIndex + 1);
-                $attempt = $this->process_attempt($runId, $row, $market, $mode, !empty($args['retry_errors']));
+                if ($skipExistingRunAttempts && $this->has_run_attempt($runId, $productId, $market)) {
+                    $attemptsBuilt++;
+                    $this->save_checkpoint(['run_id'=>$runId,'status'=>'running','mode'=>$mode,'marketplace'=>implode(',', $selection),'batch_size'=>$batchSize,'attempt_offset'=>$absoluteAttempt + 1,'product_offset'=>intdiv($absoluteAttempt + 1, count($selection)),'current_product_id'=>$productId,'current_marketplace'=>$market,'updated_at'=>current_time('mysql')]);
+                    continue;
+                }
+                $attempt = $this->process_attempt($runId, $row, $market, $mode, !empty($args['retry_errors']), $skipExistingRunAttempts);
                 $rows[] = $attempt;
                 $attemptsBuilt++;
                 $this->tally($counters, $attempt);
@@ -89,7 +100,7 @@ final class EbayInventoryFitmentBatchRunner
     public function reset(): array { delete_option(self::CHECKPOINT_OPTION); return []; }
     public function checkpoint(): array { $cp = get_option(self::CHECKPOINT_OPTION, []); return is_array($cp) ? $cp : []; }
 
-    private function process_attempt(string $runId, array $row, string $market, string $mode, bool $retryErrors): array
+    private function process_attempt(string $runId, array $row, string $market, string $mode, bool $retryErrors, bool $skipExistingRunAttempts = true): array
     {
         $prefix = $market === 'EBAY_FR' ? 'ebay_fr' : 'ebay_de';
         $productId = (int) $row['product_id'];
@@ -100,7 +111,7 @@ final class EbayInventoryFitmentBatchRunner
         $listingType = (string) ($row[$prefix . '_listing_management_type'] ?? 'unknown');
         $endpoint = self::METHOD . ' /sell/inventory/v1/inventory_item/' . ($sku !== '' ? rawurlencode($sku) : '{inventory_item_sku}') . '/product_compatibility';
         $blocked = '';
-        if ($this->already_processed($runId, $productId, $market, $retryErrors)) { $blocked = 'already_processed'; }
+        if ($skipExistingRunAttempts && $this->already_processed($runId, $productId, $market, $retryErrors)) { $blocked = 'already_processed'; }
         elseif ($productId <= 0) { $blocked = 'product_not_found_or_not_mapped'; }
         elseif (!$kt) { $blocked = 'missing_ktypes'; }
         elseif ($listingType !== 'inventory') { $blocked = 'trading_listing_not_supported'; }
@@ -143,13 +154,15 @@ final class EbayInventoryFitmentBatchRunner
     private function payload(array $kt): array { return ['compatibleProducts'=>array_map(static fn(string $id): array => ['productIdentifier'=>['ktype'=>$id]], array_values(array_map('strval', $kt)))]; }
     private function headers_summary(string $market): array { return ['Authorization'=>'Bearer [redacted]','Content-Type'=>'application/json','Accept'=>'application/json','Content-Language'=>$market === 'EBAY_FR' ? 'fr-FR' : 'de-DE','X-EBAY-C-MARKETPLACE-ID'=>$market]; }
     private function summary(mixed $data): string { $json = is_string($data) ? $data : wp_json_encode($data, JSON_UNESCAPED_SLASHES); return strlen((string)$json) > 6000 ? substr((string)$json,0,6000).'…' : (string)$json; }
-    private function already_processed(string $runId, int $productId, string $market, bool $retryErrors): bool { global $wpdb; $t=Database::table_names()['ebay_sync_log']; $statuses = "'success','warning_success'"; return (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t} WHERE run_id=%s AND product_id=%d AND marketplace=%s AND api_mode='inventory' AND mode='live' AND status IN ({$statuses})", $runId, $productId, $market)) > 0; }
+    private function already_processed(string $runId, int $productId, string $market, bool $retryErrors): bool { return $this->has_run_attempt($runId, $productId, $market); }
+    private function has_run_attempt(string $runId, int $productId, string $market): bool { global $wpdb; if ($runId === '' || $productId <= 0 || $market === '') { return false; } $t=Database::table_names()['ebay_sync_log']; $statuses = "'success','warning_success','preview','blocked','already_processed'"; return (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t} WHERE run_id=%s AND product_id=%d AND marketplace=%s AND api_mode='inventory' AND status IN ({$statuses})", $runId, $productId, $market)) > 0; }
+    private function dedupe_candidates_by_product(array $candidates): array { $out=[]; $seen=[]; foreach ($candidates as $candidate) { if (!is_array($candidate)) { continue; } $productId=(int)($candidate['product_id'] ?? 0); if ($productId <= 0 || isset($seen[$productId])) { continue; } $seen[$productId]=true; $out[]=$candidate; } return $out; }
     private function insert_log(array $r): int { global $wpdb; $wpdb->insert(Database::table_names()['ebay_sync_log'], ['run_id'=>$r['run_id'],'product_id'=>$r['product_id'],'marketplace'=>$r['marketplace'],'ebay_item_id'=>$r['item_id'],'api_mode'=>'inventory','endpoint'=>$r['endpoint'],'method'=>'PUT','offer_id'=>$r['offer_id'],'inventory_item_sku'=>$r['inventory_item_sku'],'part_number_normalized'=>$r['part_number_normalized'],'ktype_count'=>$r['ktype_count'],'mode'=>$r['mode'],'attempted'=>$r['attempted']==='true'?1:0,'http_status'=>$r['http_status'],'blocked_reason'=>$r['blocked_reason'],'warnings'=>$r['warnings'],'status'=>$r['status'],'request_summary'=>wp_json_encode(['headers'=>$r['headers_summary'],'payload'=>$r['payload_summary']]),'response_summary'=>$r['response_summary'],'error_message'=>$r['error_message'],'created_at'=>$r['created_at']]); return (int)$wpdb->insert_id; }
     private function last_rows(string $runId, int $limit): array { global $wpdb; return $wpdb->get_results($wpdb->prepare('SELECT * FROM '.Database::table_names()['ebay_sync_log'].' WHERE run_id=%s ORDER BY id DESC LIMIT %d', $runId, $limit), ARRAY_A) ?: []; }
     private function empty_counters(): array { return array_fill_keys(['scanned_products','marketplace_attempts','eligible','preview','attempted','success','warning_success','blocked','skipped','errors','preview_fr','attempted_fr','success_fr','warning_success_fr','errors_fr','blocked_fr','preview_de','attempted_de','success_de','warning_success_de','errors_de','blocked_de'], 0); }
     private function tally(array &$c, array $r): void { $c['marketplace_attempts']++; if($r['would_update']==='yes')$c['eligible']++; if($r['attempted']==='true')$c['attempted']++; $s=$r['status']; if($s==='preview')$c['preview']++; elseif($s==='success')$c['success']++; elseif($s==='warning_success')$c['warning_success']++; elseif($s==='blocked')$c['blocked']++; elseif($s==='skipped'||$s==='already_processed')$c['skipped']++; elseif($s==='error')$c['errors']++; $mk=$r['marketplace']==='EBAY_FR'?'fr':'de'; if($s==='preview')$c['preview_'.$mk]++; if($r['attempted']==='true')$c['attempted_'.$mk]++; foreach(['success','warning_success'] as $k){ if($s===$k)$c[$k.'_'.$mk]++; } if($s==='error')$c['errors_'.$mk]++; if($s==='blocked')$c['blocked_'.$mk]++; }
     private function save_checkpoint(array $cp): void { update_option(self::CHECKPOINT_OPTION, $cp, false); }
-    public function export_csv(string $runId): array { global $wpdb; $upload=wp_upload_dir(); $dir=trailingslashit($upload['basedir']).'gps-ebay-fitment-sync'; if(!is_dir($dir)){ wp_mkdir_p($dir); } $file=$dir.'/ebay-inventory-fitment-auto-'.$runId.'.csv'; $url=trailingslashit($upload['baseurl']).'gps-ebay-fitment-sync/'.basename($file); $out=fopen($file,'w'); $debugCols=['local_item_id','local_offer_id','local_sku','local_listing_status','live_item_id','live_offer_id','live_offer_status','live_listing_id','live_listing_status','live_listing_url','live_available_quantity','live_marketplace_id','validation_decision','validation_detail']; $cols=array_merge(['run_id','product_id','marketplace','item_id','offer_id','inventory_item_sku','part_number_normalized','ktype_count','sample_ktypes','endpoint','attempted','status','http_status','blocked_reason','warning_count','warnings','error_message','response_summary','created_at'],$debugCols); fputcsv($out,$cols); $lastId=0; $table=Database::table_names()['ebay_sync_log']; do { $rows=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE run_id=%s AND id > %d ORDER BY id ASC LIMIT %d", $runId, $lastId, 500),ARRAY_A) ?: []; foreach($rows as $r){ $lastId=max($lastId,(int)($r['id'] ?? 0)); $audit=$this->audit_from_response((string)($r['response_summary'] ?? '')); fputcsv($out,array_merge([$runId,$r['product_id'],$r['marketplace'],$r['ebay_item_id'],$r['offer_id'],$r['inventory_item_sku'],$r['part_number_normalized'],$r['ktype_count'],'',$r['endpoint'],empty($r['attempted'])?'false':'true',$r['status'],$r['http_status'] ?? '',$r['blocked_reason'] ?? '',substr_count((string)($r['warnings'] ?? ''),'|') + ((string)($r['warnings'] ?? '')!=='' ? 1 : 0),$r['warnings'] ?? '',$r['error_message'] ?? '',$r['response_summary'] ?? '',$r['created_at']], array_map(static fn($c)=>(string)($audit[$c] ?? ''), $debugCols))); } } while (count($rows) === 500); fclose($out); return ['path'=>$file,'url'=>$url,'columns'=>$cols]; }
+    public function export_csv(string $runId): array { global $wpdb; $upload=wp_upload_dir(); $dir=trailingslashit($upload['basedir']).'gps-ebay-fitment-sync'; if(!is_dir($dir)){ wp_mkdir_p($dir); } $file=$dir.'/ebay-inventory-fitment-auto-'.$runId.'.csv'; $url=trailingslashit($upload['baseurl']).'gps-ebay-fitment-sync/'.basename($file); $out=fopen($file,'w'); $debugCols=['local_item_id','local_offer_id','local_sku','local_listing_status','live_item_id','live_offer_id','live_offer_status','live_listing_id','live_listing_status','live_listing_url','live_available_quantity','live_marketplace_id','validation_decision','validation_detail']; $cols=array_merge(['run_id','product_id','marketplace','item_id','offer_id','inventory_item_sku','part_number_normalized','ktype_count','sample_ktypes','endpoint','attempted','status','http_status','blocked_reason','warning_count','warnings','error_message','response_summary','created_at'],$debugCols); fputcsv($out,$cols); $lastId=0; $seenCsvRows=[]; $table=Database::table_names()['ebay_sync_log']; do { $rows=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE run_id=%s AND id > %d ORDER BY id ASC LIMIT %d", $runId, $lastId, 500),ARRAY_A) ?: []; foreach($rows as $r){ $lastId=max($lastId,(int)($r['id'] ?? 0)); $csvKey=(int)($r['product_id'] ?? 0).'|'.(string)($r['marketplace'] ?? ''); if (isset($seenCsvRows[$csvKey])) { continue; } $seenCsvRows[$csvKey]=true; $audit=$this->audit_from_response((string)($r['response_summary'] ?? '')); fputcsv($out,array_merge([$runId,$r['product_id'],$r['marketplace'],$r['ebay_item_id'],$r['offer_id'],$r['inventory_item_sku'],$r['part_number_normalized'],$r['ktype_count'],'',$r['endpoint'],empty($r['attempted'])?'false':'true',$r['status'],$r['http_status'] ?? '',$r['blocked_reason'] ?? '',substr_count((string)($r['warnings'] ?? ''),'|') + ((string)($r['warnings'] ?? '')!=='' ? 1 : 0),$r['warnings'] ?? '',$r['error_message'] ?? '',$r['response_summary'] ?? '',$r['created_at']], array_map(static fn($c)=>(string)($audit[$c] ?? ''), $debugCols))); } } while (count($rows) === 500); fclose($out); return ['path'=>$file,'url'=>$url,'columns'=>$cols]; }
     private function audit_from_response(string $summary): array { $decoded=json_decode($summary, true); return is_array($decoded) && isset($decoded['remap_audit']) && is_array($decoded['remap_audit']) ? $decoded['remap_audit'] : []; }
 
     private function progress_response(string $runId, string $mode, array $selection, int $batchSize, int $totalAttempts, array $rows, array $diagnostics, array $tickCounters = []): array
