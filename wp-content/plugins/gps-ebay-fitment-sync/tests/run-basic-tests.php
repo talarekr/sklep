@@ -365,14 +365,17 @@ final class FakeWpdb
             }
         }
 
-        if (preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id='([^']*)' AND product_id=(\d+) AND marketplace='([^']*)' AND api_mode='inventory' AND mode='live' AND status IN \('success','warning_success'\)/", $query, $matches)
-            || preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id = '([^']*)' AND product_id = (\d+) AND marketplace = '([^']*)' AND api_mode='inventory' AND mode='live' AND status IN \('success','warning_success'\)/", $query, $matches)) {
+        if (preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id='([^']*)' AND product_id=(\d+) AND marketplace='([^']*)' AND api_mode='inventory'(?: AND mode='live')? AND status IN \(([^)]*)\)/", $query, $matches)
+            || preg_match("/SELECT COUNT\(\*\) FROM (\S+) WHERE run_id = '([^']*)' AND product_id = (\d+) AND marketplace = '([^']*)' AND api_mode='inventory'(?: AND mode='live')? AND status IN \(([^)]*)\)/", $query, $matches)) {
+            preg_match_all("/'([^']*)'/", $matches[5], $statusMatches);
+            $statuses = $statusMatches[1] ?: ['success', 'warning_success'];
+            $requiresLive = str_contains($query, "mode='live'");
             return count(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2]
                 && (int) ($row['product_id'] ?? 0) === (int) $matches[3]
                 && (string) ($row['marketplace'] ?? '') === $matches[4]
                 && (string) ($row['api_mode'] ?? '') === 'inventory'
-                && (string) ($row['mode'] ?? '') === 'live'
-                && in_array((string) ($row['status'] ?? ''), ['success', 'warning_success'], true)));
+                && (!$requiresLive || (string) ($row['mode'] ?? '') === 'live')
+                && in_array((string) ($row['status'] ?? ''), $statuses, true)));
         }
 
         return null;
@@ -1520,12 +1523,12 @@ $GLOBALS['gps_test_options']['wei_ebay_settings'] = ['access_token' => 'de-token
 $GLOBALS['gps_test_options']['wei_fr_ebay_settings'] = ['access_token' => 'fr-token', 'expires_at' => time() + 3600];
 $GLOBALS['gps_test_http_calls'] = 0;
 $liveAfterDryRun = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'run_id' => 'batch-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
-assert_same(2, $liveAfterDryRun['counters']['attempted'] ?? 0, 'dry-run preview rows do not block later live run with same run_id');
-assert_same(2, $GLOBALS['gps_test_http_calls'], 'live after dry-run preview makes Inventory API calls and no Apify calls');
+assert_same(0, $liveAfterDryRun['counters']['attempted'] ?? 0, 'dry-run preview rows block duplicate live writes with same run_id');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'live after dry-run preview makes no duplicate Inventory API calls and no Apify calls');
 $duplicateLive = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'run_id' => 'batch-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
-assert_same(true, (int)($duplicateLive['rows'][0]['product_id'] ?? 0) > (int)($liveAfterDryRun['rows'][0]['product_id'] ?? 0), 'repeated live tick resumes after prior processed product instead of reloading it');
+assert_same(0, count($duplicateLive['rows'] ?? []), 'repeated live tick emits no duplicate rows for previously previewed product/marketplace pairs');
 assert_same(4, $duplicateLive['checkpoint']['attempt_offset'] ?? 0, 'repeated live tick advances checkpoint past second product attempts');
-assert_same(2, $GLOBALS['gps_test_http_calls'], 'repeated live tick does not add Inventory API calls when next product is blocked before write');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'repeated live tick does not add Inventory API calls when previous run rows already exist');
 $validatedBatchRunner = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner($previewService, new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService));
 $GLOBALS['gps_test_http_calls'] = 0;
 $liveTest = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest($previewService);
