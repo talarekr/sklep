@@ -383,11 +383,13 @@ if (!function_exists('wp_remote_request')) {
         if ($call === 'GetItem') {
             preg_match('/<ItemID>([^<]+)<\/ItemID>/', $body, $m);
             $item = $m[1] ?? '';
+            if (!empty($GLOBALS['gps_test_ebay_getitem_inventory_error'][$item])) { return new FakeHttpResponse(200, '<GetItemResponse><Ack>Failure</Ack><Errors><ShortMessage>Inventory listing</ShortMessage><LongMessage>Inventory-based listing management is not currently supported by this tool. Please refer to the tool used to create this listing.</LongMessage><ErrorCode>21919303</ErrorCode><SeverityCode>Error</SeverityCode></Errors></GetItemResponse>'); }
             $status = $GLOBALS['gps_test_ebay_getitem_status'][$item] ?? 'Active';
             $end = $status === 'Completed' ? '2026-01-01T00:00:00.000Z' : '2030-01-01T00:00:00.000Z';
             return new FakeHttpResponse(200, '<GetItemResponse><Ack>Success</Ack><Item><SellingStatus><ListingStatus>' . $status . '</ListingStatus></SellingStatus><ListingDetails><EndTime>' . $end . '</EndTime></ListingDetails></Item></GetItemResponse>');
         }
         if ($call === 'ReviseFixedPriceItem') {
+            if (!empty($GLOBALS['gps_test_ebay_revise_inventory_error'])) { return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Failure</Ack><Errors><ShortMessage>Inventory listing</ShortMessage><LongMessage>Inventory-based listing management is not currently supported by this tool. Please refer to the tool used to create this listing.</LongMessage><ErrorCode>21919303</ErrorCode><SeverityCode>Error</SeverityCode></Errors></ReviseFixedPriceItemResponse>'); }
             if (!empty($GLOBALS['gps_test_ebay_revise_error'])) { return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Failure</Ack><Errors><ShortMessage>Bad</ShortMessage><LongMessage>Fatal revise error</LongMessage><ErrorCode>219</ErrorCode><SeverityCode>Error</SeverityCode></Errors></ReviseFixedPriceItemResponse>'); }
             if (!empty($GLOBALS['gps_test_ebay_revise_warning'])) { return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Warning</Ack><Errors><ShortMessage>Funds pending</ShortMessage><LongMessage>Payment funds may be unavailable</LongMessage><ErrorCode>123</ErrorCode><SeverityCode>Warning</SeverityCode></Errors></ReviseFixedPriceItemResponse>'); }
             return new FakeHttpResponse(200, '<ReviseFixedPriceItemResponse><Ack>Success</Ack></ReviseFixedPriceItemResponse>');
@@ -1303,12 +1305,18 @@ $previewWpdb->tables['wp_posts'] = [
     ['ID' => 300, 'post_title' => 'Preview Product 300', 'post_status' => 'publish'],
     ['ID' => 301, 'post_title' => 'Preview Product 301', 'post_status' => 'publish'],
     ['ID' => 302, 'post_title' => 'Preview Product 302', 'post_status' => 'publish'],
+    ['ID' => 304, 'post_title' => 'Missing Offer Product', 'post_status' => 'publish'],
+    ['ID' => 305, 'post_title' => 'Missing Inventory SKU Product', 'post_status' => 'publish'],
+    ['ID' => 2080, 'post_title' => 'Live FR Fitment Product', 'post_status' => 'publish'],
 ];
 $previewWpdb->tables['wp_gps_fitment_part_cache'] = [
     ['id' => 1300, 'part_number_normalized' => 'PREVIEW300', 'vehicle_count' => 2],
     ['id' => 1301, 'part_number_normalized' => 'PREVIEW301', 'vehicle_count' => 1],
     ['id' => 1302, 'part_number_normalized' => 'PREVIEW302', 'vehicle_count' => 1],
     ['id' => 1303, 'part_number_normalized' => 'MISSING303', 'vehicle_count' => 1],
+    ['id' => 1304, 'part_number_normalized' => 'MISS-OFFER', 'vehicle_count' => 1],
+    ['id' => 1305, 'part_number_normalized' => 'MISS-SKU', 'vehicle_count' => 1],
+    ['id' => 2080, 'part_number_normalized' => 'LIVE-FR-2080', 'vehicle_count' => 82],
 ];
 $previewWpdb->tables['wp_gps_fitment_vehicle_cache'] = [
     ['id' => 1, 'part_cache_id' => 1300, 'vehicle_id' => 10001],
@@ -1316,40 +1324,54 @@ $previewWpdb->tables['wp_gps_fitment_vehicle_cache'] = [
     ['id' => 3, 'part_cache_id' => 1301, 'vehicle_id' => 10003],
     ['id' => 4, 'part_cache_id' => 1302, 'vehicle_id' => 10004],
     ['id' => 5, 'part_cache_id' => 1303, 'vehicle_id' => 10005],
+    ['id' => 6, 'part_cache_id' => 1304, 'vehicle_id' => 10006],
+    ['id' => 7, 'part_cache_id' => 1305, 'vehicle_id' => 10007],
 ];
+for ($i = 1; $i <= 82; $i++) { $previewWpdb->tables['wp_gps_fitment_vehicle_cache'][] = ['id' => 100 + $i, 'part_cache_id' => 2080, 'vehicle_id' => 20000 + $i]; }
 $previewWpdb->tables['wp_gps_fitment_product_map'] = [
     ['id' => 1, 'product_id' => 300, 'sku' => 'preview-300', 'part_number_normalized' => 'PREVIEW300', 'part_cache_id' => 1300],
     ['id' => 2, 'product_id' => 301, 'sku' => 'preview-301', 'part_number_normalized' => 'PREVIEW301', 'part_cache_id' => 1301],
     ['id' => 3, 'product_id' => 302, 'sku' => 'preview-302', 'part_number_normalized' => 'PREVIEW302', 'part_cache_id' => 1302],
     ['id' => 4, 'product_id' => 303, 'sku' => 'missing-303', 'part_number_normalized' => 'MISSING303', 'part_cache_id' => 1303],
+    ['id' => 5, 'product_id' => 304, 'sku' => 'missing-offer', 'part_number_normalized' => 'MISS-OFFER', 'part_cache_id' => 1304],
+    ['id' => 6, 'product_id' => 305, 'sku' => 'missing-sku', 'part_number_normalized' => 'MISS-SKU', 'part_cache_id' => 1305],
+    ['id' => 7, 'product_id' => 2080, 'sku' => 'live-fr-2080', 'part_number_normalized' => 'LIVE-FR-2080', 'part_cache_id' => 2080],
 ];
 $previewWpdb->tables['wp_marketplace_mappings'] = [
-    ['woo_product_id' => 300, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE300', 'status' => 'active'],
-    ['woo_product_id' => 300, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR300', 'status' => 'active'],
+    ['woo_product_id' => 300, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE300', 'remote_offer_id' => 'OFFER-DE300', 'remote_inventory_id' => 'SKU-DE300', 'marketplace_id' => 'EBAY_DE', 'sku' => 'SKU-DE300', 'status' => 'active'],
+    ['woo_product_id' => 300, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR300', 'remote_offer_id' => 'OFFER-FR300', 'remote_inventory_id' => 'SKU-FR300', 'marketplace_id' => 'EBAY_FR', 'sku' => 'SKU-FR300', 'status' => 'active'],
     ['woo_product_id' => 301, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE301', 'status' => 'active'],
     ['woo_product_id' => 301, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR301', 'status' => 'active'],
     ['woo_product_id' => 302, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE302', 'status' => 'active'],
     ['woo_product_id' => 303, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE303', 'status' => 'active'],
     ['woo_product_id' => 303, 'marketplace' => 'ebay_fr', 'remote_listing_id' => 'FR303', 'status' => 'active'],
+    ['woo_product_id' => 304, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE304', 'remote_offer_id' => '', 'remote_inventory_id' => 'SKU-DE304', 'marketplace_id' => 'EBAY_DE', 'sku' => 'SKU-DE304', 'status' => 'active'],
+    ['woo_product_id' => 305, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE305', 'remote_offer_id' => 'OFFER-DE305', 'remote_inventory_id' => '', 'marketplace_id' => 'EBAY_DE', 'sku' => '', 'status' => 'active'],
+    ['woo_product_id' => 2080, 'marketplace' => 'ebay', 'remote_listing_id' => 'DE2080', 'remote_offer_id' => 'OFFER-DE2080', 'remote_inventory_id' => 'SKU-DE2080', 'marketplace_id' => 'EBAY_DE', 'sku' => 'SKU-DE2080', 'status' => 'ended'],
+    ['woo_product_id' => 2080, 'marketplace' => 'ebay_fr', 'remote_listing_id' => '800119101706', 'remote_offer_id' => 'OFFER-FR2080', 'remote_inventory_id' => 'SKU-FR2080', 'marketplace_id' => 'EBAY_FR', 'sku' => 'SKU-FR2080', 'status' => 'active'],
 ];
 $GLOBALS['wpdb'] = $previewWpdb;
 $GLOBALS['gps_test_http_calls'] = 0;
 $previewService = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentPreview();
 $emptyProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
-assert_same(4, count($emptyProductPreview['rows']), 'preview with empty product_id returns rows');
+assert_same(7, count($emptyProductPreview['rows']), 'preview with empty product_id returns rows');
 assert_same('300', $emptyProductPreview['rows'][0]['product_id'] ?? '', 'preview with empty product_id starts at first matching product');
 $filteredProductPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 301, 'part_number' => '']);
 assert_same(1, count($filteredProductPreview['rows']), 'preview with product_id filters correctly');
 assert_same('301', $filteredProductPreview['rows'][0]['product_id'] ?? '', 'preview product_id filter returns requested product');
 $emptyPartPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => '', 'part_number' => '']);
-assert_same(4, count($emptyPartPreview['rows']), 'empty part number does not filter preview');
-assert_same(4, $emptyPartPreview['counters']['products_with_ktype'] ?? 0, 'preview counters still work');
+assert_same(7, count($emptyPartPreview['rows']), 'empty part number does not filter preview');
+assert_same(7, $emptyPartPreview['counters']['products_with_ktype'] ?? 0, 'preview counters still work');
 $readyPreviewRow = $emptyPartPreview['rows'][0];
 assert_same('yes', $readyPreviewRow['would_update_de'] ?? '', 'ready preview row would update DE');
 assert_same('yes', $readyPreviewRow['would_update_fr'] ?? '', 'ready preview row would update FR');
 assert_same('', $readyPreviewRow['blocked_reason'] ?? '', 'ready preview row has no contradictory product_not_found blocker');
 assert_same('', $readyPreviewRow['blocked_reason_de'] ?? '', 'ready preview row has no DE blocker');
 assert_same('', $readyPreviewRow['blocked_reason_fr'] ?? '', 'ready preview row has no FR blocker');
+
+assert_same('inventory', $readyPreviewRow['ebay_de_listing_management_type'] ?? '', 'preview exposes DE listing management type from offer/inventory IDs');
+assert_same('SKU-DE300', $readyPreviewRow['ebay_de_inventory_item_sku'] ?? '', 'preview exposes DE inventory item SKU');
+assert_same('OFFER-FR300', $readyPreviewRow['ebay_fr_offer_id'] ?? '', 'preview exposes FR offer ID');
 assert_same(2, $emptyPartPreview['counters']['ready_for_both'] ?? 0, 'ready_for_both counter follows row would_update flags');
 $mixedPreview = $previewService->query(['limit' => 50, 'offset' => 0, 'only_with_ktype' => 1, 'product_id' => 302, 'part_number' => '']);
 assert_same('yes', $mixedPreview['rows'][0]['would_update_de'] ?? '', 'mixed preview row can be ready for DE');
@@ -1362,7 +1384,27 @@ assert_same('no', $missingProductPreview['rows'][0]['would_update_de'] ?? '', 'm
 assert_same('no', $missingProductPreview['rows'][0]['would_update_fr'] ?? '', 'missing product row is not ready for FR');
 assert_same('product_not_found', $missingProductPreview['rows'][0]['blocked_reason'] ?? '', 'product_not_found only appears when product title cannot be resolved');
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'preview makes no Apify calls');
-assert_same(4, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
+assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
+
+$inventoryPreview = $previewService->inventory_fitment_preview(300, 'both');
+assert_same('yes', $inventoryPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'inventory preview builds DE update when offer and inventory SKU exist');
+assert_same('PUT /sell/inventory/v1/inventory_item/SKU-DE300/product_compatibility', $inventoryPreview['results']['EBAY_DE']['endpoint'] ?? '', 'inventory preview exposes product compatibility endpoint');
+assert_same('10001', (string) ($inventoryPreview['results']['EBAY_DE']['payload']['compatibleProducts'][0]['kTypeValue'] ?? ''), 'inventory payload uses cached KType kTypeValue shape');
+assert_same($inventoryPreview['results']['EBAY_DE']['payload']['compatibleProducts'], $inventoryPreview['results']['EBAY_FR']['payload']['compatibleProducts'], 'inventory preview uses same KTypes for DE and FR');
+$missingOfferPreview = $previewService->inventory_fitment_preview(304, 'de');
+assert_same('no', $missingOfferPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'missing offer ID blocks inventory preview update');
+assert_same(true, str_contains((string) ($missingOfferPreview['results']['EBAY_DE']['blocked_reason_inventory'] ?? ''), 'missing_offer_id'), 'missing offer ID reason is exposed');
+$missingSkuPreview = $previewService->inventory_fitment_preview(305, 'de');
+assert_same('no', $missingSkuPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'missing inventory SKU blocks inventory preview update');
+assert_same(true, str_contains((string) ($missingSkuPreview['results']['EBAY_DE']['blocked_reason_inventory'] ?? ''), 'missing_inventory_item_sku'), 'missing inventory SKU reason is exposed');
+$product2080InventoryPreview = $previewService->inventory_fitment_preview(2080, 'both');
+assert_same('800119101706', $product2080InventoryPreview['results']['EBAY_FR']['item_id'] ?? '', 'product 2080 FR inventory preview uses known item ID');
+assert_same('active', $product2080InventoryPreview['results']['EBAY_FR']['listing_status'] ?? '', 'product 2080 FR listing is active in preview fixture');
+assert_same('82', $product2080InventoryPreview['results']['EBAY_FR']['ktype_count'] ?? '', 'product 2080 FR inventory preview has 82 KTypes');
+assert_same('yes', $product2080InventoryPreview['results']['EBAY_FR']['would_update_inventory_fitment'] ?? '', 'product 2080 FR would update inventory fitment when required IDs exist');
+assert_same('no', $product2080InventoryPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'product 2080 DE inventory preview is blocked when listing ended');
+assert_same(true, str_contains((string) ($product2080InventoryPreview['results']['EBAY_DE']['blocked_reason_inventory'] ?? ''), 'listing_status_not_active'), 'product 2080 DE blocked reason reports ended/inactive local listing');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'inventory preview does not call Apify or eBay APIs');
 
 $liveTest = new GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest($previewService);
 $liveDryRun = $liveTest->run(300, 'both', true, '');
@@ -1400,6 +1442,17 @@ assert_same('warning_success', $liveWarning['results']['EBAY_FR']['status'] ?? '
 assert_same('Warning', $liveWarning['results']['EBAY_FR']['ack'] ?? '', 'Ack is preserved for warning success');
 assert_same(true, count($liveWarning['results']['EBAY_FR']['warnings'] ?? []) === 1, 'warnings array is populated');
 assert_same(2, $GLOBALS['gps_test_http_calls'], 'live valid listing calls GetItem then ReviseFixedPriceItem');
+
+$GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_ebay_getitem_inventory_error'] = ['FR300' => true];
+$liveInventoryBlocked = $liveTest->run(300, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION);
+assert_same('blocked', $liveInventoryBlocked['results']['EBAY_FR']['status'] ?? '', 'GetItem inventory-based error blocks before ReviseFixedPriceItem retry');
+assert_same('inventory_based_listing_not_supported_by_trading_api', $liveInventoryBlocked['results']['EBAY_FR']['blocked_reason'] ?? '', 'inventory GetItem error sets blocked reason');
+assert_same('inventory', $liveInventoryBlocked['results']['EBAY_FR']['listing_management_type'] ?? '', 'inventory diagnostics expose listing type');
+assert_same('SKU-FR300', $liveInventoryBlocked['results']['EBAY_FR']['inventory_item_sku'] ?? '', 'inventory diagnostics expose inventory SKU');
+assert_same('OFFER-FR300', $liveInventoryBlocked['results']['EBAY_FR']['offer_id'] ?? '', 'inventory diagnostics expose offer ID');
+assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory GetItem block does not retry Trading API ReviseFixedPriceItem');
+$GLOBALS['gps_test_ebay_getitem_inventory_error'] = [];
 $GLOBALS['gps_test_ebay_revise_warning'] = false;
 $GLOBALS['gps_test_ebay_revise_error'] = true;
 $liveFailure = $liveTest->run(300, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::CONFIRMATION);
@@ -1419,6 +1472,7 @@ $pluginPreviewSource = file_get_contents(__DIR__ . '/../src/Plugin.php');
 $liveTestSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentLiveTest.php');
 assert_same(true, str_contains($pluginPreviewSource, 'new EbayFitmentPreview()'), 'eBay fitment preview service is wired');
 assert_same(true, str_contains($adminPreviewSource, 'eBay Fitment Preview') && str_contains($adminPreviewSource, 'Export preview CSV'), 'admin page exposes eBay Fitment Preview and CSV export');
+assert_same(true, str_contains($previewSource, 'product_compatibility') && str_contains($previewSource, 'compatibleProducts') && str_contains($previewSource, 'kTypeValue'), 'inventory fitment preview builds Sell Inventory compatibility payload shape');
 assert_same(true, str_contains($previewSource, "'_wei_ebay_listing_id'") && str_contains($previewSource, "'_wei_ebay_item_id'"), 'DE item_id detection reads known DE listing/item meta');
 assert_same(true, str_contains($previewSource, "'_wei_fr_ebay_listing_id'") && str_contains($previewSource, "'_wei_fr_ebay_item_id'"), 'FR item_id detection reads known FR listing/item meta');
 assert_same(true, str_contains($previewSource, "marketplace=%s") && str_contains($previewSource, "'ebay'") && str_contains($previewSource, "'ebay_fr'"), 'DE/FR mapping reads shared marketplace_mappings table marketplaces');
@@ -1427,5 +1481,6 @@ assert_same(true, str_contains($previewSource, "'no_ktype'") && str_contains($pr
 assert_same(false, str_contains($previewSource, 'update_post_meta') || str_contains($previewSource, 'wp_update_post'), 'preview adds no Woo product modification');
 assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_contains($previewSource, 'AddFixedPriceItem') || str_contains($previewSource, 'Trading API'), 'preview adds no eBay write code');
 assert_same(true, str_contains($liveTestSource, 'ReviseFixedPriceItem'), 'live test uses Trading API ReviseFixedPriceItem');
+assert_same(true, str_contains($liveTestSource, 'inventory_based_listing_not_supported_by_trading_api'), 'live test blocks inventory-based Trading API errors');
 assert_same(false, str_contains($liveTestSource, 'ApifyClient') || str_contains($liveTestSource, 'api.apify.com'), 'live test contains no Apify client calls');
 assert_same(false, str_contains($previewSource, 'ApifyClient') || str_contains($previewSource, 'api.apify.com') || str_contains($previewSource, 'compatible_vehicles'), 'preview adds no Apify/TecDoc lookup calls');

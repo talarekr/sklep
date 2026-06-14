@@ -339,6 +339,7 @@ final class AdminPage
 
             <?php $this->render_ebay_fitment_preview(); ?>
 
+            <?php $this->render_inventory_fitment_preview(); ?>
             <?php $this->render_ebay_fitment_live_test(); ?>
 
             <?php $this->render_result($last); ?>
@@ -383,21 +384,47 @@ final class AdminPage
                 <?php foreach ($counters as $key => $value): ?><div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html((string) $key); ?></span><br><strong><?php echo esc_html((string) $value); ?></strong></div><?php endforeach; ?>
             </div>
             <div style="overflow:auto;margin-top:12px;"><table class="widefat striped"><thead><tr>
-                <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
+                <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_de_listing_management_type','ebay_de_inventory_item_sku','ebay_de_offer_id','ebay_de_would_update_inventory_fitment','ebay_de_blocked_reason_inventory','ebay_fr_item_id','ebay_fr_status','ebay_fr_listing_management_type','ebay_fr_inventory_item_sku','ebay_fr_offer_id','ebay_fr_would_update_inventory_fitment','ebay_fr_blocked_reason_inventory','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
             </tr></thead><tbody>
-                <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
-                <?php if (!$preview['rows']): ?><tr><td colspan="15"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
+                <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_de_listing_management_type','ebay_de_inventory_item_sku','ebay_de_offer_id','ebay_de_would_update_inventory_fitment','ebay_de_blocked_reason_inventory','ebay_fr_item_id','ebay_fr_status','ebay_fr_listing_management_type','ebay_fr_inventory_item_sku','ebay_fr_offer_id','ebay_fr_would_update_inventory_fitment','ebay_fr_blocked_reason_inventory','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
+                <?php if (!$preview['rows']): ?><tr><td colspan="25"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
             </tbody></table></div>
         <?php
     }
 
+
+    private function render_inventory_fitment_preview(): void
+    {
+        $productId = isset($_GET['inventory_product_id']) ? max(0, (int) $_GET['inventory_product_id']) : 2080;
+        $marketplace = isset($_GET['inventory_marketplace']) ? sanitize_text_field(wp_unslash((string) $_GET['inventory_marketplace'])) : 'both';
+        if (!in_array($marketplace, ['de', 'fr', 'both'], true)) { $marketplace = 'both'; }
+        $preview = $productId > 0 ? $this->ebayFitmentPreview->inventory_fitment_preview($productId, $marketplace) : ['results' => [], 'write_enabled' => false];
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('Inventory API Fitment Preview', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Preview only. Builds the expected Sell Inventory API product compatibility payload from cached KTypes and existing listing IDs. Live Inventory API writes are not implemented and no eBay write endpoint is called.', 'gps-ebay-fitment-sync'); ?></p>
+            <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <input type="hidden" name="page" value="gps-ebay-fitment-sync">
+                <label><?php echo esc_html__('Product ID', 'gps-ebay-fitment-sync'); ?> <input name="inventory_product_id" type="number" min="1" value="<?php echo esc_attr((string) $productId); ?>"></label>
+                <label><?php echo esc_html__('Marketplace', 'gps-ebay-fitment-sync'); ?> <select name="inventory_marketplace"><option value="de" <?php selected($marketplace, 'de'); ?>>DE only</option><option value="fr" <?php selected($marketplace, 'fr'); ?>>FR only</option><option value="both" <?php selected($marketplace, 'both'); ?>>DE + FR</option></select></label>
+                <button class="button button-primary"><?php echo esc_html__('Build inventory fitment preview', 'gps-ebay-fitment-sync'); ?></button>
+                <button class="button" disabled><?php echo esc_html__('Live Inventory API write not implemented', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <div style="overflow:auto;margin-top:12px;"><table class="widefat striped"><thead><tr>
+                <?php foreach (['marketplace','listing_management_type','item_id','listing_status','offer_id','inventory_item_sku','ktype_count','sample_ktypes','would_update_inventory_fitment','blocked_reason_inventory','method','endpoint','payload_summary','live_write_enabled'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
+            </tr></thead><tbody>
+                <?php foreach ((array) ($preview['results'] ?? []) as $result): ?><tr><?php foreach (['marketplace','listing_management_type','item_id','listing_status','offer_id','inventory_item_sku','ktype_count','sample_ktypes','would_update_inventory_fitment','blocked_reason_inventory','method','endpoint','payload_summary','live_write_enabled'] as $column): ?><td><?php echo esc_html((string) ($result[$column] ?? '')); ?></td><?php endforeach; ?></tr><tr><td colspan="14"><details><summary><?php echo esc_html__('Raw compatibility payload JSON', 'gps-ebay-fitment-sync'); ?></summary><pre style="white-space:pre-wrap;max-height:260px;overflow:auto;"><?php echo esc_html((string) ($result['payload_json'] ?? '')); ?></pre></details></td></tr><?php endforeach; ?>
+                <?php if (empty($preview['results'])): ?><tr><td colspan="14"><?php echo esc_html__('No inventory preview rows.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
+            </tbody></table></div>
+        <?php
+    }
 
     private function render_ebay_fitment_live_test(): void
     {
         ?>
             <hr>
             <h2><?php echo esc_html__('eBay Fitment Live Test', 'gps-ebay-fitment-sync'); ?></h2>
-            <p><?php echo esc_html__('One product only. Uses existing local KType cache and local eBay listing mappings. Dry-run is on by default and never calls eBay write APIs. Live uses Trading API ReviseFixedPriceItem to send only ItemID plus ItemCompatibilityList.', 'gps-ebay-fitment-sync'); ?></p>
+            <p><?php echo esc_html__('One product only. Uses existing local KType cache and local eBay listing mappings. Dry-run is on by default and never calls eBay write APIs. Live uses Trading API ReviseFixedPriceItem only for Trading-managed listings; inventory-based listing errors are blocked with diagnostics instead of retrying.', 'gps-ebay-fitment-sync'); ?></p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="gps-ebay-fitment-live-test-form">
                 <input type="hidden" name="action" value="gps_ebay_fitment_live_test">
                 <?php wp_nonce_field('gps_ebay_fitment_live_test'); ?>

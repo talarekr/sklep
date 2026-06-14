@@ -11,12 +11,18 @@ final class EbayFitmentPreview
     public const DE_LISTING_META = '_wei_ebay_listing_id';
     public const DE_ITEM_META = '_wei_ebay_item_id';
     public const DE_STATUS_META = '_wei_ebay_listing_status';
+    public const DE_OFFER_META = '_wei_ebay_offer_id';
+    public const DE_INVENTORY_ITEM_META = '_wei_ebay_inventory_item_id';
+    public const DE_INVENTORY_ID_META = '_wei_ebay_inventory_id';
     public const FR_LISTING_META = '_wei_fr_ebay_listing_id';
     public const FR_ITEM_META = '_wei_fr_ebay_item_id';
     public const FR_STATUS_META = '_wei_fr_ebay_listing_status';
+    public const FR_OFFER_META = '_wei_fr_ebay_offer_id';
+    public const FR_INVENTORY_ITEM_META = '_wei_fr_ebay_inventory_item_id';
+    public const FR_INVENTORY_ID_META = '_wei_fr_ebay_inventory_id';
 
     /** @var string[] */
-    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason','live_checked_revisable_de','live_checked_revisable_fr','local_active_but_live_ended_de','local_active_but_live_ended_fr'];
+    private const CSV_COLUMNS = ['product_id','product_title','sku','part_number_normalized','ktype_count','vehicle_ids','ebay_de_item_id','ebay_de_status','ebay_de_listing_management_type','ebay_de_inventory_item_sku','ebay_de_offer_id','ebay_de_inventory_marketplace','ebay_de_inventory_endpoint','ebay_de_would_update_inventory_fitment','ebay_de_blocked_reason_inventory','ebay_de_inventory_payload_summary','ebay_fr_item_id','ebay_fr_status','ebay_fr_listing_management_type','ebay_fr_inventory_item_sku','ebay_fr_offer_id','ebay_fr_inventory_marketplace','ebay_fr_inventory_endpoint','ebay_fr_would_update_inventory_fitment','ebay_fr_blocked_reason_inventory','ebay_fr_inventory_payload_summary','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason','live_checked_revisable_de','live_checked_revisable_fr','local_active_but_live_ended_de','local_active_but_live_ended_fr'];
 
     public function query(array $args = []): array
     {
@@ -41,6 +47,40 @@ final class EbayFitmentPreview
     {
         $result = $this->query(['product_id' => $productId, 'limit' => 1, 'offset' => 0]);
         return $result['rows'][0] ?? null;
+    }
+
+    public function inventory_fitment_preview(int $productId, string $selection = 'both'): array
+    {
+        $row = $this->one_product($productId);
+        $markets = $selection === 'de' ? ['de' => 'EBAY_DE'] : ($selection === 'fr' ? ['fr' => 'EBAY_FR'] : ['de' => 'EBAY_DE', 'fr' => 'EBAY_FR']);
+        $results = [];
+        foreach ($markets as $key => $marketplace) {
+            $prefix = $key === 'fr' ? 'ebay_fr' : 'ebay_de';
+            if (!$row) {
+                $results[$marketplace] = ['marketplace' => $marketplace, 'would_update_inventory_fitment' => 'no', 'blocked_reason_inventory' => 'product_not_found_or_not_mapped'];
+                continue;
+            }
+            $listing = [
+                'item_id' => (string) ($row[$prefix . '_item_id'] ?? ''),
+                'offer_id' => (string) ($row[$prefix . '_offer_id'] ?? ''),
+                'inventory_item_sku' => (string) ($row[$prefix . '_inventory_item_sku'] ?? ''),
+                'listing_management_type' => (string) ($row[$prefix . '_listing_management_type'] ?? 'unknown'),
+                'status' => (string) ($row[$prefix . '_status'] ?? ''),
+                'marketplace_id' => $marketplace,
+            ];
+            $results[$marketplace] = $this->inventory_fitment_preview_for_listing($marketplace, $listing, $this->vehicle_ids_from_row($row)) + [
+                'product_id' => (string) ($row['product_id'] ?? ''),
+                'item_id' => $listing['item_id'],
+                'offer_id' => $listing['offer_id'],
+                'inventory_item_sku' => $listing['inventory_item_sku'],
+                'listing_management_type' => $listing['listing_management_type'],
+                'listing_status' => $listing['status'],
+                'ktype_count' => (string) count($this->vehicle_ids_from_row($row)),
+                'sample_ktypes' => implode(',', array_slice($this->vehicle_ids_from_row($row), 0, 10)),
+            ];
+        }
+
+        return ['product_id' => $productId, 'product' => $row, 'results' => $results, 'write_enabled' => false, 'note' => 'Preview only. No eBay Inventory API write is called.'];
     }
 
     public function stream_csv(array $args = []): void
@@ -104,6 +144,8 @@ final class EbayFitmentPreview
         $frBlocked = $this->market_blocked_reasons($productExists, $ktypeCount, $fr, 'fr');
         $deReady = $deBlocked === [];
         $frReady = $frBlocked === [];
+        $deInventory = $this->inventory_fitment_preview_for_listing('EBAY_DE', $de, $vehicles);
+        $frInventory = $this->inventory_fitment_preview_for_listing('EBAY_FR', $fr, $vehicles);
         $blocked = $this->overall_blocked_reasons($deBlocked, $frBlocked, $deReady, $frReady);
 
         return [
@@ -117,8 +159,26 @@ final class EbayFitmentPreview
             'sample_ktypes' => implode(',', array_slice($vehicles, 0, 10)),
             'ebay_de_item_id' => $de['item_id'],
             'ebay_de_status' => $de['status'],
+            'ebay_de_listing_management_type' => $de['listing_management_type'],
+            'ebay_de_inventory_item_sku' => $de['inventory_item_sku'],
+            'ebay_de_offer_id' => $de['offer_id'],
+            'ebay_de_inventory_marketplace' => $deInventory['marketplace'],
+            'ebay_de_inventory_endpoint' => $deInventory['endpoint'],
+            'ebay_de_would_update_inventory_fitment' => $deInventory['would_update_inventory_fitment'],
+            'ebay_de_blocked_reason_inventory' => $deInventory['blocked_reason_inventory'],
+            'ebay_de_inventory_payload_summary' => $deInventory['payload_summary'],
+            'ebay_de_inventory_payload_json' => $deInventory['payload_json'],
             'ebay_fr_item_id' => $fr['item_id'],
             'ebay_fr_status' => $fr['status'],
+            'ebay_fr_listing_management_type' => $fr['listing_management_type'],
+            'ebay_fr_inventory_item_sku' => $fr['inventory_item_sku'],
+            'ebay_fr_offer_id' => $fr['offer_id'],
+            'ebay_fr_inventory_marketplace' => $frInventory['marketplace'],
+            'ebay_fr_inventory_endpoint' => $frInventory['endpoint'],
+            'ebay_fr_would_update_inventory_fitment' => $frInventory['would_update_inventory_fitment'],
+            'ebay_fr_blocked_reason_inventory' => $frInventory['blocked_reason_inventory'],
+            'ebay_fr_inventory_payload_summary' => $frInventory['payload_summary'],
+            'ebay_fr_inventory_payload_json' => $frInventory['payload_json'],
             'would_update_de' => $deReady ? 'yes' : 'no',
             'would_update_fr' => $frReady ? 'yes' : 'no',
             'blocked_reason_de' => $deBlocked ? implode('|', array_values(array_unique($deBlocked))) : '',
@@ -175,6 +235,47 @@ final class EbayFitmentPreview
         ];
     }
 
+    private function inventory_fitment_preview_for_listing(string $marketplace, array $listing, array $vehicleIds): array
+    {
+        $inventorySku = trim((string) ($listing['inventory_item_sku'] ?? ''));
+        $offerId = trim((string) ($listing['offer_id'] ?? ''));
+        $itemId = trim((string) ($listing['item_id'] ?? ''));
+        $status = trim((string) ($listing['status'] ?? ''));
+        $blocked = [];
+        if ($itemId === '') { $blocked[] = 'missing_item_id'; }
+        if ($offerId === '') { $blocked[] = 'missing_offer_id'; }
+        if ($inventorySku === '') { $blocked[] = 'missing_inventory_item_sku'; }
+        if (!$this->status_ready($status)) { $blocked[] = 'listing_status_not_active'; }
+        if (!$vehicleIds) { $blocked[] = 'no_ktype'; }
+        $payload = $this->inventory_compatibility_payload($marketplace, $vehicleIds);
+        $endpoint = $inventorySku !== '' ? 'PUT /sell/inventory/v1/inventory_item/' . rawurlencode($inventorySku) . '/product_compatibility' : 'PUT /sell/inventory/v1/inventory_item/{inventory_item_sku}/product_compatibility';
+        return [
+            'marketplace' => $marketplace,
+            'method' => 'PUT',
+            'endpoint' => $endpoint,
+            'target' => $inventorySku !== '' ? $inventorySku : $offerId,
+            'payload' => $payload,
+            'payload_json' => wp_json_encode($payload, JSON_UNESCAPED_SLASHES),
+            'payload_summary' => 'compatibleProducts=' . count($payload['compatibleProducts']) . '; kTypeValue sample=' . implode(',', array_slice($vehicleIds, 0, 10)),
+            'would_update_inventory_fitment' => $blocked === [] ? 'yes' : 'no',
+            'blocked_reason_inventory' => $blocked ? implode('|', array_values(array_unique($blocked))) : '',
+            'live_write_enabled' => 'no',
+        ];
+    }
+
+    private function inventory_compatibility_payload(string $marketplace, array $vehicleIds): array
+    {
+        return [
+            'marketplaceId' => $marketplace,
+            'compatibleProducts' => array_map(static fn(string $ktype): array => ['kTypeValue' => $ktype], array_values(array_map('strval', $vehicleIds))),
+        ];
+    }
+
+    private function vehicle_ids_from_row(array $row): array
+    {
+        return array_values(array_filter(array_map('trim', explode(',', (string) ($row['vehicle_ids'] ?? '')))));
+    }
+
     private function vehicle_ids(int $partCacheId): array
     {
         if ($partCacheId <= 0) { return []; }
@@ -189,14 +290,23 @@ final class EbayFitmentPreview
         $prefix = $market === 'fr' ? '_wei_fr_ebay_' : '_wei_ebay_';
         $marketplace = $market === 'fr' ? 'ebay_fr' : 'ebay';
         $mappingTable = $wpdb->prefix . 'marketplace_mappings';
-        $mapping = $this->table_exists($mappingTable) ? $wpdb->get_row($wpdb->prepare("SELECT remote_listing_id, status FROM {$mappingTable} WHERE marketplace=%s AND woo_product_id=%d ORDER BY updated_at DESC LIMIT 1", $marketplace, $productId), ARRAY_A) : null;
+        $mapping = $this->table_exists($mappingTable) ? $wpdb->get_row($wpdb->prepare("SELECT remote_listing_id, remote_offer_id, remote_inventory_id, marketplace_id, sku, status FROM {$mappingTable} WHERE marketplace=%s AND woo_product_id=%d ORDER BY updated_at DESC LIMIT 1", $marketplace, $productId), ARRAY_A) : null;
         $itemId = trim((string) ($mapping['remote_listing_id'] ?? ''));
         if ($itemId === '') { $itemId = trim((string) get_post_meta($productId, $prefix . 'listing_id', true)); }
         if ($itemId === '') { $itemId = trim((string) get_post_meta($productId, $prefix . 'item_id', true)); }
+        $offerId = trim((string) ($mapping['remote_offer_id'] ?? ''));
+        if ($offerId === '') { $offerId = trim((string) get_post_meta($productId, $prefix . 'offer_id', true)); }
+        $inventorySku = trim((string) ($mapping['remote_inventory_id'] ?? ''));
+        if ($inventorySku === '') { $inventorySku = trim((string) get_post_meta($productId, $prefix . 'inventory_item_id', true)); }
+        if ($inventorySku === '') { $inventorySku = trim((string) get_post_meta($productId, $prefix . 'inventory_id', true)); }
+        if ($inventorySku === '') { $inventorySku = trim((string) ($mapping['sku'] ?? '')); }
+        $marketplaceId = trim((string) ($mapping['marketplace_id'] ?? ''));
+        if ($marketplaceId === '') { $marketplaceId = $market === 'fr' ? 'EBAY_FR' : 'EBAY_DE'; }
         $status = trim((string) ($mapping['status'] ?? ''));
         if ($status === '') { $status = trim((string) get_post_meta($productId, $prefix . 'listing_status', true)); }
         if ($status === '') { $status = trim((string) get_post_meta($productId, $prefix . 'export_status', true)); }
-        return ['item_id' => $itemId, 'status' => $status];
+        $type = ($offerId !== '' || $inventorySku !== '') ? 'inventory' : ($itemId !== '' ? 'trading' : 'unknown');
+        return ['item_id' => $itemId, 'status' => $status, 'offer_id' => $offerId, 'inventory_item_sku' => $inventorySku, 'listing_management_type' => $type, 'marketplace_id' => $marketplaceId];
     }
 
     private function status_ready(string $status): bool
@@ -217,8 +327,8 @@ final class EbayFitmentPreview
         return [
             'mapping_table' => $wpdb->prefix . 'marketplace_mappings',
             'mapping_table_exists' => $this->table_exists($wpdb->prefix . 'marketplace_mappings'),
-            'de_sources' => ['marketplace_mappings.marketplace=ebay remote_listing_id', self::DE_LISTING_META, self::DE_ITEM_META, self::DE_STATUS_META],
-            'fr_sources' => ['marketplace_mappings.marketplace=ebay_fr remote_listing_id', self::FR_LISTING_META, self::FR_ITEM_META, self::FR_STATUS_META],
+            'de_sources' => ['marketplace_mappings.marketplace=ebay remote_listing_id', self::DE_LISTING_META, self::DE_ITEM_META, self::DE_STATUS_META, self::DE_OFFER_META, self::DE_INVENTORY_ITEM_META, self::DE_INVENTORY_ID_META, 'marketplace_mappings.remote_offer_id', 'marketplace_mappings.remote_inventory_id'],
+            'fr_sources' => ['marketplace_mappings.marketplace=ebay_fr remote_listing_id', self::FR_LISTING_META, self::FR_ITEM_META, self::FR_STATUS_META, self::FR_OFFER_META, self::FR_INVENTORY_ITEM_META, self::FR_INVENTORY_ID_META, 'marketplace_mappings.remote_offer_id', 'marketplace_mappings.remote_inventory_id'],
             'note' => 'Preview reads local DB/cache/meta only; it does not call eBay, Apify, TecDoc, or modify Woo products.',
         ];
     }
