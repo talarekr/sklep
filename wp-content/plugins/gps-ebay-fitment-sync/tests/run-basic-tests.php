@@ -1698,6 +1698,11 @@ assert_same(false, str_contains($batchRunnerSource, 'ApifyClient') || str_contai
 assert_same(false, str_contains($batchRunnerSource, 'update_post_meta') || str_contains($batchRunnerSource, 'wp_update_post'), 'batch runner contains no Woo product modifications');
 assert_same(false, str_contains($batchRunnerSource, 'ReviseFixedPriceItem'), 'batch runner never uses Trading API ReviseFixedPriceItem');
 assert_same(true, str_contains($adminSource, 'wp_ajax_gps_ebay_inventory_fitment_batch'), 'inventory auto tick uses a dedicated AJAX endpoint');
+assert_same(true, str_contains($batchRunnerSource, 'wp_nonce_url($csvUrl') && str_contains($batchRunnerSource, 'gps_ebay_inventory_fitment_csv'), 'AJAX inventory CSV response URL contains a fresh nonce');
+assert_same(true, str_contains($adminSource, "wp_nonce_field('gps_ebay_inventory_fitment_csv')") && str_contains($adminSource, 'id="gps-inv-export-form"'), 'admin inventory Export CSV button posts run_id with nonce');
+assert_same(true, str_contains($adminSource, 'inventory_fitment_csv_url') && str_contains($adminSource, 'wp_nonce_url($url'), 'rendered inventory CSV export URL contains a nonce');
+assert_same(true, str_contains($adminSource, 'wp_verify_nonce($nonce') && str_contains($adminSource, 'gps_ebay_inventory_fitment_csv') && str_contains($adminSource, "current_user_can('manage_woocommerce')"), 'admin-post inventory CSV validates nonce and capability');
+assert_same(true, str_contains($adminSource, 'CSV export link expired. Refresh the GPS eBay Fitment admin page and click Export CSV again.'), 'invalid inventory CSV nonce returns clear error message');
 assert_same(false, str_contains($adminSource, '$this->ebayFitmentPreview->query($args);'), 'admin page render does not eagerly run full preview query');
 assert_same(true, str_contains($adminSource, 'gps_fitment_preview'), 'full preview query is gated behind explicit preview request');
 assert_same(false, str_contains($batchRunnerSource, 'wc_get_product') || str_contains($batchRunnerSource, 'WP_Query') || str_contains($batchRunnerSource, 'get_posts') || str_contains($batchRunnerSource, 'get_post_meta'), 'auto runner batch code avoids Woo product CRUD, WP_Query/get_posts, and post meta APIs');

@@ -137,7 +137,13 @@ final class EbayInventoryFitmentBatchRunner
 
     private function progress_response(string $runId, string $mode, array $selection, int $batchSize, int $totalAttempts, array $rows, array $diagnostics, array $tickCounters = []): array
     {
-        $csvUrl = function_exists('admin_url') ? admin_url('admin-post.php?action=gps_ebay_inventory_fitment_csv&run_id=' . rawurlencode($runId)) : '';
+        $csvUrl = '';
+        if ($runId !== '' && function_exists('admin_url')) {
+            $csvUrl = admin_url('admin-post.php?action=gps_ebay_inventory_fitment_csv&run_id=' . rawurlencode($runId));
+            if (function_exists('wp_nonce_url')) {
+                $csvUrl = wp_nonce_url($csvUrl, 'gps_ebay_inventory_fitment_csv');
+            }
+        }
         $csv = $runId !== '' ? ['url' => $csvUrl, 'streamed' => true] : [];
         $checkpoint = $this->checkpoint();
         $aggregate = $this->aggregate_counters($runId);
