@@ -364,7 +364,7 @@ final class AdminPage
                     <label><input id="gps-ktype-dry-run" type="checkbox" value="1"> <?php echo esc_html__('Dry-run / preview only mode (no Apify calls and no cache writes)', 'gps-ebay-fitment-sync'); ?></label>
                 </p>
                 <p><label><?php echo esc_html__('Confirmation', 'gps-ebay-fitment-sync'); ?> <input id="gps-ktype-confirmation" type="text" class="regular-text" placeholder="RUN KTYPE BACKFILL"></label> <code>RUN KTYPE BACKFILL</code></p>
-                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-generate-report"><?php echo esc_html__('Generate final CSV/report', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-mark-stopped" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Mark as stopped', 'gps-ebay-fitment-sync'); ?></button></p>
+                <p><button type="button" class="button button-primary" id="gps-ktype-start" disabled><?php echo esc_html__('Start new run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-resume" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Resume last run', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-stop"><?php echo esc_html__('Stop', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-generate-report"><?php echo esc_html__('Generate final CSV/report', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-process-final-chunk"><?php echo esc_html__('Process next final export chunk', 'gps-ebay-fitment-sync'); ?></button> <button type="button" class="button" id="gps-ktype-mark-stopped" <?php disabled(empty($checkpoint)); ?>><?php echo esc_html__('Mark as stopped', 'gps-ebay-fitment-sync'); ?></button></p>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:0 0 12px;">
                     <input type="hidden" name="action" value="gps_ebay_fitment_ktype_generate_report">
                     <input type="hidden" name="run_id" value="<?php echo esc_attr((string) ($checkpoint['run_id'] ?? '')); ?>">
@@ -389,6 +389,7 @@ final class AdminPage
                 const resumeButton = $('gps-ktype-resume');
                 const stopButton = $('gps-ktype-stop');
                 const generateReportButton = $('gps-ktype-generate-report');
+                const processFinalChunkButton = $('gps-ktype-process-final-chunk');
                 const markStoppedButton = $('gps-ktype-mark-stopped');
                 const confirmationInput = $('gps-ktype-confirmation');
                 const dryRunInput = $('gps-ktype-dry-run');
@@ -483,7 +484,7 @@ final class AdminPage
                         const requestStarted = Date.now();
                         const response = await fetch(runner.dataset.ajaxUrl, { method:'POST', credentials:'same-origin', body:formData, signal:state.abortController.signal });
                         state.request_duration_seconds = Math.round((Date.now() - requestStarted) / 100) / 10; state.last_request_duration_seconds = state.request_duration_seconds;
-                        if (!response.ok) { const error = new Error('request_failed_http_' + response.status); error.httpStatus = response.status; if ([503,502,504,429].indexOf(response.status) !== -1) { error.transient = true; } throw error; }
+                        if (!response.ok) { const responseText = await response.text(); const error = new Error('request_failed_http_' + response.status + (responseText ? ': ' + responseText.slice(0, 500) : '')); error.httpStatus = response.status; error.responseText = responseText; if ([503,502,504,429].indexOf(response.status) !== -1) { error.transient = true; } throw error; }
                         const result = await response.json();
                         state.request_duration_seconds = Math.round((Date.now() - requestStarted) / 100) / 10; state.last_request_duration_seconds = state.request_duration_seconds;
                         if (result && result.success && result.data) { return result.data; }
@@ -524,20 +525,36 @@ final class AdminPage
                     refresh();
                     try { const checkpoint = await post('gps_ebay_fitment_ktype_backfill_stop', { reason: state.stopped_reason }); applyCheckpoint(checkpoint); refresh(); } catch (e) {}
                 }
+                function finalExportView(result) {
+                    result = result || {};
+                    const files = result.files || {};
+                    return {
+                        run_id: result.export_run_id || result.run_id || state.run_id || serverCheckpoint.run_id || '',
+                        status: result.status || '',
+                        offset: parseInt(result.offset || result.offset_after || 0, 10) || 0,
+                        total_rows: parseInt(result.total_rows || 0, 10) || 0,
+                        final_rows: result.row_counts ? (parseInt(result.row_counts.final || 0, 10) || 0) : (parseInt(result.final_csv_row_count || 0, 10) || 0),
+                        found_only_rows: result.row_counts ? (parseInt(result.row_counts.found_only || 0, 10) || 0) : (parseInt(result.found_only_csv_row_count || 0, 10) || 0),
+                        last_error: result.last_error || result.final_csv_error || result.summary_csv_error || result.found_only_csv_error || '',
+                        final_csv_url: result.final_csv_url || (files.final ? files.final.url : ''),
+                        found_only_csv_url: result.found_only_csv_url || (files.found_only ? files.found_only.url : ''),
+                        summary_csv_url: result.summary_csv_url || result.final_summary_csv_url || ''
+                    };
+                }
                 function renderReportResult(result) {
+                    const view = finalExportView(result);
+                    const running = view.status === 'running';
                     const lines = [
-                        'Success. Run ID: ' + (result.run_id || state.run_id || serverCheckpoint.run_id || ''),
-                        'Summary rows: ' + (result.summary_csv_row_count ?? 0),
-                        'Full final rows: ' + (result.final_csv_row_count ?? 0),
-                        'Found-only rows: ' + (result.found_only_csv_row_count ?? 0),
-                        link(result.summary_csv_url || ''),
-                        link(result.final_csv_url || ''),
-                        link(result.found_only_csv_url || '')
+                        (running ? 'Export running: offset ' : 'Export ' + (view.status || 'completed') + ': offset ') + view.offset + ' / ' + view.total_rows,
+                        'Full CSV rows: ' + view.final_rows,
+                        'Found-only CSV rows: ' + view.found_only_rows,
+                        'Last error: ' + (view.last_error || '-'),
+                        'Final CSV: ' + link(view.final_csv_url),
+                        'Found-only CSV: ' + link(view.found_only_csv_url),
+                        'Summary CSV: ' + link(view.summary_csv_url)
                     ];
-                    if (result.summary_csv_error || result.final_csv_error || result.found_only_csv_error) {
-                        lines.push('Errors: ' + [result.summary_csv_error || '', result.final_csv_error || '', result.found_only_csv_error || ''].filter(Boolean).join('; '));
-                    }
                     if (fields.final_summary_csv) { fields.final_summary_csv.innerHTML = lines.join('<br>'); }
+                    if (fields.last_batch_result) { fields.last_batch_result.textContent = JSON.stringify(result || {}, null, 2); }
                 }
                 async function writeSummary(reason, force) {
                     if (!force && !$('gps-ktype-final-summary').checked) { return; }
@@ -546,10 +563,16 @@ final class AdminPage
                     let result = await post('gps_ebay_fitment_ktype_final_export_start', { run_id:reportRunId, chunk_size:250 });
                     renderReportResult(result);
                     while (result && result.status === 'running') {
-                        if (fields.final_summary_csv) { fields.final_summary_csv.innerHTML = 'Export running: ' + (result.offset || 0) + ' / ' + (result.total_rows || 0) + '<br>Full rows: ' + ((result.row_counts && result.row_counts.final) || 0) + '<br>Found-only rows: ' + ((result.row_counts && result.row_counts.found_only) || 0); }
+                        renderReportResult(result);
                         result = await post('gps_ebay_fitment_ktype_final_export_chunk', { run_id:result.export_run_id || reportRunId, chunk_size:250 });
                     }
-                    renderReportResult({ run_id:result.export_run_id, final_csv_url:result.files && result.files.final ? result.files.final.url : '', found_only_csv_url:result.files && result.files.found_only ? result.files.found_only.url : '', final_csv_row_count:result.row_counts ? result.row_counts.final : 0, found_only_csv_row_count:result.row_counts ? result.row_counts.found_only : 0, final_csv_error:result.last_error || '' });
+                    renderReportResult(result);
+                }
+                async function processOneFinalChunk() {
+                    if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'Processing one final export chunk...'; }
+                    const reportRunId = state.run_id || serverCheckpoint.run_id || '';
+                    const result = await post('gps_ebay_fitment_ktype_final_export_chunk', { run_id:reportRunId, chunk_size:250 });
+                    renderReportResult(result);
                 }
                 async function start(resume) {
                     if (state.running || state.inFlight) { return; }
@@ -598,6 +621,7 @@ final class AdminPage
                 resumeButton.addEventListener('click', function () { start(true); });
                 stopButton.addEventListener('click', function () { stop('manual_stop'); });
                 if (generateReportButton) { generateReportButton.addEventListener('click', function () { writeSummary('manual_report', true).catch(function (error) { if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'summary_failed: ' + (error && error.message ? error.message : error); } }); }); }
+                if (processFinalChunkButton) { processFinalChunkButton.addEventListener('click', function () { processOneFinalChunk().catch(function (error) { if (fields.final_summary_csv) { fields.final_summary_csv.textContent = 'chunk_failed: ' + (error && error.message ? error.message : error); } }); }); }
                 if (markStoppedButton) { markStoppedButton.addEventListener('click', function () { stop('manual_mark_stopped'); }); }
                 window.addEventListener('beforeunload', function () { if (state.running) { stop('page_unload'); } });
                 refresh();

@@ -219,10 +219,20 @@ final class AuditCsvExporter
     /** @return array<string, mixed> */
     public function start_final_export(string $runId, int $chunkSize = 250): array
     {
+        $existing = $this->final_export_checkpoint($runId);
+        if ($existing && (string) ($existing['status'] ?? '') === 'running') {
+            $existing['action_called'] = 'start';
+            $existing['resumed_existing_checkpoint'] = true;
+            $existing['offset_before'] = (int) ($existing['offset'] ?? 0);
+            $existing['offset_after'] = (int) ($existing['offset'] ?? 0);
+            $existing['rows_processed_in_chunk'] = 0;
+            $existing['memory_usage'] = function_exists('memory_get_usage') ? memory_get_usage(true) : 0;
+            return $this->save_final_export_checkpoint($existing);
+        }
         $runId = $runId !== '' ? $runId : $this->run_id('ktype_backfill_final');
         $directory = $this->audit_directory();
         if ($directory === '' || (!is_dir($directory) && !wp_mkdir_p($directory))) {
-            return $this->save_final_export_checkpoint(['export_run_id' => $runId, 'status' => 'error', 'last_error' => 'Unable to create audit CSV directory.']);
+            return $this->save_final_export_checkpoint($this->with_final_export_debug(['export_run_id' => $runId, 'status' => 'error', 'last_error' => 'Unable to create audit CSV directory.'], 'start', 0, 0, 0));
         }
         $stamp = gmdate('Ymd-His');
         $files = [
@@ -236,15 +246,21 @@ final class AuditCsvExporter
             'headers_written' => ['final' => false, 'found_only' => false],
             'started_at' => gmdate('c'), 'updated_at' => gmdate('c'), 'last_error' => '',
         ];
-        return $this->save_final_export_checkpoint($state);
+        return $this->save_final_export_checkpoint($this->with_final_export_debug($state, 'start', 0, 0, 0));
     }
 
     /** @return array<string, mixed> */
     public function process_final_export_chunk(string $runId = '', int $chunkSize = 250): array
     {
         $state = $this->final_export_checkpoint($runId);
-        if (!$state || (string) ($state['status'] ?? '') === 'completed') { return $state ?: $this->start_final_export($runId, $chunkSize); }
-        if ((string) ($state['status'] ?? '') === 'error') { return $state; }
+        if (!$state) {
+            $state = $this->start_final_export($runId, $chunkSize);
+            if ((string) ($state['status'] ?? '') !== 'running') { return $state; }
+        }
+        $offsetBefore = (int) ($state['offset'] ?? 0);
+        if ((string) ($state['status'] ?? '') === 'completed') { return $this->with_final_export_debug($state, 'chunk', $offsetBefore, $offsetBefore, 0); }
+        if ((string) ($state['status'] ?? '') === 'error') { return $this->with_final_export_debug($state, 'chunk', $offsetBefore, $offsetBefore, 0); }
+        $rowsProcessed = 0;
         try {
             $limit = max(1, min(500, (int) ($chunkSize ?: ($state['chunk_size'] ?? 250))));
             $rows = $this->database->product_map_page_for_export((int) ($state['last_processed_id'] ?? 0), $limit);
@@ -262,17 +278,27 @@ final class AuditCsvExporter
                     ]);
                     $state['row_counts']['found_only']++;
                 }
-                $state['last_processed_id'] = $currentId; $state['offset']++;
+                $state['last_processed_id'] = $currentId; $state['offset']++; $rowsProcessed++;
             }
             if (count($rows) < $limit) { $state['status'] = 'completed'; }
-            $state['updated_at'] = gmdate('c'); $state['memory_usage'] = memory_get_usage(true);
+            $state['updated_at'] = gmdate('c'); $state['memory_usage'] = function_exists('memory_get_usage') ? memory_get_usage(true) : 0;
         } catch (\Throwable $e) {
-            $state['status'] = 'error'; $state['last_error'] = $e->getMessage(); $state['memory_usage'] = memory_get_usage(true); $state['updated_at'] = gmdate('c');
+            $state['status'] = 'error'; $state['last_error'] = $e->getMessage(); $state['memory_usage'] = function_exists('memory_get_usage') ? memory_get_usage(true) : 0; $state['updated_at'] = gmdate('c');
             error_log('GPS final export failed at offset ' . (int) ($state['offset'] ?? 0) . ': ' . $e->getMessage());
         }
-        return $this->save_final_export_checkpoint($state);
+        return $this->save_final_export_checkpoint($this->with_final_export_debug($state, 'chunk', $offsetBefore, (int) ($state['offset'] ?? $offsetBefore), $rowsProcessed));
     }
 
+    /** @param array<string,mixed> $state @return array<string,mixed> */
+    private function with_final_export_debug(array $state, string $action, int $offsetBefore, int $offsetAfter, int $rowsProcessed): array
+    {
+        $state['action_called'] = $action;
+        $state['offset_before'] = $offsetBefore;
+        $state['offset_after'] = $offsetAfter;
+        $state['rows_processed_in_chunk'] = $rowsProcessed;
+        $state['memory_usage'] = function_exists('memory_get_usage') ? memory_get_usage(true) : (int) ($state['memory_usage'] ?? 0);
+        return $state;
+    }
 
     /** @param array<string,mixed> $state @param array<string,mixed> $checkpoint */
     private function append_rejected_rows_from_scanner(array &$state, array $checkpoint, ProductScanner $scanner, string $runId): void
