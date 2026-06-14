@@ -1475,6 +1475,15 @@ $noKtype = $liveTest->run(302, 'fr', true, '');
 assert_same('blocked', $noKtype['results']['EBAY_FR']['status'] ?? '', 'product without eBay item ID is blocked');
 assert_same('no_ebay_fr_listing', $noKtype['results']['EBAY_FR']['error'] ?? '', 'missing FR listing gives blocked reason');
 
+
+$adminPageSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');
+assert_same(true, str_contains($adminPageSource, '<option value="de">DE only</option>'), 'admin UI marketplace markup contains DE only as enabled option');
+assert_same(true, str_contains($adminPageSource, "inventoryMode&&marketplace.value==='both'"), 'admin UI only resets combined marketplace in inventory mode');
+assert_same(false, str_contains($adminPageSource, "if(m.value==='inventory'){market.value='fr';}"), 'admin UI inventory mode does not force DE only back to FR');
+assert_same(true, str_contains($adminPageSource, 'Inventory API (FR only or DE only product_compatibility)'), 'admin UI labels Inventory API as FR only or DE only');
+assert_same(true, str_contains($adminPageSource, 'DE + FR not supported for Inventory API'), 'admin UI labels combined marketplace as unsupported for Inventory API');
+assert_same(false, str_contains($adminPageSource, 'DE only (Trading mode only)'), 'admin UI does not label DE only as Trading mode only');
+
 $inventoryDryRun = $liveTest->run(2080, 'fr', true, '', 'inventory');
 assert_same('preview', $inventoryDryRun['results']['EBAY_FR']['status'] ?? '', 'inventory dry-run builds FR product compatibility preview');
 assert_same('PUT /sell/inventory/v1/inventory_item/SKU-FR2080/product_compatibility', $inventoryDryRun['results']['EBAY_FR']['endpoint'] ?? '', 'inventory dry-run exposes exact product compatibility endpoint');
@@ -1483,8 +1492,21 @@ assert_same('20001', (string) ($inventoryDryRun['results']['EBAY_FR']['payload']
 assert_same(false, array_key_exists('kTypeValue', $inventoryDryRun['results']['EBAY_FR']['payload']['compatibleProducts'][0] ?? []), 'inventory dry-run does not use old kTypeValue shape');
 assert_same(82, count($inventoryDryRun['results']['EBAY_FR']['payload']['compatibleProducts'] ?? []), 'inventory dry-run uses all cached KTypes for product 2080');
 assert_same(false, $inventoryDryRun['results']['EBAY_FR']['attempted'] ?? true, 'inventory dry-run does not call eBay write API');
+$inventoryDryRunDe = $liveTest->run(300, 'de', true, '', 'inventory');
+assert_same('preview', $inventoryDryRunDe['results']['EBAY_DE']['status'] ?? '', 'inventory dry-run accepts DE only selection');
+assert_same('PUT /sell/inventory/v1/inventory_item/SKU-DE300/product_compatibility', $inventoryDryRunDe['results']['EBAY_DE']['endpoint'] ?? '', 'inventory DE dry-run exposes exact product compatibility endpoint');
+assert_same(false, $inventoryDryRunDe['results']['EBAY_DE']['attempted'] ?? true, 'inventory DE dry-run does not call eBay write API');
+$inventoryDryRunFr = $liveTest->run(300, 'EBAY_FR', true, '', 'inventory');
+assert_same('preview', $inventoryDryRunFr['results']['EBAY_FR']['status'] ?? '', 'inventory dry-run accepts exact EBAY_FR selection value');
+$inventoryDryRunDeExact = $liveTest->run(300, 'EBAY_DE', true, '', 'inventory');
+assert_same('preview', $inventoryDryRunDeExact['results']['EBAY_DE']['status'] ?? '', 'inventory dry-run accepts exact EBAY_DE selection value');
+$inventoryCombined = $liveTest->run(300, 'both', true, '', 'inventory');
+assert_same('blocked', $inventoryCombined['results']['EBAY_FR']['status'] ?? '', 'inventory dry-run blocks DE plus FR combined selection');
+assert_same('inventory_live_test_combined_marketplace_not_supported', $inventoryCombined['results']['EBAY_FR']['error'] ?? '', 'inventory dry-run reports combined marketplace unsupported');
+$inventoryUnknown = $liveTest->run(300, 'unknown', true, '', 'inventory');
+assert_same('blocked', $inventoryUnknown['results']['EBAY_FR']['status'] ?? '', 'inventory dry-run blocks unknown marketplace selection');
 $inventoryMissingOffer = $liveTest->run(304, 'de', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
-assert_same('blocked', $inventoryMissingOffer['results']['EBAY_FR']['status'] ?? '', 'inventory live blocks non-FR selection before write');
+assert_same('missing_offer_id', $inventoryMissingOffer['results']['EBAY_DE']['blocked_reason'] ?? '', 'inventory live accepts DE selection before identifier validation');
 $inventoryMissingOffer = $liveTest->run(304, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
 assert_same('missing_offer_id', $inventoryMissingOffer['results']['EBAY_FR']['blocked_reason'] ?? '', 'inventory live blocks missing offer_id');
 $inventoryMissingSku = $liveTest->run(305, 'fr', false, GPS_Ebay_Fitment_Sync\Service\EbayFitmentLiveTest::INVENTORY_CONFIRMATION, 'inventory');
@@ -1499,6 +1521,7 @@ assert_same(true, $inventoryLive['results']['EBAY_FR']['attempted'] ?? false, 'i
 assert_same('PUT', $GLOBALS['gps_test_last_inventory_request']['method'] ?? '', 'inventory live uses PUT method');
 assert_same(false, array_key_exists('marketplaceId', $GLOBALS['gps_test_last_inventory_request']['body'] ?? []), 'inventory live payload does not include marketplaceId');
 assert_same('fr-FR', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Language'] ?? '', 'inventory live sends fr-FR Content-Language for EBAY_FR');
+assert_same('EBAY_FR', $GLOBALS['gps_test_last_inventory_request']['headers']['X-EBAY-C-MARKETPLACE-ID'] ?? '', 'inventory live sends EBAY_FR marketplace header');
 assert_same('application/json', $GLOBALS['gps_test_last_inventory_request']['headers']['Content-Type'] ?? '', 'inventory live sends application/json Content-Type');
 assert_same('Bearer fr-token', $GLOBALS['gps_test_last_inventory_request']['headers']['Authorization'] ?? '', 'inventory live sends bearer authorization');
 assert_same('20001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory live sends productIdentifier.ktype KTypes');

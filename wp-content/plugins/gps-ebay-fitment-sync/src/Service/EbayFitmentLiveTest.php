@@ -56,29 +56,30 @@ final class EbayFitmentLiveTest
     {
         $productId = max(0, $productId);
         $row = $this->preview->one_product($productId);
-        $market = 'EBAY_FR';
+        $market = $this->inventory_market($selection);
         $results = [];
-        if ($selection !== 'fr') {
-            $results[$market] = $this->blocked($row, $market, 'inventory_live_test_fr_only');
-            return ['dry_run' => $dryRun, 'product' => $row, 'results' => $results, 'api_mode' => 'inventory', 'api_method' => self::INVENTORY_METHOD . ' ' . self::INVENTORY_PATH_TEMPLATE, 'note' => 'Inventory live test is intentionally FR-only and one product per request.'];
+        if ($market === '') {
+            $blockedMarket = $this->inventory_block_market($selection);
+            $results[$blockedMarket] = $this->blocked($row, $blockedMarket, $selection === 'both' ? 'inventory_live_test_combined_marketplace_not_supported' : 'inventory_live_test_unknown_marketplace');
+            return ['dry_run' => $dryRun, 'product' => $row, 'results' => $results, 'api_mode' => 'inventory', 'api_method' => self::INVENTORY_METHOD . ' ' . self::INVENTORY_PATH_TEMPLATE, 'note' => 'Inventory live test supports FR only or DE only. DE + FR combined is not yet supported.'];
         }
         if (!$dryRun && ($productId <= 0 || $confirmation !== self::INVENTORY_CONFIRMATION)) {
             $results[$market] = $this->blocked($row, $market, 'live_confirmation_required');
             return ['dry_run' => false, 'product' => $row, 'results' => $results, 'api_mode' => 'inventory', 'api_method' => self::INVENTORY_METHOD . ' ' . self::INVENTORY_PATH_TEMPLATE];
         }
-        $results[$market] = $this->process_inventory_market($row, $dryRun);
+        $results[$market] = $this->process_inventory_market($row, $market, $dryRun);
         return ['dry_run' => $dryRun, 'product' => $row, 'results' => $results, 'api_mode' => 'inventory', 'api_method' => self::INVENTORY_METHOD . ' ' . self::INVENTORY_PATH_TEMPLATE, 'compatibility_target' => 'inventory_item_product_compatibility'];
     }
 
-    private function process_inventory_market(?array $row, bool $dryRun): array
+    private function process_inventory_market(?array $row, string $market, bool $dryRun): array
     {
-        $market = 'EBAY_FR';
         if (!$row) { return $this->blocked($row, $market, 'product_not_found_or_not_mapped'); }
+        $prefix = $market === 'EBAY_FR' ? 'ebay_fr' : 'ebay_de';
         $vehicleIds = $this->vehicle_ids($row);
-        $itemId = trim((string) ($row['ebay_fr_item_id'] ?? ''));
-        $offerId = trim((string) ($row['ebay_fr_offer_id'] ?? ''));
-        $sku = trim((string) ($row['ebay_fr_inventory_item_sku'] ?? ''));
-        $marketplaceId = trim((string) ($row['ebay_fr_inventory_marketplace'] ?? 'EBAY_FR')) ?: 'EBAY_FR';
+        $itemId = trim((string) ($row[$prefix . '_item_id'] ?? ''));
+        $offerId = trim((string) ($row[$prefix . '_offer_id'] ?? ''));
+        $sku = trim((string) ($row[$prefix . '_inventory_item_sku'] ?? ''));
+        $marketplaceId = trim((string) ($row[$prefix . '_inventory_marketplace'] ?? $market)) ?: $market;
         $endpoint = self::INVENTORY_METHOD . ' /sell/inventory/v1/inventory_item/' . ($sku !== '' ? rawurlencode($sku) : '{inventory_item_sku}') . '/product_compatibility';
         $payload = $this->inventory_payload($vehicleIds);
         $base = ['api_mode'=>'inventory','marketplace'=>$market,'item_id'=>$itemId,'itemId'=>$itemId,'offer_id'=>$offerId,'inventory_item_sku'=>$sku,'endpoint'=>$endpoint,'method'=>self::INVENTORY_METHOD,'payload'=>$payload,'count'=>count($vehicleIds),'ktype_count'=>count($vehicleIds),'merge_strategy'=>'Dedicated product_compatibility endpoint replaces only compatibility data; offer/inventory item details are not sent or overwritten.','attempted'=>false,'http_status'=>0,'warnings'=>[],'ack'=>''];
@@ -87,7 +88,7 @@ final class EbayFitmentLiveTest
         elseif ($offerId === '') { $block = 'missing_offer_id'; }
         elseif ($sku === '') { $block = 'missing_inventory_item_sku'; }
         elseif (!$vehicleIds) { $block = 'no_ktype'; }
-        elseif ($marketplaceId !== 'EBAY_FR') { $block = 'marketplace_must_be_EBAY_FR'; }
+        elseif ($marketplaceId !== $market) { $block = 'marketplace_must_be_' . $market; }
         if ($block !== '') {
             $logId = $this->insert_inventory_log($row, $market, $itemId, $offerId, $sku, $endpoint, self::INVENTORY_METHOD, count($vehicleIds), 'blocked', $this->summary($payload), '', $block);
             return $base + ['status'=>'blocked','blocked_reason'=>$block,'error'=>$block,'logId'=>$logId,'log_id'=>$logId,'response_summary'=>''];
@@ -96,7 +97,7 @@ final class EbayFitmentLiveTest
             $logId = $this->insert_inventory_log($row, $market, $itemId, $offerId, $sku, $endpoint, self::INVENTORY_METHOD, count($vehicleIds), 'preview', $this->summary($payload), 'dry-run only: no eBay write API called', '');
             return $base + ['status'=>'preview','blocked_reason'=>'','error'=>'','logId'=>$logId,'log_id'=>$logId,'response_summary'=>'dry-run only: no eBay write API called'];
         }
-        $response = $this->inventory_request($sku, $payload);
+        $response = $this->inventory_request($market, $sku, $payload);
         $http = (int) ($response['http_status'] ?? 0);
         $summary = $this->summary($response['body'] ?? $response);
         if (!empty($response['error'])) {
@@ -119,12 +120,12 @@ final class EbayFitmentLiveTest
         return ['EBAY_FR' => 'fr-FR', 'EBAY_DE' => 'de-DE'][$marketplaceId] ?? 'en-US';
     }
 
-    private function inventory_request(string $sku, array $payload): array
+    private function inventory_request(string $market, string $sku, array $payload): array
     {
-        $token = $this->access_token('EBAY_FR');
+        $token = $this->access_token($market);
         if ($token === '') { return ['error' => 'safe_client_reuse_unavailable_or_missing_access_token', 'http_status' => 0, 'warnings' => []]; }
         $path = '/sell/inventory/v1/inventory_item/' . rawurlencode($sku) . '/product_compatibility';
-        $res = wp_remote_request('https://api.ebay.com' . $path, ['method'=>self::INVENTORY_METHOD,'timeout'=>25,'headers'=>['Authorization'=>'Bearer '.$token,'Content-Type'=>'application/json','Accept'=>'application/json','Content-Language'=>$this->content_language_for_marketplace('EBAY_FR'),'X-EBAY-C-MARKETPLACE-ID'=>'EBAY_FR'], 'body'=>wp_json_encode($payload)]);
+        $res = wp_remote_request('https://api.ebay.com' . $path, ['method'=>self::INVENTORY_METHOD,'timeout'=>25,'headers'=>['Authorization'=>'Bearer '.$token,'Content-Type'=>'application/json','Accept'=>'application/json','Content-Language'=>$this->content_language_for_marketplace($market),'X-EBAY-C-MARKETPLACE-ID'=>$market], 'body'=>wp_json_encode($payload)]);
         if (is_wp_error($res)) { return ['error'=>$res->get_error_message(),'http_status'=>0,'warnings'=>[]]; }
         $code = (int) wp_remote_retrieve_response_code($res); $body = (string) wp_remote_retrieve_body($res); $decoded = json_decode($body, true); $warnings = $this->response_messages(is_array($decoded) ? $decoded : []);
         if ($code < 200 || $code >= 300) { return ['error'=>$warnings[0] ?? ('eBay Inventory API HTTP '.$code),'http_status'=>$code,'warnings'=>$warnings,'body'=>is_array($decoded)?$decoded:$body]; }
@@ -293,7 +294,9 @@ final class EbayFitmentLiveTest
         return $xml . '</ItemCompatibilityList></Item></ReviseFixedPriceItemRequest>';
     }
 
-    private function markets(string $selection): array { return $selection === 'de' ? ['EBAY_DE'] : ($selection === 'fr' ? ['EBAY_FR'] : ['EBAY_DE','EBAY_FR']); }
+    private function markets(string $selection): array { return $selection === 'de' || $selection === 'EBAY_DE' ? ['EBAY_DE'] : ($selection === 'fr' || $selection === 'EBAY_FR' ? ['EBAY_FR'] : ['EBAY_DE','EBAY_FR']); }
+    private function inventory_market(string $selection): string { return $selection === 'de' || $selection === 'EBAY_DE' ? 'EBAY_DE' : ($selection === 'fr' || $selection === 'EBAY_FR' ? 'EBAY_FR' : ''); }
+    private function inventory_block_market(string $selection): string { return $selection === 'de' || $selection === 'EBAY_DE' ? 'EBAY_DE' : 'EBAY_FR'; }
     private function vehicle_ids(array $row): array { return array_values(array_filter(array_map('trim', explode(',', (string) ($row['vehicle_ids'] ?? ''))))); }
     private function blocked(?array $row, string $market, string $reason): array { $item = $row ? (string) ($row[$market === 'EBAY_FR' ? 'ebay_fr_item_id' : 'ebay_de_item_id'] ?? '') : ''; $logId = $row ? $this->insert_log($row, $market, $item, 'blocked', '', '', $reason) : 0; return $this->result($market, $item, false, 'blocked', $row ? count($this->vehicle_ids($row)) : 0, $reason, '', [], $logId, []); }
     private function result(string $market, string $itemId, bool $attempted, string $status, int $count, string $error, string $ack, array $warnings, int $logId, array $payload, array $liveValidation = []): array { return compact('market','itemId','attempted','status','count','error','ack','warnings','logId','payload','liveValidation'); }
