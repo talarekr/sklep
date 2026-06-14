@@ -366,10 +366,10 @@ final class AdminPage
                 <?php foreach ($counters as $key => $value): ?><div style="border:1px solid #c3c4c7;background:#fff;padding:8px;"><span><?php echo esc_html((string) $key); ?></span><br><strong><?php echo esc_html((string) $value); ?></strong></div><?php endforeach; ?>
             </div>
             <div style="overflow:auto;margin-top:12px;"><table class="widefat striped"><thead><tr>
-                <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
+                <?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><th><?php echo esc_html($column); ?></th><?php endforeach; ?>
             </tr></thead><tbody>
-                <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
-                <?php if (!$preview['rows']): ?><tr><td colspan="13"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
+                <?php foreach ($preview['rows'] as $row): ?><tr><?php foreach (['product_id','product_title','sku','part_number_normalized','ktype_count','sample_ktypes','ebay_de_item_id','ebay_de_status','ebay_fr_item_id','ebay_fr_status','would_update_de','would_update_fr','blocked_reason_de','blocked_reason_fr','blocked_reason'] as $column): ?><td><?php echo esc_html((string) ($row[$column] ?? '')); ?></td><?php endforeach; ?></tr><?php endforeach; ?>
+                <?php if (!$preview['rows']): ?><tr><td colspan="15"><?php echo esc_html__('No preview rows matched the current filters.', 'gps-ebay-fitment-sync'); ?></td></tr><?php endif; ?>
             </tbody></table></div>
         <?php
     }
