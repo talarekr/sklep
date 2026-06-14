@@ -37,6 +37,12 @@ final class EbayFitmentPreview
         ];
     }
 
+    public function one_product(int $productId): ?array
+    {
+        $result = $this->query(['product_id' => $productId, 'limit' => 1, 'offset' => 0]);
+        return $result['rows'][0] ?? null;
+    }
+
     public function stream_csv(array $args = []): void
     {
         $args['limit'] = isset($args['limit']) ? (int) $args['limit'] : 5000;

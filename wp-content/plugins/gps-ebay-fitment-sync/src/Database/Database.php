@@ -8,7 +8,7 @@ use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 
 final class Database
 {
-    private const DB_VERSION = '0.1.2';
+    private const DB_VERSION = '0.1.3';
     private const DB_OPTION = 'gps_ebay_fitment_sync_db_version';
 
     private PartNumberNormalizer $normalizer;
@@ -45,6 +45,7 @@ final class Database
         $vehicle = $wpdb->prefix . 'gps_fitment_vehicle_cache';
         $map = $wpdb->prefix . 'gps_fitment_product_map';
         $jobs = $wpdb->prefix . 'gps_fitment_apify_jobs';
+        $ebayLog = $wpdb->prefix . 'gps_fitment_ebay_sync_log';
 
         dbDelta("CREATE TABLE {$part} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -115,6 +116,24 @@ final class Database
             KEY part_step_article (part_number_normalized, step, article_no, supplier_id)
         ) {$charset};");
 
+        dbDelta("CREATE TABLE {$ebayLog} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            product_id bigint(20) unsigned NOT NULL,
+            marketplace varchar(20) NOT NULL,
+            ebay_item_id varchar(64) NOT NULL,
+            part_number_normalized varchar(191) NOT NULL,
+            part_cache_id bigint(20) unsigned NULL,
+            ktype_count int(11) NOT NULL DEFAULT 0,
+            status varchar(20) NOT NULL,
+            request_summary longtext NULL,
+            response_summary longtext NULL,
+            error_message text NULL,
+            created_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            KEY product_market_created (product_id, marketplace, created_at),
+            KEY status (status)
+        ) {$charset};");
+
         dbDelta("CREATE TABLE {$map} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             product_id bigint(20) unsigned NOT NULL,
@@ -146,6 +165,7 @@ final class Database
             'vehicle_cache' => $wpdb->prefix . 'gps_fitment_vehicle_cache',
             'product_map' => $wpdb->prefix . 'gps_fitment_product_map',
             'apify_jobs' => $wpdb->prefix . 'gps_fitment_apify_jobs',
+            'ebay_sync_log' => $wpdb->prefix . 'gps_fitment_ebay_sync_log',
         ];
     }
 
