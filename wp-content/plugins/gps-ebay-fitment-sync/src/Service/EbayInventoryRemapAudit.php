@@ -7,7 +7,7 @@ namespace GPS_Ebay_Fitment_Sync\Service;
 final class EbayInventoryRemapAudit
 {
     public const BLOCK_REASON = 'stale_or_unconfirmed_listing_mapping';
-    public const COLUMNS = ['product_id','product_title','marketplace','part_number_normalized','ktype_count','inventory_item_sku','local_item_id','local_offer_id','local_listing_status','live_item_id','live_offer_id','live_offer_status','live_listing_status','marketplace_id','is_published','is_active_listing','stale_mapping','suggested_current_item_id','suggested_current_offer_id','suggested_inventory_item_sku','suggested_action','api_error'];
+    public const COLUMNS = ['product_id','product_title','marketplace','part_number_normalized','ktype_count','inventory_item_sku','local_item_id','local_offer_id','local_sku','local_listing_status','live_item_id','live_listing_id','live_offer_id','live_offer_status','live_listing_status','live_listing_url','live_available_quantity','live_marketplace_id','marketplace_id','is_published','is_active_listing','stale_mapping','suggested_current_item_id','suggested_current_offer_id','suggested_inventory_item_sku','suggested_action','validation_decision','validation_detail','api_error'];
 
     public function __construct(private EbayFitmentPreview $preview) {}
 
@@ -38,28 +38,28 @@ final class EbayInventoryRemapAudit
         $localOffer = trim((string) ($row[$prefix . '_offer_id'] ?? ''));
         $sku = trim((string) ($row[$prefix . '_inventory_item_sku'] ?? ''));
         $localStatus = trim((string) ($row[$prefix . '_status'] ?? ''));
-        $base = ['product_id'=>(string)($row['product_id'] ?? ''),'product_title'=>(string)($row['product_title'] ?? ''),'marketplace'=>$marketplace,'part_number_normalized'=>(string)($row['part_number_normalized'] ?? ''),'ktype_count'=>(string)($row['ktype_count'] ?? ''),'inventory_item_sku'=>$sku,'local_item_id'=>$localItem,'local_offer_id'=>$localOffer,'local_listing_status'=>$localStatus,'live_item_id'=>'','live_offer_id'=>'','live_offer_status'=>'','live_listing_status'=>'','marketplace_id'=>$marketplace,'is_published'=>'no','is_active_listing'=>'no','stale_mapping'=>'no','suggested_current_item_id'=>'','suggested_current_offer_id'=>'','suggested_inventory_item_sku'=>'','suggested_action'=>'','api_error'=>''];
-        if ($sku === '') { return $base + ['suggested_action'=>'missing_inventory_sku']; }
+        $base = ['product_id'=>(string)($row['product_id'] ?? ''),'product_title'=>(string)($row['product_title'] ?? ''),'marketplace'=>$marketplace,'part_number_normalized'=>(string)($row['part_number_normalized'] ?? ''),'ktype_count'=>(string)($row['ktype_count'] ?? ''),'inventory_item_sku'=>$sku,'local_item_id'=>$localItem,'local_offer_id'=>$localOffer,'local_sku'=>$sku,'local_listing_status'=>$localStatus,'live_item_id'=>'','live_listing_id'=>'','live_offer_id'=>'','live_offer_status'=>'','live_listing_status'=>'','live_listing_url'=>'','live_available_quantity'=>'','live_marketplace_id'=>'','marketplace_id'=>$marketplace,'is_published'=>'no','is_active_listing'=>'no','stale_mapping'=>'no','suggested_current_item_id'=>'','suggested_current_offer_id'=>'','suggested_inventory_item_sku'=>'','suggested_action'=>'','validation_decision'=>'blocked','validation_detail'=>'','api_error'=>''];
+        if ($sku === '') { $base['suggested_action'] = 'missing_inventory_sku'; $base['validation_detail'] = 'Missing local inventory SKU; cannot confirm writable Inventory API offer.'; return $base; }
         $live = $this->live_listing($marketplace, $sku, $localOffer);
-        if (!empty($live['error'])) { $base['api_error'] = (string) $live['error']; $base['suggested_action'] = 'api_error'; return $base; }
-        if (($live['item_id'] ?? '') === '') { $base['suggested_action'] = $localOffer === '' ? 'missing_offer_id' : 'current_listing_not_found'; return $base; }
-        $base['live_item_id'] = (string) $live['item_id'];
-        $base['live_offer_id'] = (string) $live['offer_id'];
-        $base['live_offer_status'] = (string) $live['offer_status'];
-        $base['live_listing_status'] = (string) $live['listing_status'];
+        if (!empty($live['error'])) { $base['api_error'] = (string) $live['error']; $base['suggested_action'] = 'api_error'; $base['validation_detail'] = 'Inventory API read failed: ' . $base['api_error']; return $base; }
+        foreach (['item_id'=>'live_item_id','listing_id'=>'live_listing_id','offer_id'=>'live_offer_id','offer_status'=>'live_offer_status','listing_status'=>'live_listing_status','available_quantity'=>'live_available_quantity','marketplace_id'=>'live_marketplace_id'] as $from=>$to) { $base[$to] = (string) ($live[$from] ?? ''); }
+        $base['live_listing_url'] = $this->listing_url($marketplace, $base['live_listing_id']);
         $base['is_published'] = !empty($live['is_published']) ? 'yes' : 'no';
         $base['is_active_listing'] = !empty($live['is_active_listing']) ? 'yes' : 'no';
-        if ($base['is_active_listing'] === 'yes' && $localItem !== '' && $localItem !== $base['live_item_id']) {
+        $detail = $this->validation_detail($localItem, $localOffer, $sku, $marketplace, $live);
+        $base['validation_detail'] = $detail;
+        if (($live['listing_id'] ?? '') === '') { $base['suggested_action'] = $localOffer === '' ? 'missing_offer_id' : 'current_listing_not_found'; return $base; }
+        if (($live['sku'] ?? '') !== $sku || ($live['marketplace_id'] ?? '') !== $marketplace || $base['is_active_listing'] !== 'yes') { $base['suggested_action'] = 'current_listing_not_found'; return $base; }
+        if ($localItem !== '' && $localItem !== $base['live_listing_id']) {
             $base['stale_mapping'] = 'yes';
-            $base['suggested_current_item_id'] = $base['live_item_id'];
+            $base['suggested_current_item_id'] = $base['live_listing_id'];
             $base['suggested_current_offer_id'] = $base['live_offer_id'];
             $base['suggested_inventory_item_sku'] = $sku;
             $base['suggested_action'] = 'update_mapping_to_live_listing';
-        } elseif ($base['is_active_listing'] === 'yes') {
-            $base['suggested_action'] = 'ok_current_mapping';
-        } else {
-            $base['suggested_action'] = 'current_listing_not_found';
+            return $base;
         }
+        $base['suggested_action'] = 'ok_current_mapping';
+        $base['validation_decision'] = 'writable';
         return $base;
     }
 
@@ -72,13 +72,26 @@ final class EbayInventoryRemapAudit
 
     private function live_listing(string $marketplace, string $sku, string $offerId): array
     {
-        if ($offerId !== '') { $offer = $this->get_json($marketplace, '/sell/inventory/v1/offer/' . rawurlencode($offerId)); if (empty($offer['error']) && $this->offer_item_id($offer) !== '') { return $this->normalize_offer($offer, $sku); } }
+        $direct = [];
+        if ($offerId !== '') {
+            $offer = $this->get_json($marketplace, '/sell/inventory/v1/offer/' . rawurlencode($offerId));
+            if (!empty($offer['error']) && (int)($offer['http_status'] ?? 0) !== 404) { return $offer; }
+            if (empty($offer['error'])) { $direct = $this->normalize_offer($offer, $sku); }
+        }
         $offers = $this->get_json($marketplace, '/sell/inventory/v1/offer?sku=' . rawurlencode($sku) . '&marketplace_id=' . rawurlencode($marketplace));
         if (!empty($offers['error'])) { return $offers; }
-        foreach (($offers['offers'] ?? []) as $offer) { $n = $this->normalize_offer((array) $offer, $sku); if (!empty($n['is_active_listing'])) { return $n; } }
+        $best = [];
+        foreach (($offers['offers'] ?? []) as $offer) {
+            $n = $this->normalize_offer((array) $offer, $sku);
+            if (($n['sku'] ?? '') !== $sku || ($n['marketplace_id'] ?? '') !== $marketplace) { continue; }
+            if ($offerId !== '' && ($n['offer_id'] ?? '') === $offerId) { $best = $n; break; }
+            if (!$best && !empty($n['is_active_listing'])) { $best = $n; }
+        }
+        if ($best) { $best['direct_offer_id'] = (string)($direct['offer_id'] ?? ''); $best['direct_listing_id'] = (string)($direct['listing_id'] ?? ''); return $best; }
+        if ($direct && ($direct['sku'] ?? '') === $sku && ($direct['marketplace_id'] ?? '') === $marketplace) { return $direct; }
         $item = $this->get_json($marketplace, '/sell/inventory/v1/inventory_item/' . rawurlencode($sku));
         if (!empty($item['error']) && (int)($item['http_status'] ?? 0) !== 404) { return $item; }
-        return [];
+        return $direct ? $direct + ['is_active_listing'=>false] : [];
     }
 
     private function get_json(string $marketplace, string $path): array
@@ -90,7 +103,9 @@ final class EbayInventoryRemapAudit
         if ($code < 200 || $code >= 300) { return ['error'=>'eBay Inventory API HTTP '.$code,'http_status'=>$code,'body'=>$body]; }
         return is_array($json) ? $json : [];
     }
-    private function normalize_offer(array $offer, string $sku): array { $status=(string)($offer['status'] ?? $offer['offerStatus'] ?? ''); $listingStatus=(string)($offer['listingStatus'] ?? $offer['listing']['listingStatus'] ?? $status); $item=$this->offer_item_id($offer); return ['item_id'=>$item,'offer_id'=>(string)($offer['offerId'] ?? ''),'offer_status'=>$status,'listing_status'=>$listingStatus,'is_published'=>$item !== '' || stripos($status,'publish') !== false,'is_active_listing'=>$item !== '' && in_array(strtolower($listingStatus ?: $status), ['published','active'], true),'sku'=>(string)($offer['sku'] ?? $sku)]; }
+    private function normalize_offer(array $offer, string $sku): array { $status=(string)($offer['status'] ?? $offer['offerStatus'] ?? ''); $listingStatus=(string)($offer['listingStatus'] ?? $offer['listing']['listingStatus'] ?? $status); $item=$this->offer_item_id($offer); $market=(string)($offer['marketplaceId'] ?? $offer['marketplace_id'] ?? $offer['listing']['marketplaceId'] ?? ''); $qty=(string)($offer['availableQuantity'] ?? $offer['quantityLimitPerBuyer'] ?? $offer['listing']['availableQuantity'] ?? ''); return ['item_id'=>$item,'listing_id'=>$item,'offer_id'=>(string)($offer['offerId'] ?? ''),'offer_status'=>$status,'listing_status'=>$listingStatus,'marketplace_id'=>$market,'available_quantity'=>$qty,'is_published'=>$item !== '' || stripos($status,'publish') !== false,'is_active_listing'=>$item !== '' && in_array(strtolower($listingStatus ?: $status), ['published','active'], true),'sku'=>(string)($offer['sku'] ?? $sku)]; }
+    private function validation_detail(string $localItem, string $localOffer, string $sku, string $marketplace, array $live): string { if (($live['listing_id'] ?? '') === '') { return 'No current published listingId found from GET offer by offer_id or GET offer by sku/marketplace.'; } $parts=[]; foreach(['sku'=>$sku,'marketplace_id'=>$marketplace,'listing_id'=>$localItem,'offer_id'=>$localOffer] as $k=>$v){ $liveKey=$k==='listing_id'?'listing_id':$k; if ($v !== '' && isset($live[$liveKey]) && (string)$live[$liveKey] !== $v) { $parts[]=$k . ' mismatch local=' . $v . ' live=' . (string)$live[$liveKey]; }} if (empty($live['is_active_listing'])) { $parts[]='listing is not active/published: offer_status=' . (string)($live['offer_status'] ?? '') . ' listing_status=' . (string)($live['listing_status'] ?? ''); } return $parts ? implode('; ', $parts) : 'Inventory API confirmed same sku, marketplace, offer_id, and active published listingId ' . (string)($live['listing_id'] ?? '') . '.'; }
+    private function listing_url(string $marketplace, string $listingId): string { if ($listingId === '') { return ''; } return ($marketplace === 'EBAY_FR' ? 'https://www.ebay.fr/itm/' : 'https://www.ebay.de/itm/') . rawurlencode($listingId); }
     private function offer_item_id(array $offer): string { return trim((string)($offer['listingId'] ?? $offer['listing']['listingId'] ?? $offer['listing']['itemId'] ?? $offer['itemId'] ?? '')); }
     private function access_token(string $market): string { $authClass = $market === 'EBAY_FR' ? '\\WEI_FR\\Services\\EbayAuth' : '\\WEI\\Services\\EbayAuth'; $loggerClass = $market === 'EBAY_FR' ? '\\WEI_FR\\Services\\Logger' : '\\WEI\\Services\\Logger'; if (class_exists($authClass) && class_exists($loggerClass)) { $token = (new $authClass(new $loggerClass()))->get_valid_access_token(); return is_wp_error($token) ? '' : (string) $token; } $s = get_option($market === 'EBAY_FR' ? 'wei_fr_ebay_settings' : 'wei_ebay_settings', []); return is_array($s) && (int)($s['expires_at'] ?? 0) > time() + 120 ? (string)($s['access_token'] ?? '') : ''; }
     private function markets(string $s): array { return $s === 'fr' ? ['EBAY_FR'] : ($s === 'both' ? ['EBAY_DE','EBAY_FR'] : ['EBAY_DE']); }

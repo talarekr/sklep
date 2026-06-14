@@ -1517,8 +1517,30 @@ $liveAfterDryRun = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => '
 assert_same(2, $liveAfterDryRun['counters']['attempted'] ?? 0, 'dry-run preview rows do not block later live run with same run_id');
 assert_same(2, $GLOBALS['gps_test_http_calls'], 'live after dry-run preview makes Inventory API calls and no Apify calls');
 $duplicateLive = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'run_id' => 'batch-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
-assert_same(2, $duplicateLive['counters']['skipped'] ?? 0, 'duplicate protection skips only previous live success/warning_success rows in same run');
-assert_same(2, $GLOBALS['gps_test_http_calls'], 'duplicate live batch does not add Inventory API calls');
+assert_same(true, (int)($duplicateLive['rows'][0]['product_id'] ?? 0) > (int)($liveAfterDryRun['rows'][0]['product_id'] ?? 0), 'repeated live tick resumes after prior processed product instead of reloading it');
+assert_same(4, $duplicateLive['checkpoint']['attempt_offset'] ?? 0, 'repeated live tick advances checkpoint past second product attempts');
+assert_same(2, $GLOBALS['gps_test_http_calls'], 'repeated live tick does not add Inventory API calls when next product is blocked before write');
+$validatedBatchRunner = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner($previewService, new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService));
+$GLOBALS['gps_test_http_calls'] = 0;
+$GLOBALS['gps_test_inventory_offers_by_id'] = [];
+$GLOBALS['gps_test_inventory_offers_by_sku'] = [];
+$blockedTickOne = $validatedBatchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'run_id' => 'blocked-repeat-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(2, $blockedTickOne['counters']['blocked'] ?? 0, 'blocked FR+DE product records both marketplaces once in first tick');
+assert_same(2, $blockedTickOne['checkpoint']['attempt_offset'] ?? 0, 'blocked FR+DE product advances checkpoint after both marketplaces');
+$blockedTickTwo = $validatedBatchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'run_id' => 'blocked-repeat-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(true, (int)($blockedTickTwo['rows'][0]['product_id'] ?? 0) > (int)($blockedTickOne['rows'][0]['product_id'] ?? 0), 'repeated tick does not reload the same blocked product IDs');
+assert_same(4, $blockedTickTwo['checkpoint']['attempt_offset'] ?? 0, 'second blocked tick advances checkpoint after next product');
+$blockedReset = $validatedBatchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'reset' => 1, 'run_id' => 'blocked-repeat-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same($blockedTickOne['rows'][0]['product_id'] ?? '', $blockedReset['rows'][0]['product_id'] ?? '', 'reset intentionally starts inventory auto runner from beginning');
+$GLOBALS['gps_test_inventory_api_error'] = true;
+$GLOBALS['gps_test_http_calls'] = 0;
+$errorTickOne = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'run_id' => 'error-advance-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(2, $errorTickOne['counters']['errors'] ?? 0, 'Inventory API errors are logged for both marketplaces');
+assert_same(2, $errorTickOne['checkpoint']['attempt_offset'] ?? 0, 'Inventory API errors advance checkpoint');
+$errorTickTwo = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 1, 'offset' => 0, 'attempt_offset' => 0, 'run_id' => 'error-advance-test', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
+assert_same(true, (int)($errorTickTwo['rows'][0]['product_id'] ?? 0) > (int)($errorTickOne['rows'][0]['product_id'] ?? 0), 'Inventory API errors do not cause endless reload of same product');
+$GLOBALS['gps_test_inventory_api_error'] = false;
+$GLOBALS['gps_test_http_calls'] = 0;
 $GLOBALS['gps_test_http_calls'] = 0;
 $liveBatch = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'live', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-live-ok', 'confirmation' => GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner::CONFIRMATION]);
 assert_same(true, $liveBatch['ok'] ?? false, 'batch live mode with exact confirmation invokes runner');
@@ -1662,6 +1684,48 @@ assert_same('Bearer de-token', $GLOBALS['gps_test_last_inventory_request']['head
 assert_same('10001', (string) ($GLOBALS['gps_test_last_inventory_request']['body']['compatibleProducts'][0]['productIdentifier']['ktype'] ?? ''), 'inventory DE live sends productIdentifier.ktype KTypes');
 assert_same(1, $GLOBALS['gps_test_http_calls'], 'inventory DE live makes one Inventory API write and no Apify calls');
 
+
+
+// Inventory remap validation decision tests.
+$remapAudit = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryRemapAudit($previewService);
+$GLOBALS['gps_test_inventory_offers_by_id'] = [
+    '180394514011' => ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
+    '163638154011' => ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
+    'OFFER-ENDED' => ['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']],
+];
+$GLOBALS['gps_test_inventory_offers_by_sku'] = [
+    'GPSW-2177' => [
+        ['offerId'=>'180394514011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_FR','status'=>'PUBLISHED','listing'=>['listingId'=>'800119556464','listingStatus'=>'ACTIVE'],'availableQuantity'=>3],
+        ['offerId'=>'163638154011','sku'=>'GPSW-2177','marketplaceId'=>'EBAY_DE','status'=>'PUBLISHED','listing'=>['listingId'=>'389993640108','listingStatus'=>'ACTIVE'],'availableQuantity'=>2],
+    ],
+    'SKU-ENDED' => [['offerId'=>'OFFER-ENDED','sku'=>'SKU-ENDED','marketplaceId'=>'EBAY_DE','status'=>'ENDED','listing'=>['listingId'=>'DE-ENDED','listingStatus'=>'ENDED']]],
+];
+$fr2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_fr_item_id'=>'800119556464','ebay_fr_offer_id'=>'180394514011','ebay_fr_inventory_item_sku'=>'GPSW-2177','ebay_fr_status'=>'active'];
+$GLOBALS['gps_test_inventory_read_calls'] = [];
+$frAudit = $remapAudit->audit_row($fr2177, 'EBAY_FR');
+$frReadUrls = implode(' ', array_map(static fn(array $call): string => $call['url'] ?? '', $GLOBALS['gps_test_inventory_read_calls'] ?? []));
+assert_same(true, str_contains($frReadUrls, '/sell/inventory/v1/offer/180394514011') && str_contains($frReadUrls, '/sell/inventory/v1/offer?sku=GPSW-2177') && str_contains($frReadUrls, 'marketplace_id=EBAY_FR'), 'remap validation compares GET offer by offer_id with GET offer by sku and marketplace');
+assert_same('800119556464', $frAudit['live_listing_id'] ?? '', 'remap uses Inventory API listingId as public item ID, not offer_id');
+assert_same('180394514011', $frAudit['live_offer_id'] ?? '', 'remap keeps offer_id separate from public item ID');
+assert_same('https://www.ebay.fr/itm/800119556464', $frAudit['live_listing_url'] ?? '', 'FR public listing URL uses listingId/item_id');
+assert_same('writable', $frAudit['validation_decision'] ?? '', 'active published FR listing passes validation');
+assert_same(true, str_contains($frAudit['validation_detail'] ?? '', 'listingId 800119556464'), 'successful validation detail names the confirmed listingId');
+assert_same(false, ($frAudit['live_listing_id'] ?? '') === ($frAudit['live_offer_id'] ?? ''), 'offer_id is never treated as public item_id');
+$de2177 = ['product_id'=>2177,'product_title'=>'2177','part_number_normalized'=>'GPSW','ktype_count'=>'1','ebay_de_item_id'=>'389993640108','ebay_de_offer_id'=>'163638154011','ebay_de_inventory_item_sku'=>'GPSW-2177','ebay_de_status'=>'active'];
+$deAudit = $remapAudit->audit_row($de2177, 'EBAY_DE');
+assert_same('https://www.ebay.de/itm/389993640108', $deAudit['live_listing_url'] ?? '', 'DE public listing URL uses listingId/item_id');
+assert_same('writable', $deAudit['validation_decision'] ?? '', 'active published DE listing passes validation');
+$staleFr = $fr2177; $staleFr['ebay_fr_item_id'] = '180394514011';
+$staleValidation = $remapAudit->validate_before_write($staleFr, 'EBAY_FR');
+assert_same(false, $staleValidation['ok'] ?? true, 'stale mapping blocks validation');
+assert_same('stale_or_unconfirmed_listing_mapping', $staleValidation['blocked_reason'] ?? '', 'stale mapping returns expected block reason');
+assert_same(true, str_contains($staleValidation['audit']['validation_detail'] ?? '', 'listing_id mismatch local=180394514011 live=800119556464'), 'stale mapping detail explains exact item/listing mismatch');
+$endedAudit = $remapAudit->audit_row(['product_id'=>400,'product_title'=>'ended','part_number_normalized'=>'END','ktype_count'=>'1','ebay_de_item_id'=>'DE-ENDED','ebay_de_offer_id'=>'OFFER-ENDED','ebay_de_inventory_item_sku'=>'SKU-ENDED','ebay_de_status'=>'active'], 'EBAY_DE');
+assert_same('blocked', $endedAudit['validation_decision'] ?? '', 'ended listings remain blocked');
+assert_same('current_listing_not_found', $endedAudit['suggested_action'] ?? '', 'ended listings report current listing not found');
+assert_same(true, str_contains($endedAudit['validation_detail'] ?? '', 'not active/published'), 'ended listing detail explains inactive listing');
+$GLOBALS['gps_test_inventory_offers_by_id'] = [];
+$GLOBALS['gps_test_inventory_offers_by_sku'] = [];
 
 $previewSource = file_get_contents(__DIR__ . '/../src/Service/EbayFitmentPreview.php');
 $adminPreviewSource = file_get_contents(__DIR__ . '/../src/Admin/AdminPage.php');

@@ -28,10 +28,12 @@ final class EbayInventoryFitmentBatchRunner
         if ($mode === 'live' && (string) ($args['confirmation'] ?? '') !== self::CONFIRMATION) {
             return ['ok' => false, 'error' => 'live_confirmation_required', 'required_confirmation' => self::CONFIRMATION, 'checkpoint' => $this->checkpoint()];
         }
-        $checkpoint = !empty($args['resume']) ? $this->checkpoint() : [];
-        $runId = (string) ($args['run_id'] ?? ($checkpoint['run_id'] ?? ''));
+        $storedCheckpoint = $this->checkpoint();
+        $requestedRunId = (string) ($args['run_id'] ?? '');
+        $checkpoint = $this->checkpoint_for_tick($storedCheckpoint, $args, $requestedRunId, $mode, $selection, $batchSize);
+        $runId = (string) ($requestedRunId !== '' ? $requestedRunId : ($checkpoint['run_id'] ?? ''));
         if ($runId === '') { $runId = 'ebay-inventory-fitment-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false); }
-        $attemptOffset = isset($args['attempt_offset']) ? max(0, (int) $args['attempt_offset']) : max(0, (int) ($checkpoint['attempt_offset'] ?? ((int) ($args['offset'] ?? 0) * count($selection))));
+        $attemptOffset = isset($args['attempt_offset']) && (int) $args['attempt_offset'] > 0 ? max(0, (int) $args['attempt_offset']) : max(0, (int) ($checkpoint['attempt_offset'] ?? ((int) ($args['offset'] ?? 0) * count($selection))));
         $productOffset = intdiv($attemptOffset, count($selection));
         $marketStart = $attemptOffset % count($selection);
         $checkpointStatus = (string) ($checkpoint['status'] ?? '');
@@ -67,6 +69,20 @@ final class EbayInventoryFitmentBatchRunner
         $diagnostics = ['memory_usage_start'=>$memoryStart,'memory_usage_end'=>memory_get_usage(true),'peak_memory_usage'=>memory_get_peak_usage(true),'candidate_products_loaded'=>count($candidates),'marketplace_attempts_built'=>$attemptsBuilt];
         if ($diagnostics['peak_memory_usage'] > 180 * 1024 * 1024) { $diagnostics['memory_warning'] = 'high_memory_usage'; }
         return $this->progress_response($runId, $mode, $selection, $batchSize, $totalAttempts, $rows, $diagnostics, $counters);
+    }
+
+    private function checkpoint_for_tick(array $stored, array $args, string $requestedRunId, string $mode, array $selection, int $batchSize): array
+    {
+        if (!empty($args['reset']) || (isset($args['offset']) && (int) $args['offset'] > 0) || (isset($args['attempt_offset']) && (int) $args['attempt_offset'] > 0)) { return []; }
+        if (!empty($args['resume'])) { return $stored; }
+        if (!$stored) { return []; }
+        $storedRunId = (string) ($stored['run_id'] ?? '');
+        if ($requestedRunId !== '' && $storedRunId !== $requestedRunId) { return []; }
+        if ((string) ($stored['mode'] ?? '') !== $mode) { return []; }
+        if ((string) ($stored['marketplace'] ?? '') !== implode(',', $selection)) { return []; }
+        if ((int) ($stored['batch_size'] ?? 0) !== $batchSize) { return []; }
+        if (in_array((string) ($stored['status'] ?? ''), ['completed', 'stopped'], true)) { return []; }
+        return $stored;
     }
 
     public function stop(string $reason = 'manual_stop'): array { $cp = $this->checkpoint(); $cp['status'] = 'stopped'; $cp['stopped_reason'] = $reason; $cp['updated_at'] = current_time('mysql'); $this->save_checkpoint($cp); return $cp; }
@@ -133,7 +149,8 @@ final class EbayInventoryFitmentBatchRunner
     private function empty_counters(): array { return array_fill_keys(['scanned_products','marketplace_attempts','eligible','preview','attempted','success','warning_success','blocked','skipped','errors','preview_fr','attempted_fr','success_fr','warning_success_fr','errors_fr','blocked_fr','preview_de','attempted_de','success_de','warning_success_de','errors_de','blocked_de'], 0); }
     private function tally(array &$c, array $r): void { $c['marketplace_attempts']++; if($r['would_update']==='yes')$c['eligible']++; if($r['attempted']==='true')$c['attempted']++; $s=$r['status']; if($s==='preview')$c['preview']++; elseif($s==='success')$c['success']++; elseif($s==='warning_success')$c['warning_success']++; elseif($s==='blocked')$c['blocked']++; elseif($s==='skipped'||$s==='already_processed')$c['skipped']++; elseif($s==='error')$c['errors']++; $mk=$r['marketplace']==='EBAY_FR'?'fr':'de'; if($s==='preview')$c['preview_'.$mk]++; if($r['attempted']==='true')$c['attempted_'.$mk]++; foreach(['success','warning_success'] as $k){ if($s===$k)$c[$k.'_'.$mk]++; } if($s==='error')$c['errors_'.$mk]++; if($s==='blocked')$c['blocked_'.$mk]++; }
     private function save_checkpoint(array $cp): void { update_option(self::CHECKPOINT_OPTION, $cp, false); }
-    public function export_csv(string $runId): array { global $wpdb; $upload=wp_upload_dir(); $dir=trailingslashit($upload['basedir']).'gps-ebay-fitment-sync'; if(!is_dir($dir)){ wp_mkdir_p($dir); } $file=$dir.'/ebay-inventory-fitment-auto-'.$runId.'.csv'; $url=trailingslashit($upload['baseurl']).'gps-ebay-fitment-sync/'.basename($file); $out=fopen($file,'w'); $cols=['run_id','product_id','marketplace','item_id','offer_id','inventory_item_sku','part_number_normalized','ktype_count','sample_ktypes','endpoint','attempted','status','http_status','blocked_reason','warning_count','warnings','error_message','response_summary','created_at']; fputcsv($out,$cols); $lastId=0; $table=Database::table_names()['ebay_sync_log']; do { $rows=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE run_id=%s AND id > %d ORDER BY id ASC LIMIT %d", $runId, $lastId, 500),ARRAY_A) ?: []; foreach($rows as $r){ $lastId=max($lastId,(int)($r['id'] ?? 0)); fputcsv($out,[$runId,$r['product_id'],$r['marketplace'],$r['ebay_item_id'],$r['offer_id'],$r['inventory_item_sku'],$r['part_number_normalized'],$r['ktype_count'],'',$r['endpoint'],empty($r['attempted'])?'false':'true',$r['status'],$r['http_status'] ?? '',$r['blocked_reason'] ?? '',substr_count((string)($r['warnings'] ?? ''),'|') + ((string)($r['warnings'] ?? '')!=='' ? 1 : 0),$r['warnings'] ?? '',$r['error_message'] ?? '',$r['response_summary'] ?? '',$r['created_at']]); } } while (count($rows) === 500); fclose($out); return ['path'=>$file,'url'=>$url,'columns'=>$cols]; }
+    public function export_csv(string $runId): array { global $wpdb; $upload=wp_upload_dir(); $dir=trailingslashit($upload['basedir']).'gps-ebay-fitment-sync'; if(!is_dir($dir)){ wp_mkdir_p($dir); } $file=$dir.'/ebay-inventory-fitment-auto-'.$runId.'.csv'; $url=trailingslashit($upload['baseurl']).'gps-ebay-fitment-sync/'.basename($file); $out=fopen($file,'w'); $debugCols=['local_item_id','local_offer_id','local_sku','live_offer_id','live_offer_status','live_listing_id','live_listing_status','live_listing_url','live_available_quantity','live_marketplace_id','validation_decision','validation_detail']; $cols=array_merge(['run_id','product_id','marketplace','item_id','offer_id','inventory_item_sku','part_number_normalized','ktype_count','sample_ktypes','endpoint','attempted','status','http_status','blocked_reason','warning_count','warnings','error_message','response_summary','created_at'],$debugCols); fputcsv($out,$cols); $lastId=0; $table=Database::table_names()['ebay_sync_log']; do { $rows=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE run_id=%s AND id > %d ORDER BY id ASC LIMIT %d", $runId, $lastId, 500),ARRAY_A) ?: []; foreach($rows as $r){ $lastId=max($lastId,(int)($r['id'] ?? 0)); $audit=$this->audit_from_response((string)($r['response_summary'] ?? '')); fputcsv($out,array_merge([$runId,$r['product_id'],$r['marketplace'],$r['ebay_item_id'],$r['offer_id'],$r['inventory_item_sku'],$r['part_number_normalized'],$r['ktype_count'],'',$r['endpoint'],empty($r['attempted'])?'false':'true',$r['status'],$r['http_status'] ?? '',$r['blocked_reason'] ?? '',substr_count((string)($r['warnings'] ?? ''),'|') + ((string)($r['warnings'] ?? '')!=='' ? 1 : 0),$r['warnings'] ?? '',$r['error_message'] ?? '',$r['response_summary'] ?? '',$r['created_at']], array_map(static fn($c)=>(string)($audit[$c] ?? ''), $debugCols))); } } while (count($rows) === 500); fclose($out); return ['path'=>$file,'url'=>$url,'columns'=>$cols]; }
+    private function audit_from_response(string $summary): array { $decoded=json_decode($summary, true); return is_array($decoded) && isset($decoded['remap_audit']) && is_array($decoded['remap_audit']) ? $decoded['remap_audit'] : []; }
 
     private function progress_response(string $runId, string $mode, array $selection, int $batchSize, int $totalAttempts, array $rows, array $diagnostics, array $tickCounters = []): array
     {
@@ -185,6 +202,9 @@ final class EbayInventoryFitmentBatchRunner
                 SUM(CASE WHEN marketplace='EBAY_DE' AND status='blocked' THEN 1 ELSE 0 END) AS blocked_de
             FROM {$table} WHERE run_id=%s AND api_mode='inventory'", $runId), ARRAY_A) ?: [];
         foreach ($c as $key => $_) { $c[$key] = (int) ($summary[$key] ?? 0); }
+        $c['scanned_products_total'] = $c['scanned_products'];
+        $c['marketplace_attempts_total'] = $c['marketplace_attempts'];
+        $c['blocked_total'] = $c['blocked'];
         return $c;
     }
 
