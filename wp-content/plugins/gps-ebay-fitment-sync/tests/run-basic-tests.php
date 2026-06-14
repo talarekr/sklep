@@ -33,6 +33,17 @@ if (!function_exists('update_option')) {
         return true;
     }
 }
+
+if (!function_exists('delete_option')) {
+    function delete_option($option): bool { unset($GLOBALS['gps_test_options'][(string) $option]); return true; }
+}
+if (!function_exists('wp_generate_password')) {
+    function wp_generate_password($length = 12, $special_chars = true, $extra_special_chars = false): string { return substr(str_repeat('abc123', 10), 0, (int) $length); }
+}
+if (!function_exists('trailingslashit')) {
+    function trailingslashit($value): string { return rtrim((string) $value, '/') . '/'; }
+}
+
 if (!function_exists('apply_filters')) {
     function apply_filters($hook, $value, ...$args) { return $value; }
 }
@@ -248,6 +259,20 @@ final class FakeWpdb
             return array_values(array_filter($this->tables[$matches[1]] ?? [], static function (array $row) use ($matches): bool {
                 return (string) ($row['run_id'] ?? '') === $matches[2] && (string) ($row['part_number_normalized'] ?? '') === $matches[3];
             }));
+        }
+
+        if (preg_match("/SELECT \* FROM (\S+) WHERE run_id='([^']*)' ORDER BY id DESC LIMIT (\d+)/", $query, $matches)
+            || preg_match("/SELECT \* FROM (\S+) WHERE run_id = '([^']*)' ORDER BY id DESC LIMIT (\d+)/", $query, $matches)) {
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2]));
+            usort($rows, fn(array $a, array $b): int => (int) ($b['id'] ?? 0) <=> (int) ($a['id'] ?? 0));
+            return array_slice($rows, 0, (int) $matches[3]);
+        }
+
+        if (preg_match("/SELECT \* FROM (\S+) WHERE run_id='([^']*)' AND id > (\d+) ORDER BY id ASC LIMIT (\d+)/", $query, $matches)
+            || preg_match("/SELECT \* FROM (\S+) WHERE run_id = '([^']*)' AND id > (\d+) ORDER BY id ASC LIMIT (\d+)/", $query, $matches)) {
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool => (string) ($row['run_id'] ?? '') === $matches[2] && (int) ($row['id'] ?? 0) > (int) $matches[3]));
+            usort($rows, fn(array $a, array $b): int => (int) ($a['id'] ?? 0) <=> (int) ($b['id'] ?? 0));
+            return array_slice($rows, 0, (int) $matches[4]);
         }
 
         return [];
@@ -1395,6 +1420,19 @@ assert_same('product_not_found', $missingProductPreview['rows'][0]['blocked_reas
 assert_same(0, $GLOBALS['gps_test_http_calls'], 'preview makes no Apify calls');
 assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'preview does not modify Woo/product-map data');
 
+$batchCandidates = $previewService->inventory_batch_candidates('both', 0, 5);
+assert_same(5, count($batchCandidates['rows']), 'candidate loader applies limit before building payloads');
+assert_same(10, $batchCandidates['marketplace_attempts_built'] ?? 0, 'candidate loader reports at most 10 marketplace attempts for 5 DE+FR products');
+$batchRunner = new GPS_Ebay_Fitment_Sync\Service\EbayInventoryFitmentBatchRunner($previewService);
+$GLOBALS['gps_test_http_calls'] = 0;
+$batchResult = $batchRunner->run_batch(['marketplace' => 'both', 'mode' => 'dry_run', 'batch_size' => 5, 'offset' => 0, 'run_id' => 'batch-test']);
+assert_same(5, $batchResult['diagnostics']['candidate_products_loaded'] ?? 0, 'batch size 5 loads max 5 Woo products');
+assert_same(10, $batchResult['diagnostics']['marketplace_attempts_built'] ?? 0, 'batch size 5 builds at most 10 marketplace attempts for DE+FR');
+assert_same(10, count($batchResult['rows'] ?? []), 'batch dry-run writes log rows for current chunk only');
+assert_same(0, $GLOBALS['gps_test_http_calls'], 'batch dry-run makes no Apify or eBay API calls');
+assert_same(7, count($previewWpdb->tables['wp_gps_fitment_product_map'] ?? []), 'batch runner does not modify Woo/product-map data');
+assert_same(true, isset($batchResult['diagnostics']['memory_usage_start'], $batchResult['diagnostics']['memory_usage_end'], $batchResult['diagnostics']['peak_memory_usage']), 'batch runner returns memory diagnostics');
+
 $inventoryPreview = $previewService->inventory_fitment_preview(300, 'both');
 assert_same('yes', $inventoryPreview['results']['EBAY_DE']['would_update_inventory_fitment'] ?? '', 'inventory preview builds DE update when offer and inventory SKU exist');
 assert_same('PUT /sell/inventory/v1/inventory_item/SKU-DE300/product_compatibility', $inventoryPreview['results']['EBAY_DE']['endpoint'] ?? '', 'inventory preview exposes product compatibility endpoint');
@@ -1550,6 +1588,9 @@ assert_same(false, str_contains($previewSource, 'ReviseFixedPriceItem') || str_c
 assert_same(true, str_contains($liveTestSource, 'ReviseFixedPriceItem'), 'live test uses Trading API ReviseFixedPriceItem');
 assert_same(true, str_contains($liveTestSource, 'inventory_based_listing_not_supported_by_trading_api'), 'live test blocks inventory-based Trading API errors');
 assert_same(true, str_contains($liveTestSource, 'product_compatibility') && str_contains($liveTestSource, 'UPDATE EBAY INVENTORY FITMENT'), 'live test contains Inventory API product compatibility mode');
+assert_same(false, str_contains($batchRunnerSource, '->query('), 'batch runner does not call full preview query method');
+assert_same(true, str_contains($batchRunnerSource, 'inventory_batch_candidates'), 'batch runner uses lightweight candidate loader');
+assert_same(true, str_contains($batchRunnerSource, 'id > %d') && str_contains($batchRunnerSource, 'LIMIT %d'), 'batch CSV export streams log rows incrementally');
 assert_same(true, str_contains($batchRunnerSource, 'RUN EBAY INVENTORY FITMENT BATCH'), 'batch live requires exact RUN EBAY INVENTORY FITMENT BATCH confirmation');
 assert_same(true, str_contains($batchRunnerSource, "['EBAY_FR','EBAY_DE']") || str_contains($batchRunnerSource, "['EBAY_FR', 'EBAY_DE']"), 'DE + FR creates separate marketplace attempts');
 assert_same(true, str_contains($batchRunnerSource, "'fr-FR'") && str_contains($batchRunnerSource, "'de-DE'") && str_contains($batchRunnerSource, "X-EBAY-C-MARKETPLACE-ID"), 'FR and DE headers are explicit');

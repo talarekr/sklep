@@ -43,6 +43,54 @@ final class EbayFitmentPreview
         ];
     }
 
+    /**
+     * Load only the limited product candidates needed by the Inventory batch runner.
+     *
+     * This intentionally avoids query(), counters(), CSV columns, payload JSON, and any
+     * full-preview decoration so batch dry-runs do not materialize thousands of rows.
+     */
+    public function inventory_batch_candidates(string $selection = 'both', int $offset = 0, int $limit = 25): array
+    {
+        $limit = max(1, min(100, $limit));
+        $offset = max(0, $offset);
+        $markets = $selection === 'fr' ? ['fr'] : ($selection === 'de' ? ['de'] : ['fr', 'de']);
+        $rows = $this->base_rows($limit, $offset, ['only_with_ktype' => true, 'product_id' => null, 'part_number' => '']);
+        $candidates = [];
+        foreach (array_slice($rows, 0, $limit) as $row) {
+            $productId = (int) ($row['product_id'] ?? 0);
+            $vehicles = $this->vehicle_ids((int) ($row['part_cache_id'] ?? 0));
+            $candidate = [
+                'product_id' => (string) $productId,
+                'product_title' => trim((string) ($row['product_title'] ?? '')),
+                'sku' => (string) ($row['sku'] ?? ''),
+                'part_number_normalized' => (string) ($row['part_number_normalized'] ?? ''),
+                'part_cache_id' => (string) ($row['part_cache_id'] ?? ''),
+                'ktype_count' => (string) count($vehicles),
+                'vehicle_ids' => implode(',', $vehicles),
+                'sample_ktypes' => implode(',', array_slice($vehicles, 0, 10)),
+            ];
+            foreach ($markets as $market) {
+                $prefix = $market === 'fr' ? 'ebay_fr' : 'ebay_de';
+                $listing = $this->listing($productId, $market);
+                $candidate[$prefix . '_item_id'] = $listing['item_id'];
+                $candidate[$prefix . '_status'] = $listing['status'];
+                $candidate[$prefix . '_listing_management_type'] = $listing['listing_management_type'];
+                $candidate[$prefix . '_inventory_item_sku'] = $listing['inventory_item_sku'];
+                $candidate[$prefix . '_offer_id'] = $listing['offer_id'];
+            }
+            $candidates[] = $candidate;
+        }
+
+        return [
+            'rows' => $candidates,
+            'limit' => $limit,
+            'offset' => $offset,
+            'marketplaces' => $markets,
+            'candidate_products_loaded' => count($candidates),
+            'marketplace_attempts_built' => count($candidates) * count($markets),
+        ];
+    }
+
     public function one_product(int $productId): ?array
     {
         $result = $this->query(['product_id' => $productId, 'limit' => 1, 'offset' => 0]);
