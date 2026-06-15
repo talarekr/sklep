@@ -314,26 +314,30 @@ final class AdminPage
     {
         $this->guard('gps_oem_ktype_ebay_coverage_audit');
         $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash((string) $_POST['run_id'])) : OemKtypeEbayCoverageAudit::DEFAULT_RUN_ID;
-        $this->store_result(['type' => 'oem_ktype_ebay_coverage_audit', 'result' => $this->oemKtypeEbayCoverageAudit->run($runId)]);
+        $sampleSize = isset($_POST['sample_size']) ? (int) $_POST['sample_size'] : 50;
+        $this->store_result(['type' => 'oem_ktype_ebay_coverage_audit', 'result' => $this->oemKtypeEbayCoverageAudit->run($runId, $sampleSize)]);
     }
 
     public function oem_ktype_ebay_coverage_csv(): void
     {
         $this->guard('gps_oem_ktype_ebay_coverage_csv');
         $runId = isset($_POST['run_id']) ? sanitize_text_field(wp_unslash((string) $_POST['run_id'])) : OemKtypeEbayCoverageAudit::DEFAULT_RUN_ID;
-        $this->store_result(['type' => 'oem_ktype_ebay_coverage_csv', 'result' => $this->oemKtypeEbayCoverageAudit->export_csv($runId)]);
+        $this->oemKtypeEbayCoverageAudit->stream_csv_download($runId);
+        exit;
     }
 
     public function ktype_miss_audit(): void
     {
         $this->guard('gps_ktype_miss_audit');
-        $this->store_result(['type' => 'ktype_miss_audit', 'result' => $this->ktypeMissAudit->run()]);
+        $sampleSize = isset($_POST['sample_size']) ? (int) $_POST['sample_size'] : 50;
+        $this->store_result(['type' => 'ktype_miss_audit', 'result' => $this->ktypeMissAudit->run($sampleSize)]);
     }
 
     public function ktype_miss_audit_csv(): void
     {
         $this->guard('gps_ktype_miss_audit_csv');
-        $this->store_result(['type' => 'ktype_miss_audit_csv', 'result' => $this->ktypeMissAudit->export_csv()]);
+        $this->ktypeMissAudit->stream_csv_download();
+        exit;
     }
 
     public function ebay_fitment_live_test(): void
@@ -647,6 +651,7 @@ final class AdminPage
                 <input type="hidden" name="action" value="gps_oem_ktype_ebay_coverage_audit">
                 <?php wp_nonce_field('gps_oem_ktype_ebay_coverage_audit'); ?>
                 <label><?php echo esc_html__('Run ID', 'gps-ebay-fitment-sync'); ?> <input name="run_id" type="text" class="regular-text" value="<?php echo esc_attr($runId); ?>"></label>
+                <label><?php echo esc_html__('Preview rows', 'gps-ebay-fitment-sync'); ?> <input name="sample_size" type="number" min="0" max="200" value="50"></label>
                 <button class="button button-primary" type="submit"><?php echo esc_html__('Run coverage audit', 'gps-ebay-fitment-sync'); ?></button>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
@@ -668,6 +673,7 @@ final class AdminPage
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;">
                 <input type="hidden" name="action" value="gps_ktype_miss_audit">
                 <?php wp_nonce_field('gps_ktype_miss_audit'); ?>
+                <label><?php echo esc_html__('Preview rows', 'gps-ebay-fitment-sync'); ?> <input name="sample_size" type="number" min="0" max="200" value="50"></label>
                 <button class="button button-primary" type="submit"><?php echo esc_html__('Run KType miss audit', 'gps-ebay-fitment-sync'); ?></button>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
