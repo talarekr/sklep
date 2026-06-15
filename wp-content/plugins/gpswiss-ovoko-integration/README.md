@@ -980,3 +980,16 @@ Remaining unknowns:
 
 The Woo → Ovoko create-part preview contract report now includes documentation-backed findings with `confirmed_by_documentation`, `not_found_in_documentation`, and `unknown` statuses plus the latest saved part status probe summary and a `listing_visibility_audit` section. Future live create remains blocked until publication behavior and business acceptance are explicitly decided.
 
+## Read-only donor-car API probe
+
+Admin action **Probe donor cars API** (`admin_post_gpswiss_ovoko_probe_donor_cars_api`) confirms account access to donor vehicle export without crawling all cars.
+
+Safety guarantees:
+- calls only `POST /v2/get/cars?limit=5&page=1`,
+- optionally calls one `POST /get/car/{id}` hydration probe for the first returned car ID,
+- sends standard RRR form auth fields but never includes credential values in output,
+- reports HTTP/API status, pagination, total count, returned count, first car IDs, first record keys, available vehicle fields, and redacted samples,
+- writes no Woo product data, no local car records, no mappings, and no Ovoko/RRR data,
+- does not call eBay, Allegro, marketplace, publish, product-update, or inventory-update APIs.
+
+If the probe returns records, a future full donor-car CSV export is feasible by paging `POST /v2/get/cars` with the documented `page`/`limit` controls, but the probe intentionally uses only page 1 with limit 5.

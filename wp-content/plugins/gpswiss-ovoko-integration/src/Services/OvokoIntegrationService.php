@@ -688,6 +688,12 @@ class OvokoIntegrationService
         ];
     }
 
+    public function probe_donor_cars_api(): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        return $client->probe_donor_cars_api(5, 1, true);
+    }
+
 
     public function manual_probe_ovoko_single_part_stock(int $partId): array
     {
