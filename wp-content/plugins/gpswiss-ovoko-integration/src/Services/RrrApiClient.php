@@ -787,6 +787,16 @@ class RrrApiClient
         $carIds = [];
         $normalizedSamples = [];
         $availableFields = [];
+        $dictionaryDiagnostics = [
+            'dictionary_probe_called' => false,
+            'cache' => ['hits' => 0, 'misses' => 0],
+            'endpoints_called' => [],
+            'endpoint_statuses' => [],
+            'record_counts' => [],
+            'sample_id_resolution' => [],
+            'dictionary_resolution_available' => false,
+            'reason' => 'no_donor_records_returned',
+        ];
 
         foreach ($rawRecords as $record) {
             $record = (array) $record;
@@ -795,7 +805,8 @@ class RrrApiClient
                 $carIds[] = sanitize_text_field($carId);
             }
 
-            $normalized = $this->normalize_vehicle_record($record, $carId, false);
+            $normalized = $this->normalize_vehicle_record($record, $carId, true);
+            $this->merge_dictionary_resolution_diagnostics($dictionaryDiagnostics, $this->build_dictionary_resolution_diagnostics($record));
             foreach ($normalized as $key => $value) {
                 if (!is_array($value) && $value !== '' && $value !== null) {
                     $availableFields[$key] = true;
@@ -820,7 +831,7 @@ class RrrApiClient
             $single = $this->post_form('/get/car/' . rawurlencode($firstCarId), [], true);
             $singlePayload = (array) ($single['payload'] ?? []);
             $singleRecord = $this->extract_candidate_record($singlePayload, $firstCarId);
-            $singleNormalized = $this->normalize_vehicle_record((array) $singleRecord, $firstCarId, false);
+            $singleNormalized = $this->normalize_vehicle_record((array) $singleRecord, $firstCarId, true);
             $firstCarHydration = [
                 'executed' => true,
                 'method' => 'POST',
@@ -833,6 +844,7 @@ class RrrApiClient
                 'contains_requested_car_id' => (string) $this->first_non_empty_value((array) $singleRecord, ['id', 'car_id', 'vehicle_id']) === $firstCarId,
                 'safe_sample' => $this->redacted_vehicle_preview((array) $singleRecord),
                 'normalized_vehicle_fields' => $singleNormalized,
+                'dictionary_resolution_diagnostics' => $this->build_dictionary_resolution_diagnostics((array) $singleRecord),
                 'available_vehicle_fields' => array_values(array_keys(array_filter($singleNormalized, static fn($value) => !is_array($value) && $value !== '' && $value !== null))),
                 'full_payload_omitted' => true,
             ];
@@ -860,6 +872,7 @@ class RrrApiClient
             'available_vehicle_fields' => array_values(array_keys($availableFields)),
             'sample_records' => $normalizedSamples,
             'first_car_hydration' => $firstCarHydration,
+            'dictionary_resolution_diagnostics' => $dictionaryDiagnostics,
             'csv_export_feasible' => !empty($result['ok']) && count($rawRecords) > 0,
             'csv_export_feasible_reason' => !empty($result['ok']) && count($rawRecords) > 0
                 ? 'POST /v2/get/cars returned paginated donor car records with car IDs and vehicle fields.'
@@ -1606,6 +1619,104 @@ class RrrApiClient
         ], $inspection);
     }
 
+    private function build_dictionary_resolution_diagnostics(array $record): array
+    {
+        $ids = $this->extract_vehicle_dictionary_id_candidates($record);
+        $checks = [
+            'car_model' => ['model', (string) (array_values($ids['model_id'] ?? [])[0] ?? '')],
+            'car_model_category' => ['make', (string) (array_values($ids['make_id'] ?? [])[0] ?? '')],
+            'car_fuel' => ['fuel', (string) (array_values($ids['fuel_id'] ?? [])[0] ?? '')],
+            'car_gearbox_type' => ['gearbox', (string) (array_values($ids['gearbox_id'] ?? [])[0] ?? '')],
+            'car_wheel_drive' => ['wheel_drive', (string) (array_values($ids['wheel_drive_id'] ?? [])[0] ?? '')],
+            'car_body_type' => ['body_type', (string) (array_values($ids['body_type_id'] ?? [])[0] ?? '')],
+            'car_color' => ['color', (string) (array_values($ids['color_id'] ?? [])[0] ?? '')],
+        ];
+        $diag = [
+            'dictionary_probe_called' => true,
+            'cache' => ['hits' => 0, 'misses' => 0],
+            'endpoints_called' => [],
+            'endpoint_statuses' => [],
+            'record_counts' => [],
+            'sample_id_resolution' => [],
+            'dictionary_resolution_available' => false,
+            'reason' => '',
+        ];
+        foreach ($checks as $field => [$type, $id]) {
+            if ($id === '') {
+                $diag['sample_id_resolution'][$field] = ['id' => '', 'resolved' => false, 'label' => '', 'reason' => 'raw_id_missing'];
+                continue;
+            }
+            $resolution = $this->resolve_vehicle_dictionary_value_with_source((string) $type, $id, $record);
+            $cacheStatus = (string) ($resolution['cache_status'] ?? 'miss');
+            $diag['cache'][$cacheStatus === 'hit' ? 'hits' : 'misses']++;
+            $endpoints = (array) ($resolution['endpoints_checked'] ?? $this->official_vehicle_dictionary_paths((string) $type, $record));
+            foreach ($endpoints as $endpoint) {
+                $endpoint = (string) $endpoint;
+                if ($endpoint !== '' && !in_array($endpoint, $diag['endpoints_called'], true)) {
+                    $diag['endpoints_called'][] = $endpoint;
+                }
+            }
+            foreach ($endpoints as $endpoint) {
+                $endpoint = (string) $endpoint;
+                if ($endpoint === '' || isset($diag['endpoint_statuses'][$endpoint])) { continue; }
+                if ($cacheStatus === 'hit') {
+                    $diag['endpoint_statuses'][$endpoint] = [
+                        'http_status' => null,
+                        'api_status_code' => '',
+                        'success' => true,
+                        'message' => 'cache_hit_not_refetched',
+                        'top_level_keys' => (array) ($resolution['raw_keys'][$endpoint] ?? []),
+                        'first_record_keys' => [],
+                    ];
+                    $diag['record_counts'][$endpoint] = null;
+                    continue;
+                }
+                $report = $this->probe_dictionary_endpoint($endpoint, $id);
+                $diag['endpoint_statuses'][$endpoint] = [
+                    'http_status' => $report['http_code'] ?? null,
+                    'api_status_code' => (string) ($report['status_code'] ?? ''),
+                    'success' => !empty($report['success']),
+                    'message' => (string) ($report['msg'] ?? ''),
+                    'top_level_keys' => (array) ($report['raw_keys_sample']['top_level_keys'] ?? []),
+                    'first_record_keys' => (array) ($report['raw_keys_sample']['first_record_keys'] ?? []),
+                ];
+                $diag['record_counts'][$endpoint] = (int) ($report['records_count'] ?? 0);
+            }
+            $label = (string) ($resolution['label'] ?? '');
+            $source = (string) ($resolution['source'] ?? 'unresolved');
+            $resolvedByApi = $label !== '' && $source === 'dictionary_api';
+            if ($resolvedByApi) { $diag['dictionary_resolution_available'] = true; }
+            $diag['sample_id_resolution'][$field] = [
+                'id' => $id,
+                'resolved' => $label !== '',
+                'resolved_by_dictionary_api' => $resolvedByApi,
+                'label' => $label,
+                'source' => $source,
+                'endpoint_used' => (string) ($resolution['endpoint_used'] ?? ''),
+                'cache_status' => $cacheStatus,
+            ];
+        }
+        if (!$diag['dictionary_resolution_available']) {
+            $diag['reason'] = $diag['endpoints_called'] === [] ? 'no_dictionary_endpoints_available_for_sample_ids' : 'dictionary_endpoints_failed_or_returned_unexpected_shape_or_no_matching_labels';
+        }
+        return $diag;
+    }
+
+    private function merge_dictionary_resolution_diagnostics(array &$target, array $source): void
+    {
+        $target['dictionary_probe_called'] = !empty($target['dictionary_probe_called']) || !empty($source['dictionary_probe_called']);
+        $target['cache']['hits'] = (int) ($target['cache']['hits'] ?? 0) + (int) ($source['cache']['hits'] ?? 0);
+        $target['cache']['misses'] = (int) ($target['cache']['misses'] ?? 0) + (int) ($source['cache']['misses'] ?? 0);
+        foreach ((array) ($source['endpoints_called'] ?? []) as $endpoint) {
+            if (!in_array($endpoint, $target['endpoints_called'], true)) { $target['endpoints_called'][] = $endpoint; }
+        }
+        $target['endpoint_statuses'] = array_merge((array) ($target['endpoint_statuses'] ?? []), (array) ($source['endpoint_statuses'] ?? []));
+        $target['record_counts'] = array_merge((array) ($target['record_counts'] ?? []), (array) ($source['record_counts'] ?? []));
+        $target['sample_id_resolution'] = array_merge((array) ($target['sample_id_resolution'] ?? []), (array) ($source['sample_id_resolution'] ?? []));
+        $target['dictionary_resolution_available'] = !empty($target['dictionary_resolution_available']) || !empty($source['dictionary_resolution_available']);
+        $target['reason'] = !empty($target['dictionary_resolution_available']) ? '' : (string) ($source['reason'] ?? $target['reason'] ?? '');
+    }
+
     private function scan_car_model_dictionary_by_id_debug(string $id): array
     {
         $cacheKey = 'gpswiss_ovoko_car_model_debug_scan_' . md5($id);
@@ -1656,6 +1767,11 @@ class RrrApiClient
     public function resolve_donor_car_vehicle_fields(array $record): array
     {
         return $this->normalize_vehicle_record($record, (string) ($record['car_id'] ?? $record['id'] ?? $record['vehicle_id'] ?? ''), true);
+    }
+
+    public function donor_car_dictionary_resolution_diagnostics(array $record): array
+    {
+        return $this->build_dictionary_resolution_diagnostics($record);
     }
 
     public function probe_ovoko_dictionaries_for_donor_cars(array $sampleRecord = []): array
@@ -2600,9 +2716,11 @@ class RrrApiClient
 
         $cacheKey = 'gpswiss_ovoko_vehicle_dict_v4_' . md5($type . ':' . $id . ':' . wp_json_encode($context));
         $cached = get_transient($cacheKey);
-        if (is_array($cached)) {
+        if (is_array($cached) && (string) ($cached['label'] ?? '') !== '') {
+            $cached['cache_status'] = 'hit';
             return $cached;
         }
+        $cacheStatus = is_array($cached) ? 'miss_empty_or_failed_cached' : 'miss';
 
         $endpointsChecked = [];
         $rawKeys = [];
@@ -2619,7 +2737,7 @@ class RrrApiClient
             if ($label !== '') {
                 $record = (array) ($inspection['matched_record'] ?? []);
                 if ($record === []) { $record = $this->extract_dictionary_record_from_payload($payload, $id); }
-                $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $path, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'dictionary_record' => $record, 'matched_record' => $record];
+                $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $path, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'dictionary_record' => $record, 'matched_record' => $record, 'cache_status' => $cacheStatus];
                 if ($type === 'model') {
                     $resolved['model_record'] = $record;
                     $brandFromRecord = $this->first_non_empty_value($record, ['brand','brand_id','manufacturer_id','make_id']);
@@ -2650,6 +2768,7 @@ class RrrApiClient
                     'dictionary_record' => (array) ($scan['model_record'] ?? []),
                     'model_lookup_strategy' => 'all_brand_scan_by_model_id',
                     'model_lookup_matched_brand_id' => (string) ($scan['model_lookup_matched_brand_id'] ?? ''),
+                    'cache_status' => $cacheStatus,
                 ];
                 set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
                 return $resolved;
@@ -2658,21 +2777,19 @@ class RrrApiClient
 
         $csv = $this->resolve_vehicle_dictionary_from_csv_mapping($type, $id);
         if ((string) ($csv['label'] ?? '') !== '') {
-            $resolved = ['label' => (string) $csv['label'], 'source' => 'csv_mapping', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'csv_mapping_match' => (array) ($csv['match'] ?? [])];
+            $resolved = ['label' => (string) $csv['label'], 'source' => 'csv_mapping', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'csv_mapping_match' => (array) ($csv['match'] ?? []), 'cache_status' => $cacheStatus];
             set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
             return $resolved;
         }
 
         $fallback = $this->fallback_vehicle_dictionary_label($type, $id);
         if ($fallback !== '') {
-            $resolved = ['label' => $fallback, 'source' => 'local_fallback', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
+            $resolved = ['label' => $fallback, 'source' => 'local_fallback', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'cache_status' => $cacheStatus];
             set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
             return $resolved;
         }
 
-        $resolved = ['label' => '', 'source' => 'unresolved', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys];
-        set_transient($cacheKey, $resolved, HOUR_IN_SECONDS);
-        return $resolved;
+        return ['label' => '', 'source' => 'unresolved', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'cache_status' => $cacheStatus];
     }
 
     private function extract_dictionary_record_from_payload(array $payload, string $id): array
@@ -2721,9 +2838,7 @@ class RrrApiClient
         $brandPayload = (array) ($brands['payload'] ?? []);
         $rawKeys[$brandPath] = array_values(array_map('strval', array_keys($brandPayload)));
         if (empty($brands['success'])) {
-            $result = ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_lookup_strategy' => 'all_brand_scan_by_model_id', 'model_lookup_matched_brand_id' => '', 'model_record' => []];
-            set_transient($cacheKey, $result, HOUR_IN_SECONDS);
-            return $result;
+            return ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_lookup_strategy' => 'all_brand_scan_by_model_id', 'model_lookup_matched_brand_id' => '', 'model_record' => []];
         }
         $brandIds = array_slice($this->extract_car_brand_ids_from_payload($brandPayload), 0, 500);
         foreach ($brandIds as $brandId) {
@@ -2750,9 +2865,7 @@ class RrrApiClient
                 return $result;
             }
         }
-        $result = ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_lookup_strategy' => 'all_brand_scan_by_model_id', 'model_lookup_matched_brand_id' => '', 'model_record' => []];
-        set_transient($cacheKey, $result, HOUR_IN_SECONDS);
-        return $result;
+        return ['label' => '', 'endpoint_used' => '', 'endpoints_checked' => $endpointsChecked, 'raw_keys' => $rawKeys, 'model_lookup_strategy' => 'all_brand_scan_by_model_id', 'model_lookup_matched_brand_id' => '', 'model_record' => []];
     }
 
     private function resolve_vehicle_dictionary_from_csv_mapping(string $type, string $id): array
