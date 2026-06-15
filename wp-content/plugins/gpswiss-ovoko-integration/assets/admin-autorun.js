@@ -6,6 +6,57 @@ document.addEventListener('DOMContentLoaded', function () {
   const jsLoadedEl = $('gpswiss_autorun_js_loaded');
   if (jsLoadedEl) { jsLoadedEl.textContent = 'yes'; }
 
+
+  const donorBtn = $('gpswiss_ovoko_donor_cars_export_start');
+  if (donorBtn) {
+    const donorStatus = $('gpswiss_ovoko_donor_cars_export_status');
+    const donorLog = $('gpswiss_ovoko_donor_cars_export_log');
+    const donorDownloads = $('gpswiss_ovoko_donor_cars_export_downloads');
+    const setDonor = function (k, v) { const n = donorStatus ? donorStatus.querySelector('[data-k="' + k + '"]') : null; if (n) { n.textContent = String(v); } };
+    const donorAppend = function (row) { if (donorLog) { donorLog.textContent += JSON.stringify(row) + '\n'; donorLog.scrollTop = donorLog.scrollHeight; } };
+    const donorRequest = async function (params) {
+      const fd = new URLSearchParams();
+      fd.set('action', config.donorCarsExportAction || 'gpswiss_ovoko_donor_cars_csv_export');
+      fd.set('_ajax_nonce', config.donorCarsExportNonce || '');
+      Object.keys(params).forEach(function (k) { fd.set(k, params[k]); });
+      const r = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:fd.toString()});
+      const text = await r.text();
+      const json = JSON.parse(text);
+      if (!r.ok || !json.ok) { throw new Error((json && json.error) || 'donor_export_failed'); }
+      return json;
+    };
+    donorBtn.addEventListener('click', async function () {
+      donorBtn.disabled = true;
+      if (donorLog) { donorLog.textContent = ''; }
+      setDonor('status', 'starting'); setDonor('page', 0); setDonor('exported', 0); setDonor('total', 0); setDonor('errors', 0);
+      try {
+        await donorRequest({mode:'start'});
+        let page = 1; let done = false;
+        while (!done) {
+          setDonor('status', 'running'); setDonor('page', page);
+          const res = await donorRequest({mode:'page', page:String(page)});
+          const summary = res.summary || {};
+          setDonor('exported', summary.cars_exported || 0); setDonor('total', summary.total_count_from_api || 0); setDonor('errors', (summary.errors || []).length);
+          donorAppend({page: page, records_exported: res.records_exported || 0, done: !!res.done, memory: (summary.memory_usage_diagnostics || []).slice(-1)[0] || {}});
+          if (res.downloads && donorDownloads) {
+            donorDownloads.style.display = 'block';
+            const csv = donorDownloads.querySelector('[data-download="csv"]');
+            const summaryLink = donorDownloads.querySelector('[data-download="summary"]');
+            if (csv) { csv.href = res.downloads.csv; }
+            if (summaryLink) { summaryLink.href = res.downloads.summary; }
+          }
+          done = !!res.done;
+          page = parseInt(res.next_page || (page + 1), 10);
+        }
+        setDonor('status', 'done');
+      } catch (e) {
+        setDonor('status', 'error'); donorAppend({error: e.message || 'donor_export_failed'});
+      } finally {
+        donorBtn.disabled = false;
+      }
+    });
+  }
+
   const form = $('gpswiss_ovoko_batch_update_form');
   if (!form) { return; }
 

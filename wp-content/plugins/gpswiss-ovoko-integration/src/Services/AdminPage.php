@@ -51,6 +51,8 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_gmail_draft_batch_placeholder', [$this, 'handle_gmail_draft_batch_placeholder']);
         add_action('wp_ajax_gpswiss_ovoko_gmail_draft_batch_run', [$this, 'handle_gmail_draft_batch_run_ajax']);
         add_action('wp_ajax_gpswiss_ovoko_crm_only_batch_import', [$this, 'handle_crm_only_batch_import_ajax']);
+        add_action('wp_ajax_gpswiss_ovoko_donor_cars_csv_export', [$this, 'handle_donor_cars_csv_export_ajax']);
+        add_action('admin_post_gpswiss_ovoko_download_donor_cars_export', [$this, 'handle_download_donor_cars_export']);
         add_action('admin_post_gpswiss_ovoko_repair_crm_only_part_link', [$this, 'handle_repair_crm_only_part_link']);
         add_action('admin_post_gpswiss_ovoko_read_part_statuses', [$this, 'handle_read_part_statuses']);
         add_action('admin_post_gpswiss_ovoko_single_part_internal_notes_live_probe', [$this, 'handle_single_part_internal_notes_live_probe']);
@@ -144,6 +146,8 @@ class AdminPage
             'categoryRebuildAutorunAction' => 'gpswiss_ovoko_category_rebuild_autorun',
             'crmOnlyBatchNonce' => wp_create_nonce('gpswiss_ovoko_crm_only_batch_import'),
             'crmOnlyBatchAction' => 'gpswiss_ovoko_crm_only_batch_import',
+            'donorCarsExportNonce' => wp_create_nonce('gpswiss_ovoko_donor_cars_csv_export'),
+            'donorCarsExportAction' => 'gpswiss_ovoko_donor_cars_csv_export',
         ]);
     }
 
@@ -916,6 +920,51 @@ class AdminPage
         $type = !empty($result['ok']) ? 'success' : 'warning';
         set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+
+    public function handle_donor_cars_csv_export_ajax(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['error' => 'unauthorized'], 403);
+        }
+        check_ajax_referer('gpswiss_ovoko_donor_cars_csv_export');
+
+        $settings = $this->service->get_settings();
+        $exporter = new OvokoDonorCarsCsvExportService(new RrrApiClient($settings));
+        $mode = sanitize_key((string) ($_POST['mode'] ?? 'page'));
+        if ($mode === 'start') {
+            wp_send_json($exporter->start() + ['downloads' => $exporter->download_urls()]);
+        }
+
+        $page = max(1, (int) ($_POST['page'] ?? 1));
+        wp_send_json($exporter->process_page($page));
+    }
+
+    public function handle_download_donor_cars_export(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        $type = sanitize_key((string) ($_GET['type'] ?? ''));
+        if (!in_array($type, ['csv', 'summary'], true)) {
+            wp_die('Invalid export type');
+        }
+        check_admin_referer('gpswiss_ovoko_download_donor_cars_export_' . $type);
+
+        $exporter = new OvokoDonorCarsCsvExportService(new RrrApiClient($this->service->get_settings()));
+        $paths = $exporter->paths();
+        $path = $type === 'csv' ? $paths['csv'] : $paths['summary'];
+        if (!file_exists($path) || !is_readable($path)) {
+            wp_die('Export file not found. Run the donor cars CSV export first.');
+        }
+
+        nocache_headers();
+        header('Content-Type: ' . ($type === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8'));
+        header('Content-Disposition: attachment; filename="' . ($type === 'csv' ? OvokoDonorCarsCsvExportService::CSV_FILENAME : OvokoDonorCarsCsvExportService::SUMMARY_FILENAME) . '"');
+        header('Content-Length: ' . filesize($path));
+        readfile($path);
         exit;
     }
 
