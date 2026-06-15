@@ -950,12 +950,25 @@ class AdminPage
 
         $exportId = sanitize_key((string) ($_GET['export_id'] ?? 'donor_cars'));
         if ($exportId !== 'donor_cars') {
+            $this->log_invalid_donor_cars_download($exportId, '', '', 'export_id');
             wp_die('Invalid export type');
         }
 
-        $type = sanitize_key((string) ($_GET['type'] ?? ''));
+        $requestedTypeSource = 'type';
+        $requestedType = (string) ($_GET['type'] ?? '');
+        if ($requestedType === '' && isset($_GET['file'])) {
+            $requestedTypeSource = 'file';
+            $requestedType = (string) $_GET['file'];
+        }
+        if ($requestedType === '' && isset($_GET['export_type'])) {
+            $requestedTypeSource = 'export_type';
+            $requestedType = (string) $_GET['export_type'];
+        }
+
+        $type = sanitize_key($requestedType);
         $download = $this->donor_cars_download_definition($type);
         if ($download === null) {
+            $this->log_invalid_donor_cars_download($exportId, $type, $requestedType, $requestedTypeSource);
             wp_die('Invalid export type');
         }
         check_admin_referer('gpswiss_ovoko_download_donor_cars_export_' . $download['nonce_type']);
@@ -974,16 +987,41 @@ class AdminPage
         exit;
     }
 
+
+    private function log_invalid_donor_cars_download(string $exportId, string $type, string $requestedValue, string $requestedSource): void
+    {
+        $acceptedTypes = array_keys($this->donor_cars_download_definitions());
+        $keys = array_map('strval', array_keys($_GET));
+        $sanitizedKeys = array_map(static fn(string $key): string => sanitize_key($key), $keys);
+        error_log('GPSwiss Ovoko donor cars download invalid export type: ' . wp_json_encode([
+            'action' => (string) ($_GET['action'] ?? ''),
+            'get_keys' => $sanitizedKeys,
+            'export_id' => $exportId,
+            'type' => (string) ($_GET['type'] ?? ''),
+            'file' => (string) ($_GET['file'] ?? ''),
+            'export_type' => (string) ($_GET['export_type'] ?? ''),
+            'requested_type_source' => $requestedSource,
+            'requested_type_raw' => $requestedValue,
+            'requested_type' => $type,
+            'accepted_types' => $acceptedTypes,
+        ]));
+    }
+
     private function donor_cars_download_definition(string $type): ?array
     {
-        $types = [
+        $types = $this->donor_cars_download_definitions();
+
+        return $types[$type] ?? null;
+    }
+
+    private function donor_cars_download_definitions(): array
+    {
+        return [
             'csv' => ['nonce_type' => 'csv', 'path_key' => 'csv', 'filename' => OvokoDonorCarsCsvExportService::CSV_FILENAME, 'content_type' => 'text/csv; charset=utf-8'],
             'donor_cars_csv' => ['nonce_type' => 'csv', 'path_key' => 'csv', 'filename' => OvokoDonorCarsCsvExportService::CSV_FILENAME, 'content_type' => 'text/csv; charset=utf-8'],
             'summary' => ['nonce_type' => 'summary', 'path_key' => 'summary', 'filename' => OvokoDonorCarsCsvExportService::SUMMARY_FILENAME, 'content_type' => 'application/json; charset=utf-8'],
             'donor_cars_summary' => ['nonce_type' => 'summary', 'path_key' => 'summary', 'filename' => OvokoDonorCarsCsvExportService::SUMMARY_FILENAME, 'content_type' => 'application/json; charset=utf-8'],
         ];
-
-        return $types[$type] ?? null;
     }
 
     private function is_donor_cars_export_file(string $path, string $exportDir): bool
