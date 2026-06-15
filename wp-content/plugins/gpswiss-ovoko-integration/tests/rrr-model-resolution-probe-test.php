@@ -143,4 +143,64 @@ gpswiss_model_probe_assert($failureDiag['response_shape'] === 'empty' && $failur
 gpswiss_model_probe_assert(str_contains($failureDiag['non_json_body_prefix'], 'diagnostic failure') && !str_contains($failureDiag['non_json_body_prefix'], 'password=pass') && str_contains($failureDiag['non_json_body_prefix'], 'password=[redacted]'), 'Failing fallback must include redacted non-JSON body prefix.');
 gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Failure diagnostics must remain read-only.');
 
-echo "PASS model resolution probe hydrates requested cars, reuses donor cars fetcher, reports fallback diagnostics, and stays read-only\n";
+require_once dirname(__DIR__) . '/src/Services/OvokoIntegrationService.php';
+require_once dirname(__DIR__) . '/src/Services/AdminPage.php';
+
+function get_option(string $key, mixed $default = false): mixed
+{
+    return [
+        'rrr_api_base_url' => 'https://api.rrr.test',
+        'rrr_api_username' => 'user',
+        'rrr_api_password' => 'pass',
+        'rrr_api_user_token' => 'token',
+    ];
+}
+function wp_parse_args(array $args, array $defaults = []): array { return array_merge($defaults, $args); }
+function current_user_can(string $capability): bool { return true; }
+function check_admin_referer(string $action): bool { return true; }
+function admin_url(string $path = ''): string { return 'https://wp.test/wp-admin/' . ltrim($path, '/'); }
+function wp_safe_redirect(string $location): bool { throw new RuntimeException('redirect:' . $location); }
+function wp_die(string $message): void { throw new RuntimeException('wp_die:' . $message); }
+
+class GPSwissProbeServiceForRegressionTest extends GPSwiss\Ovoko\Services\OvokoIntegrationService
+{
+    public function __construct() { parent::__construct(__FILE__); }
+}
+
+class GPSwissThrowingProbeServiceForRegressionTest extends GPSwiss\Ovoko\Services\OvokoIntegrationService
+{
+    public function __construct() { parent::__construct(__FILE__); }
+    public function probe_requested_donor_cars_only(array $carIds = ['493','494','495']): array
+    {
+        throw new RuntimeException('controlled test exception');
+    }
+}
+
+$reflection = new ReflectionClass(GPSwiss\Ovoko\Services\OvokoIntegrationService::class);
+gpswiss_model_probe_assert($reflection->hasMethod('rrr_client'), 'OvokoIntegrationService must define the RRR client accessor used by hydration-only probes.');
+$rrrClientAccessor = $reflection->getMethod('rrr_client');
+gpswiss_model_probe_assert($rrrClientAccessor->isPrivate(), 'RRR client accessor should be the single private service helper, not a public duplicate factory.');
+
+$GLOBALS['gpswiss_model_probe_requests'] = [];
+$GLOBALS['gpswiss_model_probe_writes'] = [];
+$serviceResult = (new GPSwissProbeServiceForRegressionTest())->probe_requested_donor_cars_only(['493', '494', '495']);
+gpswiss_model_probe_assert(is_array($serviceResult), 'Service probe must return a controlled result array without calling an undefined method.');
+gpswiss_model_probe_assert(array_filter($GLOBALS['gpswiss_model_probe_requests'], static fn(array $r): bool => str_contains($r['url'], '/v2/get/cars')) !== [], 'Service hydration-only probe must use the existing RRR client donor-cars fetcher.');
+gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Service hydration-only probe must stay read-only.');
+
+$GLOBALS['gpswiss_model_probe_transients'] = [];
+$_POST = ['car_ids' => '493,494,495'];
+try {
+    (new GPSwiss\Ovoko\Services\AdminPage(new GPSwissThrowingProbeServiceForRegressionTest()))->handle_probe_requested_donor_cars_only();
+    gpswiss_model_probe_assert(false, 'Admin handler should redirect after storing the controlled error notice.');
+} catch (RuntimeException $e) {
+    gpswiss_model_probe_assert(str_starts_with($e->getMessage(), 'redirect:'), 'Admin handler should redirect normally after catching probe exceptions.');
+}
+$notice = $GLOBALS['gpswiss_model_probe_transients']['gpswiss_ovoko_notice'] ?? [];
+gpswiss_model_probe_assert(($notice['type'] ?? '') === 'error', 'Admin handler must return a controlled readable error notice on exception.');
+gpswiss_model_probe_assert(str_contains((string) ($notice['text'] ?? ''), 'probe_requested_donor_cars_only_failed'), 'Admin handler error notice must identify the failed probe.');
+gpswiss_model_probe_assert(str_contains((string) ($notice['text'] ?? ''), 'controlled test exception'), 'Admin handler error notice must include the exception message.');
+gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Admin exception path must not perform Woo/local/marketplace/Laravel writes.');
+
+
+echo "PASS model resolution probe hydrates requested cars, reuses donor cars fetcher, service probe uses existing RRR client, admin exceptions are controlled, and stays read-only\n";

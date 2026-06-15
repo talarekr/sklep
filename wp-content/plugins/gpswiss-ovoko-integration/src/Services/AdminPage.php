@@ -1146,8 +1146,17 @@ class AdminPage
         }
         check_admin_referer('gpswiss_ovoko_probe_requested_donor_cars_only');
         $carIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['car_ids'] ?? '493,494,495')))));
-        $result = $this->service->probe_requested_donor_cars_only($carIds);
-        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        try {
+            $result = $this->service->probe_requested_donor_cars_only($carIds);
+            set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        } catch (\Throwable $e) {
+            $result = [
+                'ok' => false,
+                'error' => 'probe_requested_donor_cars_only_failed',
+                'message' => $e->getMessage(),
+            ];
+            set_transient('gpswiss_ovoko_notice', ['type' => 'error', 'text' => wp_json_encode($result)], 30);
+        }
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }
