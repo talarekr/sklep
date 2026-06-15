@@ -947,25 +947,58 @@ class AdminPage
         if (!current_user_can('manage_options')) {
             wp_die('Unauthorized');
         }
-        $type = sanitize_key((string) ($_GET['type'] ?? ''));
-        if (!in_array($type, ['csv', 'summary'], true)) {
+
+        $exportId = sanitize_key((string) ($_GET['export_id'] ?? 'donor_cars'));
+        if ($exportId !== 'donor_cars') {
             wp_die('Invalid export type');
         }
-        check_admin_referer('gpswiss_ovoko_download_donor_cars_export_' . $type);
 
-        $exporter = new OvokoDonorCarsCsvExportService(new RrrApiClient($this->service->get_settings()));
-        $paths = $exporter->paths();
-        $path = $type === 'csv' ? $paths['csv'] : $paths['summary'];
-        if (!file_exists($path) || !is_readable($path)) {
-            wp_die('Export file not found. Run the donor cars CSV export first.');
+        $type = sanitize_key((string) ($_GET['type'] ?? ''));
+        $download = $this->donor_cars_download_definition($type);
+        if ($download === null) {
+            wp_die('Invalid export type');
+        }
+        check_admin_referer('gpswiss_ovoko_download_donor_cars_export_' . $download['nonce_type']);
+
+        $paths = (new OvokoDonorCarsCsvExportService(new RrrApiClient([])))->paths();
+        $path = $paths[$download['path_key']] ?? '';
+        if (!$this->is_donor_cars_export_file($path, $paths['dir'])) {
+            wp_die('Export file not found. Please run the donor cars export again.');
         }
 
         nocache_headers();
-        header('Content-Type: ' . ($type === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8'));
-        header('Content-Disposition: attachment; filename="' . ($type === 'csv' ? OvokoDonorCarsCsvExportService::CSV_FILENAME : OvokoDonorCarsCsvExportService::SUMMARY_FILENAME) . '"');
+        header('Content-Type: ' . $download['content_type']);
+        header('Content-Disposition: attachment; filename="' . $download['filename'] . '"');
         header('Content-Length: ' . filesize($path));
         readfile($path);
         exit;
+    }
+
+    private function donor_cars_download_definition(string $type): ?array
+    {
+        $types = [
+            'csv' => ['nonce_type' => 'csv', 'path_key' => 'csv', 'filename' => OvokoDonorCarsCsvExportService::CSV_FILENAME, 'content_type' => 'text/csv; charset=utf-8'],
+            'donor_cars_csv' => ['nonce_type' => 'csv', 'path_key' => 'csv', 'filename' => OvokoDonorCarsCsvExportService::CSV_FILENAME, 'content_type' => 'text/csv; charset=utf-8'],
+            'summary' => ['nonce_type' => 'summary', 'path_key' => 'summary', 'filename' => OvokoDonorCarsCsvExportService::SUMMARY_FILENAME, 'content_type' => 'application/json; charset=utf-8'],
+            'donor_cars_summary' => ['nonce_type' => 'summary', 'path_key' => 'summary', 'filename' => OvokoDonorCarsCsvExportService::SUMMARY_FILENAME, 'content_type' => 'application/json; charset=utf-8'],
+        ];
+
+        return $types[$type] ?? null;
+    }
+
+    private function is_donor_cars_export_file(string $path, string $exportDir): bool
+    {
+        if ($path === '' || !file_exists($path) || !is_readable($path)) {
+            return false;
+        }
+
+        $realPath = realpath($path);
+        $realDir = realpath($exportDir);
+        if ($realPath === false || $realDir === false) {
+            return false;
+        }
+
+        return str_starts_with($realPath, trailingslashit($realDir));
     }
 
     public function handle_probe_donor_cars_api(): void
