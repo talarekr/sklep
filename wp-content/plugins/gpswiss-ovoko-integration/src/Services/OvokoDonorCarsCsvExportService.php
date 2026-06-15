@@ -24,7 +24,7 @@ class OvokoDonorCarsCsvExportService
         if ($handle === false) {
             return ['ok' => false, 'error' => 'csv_open_failed'];
         }
-        fputcsv($handle, self::COLUMNS);
+        fputcsv($handle, self::COLUMNS, ',', '"', '\\');
         fclose($handle);
 
         $summary = $this->initial_summary();
@@ -62,7 +62,7 @@ class OvokoDonorCarsCsvExportService
         }
         foreach ($records as $record) {
             $row = $this->map_record($record);
-            fputcsv($handle, array_map(static fn($column) => $row[$column] ?? '', self::COLUMNS));
+            fputcsv($handle, array_map(static fn($column) => $row[$column] ?? '', self::COLUMNS), ',', '"', '\\');
             $this->count_unresolved($summary, $row);
         }
         fclose($handle);

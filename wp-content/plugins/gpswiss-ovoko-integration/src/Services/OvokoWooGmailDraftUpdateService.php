@@ -302,10 +302,10 @@ class OvokoWooGmailDraftUpdateService
     {
         $columns = ['product_id','sku','ovoko_part_id','current_status','ready_for_sale','would_update','would_publish','updated','published','blocked_reasons','price_before','price_after','title_before','title_after','category_before','category_after','thumbnail_id_before','thumbnail_id_after','gallery_before_count','gallery_after_count','images_preserved','error'];
         $fh = fopen('php://temp', 'r+');
-        fputcsv($fh, $columns);
+        fputcsv($fh, $columns, ',', '"', '\\');
         foreach ($reports as $report) {
             $row = $this->compact_report_row((array) $report);
-            fputcsv($fh, array_map(static fn(string $column) => $row[$column] ?? '', $columns));
+            fputcsv($fh, array_map(static fn(string $column) => $row[$column] ?? '', $columns), ',', '"', '\\');
         }
         rewind($fh);
         return (string) stream_get_contents($fh);

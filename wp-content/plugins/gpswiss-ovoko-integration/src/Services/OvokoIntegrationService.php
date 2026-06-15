@@ -2993,9 +2993,9 @@ class OvokoIntegrationService
 
             $summary = $this->stream_missing_ovoko_id_report_rows($out);
 
-            fputcsv($out, []);
+            fputcsv($out, [], ',', '"', '\\');
             foreach ((array) $summary as $key => $value) {
-                fputcsv($out, [(string) $key, (string) $value]);
+                fputcsv($out, [(string) $key, (string) $value], ',', '"', '\\');
             }
 
             fclose($out);
@@ -3018,7 +3018,7 @@ class OvokoIntegrationService
         $summary = ['total_products_checked' => 0, 'products_with_ovoko_id' => 0, 'products_missing_ovoko_id' => 0, 'missing_allegro_id_count' => 0, 'no_csv_match_count' => 0, 'not_allegro_product_count' => 0, 'ovoko_id_conflict_count' => 0, 'api_error_count' => 0, 'unknown_count' => 0];
         $lastId = $startAfterProductId;
 
-        fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason']);
+        fputcsv($out, ['product_id', 'sku', 'title', 'status', 'allegro_id', 'ovoko_id', '_ovoko_part_id', 'reason', 'last_sync_action', 'last_sync_error', 'last_sync_skip_reason'], ',', '"', '\\');
 
         global $wpdb;
 
@@ -3094,7 +3094,7 @@ class OvokoIntegrationService
                     $lastAction,
                     $lastError,
                     $lastSkip,
-                ]);
+                ], ',', '"', '\\');
 
                 $this->clear_product_caches($productId);
 
@@ -6004,9 +6004,9 @@ private function filter_customer_facing_technical_attributes(array $attrs, array
         $audit = $this->audit_old_categories_for_cleanup();
         $handle = fopen('php://temp', 'r+');
         $headers = ['category_id', 'name', 'slug', 'parent_id', 'parent_name', 'product_count', 'children_count', 'in_ovoko_tree', 'in_menu', 'safe_to_delete', 'reason'];
-        fputcsv($handle, $headers);
+        fputcsv($handle, $headers, ',', '"', '\\');
         foreach ((array) ($audit['rows'] ?? []) as $row) {
-            fputcsv($handle, array_map(static fn(string $key) => (string) ($row[$key] ?? ''), $headers));
+            fputcsv($handle, array_map(static fn(string $key) => (string) ($row[$key] ?? ''), $headers), ',', '"', '\\');
         }
         rewind($handle);
         $csv = stream_get_contents($handle);
