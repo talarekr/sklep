@@ -1259,6 +1259,43 @@ class RrrApiClient
         ];
     }
 
+    /**
+     * Resolve only the small donor-car dictionaries that are safe to load during CSV export.
+     * Model resolution intentionally stays with the staged all-brand cache and this method
+     * never calls /get/car_models/{brand_id}.
+     */
+    public function resolve_donor_car_simple_dictionary_fields(array $record): array
+    {
+        $ids = $this->extract_vehicle_dictionary_id_candidates($record);
+        $fields = [
+            'fuel' => ['vehicle_fuel', $ids['fuel_id'] ?? []],
+            'gearbox' => ['vehicle_gearbox_type', $ids['gearbox_id'] ?? []],
+            'wheel_drive' => ['vehicle_drive_wheels', $ids['wheel_drive_id'] ?? []],
+            'wheel_type' => ['vehicle_steering_position', $ids['wheel_type_id'] ?? []],
+            'body_type' => ['vehicle_body_type', $ids['body_type_id'] ?? []],
+            'color' => ['vehicle_color', $ids['color_id'] ?? []],
+        ];
+        $resolved = [];
+        $sources = [];
+        foreach ($fields as $type => [$target, $candidates]) {
+            $sources[$target] = ['source' => 'unresolved', 'id' => '', 'endpoint_used' => ''];
+            foreach ((array) $candidates as $id) {
+                $resolution = $this->resolve_vehicle_dictionary_value_with_source((string) $type, (string) $id, $record);
+                $sources[$target] = [
+                    'source' => (string) ($resolution['source'] ?? 'unresolved'),
+                    'id' => (string) $id,
+                    'endpoint_used' => (string) ($resolution['endpoint_used'] ?? ''),
+                ];
+                if ((string) ($resolution['label'] ?? '') !== '') {
+                    $resolved[$target] = (string) $resolution['label'];
+                    break;
+                }
+            }
+        }
+        $resolved['vehicle_dictionary_field_sources'] = $sources;
+        return $resolved;
+    }
+
     private function probe_direct_model_lookup_endpoints(string $modelId): array
     {
         $reports = [];
@@ -3361,7 +3398,16 @@ class RrrApiClient
         }
         foreach ($this->official_vehicle_dictionary_paths($type, $context) as $path) {
             $endpointsChecked[] = $path;
-            $raw = $this->post_form($path, [], true);
+            $endpointCacheKey = 'gpswiss_ovoko_simple_dict_endpoint_v1_' . md5($path);
+            $cachedEndpointPayload = $type !== 'model' ? get_transient($endpointCacheKey) : false;
+            if (is_array($cachedEndpointPayload)) {
+                $raw = ['success' => true, 'payload' => $cachedEndpointPayload, 'cache_status' => 'endpoint_hit'];
+            } else {
+                $raw = $this->post_form($path, [], true);
+                if (!empty($raw['success']) && $type !== 'model') {
+                    set_transient($endpointCacheKey, (array) ($raw['payload'] ?? []), DAY_IN_SECONDS);
+                }
+            }
             if (empty($raw['success'])) {
                 continue;
             }
