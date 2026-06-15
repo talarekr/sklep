@@ -35,26 +35,27 @@ function wp_remote_post(string $url, array $args): array
     $path = (string) parse_url($url, PHP_URL_PATH);
     $carRows = [
         '/get/car/493' => ['id' => '493', 'car_model' => '22', 'car_model_category' => '7', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '5'],
-        '/get/car/494' => ['id' => '494', 'car_model' => '545', 'car_model_category' => '8', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '6'],
-        '/get/car/495' => ['id' => '495', 'car_model' => '9999', 'car_model_category' => '9', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '7'],
+        '/get/car/494' => ['id' => '494', 'car_model' => '22', 'car_model_category' => '3', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '6'],
+        '/get/car/495' => ['id' => '495', 'car_model' => '545', 'car_model_category' => '9', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '7'],
     ];
     if (isset($carRows[$path])) {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => $carRows[$path]])];
+        return ['response' => ['code' => 500], 'body' => '<html>error</html>'];
     }
     if ($path === '/v2/get/cars') {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => [['id' => '1', 'car_model' => '1']]])];
+        $query = [];
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $page = (int) ($query['page'] ?? 1);
+        $data = $page === 1 ? array_values($carRows) : [];
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'pagination' => ['total_count' => 3, 'page' => $page, 'limit' => 100], 'data' => $data])];
     }
-    if ($path === '/get/model/22') {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => ['id' => '22', 'name' => 'Direct Model 22']])];
-    }
-    if ($path === '/get/car_model/545') {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => ['id' => '545', 'name' => 'Direct Model 545']])];
+    if ($path === '/get/model/22' || $path === '/get/car_model/22' || $path === '/get/model/545' || $path === '/get/car_model/545') {
+        return ['response' => ['code' => 500], 'body' => '<html>error</html>'];
     }
     if ($path === '/get/car_brands') {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => array_map(static fn(int $id): array => ['id' => (string) $id, 'name' => 'Brand ' . $id], range(10, 120))])];
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => array_map(static fn(int $id): array => ['id' => (string) $id, 'name' => $id === 3 ? 'Audi' : 'Brand ' . $id], range(3, 120))])];
     }
-    if ($path === '/get/car_models/10') {
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => [['id' => '22', 'name' => 'Cached Model 22', 'brand_id' => '10']]])];
+    if ($path === '/get/car_models/3') {
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => [['id' => '22', 'brand' => '3', 'name' => 'A3 S3 8V', 'year_start' => '2013', 'year_end' => '2019']]])];
     }
     if ($path === '/get/car_models/11') {
         return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => []])];
@@ -85,14 +86,17 @@ foreach (['493', '494', '495'] as $carId) {
     gpswiss_model_probe_assert(array_filter($urls, static fn(string $url): bool => str_contains($url, '/get/car/' . $carId)) !== [], 'Requested car ' . $carId . ' must be hydrated directly.');
     gpswiss_model_probe_assert($result['samples'][$carId]['raw_car_record'] !== [], 'Hydrated raw car record ' . $carId . ' must be non-empty.');
 }
-gpswiss_model_probe_assert(array_filter($urls, static fn(string $url): bool => str_contains($url, '/v2/get/cars')) === [], 'Model resolution probe must not diagnose requested IDs from /v2/get/cars page 1.');
+gpswiss_model_probe_assert(array_filter($urls, static fn(string $url): bool => str_contains($url, '/v2/get/cars')) !== [], 'Model resolution probe must fall back to /v2/get/cars for requested IDs.');
 gpswiss_model_probe_assert($result['candidate_endpoints_tried'] !== [], 'Candidate endpoints tried must be populated.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['22']), 'Requested model 22 must have endpoint diagnostics.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['545']), 'Requested model 545 must have endpoint diagnostics.');
-gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['direct_lookup_results'][0]['http_code'] === 200, 'Model 22 direct endpoint HTTP status must be reported.');
-gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['direct_lookup_results'][1]['http_code'] === 200, 'Model 545 direct endpoint HTTP status must be reported.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['direct_lookup_results'][0]['http_code'] === 500, 'Model 22 direct endpoint HTTP 500 must be reported.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['direct_lookup_results'][1]['http_code'] === 500, 'Model 545 direct endpoint HTTP 500 must be reported.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['matched_record']['name'] === 'A3 S3 8V', 'Model 22 must resolve from staged cache.');
+gpswiss_model_probe_assert($result['samples']['494']['resolved_make'] === 'Audi' && $result['samples']['494']['resolved_model'] === 'A3 S3 8V', 'Car 494 must resolve to Audi A3 S3 8V from staged cache.');
+gpswiss_model_probe_assert($result['samples']['494']['hydration_source'] === 'v2_get_cars_paginated', 'Car 494 must report v2 hydration source.');
 gpswiss_model_probe_assert($result['model_cache']['model_cache_incomplete'] === true, 'Incomplete staged all-brand model cache must be reported.');
-gpswiss_model_probe_assert($result['samples']['495']['unresolved_reason'] === 'unresolved because model cache incomplete; continue staged cache ticks or build the model dictionary cache before judging CSV coverage', 'Incomplete cache should be named as unresolved reason.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['unresolved_only_because_cache_incomplete'] === true && $result['samples']['495']['unresolved_reason'] === 'unresolved because model cache incomplete; continue staged cache ticks or build the model dictionary cache before judging CSV coverage', 'Incomplete cache should be named as unresolved reason.');
 gpswiss_model_probe_assert($result['csv_safe_for_laravel_import'] === false, 'CSV must not be marked safe while model cache is incomplete.');
 gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Probe must not perform Woo/local/marketplace/Laravel writes.');
 

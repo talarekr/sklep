@@ -7,7 +7,7 @@ class OvokoDonorCarsCsvExportService
     public const LIMIT = 100;
     public const CSV_FILENAME = 'ovoko_donor_cars.csv';
     public const SUMMARY_FILENAME = 'ovoko_donor_cars_summary.json';
-    public const MAX_DICTIONARY_API_CALLS_PER_TICK = 20;
+    public const MAX_DICTIONARY_API_CALLS_PER_TICK = 8;
 
     public const COLUMNS = [
         'ovoko_car_id','external_id','make','model','generation','platform','production_year','fuel','gearbox','drive','steering_side','body_type','color','car_model_raw_id','car_model_category_raw_id','car_model_years','car_years','car_color_raw_id','car_color_code','car_body_number','car_engine_number','car_engine_cubic_capacity','car_engine_capacity_l','car_engine_power','car_engine_type','car_engine_code','car_gearbox_type_raw_id','car_gearbox_code','car_interior','car_fuel_raw_id','car_mileage','defectation_notes','car_wheel_type_raw_id','car_wheel_drive_raw_id','car_body_type_raw_id','photo','car_photo_gallery','dismantling_at','vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_period','vehicle_engine_marketing','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_engine_power_kw','vehicle_engine_code','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_steering_position','vehicle_color','vehicle_color_code','mileage_km'
@@ -120,7 +120,7 @@ class OvokoDonorCarsCsvExportService
 
     private function initial_summary(): array
     {
-        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'unique_car_model_ids' => [], 'resolved_car_model_ids' => [], 'unresolved_car_model_ids' => [], 'unresolved_car_model_id_samples' => [], 'unique_car_model_category_ids' => [], 'resolved_car_model_category_ids' => [], 'unresolved_car_model_category_id_samples' => [], 'model_dictionary_cache_complete' => false, 'model_dictionary_resolution_strategy' => 'staged_all_brand_model_cache_by_model_id_then_direct_context_if_available_no_category_as_brand', 'all_brand_model_cache_complete' => false, 'brand_model_endpoints_processed' => 0, 'brand_model_endpoints_total' => 0, 'model_resolution_errors' => [], 'sample_unresolved_rows' => [], 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
+        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'csv_safe_for_laravel_import' => false, 'csv_safe_for_laravel_import_reason' => 'model dictionary cache incomplete', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'unique_car_model_ids' => [], 'resolved_car_model_ids' => [], 'unresolved_car_model_ids' => [], 'unresolved_car_model_id_samples' => [], 'unique_car_model_category_ids' => [], 'resolved_car_model_category_ids' => [], 'unresolved_car_model_category_id_samples' => [], 'model_dictionary_cache_complete' => false, 'model_dictionary_resolution_strategy' => 'staged_all_brand_model_cache_by_model_id_then_direct_context_if_available_no_category_as_brand', 'all_brand_model_cache_complete' => false, 'brand_model_endpoints_processed' => 0, 'brand_model_endpoints_total' => 0, 'model_cache_successful_endpoint_count' => 0, 'model_cache_failed_endpoint_count' => 0, 'failed_brand_model_endpoints' => [], 'target_model_ids_found' => [], 'target_model_ids_missing' => [], 'unresolved_only_because_cache_incomplete_count' => 0, 'model_resolution_errors' => [], 'sample_unresolved_rows' => [], 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
     }
 
     private function read_summary(): array
@@ -305,10 +305,18 @@ class OvokoDonorCarsCsvExportService
         $summary['unresolved_car_model_ids'] = array_values(array_diff((array) $summary['unique_car_model_ids'], (array) $summary['resolved_car_model_ids']));
         $summary['unresolved_car_model_id_samples'] = array_slice($summary['unresolved_car_model_ids'], 0, 20);
         $summary['unresolved_car_model_category_id_samples'] = array_slice((array) $summary['unique_car_model_category_ids'], 0, 20);
-        $summary['model_dictionary_cache_complete'] = !empty($cache['model_dictionary_cache_complete']);
+        $summary['model_dictionary_cache_complete'] = !empty($cache['all_brand_model_cache_complete']);
         $summary['all_brand_model_cache_complete'] = !empty($cache['all_brand_model_cache_complete']);
         $summary['brand_model_endpoints_processed'] = (int) ($cache['brand_model_endpoints_processed'] ?? 0);
         $summary['brand_model_endpoints_total'] = (int) ($cache['brand_model_endpoints_total'] ?? 0);
+        $summary['model_cache_successful_endpoint_count'] = (int) ($cache['model_cache_successful_endpoint_count'] ?? 0);
+        $summary['model_cache_failed_endpoint_count'] = (int) ($cache['model_cache_failed_endpoint_count'] ?? 0);
+        $summary['failed_brand_model_endpoints'] = (array) ($cache['failed_brand_model_endpoints'] ?? []);
+        $summary['target_model_ids_found'] = $summary['resolved_car_model_ids'];
+        $summary['target_model_ids_missing'] = $summary['unresolved_car_model_ids'];
+        $summary['unresolved_only_because_cache_incomplete_count'] = empty($cache['all_brand_model_cache_complete']) ? count((array) $summary['unresolved_car_model_ids']) : 0;
+        $summary['csv_safe_for_laravel_import'] = !empty($cache['all_brand_model_cache_complete']);
+        $summary['csv_safe_for_laravel_import_reason'] = $summary['csv_safe_for_laravel_import'] ? 'model dictionary cache complete' : 'model dictionary cache incomplete';
     }
 
 
