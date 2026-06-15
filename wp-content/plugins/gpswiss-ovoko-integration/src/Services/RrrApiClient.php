@@ -1647,6 +1647,59 @@ class RrrApiClient
         return $result;
     }
 
+
+    /**
+     * Resolve raw donor-car dictionary IDs to readable, export-only vehicle fields.
+     * This method performs only read-only Ovoko/RRR dictionary calls plus transient caching;
+     * it does not write Woo products, mappings, marketplace data, local cars, or Laravel rows.
+     */
+    public function resolve_donor_car_vehicle_fields(array $record): array
+    {
+        return $this->normalize_vehicle_record($record, (string) ($record['car_id'] ?? $record['id'] ?? $record['vehicle_id'] ?? ''), true);
+    }
+
+    public function probe_ovoko_dictionaries_for_donor_cars(array $sampleRecord = []): array
+    {
+        $types = ['make','model','fuel','gearbox','wheel_drive','wheel_type','body_type','color'];
+        $ids = $this->extract_vehicle_dictionary_id_candidates($sampleRecord);
+        $report = [];
+        foreach ($types as $type) {
+            $paths = $this->official_vehicle_dictionary_paths($type, $sampleRecord);
+            $sampleId = match ($type) {
+                'make' => (string) (array_values($ids['make_id'] ?? [])[0] ?? ''),
+                'model' => (string) (array_values($ids['model_id'] ?? [])[0] ?? ''),
+                'fuel' => (string) (array_values($ids['fuel_id'] ?? [])[0] ?? ''),
+                'gearbox' => (string) (array_values($ids['gearbox_id'] ?? [])[0] ?? ''),
+                'wheel_drive' => (string) (array_values($ids['wheel_drive_id'] ?? [])[0] ?? ''),
+                'wheel_type' => (string) (array_values($ids['wheel_type_id'] ?? [])[0] ?? ''),
+                'body_type' => (string) (array_values($ids['body_type_id'] ?? [])[0] ?? ''),
+                'color' => (string) (array_values($ids['color_id'] ?? [])[0] ?? ''),
+                default => '',
+            };
+            $endpointReports = [];
+            foreach ($paths as $path) {
+                $endpointReports[] = $this->probe_dictionary_endpoint($path, $sampleId);
+            }
+            $resolution = $sampleId !== '' ? $this->resolve_vehicle_dictionary_value_with_source($type, $sampleId, $sampleRecord) : ['label' => '', 'source' => 'no_sample_id'];
+            $report[$type] = [
+                'sample_id' => $sampleId,
+                'endpoints_checked' => array_values(array_unique(array_merge($paths, (array) ($resolution['endpoints_checked'] ?? [])))),
+                'endpoint_reports' => array_map(static fn(array $row): array => [
+                    'endpoint' => (string) ($row['endpoint'] ?? ''),
+                    'http_status' => $row['http_code'] ?? null,
+                    'status_code' => (string) ($row['status_code'] ?? ''),
+                    'top_level_keys' => (array) ($row['raw_keys_sample']['top_level_keys'] ?? []),
+                    'sample_keys' => (array) ($row['raw_keys_sample']['first_record_keys'] ?? []),
+                    'count' => (int) ($row['records_count'] ?? 0),
+                ], $endpointReports),
+                'resolved_label' => (string) ($resolution['label'] ?? ''),
+                'source' => (string) ($resolution['source'] ?? 'unresolved'),
+                'status' => (string) ($resolution['label'] ?? '') !== '' ? 'resolved' : 'unresolved',
+            ];
+        }
+        return ['ok' => true, 'mode' => 'read_only', 'action_name' => 'Probe Ovoko dictionaries', 'dictionaries' => $report, 'credentials_redacted' => true, 'no_write_to_woo' => true, 'no_marketplace_calls' => true, 'checked_at' => gmdate('c')];
+    }
+
     public function probe_ovoko_dictionary_value(string $dictionaryType, string $id): array
     {
         $requestedDictionaryType = strtolower(trim(str_replace(['-', ' '], '_', $dictionaryType)));
@@ -2433,7 +2486,7 @@ class RrrApiClient
     private function extract_vehicle_dictionary_id_candidates(array $record): array
     {
         $map = [
-            'make_id' => ['make_id','manufacturer_id','brand_id','car_make','car_manufacturer'],
+            'make_id' => ['make_id','manufacturer_id','brand_id','car_make','car_manufacturer','car_model_category_id','car_model_category'],
             'model_id' => ['model_id','car_model_id','car_model','model'],
             'modification_id' => ['modification_id','car_modification_id','car_modification','modification'],
             'generation_id' => ['generation_id','model_category_id','generation','model_category'],
@@ -2442,6 +2495,7 @@ class RrrApiClient
             'wheel_drive_id' => ['wheel_drive_id','car_wheel_drive_id','car_wheel_drive','wheel_drive','drive_wheels'],
             'color_id' => ['color_id','car_color_id','car_color','color'],
             'body_type_id' => ['body_type_id','car_body_type_id','car_body_type','body_type'],
+            'wheel_type_id' => ['wheel_type_id','car_wheel_type_id','car_wheel_type','wheel_type','steering_position'],
         ];
         $out = [];
         foreach ($map as $label => $keys) {
@@ -2487,6 +2541,7 @@ class RrrApiClient
             'car_wheel_drive', 'wheel_drive', 'drive_wheels', 'drivetrain' => 'wheel_drive',
             'car_color', 'color' => 'color',
             'car_body_type', 'body_type' => 'body_type',
+            'car_wheel_type', 'wheel_type', 'steering', 'steering_side', 'steering_position' => 'wheel_type',
             'make', 'brand', 'manufacturer', 'car_brand', 'car_manufacturer' => 'make',
             default => '',
         };
@@ -2496,7 +2551,7 @@ class RrrApiClient
     {
         $type = $this->normalize_vehicle_dictionary_type($type);
         $brandCandidates = [];
-        foreach (['brand_id','make_id','manufacturer_id','car_make','car_manufacturer'] as $key) {
+        foreach (['brand_id','make_id','manufacturer_id','car_make','car_manufacturer','car_model_category','car_model_category_id','model_category_id'] as $key) {
             if (!empty($context[$key]) && is_scalar($context[$key]) && $this->looks_like_dictionary_id((string) $context[$key])) {
                 $brandCandidates[] = (string) $context[$key];
             }
@@ -2511,6 +2566,7 @@ class RrrApiClient
             'wheel_drive' => ['/get/wheel_drive'],
             'color' => ['/get/color'],
             'body_type' => ['/get/car_body_type'],
+            'wheel_type' => ['/get/wheel_type'],
             default => [],
         };
     }
@@ -2519,10 +2575,11 @@ class RrrApiClient
     {
         $type = $this->normalize_vehicle_dictionary_type($type);
         $maps = [
-            'gearbox' => ['0' => 'Mechaniczna', '1' => 'Automatyczna'],
+            'gearbox' => ['0' => 'Mechaniczna', '1' => 'Automatyczny'],
             'wheel_drive' => ['1' => 'Przód', '2' => 'Tył', '3' => 'AWD'],
-            'body_type' => ['1' => 'Sedan', '2' => 'Kombi', '4' => 'Minivan'],
-            'color' => ['5' => 'Niebieski', '9' => 'Szary', '10' => 'Czarny'],
+            'body_type' => ['1' => 'Sedan', '2' => 'Kombi', '3' => 'Hatchback', '4' => 'Minivan', '5' => 'SUV', '6' => 'Coupe'],
+            'color' => ['1' => 'Biały', '5' => 'Niebieski', '9' => 'Szary', '10' => 'Czarny'],
+            'wheel_type' => ['1' => 'Lewa strona', '2' => 'Prawa strona'],
         ];
         return (string) ($maps[$type][$id] ?? '');
     }
@@ -2852,6 +2909,7 @@ class RrrApiClient
             'wheel_drive' => ['vehicle_drive_wheels', $ids['wheel_drive_id'] ?? []],
             'color' => ['vehicle_color', $ids['color_id'] ?? []],
             'body_type' => ['vehicle_body_type', $ids['body_type_id'] ?? []],
+            'wheel_type' => ['vehicle_steering_position', $ids['wheel_type_id'] ?? []],
         ];
         foreach ($fields as $type => [$target, $candidates]) {
             if (!empty($resolved[$target])) {

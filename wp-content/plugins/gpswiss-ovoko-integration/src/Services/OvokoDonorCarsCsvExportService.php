@@ -9,7 +9,7 @@ class OvokoDonorCarsCsvExportService
     public const SUMMARY_FILENAME = 'ovoko_donor_cars_summary.json';
 
     public const COLUMNS = [
-        'ovoko_car_id','external_id','car_model_raw_id','car_model_category_raw_id','car_model_years','car_years','car_color_raw_id','car_color_code','car_body_number','car_engine_number','car_engine_cubic_capacity','car_engine_capacity_l','car_engine_power','car_engine_type','car_engine_code','car_gearbox_type_raw_id','car_gearbox_code','car_interior','car_fuel_raw_id','car_mileage','defectation_notes','car_wheel_type_raw_id','car_wheel_drive_raw_id','car_body_type_raw_id','photo','car_photo_gallery','dismantling_at','vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_period','vehicle_engine_marketing','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_engine_power_kw','vehicle_engine_code','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_steering_position','vehicle_color','vehicle_color_code','mileage_km'
+        'ovoko_car_id','external_id','make','model','generation','platform','production_year','fuel','gearbox','drive','steering_side','body_type','color','car_model_raw_id','car_model_category_raw_id','car_model_years','car_years','car_color_raw_id','car_color_code','car_body_number','car_engine_number','car_engine_cubic_capacity','car_engine_capacity_l','car_engine_power','car_engine_type','car_engine_code','car_gearbox_type_raw_id','car_gearbox_code','car_interior','car_fuel_raw_id','car_mileage','defectation_notes','car_wheel_type_raw_id','car_wheel_drive_raw_id','car_body_type_raw_id','photo','car_photo_gallery','dismantling_at','vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_period','vehicle_engine_marketing','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_engine_power_kw','vehicle_engine_code','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_steering_position','vehicle_color','vehicle_color_code','mileage_km'
     ];
 
     public function __construct(private RrrApiClient $client)
@@ -111,7 +111,7 @@ class OvokoDonorCarsCsvExportService
 
     private function initial_summary(): array
     {
-        return ['total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'unresolved_model_count' => 0, 'unresolved_fuel_count' => 0, 'unresolved_gearbox_count' => 0, 'unresolved_body_type_count' => 0, 'unresolved_color_count' => 0, 'errors' => [], 'memory_usage_diagnostics' => []];
+        return ['total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
     }
 
     private function read_summary(): array
@@ -134,9 +134,32 @@ class OvokoDonorCarsCsvExportService
         $capacityL = $get(['car_engine_capacity_l','engine_capacity_l']);
         if ($capacityL === '' && is_numeric($cc)) { $capacityL = rtrim(rtrim(number_format(((float) $cc) / 1000, 1, '.', ''), '0'), '.'); }
         $mileage = $get(['car_mileage','mileage','mileage_km']);
+        $resolved = $this->client->resolve_donor_car_vehicle_fields($record);
+        $fieldSources = (array) ($resolved['vehicle_dictionary_field_sources'] ?? []);
+        $modelLabel = (string) ($resolved['vehicle_model'] ?? $get(['vehicle_model','model_name']));
+        $makeLabel = (string) ($resolved['vehicle_make'] ?? $get(['vehicle_make','make','manufacturer','brand_name']));
+        $generationLabel = (string) ($resolved['vehicle_generation'] ?? $get(['vehicle_generation','generation']));
+        $yearLabel = (string) ($resolved['vehicle_year'] ?? $get(['vehicle_year','year']));
+        $fuelLabel = (string) ($resolved['vehicle_fuel'] ?? $get(['vehicle_fuel','fuel_name']));
+        $gearboxLabel = (string) ($resolved['vehicle_gearbox_type'] ?? $get(['vehicle_gearbox_type','gearbox_name']));
+        $driveLabel = (string) ($resolved['vehicle_drive_wheels'] ?? $get(['vehicle_drive_wheels','wheel_drive']));
+        $steeringLabel = (string) ($resolved['vehicle_steering_position'] ?? $get(['vehicle_steering_position','steering_position','wheel_type']));
+        $bodyLabel = (string) ($resolved['vehicle_body_type'] ?? $get(['vehicle_body_type','body_name']));
+        $colorLabel = (string) ($resolved['vehicle_color'] ?? $get(['vehicle_color','color_name']));
         return [
             'ovoko_car_id' => $get(['car_id','id','vehicle_id']),
             'external_id' => $get(['external_id']),
+            'make' => $makeLabel,
+            'model' => $modelLabel,
+            'generation' => $generationLabel,
+            'platform' => (string) ($resolved['vehicle_platform'] ?? $get(['vehicle_platform','platform'])),
+            'production_year' => $yearLabel,
+            'fuel' => $fuelLabel,
+            'gearbox' => $gearboxLabel,
+            'drive' => $driveLabel,
+            'steering_side' => $steeringLabel,
+            'body_type' => $bodyLabel,
+            'color' => $colorLabel,
             'car_model_raw_id' => $get(['car_model_id','model_id','car_model']),
             'car_model_category_raw_id' => $get(['car_model_category_id','model_category_id','car_model_category']),
             'car_model_years' => $get(['car_model_years','model_years']),
@@ -162,24 +185,25 @@ class OvokoDonorCarsCsvExportService
             'photo' => $get(['photo','main_photo']),
             'car_photo_gallery' => self::stringify($record['car_photo_gallery'] ?? $record['photo_gallery'] ?? $record['gallery'] ?? ''),
             'dismantling_at' => $get(['dismantling_at','dismantled_at','date']),
-            'vehicle_make' => $get(['vehicle_make','make','manufacturer','brand_name']),
-            'vehicle_model' => $get(['vehicle_model','model','model_name']),
-            'vehicle_generation' => $get(['vehicle_generation','generation']),
-            'vehicle_year' => $get(['vehicle_year','year']),
+            'vehicle_make' => $makeLabel,
+            'vehicle_model' => $modelLabel,
+            'vehicle_generation' => $generationLabel,
+            'vehicle_year' => $yearLabel,
             'vehicle_period' => $get(['vehicle_period','period']),
             'vehicle_engine_marketing' => $get(['vehicle_engine_marketing','engine_marketing']),
             'vehicle_engine_capacity_cc' => $cc,
             'vehicle_engine_capacity_l' => $capacityL,
             'vehicle_engine_power_kw' => $get(['vehicle_engine_power_kw','engine_power_kw']),
             'vehicle_engine_code' => $get(['vehicle_engine_code','engine_code','car_engine_code']),
-            'vehicle_fuel' => $get(['vehicle_fuel','fuel','fuel_name']),
-            'vehicle_gearbox_type' => $get(['vehicle_gearbox_type','gearbox_type','gearbox_name']),
-            'vehicle_body_type' => $get(['vehicle_body_type','body_type','body_name']),
-            'vehicle_drive_wheels' => $get(['vehicle_drive_wheels','drive_wheels','wheel_drive']),
-            'vehicle_steering_position' => $get(['vehicle_steering_position','steering_position','wheel_type']),
-            'vehicle_color' => $get(['vehicle_color','color','color_name']),
+            'vehicle_fuel' => $fuelLabel,
+            'vehicle_gearbox_type' => $gearboxLabel,
+            'vehicle_body_type' => $bodyLabel,
+            'vehicle_drive_wheels' => $driveLabel,
+            'vehicle_steering_position' => $steeringLabel,
+            'vehicle_color' => $colorLabel,
             'vehicle_color_code' => $get(['vehicle_color_code','color_code','car_color_code']),
             'mileage_km' => $mileage,
+            '_dictionary_sources' => $fieldSources,
         ];
     }
 
@@ -199,11 +223,31 @@ class OvokoDonorCarsCsvExportService
 
     private function count_unresolved(array &$summary, array $row): void
     {
-        if ($row['car_model_raw_id'] !== '' && $row['vehicle_model'] === '') { $summary['unresolved_model_count']++; }
-        if ($row['car_fuel_raw_id'] !== '' && $row['vehicle_fuel'] === '') { $summary['unresolved_fuel_count']++; }
-        if ($row['car_gearbox_type_raw_id'] !== '' && $row['vehicle_gearbox_type'] === '') { $summary['unresolved_gearbox_count']++; }
-        if ($row['car_body_type_raw_id'] !== '' && $row['vehicle_body_type'] === '') { $summary['unresolved_body_type_count']++; }
-        if ($row['car_color_raw_id'] !== '' && $row['vehicle_color'] === '') { $summary['unresolved_color_count']++; }
+        $this->count_resolution($summary, $row, 'model', 'car_model_raw_id', 'vehicle_model');
+        $this->count_resolution($summary, $row, 'fuel', 'car_fuel_raw_id', 'vehicle_fuel');
+        $this->count_resolution($summary, $row, 'gearbox', 'car_gearbox_type_raw_id', 'vehicle_gearbox_type');
+        $this->count_resolution($summary, $row, 'drive', 'car_wheel_drive_raw_id', 'vehicle_drive_wheels');
+        $this->count_resolution($summary, $row, 'body_type', 'car_body_type_raw_id', 'vehicle_body_type');
+        $this->count_resolution($summary, $row, 'color', 'car_color_raw_id', 'vehicle_color');
+        foreach ((array) ($row['_dictionary_sources'] ?? []) as $source) {
+            $name = is_array($source) ? (string) ($source['source'] ?? '') : '';
+            if ($name !== '' && $name !== 'unresolved' && !in_array($name, $summary['dictionary_sources_used'], true)) {
+                $summary['dictionary_sources_used'][] = $name;
+            }
+        }
+        $summary['dictionary_probe_status'] = $summary['dictionary_sources_used'] !== [] ? 'resolved_or_partially_resolved' : 'unresolved';
+        $resolvedTotal = (int) $summary['resolved_model_count'] + (int) $summary['resolved_fuel_count'] + (int) $summary['resolved_gearbox_count'] + (int) $summary['resolved_drive_count'] + (int) $summary['resolved_body_type_count'] + (int) $summary['resolved_color_count'];
+        $unresolvedTotal = (int) $summary['unresolved_model_count'] + (int) $summary['unresolved_fuel_count'] + (int) $summary['unresolved_gearbox_count'] + (int) $summary['unresolved_drive_count'] + (int) $summary['unresolved_body_type_count'] + (int) $summary['unresolved_color_count'];
+        if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.', $summary['warnings'], true)) {
+            $summary['warnings'][] = 'Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.';
+        }
+    }
+
+    private function count_resolution(array &$summary, array $row, string $name, string $rawKey, string $labelKey): void
+    {
+        if ((string) ($row[$rawKey] ?? '') === '') { return; }
+        if ((string) ($row[$labelKey] ?? '') !== '') { $summary['resolved_' . $name . '_count']++; return; }
+        $summary['unresolved_' . $name . '_count']++;
     }
 
     private function add_memory(array &$summary): void
