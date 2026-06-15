@@ -92,6 +92,19 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         </form>
     </div>
 
+
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Eksport CSV aut dawców Ovoko/RRR</h3>
+        <p><strong>Tylko odczyt.</strong> Eksportuje wszystkie auta dawców przez stronicowane wywołania <code>POST /v2/get/cars?limit=100&amp;page=N</code>. Nie zapisuje produktów Woo, lokalnych aut, mapowań ani danych marketplace. Pole <code>car_body_number</code> może zawierać wartość podobną do VIN/numeru nadwozia i jest uwzględnione wyłącznie dla wewnętrznej migracji.</p>
+        <p><button type="button" class="button button-primary" id="gpswiss_ovoko_donor_cars_export_start">Export donor cars CSV</button></p>
+        <div id="gpswiss_ovoko_donor_cars_export_status" style="margin-top:10px;">Status: <code data-k="status">idle</code> | Page: <code data-k="page">0</code> | Exported: <code data-k="exported">0</code> / <code data-k="total">0</code> | Errors: <code data-k="errors">0</code></div>
+        <p id="gpswiss_ovoko_donor_cars_export_downloads" style="display:none;">
+            <a class="button" data-download="csv" href="#">Download ovoko_donor_cars.csv</a>
+            <a class="button" data-download="summary" href="#">Download ovoko_donor_cars_summary.json</a>
+        </p>
+        <pre id="gpswiss_ovoko_donor_cars_export_log" style="max-height:180px; overflow:auto; background:#fff; padding:8px;"></pre>
+    </div>
+
     <?php include __DIR__ . '/partials/gmail-draft-update.php'; ?>
 
     <?php if (!empty($notice)): ?>

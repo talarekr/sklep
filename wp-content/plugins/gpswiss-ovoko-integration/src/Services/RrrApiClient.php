@@ -768,6 +768,14 @@ class RrrApiClient
         return ['ok'=>false,'endpoint_confirmed'=>false,'car_id'=>$carId,'probe'=>$probe,'message'=>'No confirmed read-only endpoint returned vehicle details for requested car_id.'];
     }
 
+
+    public function fetch_donor_cars_page(int $limit = 100, int $page = 1): array
+    {
+        $limit = max(1, min(100, $limit));
+        $page = max(1, $page);
+        return $this->post_form('/v2/get/cars?limit=' . $limit . '&page=' . $page, [], true);
+    }
+
     public function probe_donor_cars_api(int $limit = 5, int $page = 1, bool $hydrateFirstCar = true): array
     {
         $limit = max(1, min(5, $limit));
