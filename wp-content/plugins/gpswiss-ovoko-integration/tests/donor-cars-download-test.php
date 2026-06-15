@@ -16,11 +16,12 @@ $GLOBALS['gpswiss_download_test_nonce_actions'] = [];
 
 function current_user_can(string $capability): bool { return $capability === 'manage_options'; }
 function sanitize_key(string $key): string { return preg_replace('/[^a-z0-9_\-]/', '', strtolower($key)); }
-function check_admin_referer(string $action): void { $GLOBALS['gpswiss_download_test_nonce_actions'][] = $action; }
+function check_admin_referer(string $action): void { $GLOBALS['gpswiss_download_test_nonce_actions'][] = $action; if (!isset($_GET['_wpnonce'])) { wp_die('Nonce missing'); } }
 function wp_die(string $message): never { echo $message; exit(70); }
 function wp_upload_dir($time = null, bool $create_dir = true): array { return ['basedir' => $GLOBALS['gpswiss_download_test_upload_dir']]; }
 function trailingslashit(string $value): string { return rtrim($value, '/\\') . '/'; }
-function wp_nonce_url(string $url, string $action): string { return $url . '&_wpnonce=' . rawurlencode($action); }
+function wp_create_nonce(string $action): string { return 'nonce-' . $action; }
+function add_query_arg(array $args, string $url): string { return $url . '?' . http_build_query($args, '', '&', PHP_QUERY_RFC3986); }
 function wp_json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false { return json_encode($value, $flags, $depth); }
 function admin_url(string $path = ''): string { return 'https://example.test/wp-admin/' . ltrim($path, '/'); }
 function nocache_headers(): void {}
@@ -53,15 +54,22 @@ function gpswiss_download_prepare_files(): void
 
 if (($argv[1] ?? '') === 'child') {
     gpswiss_download_prepare_files();
-    $_GET = ['export_id' => 'donor_cars', $argv[2] ?? 'type' => $argv[3] ?? ''];
+    $_GET = ['export_id' => 'donor_cars', '_wpnonce' => 'nonce', $argv[2] ?? 'type' => $argv[3] ?? ''];
+    if (in_array($argv[2] ?? '', ['export_id', 'ampexport_id'], true)) {
+        $_GET['type'] = 'csv';
+    }
+    if (($argv[4] ?? '') === 'ampnonce') {
+        unset($_GET['_wpnonce']);
+        $_GET['amp_wpnonce'] = 'nonce';
+    }
     $GLOBALS['gpswiss_download_test_api_calls'] = [];
     $GLOBALS['gpswiss_download_test_writes'] = [];
     gpswiss_download_admin_page()->handle_download_donor_cars_export();
 }
 
-function gpswiss_download_run_child(string $param, string $value): array
+function gpswiss_download_run_child(string $param, string $value, bool $ampNonce = false): array
 {
-    $cmd = PHP_BINARY . ' ' . escapeshellarg(__FILE__) . ' child ' . escapeshellarg($param) . ' ' . escapeshellarg($value) . ' 2>&1';
+    $cmd = PHP_BINARY . ' ' . escapeshellarg(__FILE__) . ' child ' . escapeshellarg($param) . ' ' . escapeshellarg($value) . ($ampNonce ? ' ampnonce' : '') . ' 2>&1';
     exec($cmd, $output, $code);
     return ['code' => $code, 'output' => implode("\n", $output)];
 }
@@ -69,8 +77,10 @@ function gpswiss_download_run_child(string $param, string $value): array
 $exporter = new OvokoDonorCarsCsvExportService(new GPSwiss\Ovoko\Services\RrrApiClient([]));
 $urls = $exporter->download_urls();
 gpswiss_download_assert(str_contains($urls['csv'], 'export_id=donor_cars') && str_contains($urls['csv'], 'type=csv'), 'CSV URL must use accepted type=csv and export_id=donor_cars.');
+gpswiss_download_assert(!str_contains($urls['csv'], 'ampexport_id=') && !str_contains($urls['csv'], 'amptype='), 'CSV URL must not contain malformed amp-prefixed parameter names.');
+gpswiss_download_assert(!str_contains($urls['csv'], '&amp;') && substr_count($urls['csv'], '&') >= 3, 'CSV URL must be raw for JSON/JS and not HTML entity encoded.');
 gpswiss_download_assert(str_contains($urls['summary'], 'export_id=donor_cars') && str_contains($urls['summary'], 'type=summary'), 'Summary URL must use accepted type=summary and export_id=donor_cars.');
-echo "PASS generated download URLs use accepted donor cars types\n";
+echo "PASS generated download URLs use accepted donor cars types without double-escaped ampersands\n";
 
 $variants = [
     ['type', 'csv', 'id,name'],
@@ -83,12 +93,20 @@ $variants = [
     ['export_type', 'summary', 'cars_exported'],
     ['export_type', 'donor_cars_csv', 'id,name'],
     ['export_type', 'donor_cars_summary', 'cars_exported'],
+    ['ampexport_id', 'donor_cars', 'id,name'],
+    ['amptype', 'csv', 'id,name'],
+    ['ampfile', 'summary', 'cars_exported'],
+    ['ampexport_type', 'csv', 'id,name'],
 ];
 foreach ($variants as [$param, $value, $expected]) {
     $result = gpswiss_download_run_child($param, $value);
     gpswiss_download_assert($result['code'] === 0 && str_contains($result['output'], $expected), "Handler must accept {$param}={$value}.");
 }
-echo "PASS download handler accepts current and legacy parameter variants\n";
+echo "PASS download handler accepts current, legacy, and malformed amp-prefixed parameter variants\n";
+
+$ampNonce = gpswiss_download_run_child('amptype', 'csv', true);
+gpswiss_download_assert($ampNonce['code'] === 0 && str_contains($ampNonce['output'], 'id,name'), 'Handler must accept malformed amp_wpnonce fallback after normalization.');
+echo "PASS download handler accepts amp_wpnonce fallback after normalization\n";
 
 $invalid = gpswiss_download_run_child('type', 'invalid');
 gpswiss_download_assert($invalid['code'] === 70 && str_contains($invalid['output'], 'Invalid export type') && str_contains($invalid['output'], 'GPSwiss Ovoko donor cars download invalid export type'), 'Invalid type must log and return clear error.');

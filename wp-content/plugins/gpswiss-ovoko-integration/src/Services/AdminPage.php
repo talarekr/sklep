@@ -948,6 +948,8 @@ class AdminPage
             wp_die('Unauthorized');
         }
 
+        $this->normalize_malformed_donor_cars_download_params();
+
         $exportId = sanitize_key((string) ($_GET['export_id'] ?? 'donor_cars'));
         if ($exportId !== 'donor_cars') {
             $this->log_invalid_donor_cars_download($exportId, '', '', 'export_id');
@@ -988,6 +990,23 @@ class AdminPage
     }
 
 
+    private function normalize_malformed_donor_cars_download_params(): void
+    {
+        $fallbacks = [
+            'ampexport_id' => 'export_id',
+            'amptype' => 'type',
+            'ampfile' => 'file',
+            'ampexport_type' => 'export_type',
+            'amp_wpnonce' => '_wpnonce',
+        ];
+
+        foreach ($fallbacks as $malformedKey => $canonicalKey) {
+            if (!isset($_GET[$canonicalKey]) && isset($_GET[$malformedKey])) {
+                $_GET[$canonicalKey] = $_GET[$malformedKey];
+            }
+        }
+    }
+
     private function log_invalid_donor_cars_download(string $exportId, string $type, string $requestedValue, string $requestedSource): void
     {
         $acceptedTypes = array_keys($this->donor_cars_download_definitions());
@@ -1000,6 +1019,11 @@ class AdminPage
             'type' => (string) ($_GET['type'] ?? ''),
             'file' => (string) ($_GET['file'] ?? ''),
             'export_type' => (string) ($_GET['export_type'] ?? ''),
+            'ampexport_id' => (string) ($_GET['ampexport_id'] ?? ''),
+            'amptype' => (string) ($_GET['amptype'] ?? ''),
+            'ampfile' => (string) ($_GET['ampfile'] ?? ''),
+            'ampexport_type' => (string) ($_GET['ampexport_type'] ?? ''),
+            'amp_wpnonce_present' => isset($_GET['amp_wpnonce']),
             'requested_type_source' => $requestedSource,
             'requested_type_raw' => $requestedValue,
             'requested_type' => $type,
