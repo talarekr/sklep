@@ -1,0 +1,96 @@
+<?php
+
+declare(strict_types=1);
+
+use GPSwiss\Ovoko\Services\AdminPage;
+use GPSwiss\Ovoko\Services\OvokoDonorCarsCsvExportService;
+
+require_once dirname(__DIR__) . '/src/Services/RrrApiClient.php';
+require_once dirname(__DIR__) . '/src/Services/OvokoDonorCarsCsvExportService.php';
+require_once dirname(__DIR__) . '/src/Services/AdminPage.php';
+
+$GLOBALS['gpswiss_download_test_upload_dir'] = sys_get_temp_dir() . '/gpswiss-donor-download-test-' . md5(__FILE__);
+$GLOBALS['gpswiss_download_test_api_calls'] = [];
+$GLOBALS['gpswiss_download_test_writes'] = [];
+$GLOBALS['gpswiss_download_test_nonce_actions'] = [];
+
+function current_user_can(string $capability): bool { return $capability === 'manage_options'; }
+function sanitize_key(string $key): string { return preg_replace('/[^a-z0-9_\-]/', '', strtolower($key)); }
+function check_admin_referer(string $action): void { $GLOBALS['gpswiss_download_test_nonce_actions'][] = $action; }
+function wp_die(string $message): never { echo $message; exit(70); }
+function wp_upload_dir($time = null, bool $create_dir = true): array { return ['basedir' => $GLOBALS['gpswiss_download_test_upload_dir']]; }
+function trailingslashit(string $value): string { return rtrim($value, '/\\') . '/'; }
+function wp_nonce_url(string $url, string $action): string { return $url . '&_wpnonce=' . rawurlencode($action); }
+function admin_url(string $path = ''): string { return 'https://example.test/wp-admin/' . ltrim($path, '/'); }
+function nocache_headers(): void {}
+function wp_remote_post(string $url, array $args): array { $GLOBALS['gpswiss_download_test_api_calls'][] = [$url, $args]; return []; }
+function wp_mkdir_p(string $dir): bool { $GLOBALS['gpswiss_download_test_writes'][] = ['mkdir', $dir]; return is_dir($dir) || mkdir($dir, 0777, true); }
+function update_option(string $key, mixed $value, ?bool $autoload = null): bool { $GLOBALS['gpswiss_download_test_writes'][] = ['update_option', $key]; return true; }
+
+function gpswiss_download_assert(bool $condition, string $message): void
+{
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+}
+
+function gpswiss_download_admin_page(): AdminPage
+{
+    $ref = new ReflectionClass(AdminPage::class);
+    return $ref->newInstanceWithoutConstructor();
+}
+
+function gpswiss_download_prepare_files(): void
+{
+    $dir = $GLOBALS['gpswiss_download_test_upload_dir'] . '/gpswiss-ovoko-integration/donor-cars-export';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0777, true);
+    }
+    file_put_contents($dir . '/' . OvokoDonorCarsCsvExportService::CSV_FILENAME, "id,name\n1,Audi\n");
+    file_put_contents($dir . '/' . OvokoDonorCarsCsvExportService::SUMMARY_FILENAME, "{\"cars_exported\":1}\n");
+}
+
+if (($argv[1] ?? '') === 'child') {
+    gpswiss_download_prepare_files();
+    $_GET = ['export_id' => 'donor_cars', 'type' => $argv[2] ?? ''];
+    $GLOBALS['gpswiss_download_test_api_calls'] = [];
+    $GLOBALS['gpswiss_download_test_writes'] = [];
+    gpswiss_download_admin_page()->handle_download_donor_cars_export();
+}
+
+function gpswiss_download_run_child(string $type): array
+{
+    $cmd = PHP_BINARY . ' ' . escapeshellarg(__FILE__) . ' child ' . escapeshellarg($type);
+    exec($cmd, $output, $code);
+    return ['code' => $code, 'output' => implode("\n", $output)];
+}
+
+$exporter = new OvokoDonorCarsCsvExportService(new GPSwiss\Ovoko\Services\RrrApiClient([]));
+$urls = $exporter->download_urls();
+gpswiss_download_assert(str_contains($urls['csv'], 'export_id=donor_cars') && str_contains($urls['csv'], 'type=csv'), 'CSV URL must use accepted type=csv and export_id=donor_cars.');
+gpswiss_download_assert(str_contains($urls['summary'], 'export_id=donor_cars') && str_contains($urls['summary'], 'type=summary'), 'Summary URL must use accepted type=summary and export_id=donor_cars.');
+echo "PASS generated download URLs use accepted donor cars types\n";
+
+$csv = gpswiss_download_run_child('csv');
+gpswiss_download_assert($csv['code'] === 0 && str_contains($csv['output'], 'id,name') && str_contains($csv['output'], 'Audi'), 'CSV handler must stream generated CSV.');
+echo "PASS CSV download handler accepts type and streams file\n";
+
+$summary = gpswiss_download_run_child('summary');
+gpswiss_download_assert($summary['code'] === 0 && str_contains($summary['output'], 'cars_exported'), 'Summary handler must stream generated JSON.');
+echo "PASS summary download handler accepts type and streams file\n";
+
+$invalid = gpswiss_download_run_child('invalid');
+gpswiss_download_assert($invalid['code'] === 70 && str_contains($invalid['output'], 'Invalid export type'), 'Invalid type must return clear error.');
+echo "PASS invalid type returns clear error\n";
+
+$page = gpswiss_download_admin_page();
+$pathCheck = new ReflectionMethod(AdminPage::class, 'is_donor_cars_export_file');
+$pathCheck->setAccessible(true);
+gpswiss_download_prepare_files();
+$dir = $GLOBALS['gpswiss_download_test_upload_dir'] . '/gpswiss-ovoko-integration/donor-cars-export';
+gpswiss_download_assert($pathCheck->invoke($page, '/etc/passwd', $dir) === false, 'Path traversal/outside file must be blocked.');
+echo "PASS path traversal is blocked\n";
+
+gpswiss_download_assert($GLOBALS['gpswiss_download_test_api_calls'] === [], 'Download tests must not call Ovoko API.');
+gpswiss_download_assert(array_filter($GLOBALS['gpswiss_download_test_writes'], static fn($w) => $w[0] !== 'mkdir') === [], 'Download handler must not write application data.');
+echo "PASS no Ovoko API calls or application writes happen during download\n";
