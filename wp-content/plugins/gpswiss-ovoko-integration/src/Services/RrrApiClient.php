@@ -4,8 +4,31 @@ namespace GPSwiss\Ovoko\Services;
 
 class RrrApiClient
 {
+    private int $dictionaryApiCallsThisTick = 0;
+    private int $maxDictionaryApiCallsPerTick = 20;
+    private string $lastDictionaryEndpointAttempted = '';
+    private bool $exportSafeDictionaryMode = false;
+
     public function __construct(private array $settings)
     {
+    }
+
+    public function enable_export_safe_dictionary_mode(int $maxCallsPerTick = 20): void
+    {
+        $this->exportSafeDictionaryMode = true;
+        $this->maxDictionaryApiCallsPerTick = max(1, $maxCallsPerTick);
+        $this->dictionaryApiCallsThisTick = 0;
+        $this->lastDictionaryEndpointAttempted = '';
+    }
+
+    public function dictionary_tick_diagnostics(): array
+    {
+        return [
+            'dictionary_api_calls_this_tick' => $this->dictionaryApiCallsThisTick,
+            'max_dictionary_api_calls_per_tick' => $this->maxDictionaryApiCallsPerTick,
+            'last_dictionary_endpoint_attempted' => $this->lastDictionaryEndpointAttempted,
+            'dictionary_call_limit_reached' => $this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick,
+        ];
     }
 
     public function check_configuration(): array
@@ -2753,7 +2776,7 @@ class RrrApiClient
             }
         }
 
-        if ($type === 'model') {
+        if ($type === 'model' && !$this->exportSafeDictionaryMode) {
             $scan = $this->scan_car_model_dictionary_by_id($id);
             $endpointsChecked = array_values(array_unique(array_merge($endpointsChecked, (array) ($scan['endpoints_checked'] ?? []))));
             $rawKeys = array_merge($rawKeys, (array) ($scan['raw_keys'] ?? []));
@@ -3705,6 +3728,14 @@ class RrrApiClient
 
     private function post_form(string $path, array $payload, bool $includeRawPayload = false): array
     {
+        if (str_starts_with($path, '/get/')) {
+            $this->lastDictionaryEndpointAttempted = $path;
+            if ($this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick) {
+                return ['ok' => false, 'executed' => false, 'success' => false, 'http_code' => null, 'status_code' => null, 'message' => 'Dictionary API call limit reached for this export tick', 'payload' => []];
+            }
+            $this->dictionaryApiCallsThisTick++;
+        }
+
         $baseUrl = $this->normalize_base_url((string) ($this->settings['rrr_api_base_url'] ?? ''));
         if ($baseUrl === '') {
             return ['ok' => false, 'http_code' => null, 'status_code' => null, 'message' => 'Missing RRR base URL'];

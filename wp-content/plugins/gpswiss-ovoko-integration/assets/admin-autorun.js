@@ -21,8 +21,16 @@ document.addEventListener('DOMContentLoaded', function () {
       Object.keys(params).forEach(function (k) { fd.set(k, params[k]); });
       const r = await fetch(config.ajaxUrl, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:fd.toString()});
       const text = await r.text();
-      const json = JSON.parse(text);
-      if (!r.ok || !json.ok) { throw new Error((json && json.error) || 'donor_export_failed'); }
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) {
+        console.error('Donor cars export returned non-JSON response', {status: r.status, statusText: r.statusText, body: text});
+        throw new Error('HTTP ' + r.status + ' non-JSON response: ' + text.slice(0, 300));
+      }
+      if (!r.ok || !json.ok) {
+        console.error('Donor cars export JSON error', {status: r.status, response: json});
+        const data = json.data || {};
+        throw new Error('HTTP ' + r.status + ': ' + (data.message || json.error || 'donor_export_failed') + (data.phase ? ' | phase: ' + data.phase : ''));
+      }
       return json;
     };
     donorBtn.addEventListener('click', async function () {
@@ -30,14 +38,16 @@ document.addEventListener('DOMContentLoaded', function () {
       if (donorLog) { donorLog.textContent = ''; }
       setDonor('status', 'starting'); setDonor('page', 0); setDonor('exported', 0); setDonor('total', 0); setDonor('errors', 0);
       try {
+        setDonor('status', 'Building dictionary cache');
         await donorRequest({mode:'start'});
         let page = 1; let done = false;
         while (!done) {
-          setDonor('status', 'running'); setDonor('page', page);
+          setDonor('status', 'Exporting donor cars'); setDonor('page', page);
           const res = await donorRequest({mode:'page', page:String(page)});
           const summary = res.summary || {};
           setDonor('exported', summary.cars_exported || 0); setDonor('total', summary.total_count_from_api || 0); setDonor('errors', (summary.errors || []).length);
-          donorAppend({page: page, records_exported: res.records_exported || 0, done: !!res.done, memory: (summary.memory_usage_diagnostics || []).slice(-1)[0] || {}});
+          setDonor('status', res.phase || res.status || 'Exporting donor cars');
+          donorAppend({phase: res.phase || res.status || '', page: page, records_exported: res.records_exported || 0, done: !!res.done, dictionary_api_calls_this_tick: summary.dictionary_api_calls_this_tick || 0, dictionary_cache_complete: !!summary.dictionary_cache_complete, warnings: summary.warnings || [], memory: (summary.memory_usage_diagnostics || []).slice(-1)[0] || {}});
           if (res.downloads && donorDownloads) {
             donorDownloads.style.display = 'block';
             const csv = donorDownloads.querySelector('[data-download="csv"]');
