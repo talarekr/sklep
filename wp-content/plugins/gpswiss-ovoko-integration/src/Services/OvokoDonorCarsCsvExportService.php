@@ -81,6 +81,8 @@ class OvokoDonorCarsCsvExportService
             $summary['total_count_from_api'] = $totalCount;
         }
         $summary['cars_exported'] += count($records);
+        $this->update_laravel_safety($summary);
+        $this->add_zero_simple_dictionary_warning($summary);
         $summary['pages_processed'] = max((int) $summary['pages_processed'], $page);
         $this->merge_dictionary_tick_diagnostics($summary);
         $this->add_memory($summary);
@@ -121,7 +123,7 @@ class OvokoDonorCarsCsvExportService
 
     private function initial_summary(): array
     {
-        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'csv_safe_for_laravel_import' => false, 'csv_safe_for_laravel_import_reason' => 'model dictionary cache incomplete', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'unique_car_model_ids' => [], 'resolved_car_model_ids' => [], 'unresolved_car_model_ids' => [], 'unresolved_car_model_id_samples' => [], 'unique_car_model_category_ids' => [], 'resolved_car_model_category_ids' => [], 'unresolved_car_model_category_id_samples' => [], 'model_dictionary_cache_complete' => false, 'model_dictionary_resolution_strategy' => 'staged_all_brand_model_cache_by_model_id_then_direct_context_if_available_no_category_as_brand', 'all_brand_model_cache_complete' => false, 'brand_model_endpoints_processed' => 0, 'brand_model_endpoints_total' => 0, 'model_cache_successful_endpoint_count' => 0, 'model_cache_failed_endpoint_count' => 0, 'failed_brand_model_endpoints' => [], 'target_model_ids_found' => [], 'target_model_ids_missing' => [], 'unresolved_only_because_cache_incomplete_count' => 0, 'model_resolution_errors' => [], 'sample_unresolved_rows' => [], 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
+        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'csv_safe_for_laravel_import' => false, 'csv_safe_for_laravel_import_reason' => 'model dictionary cache incomplete', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'readable_make_count' => 0, 'readable_model_count' => 0, 'resolved_fuel_count' => 0, 'readable_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'readable_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'readable_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'readable_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'readable_color_count' => 0, 'unresolved_color_count' => 0, 'readable_steering_side_count' => 0, 'unique_car_model_ids' => [], 'resolved_car_model_ids' => [], 'unresolved_car_model_ids' => [], 'unresolved_car_model_id_samples' => [], 'unique_car_model_category_ids' => [], 'resolved_car_model_category_ids' => [], 'unresolved_car_model_category_id_samples' => [], 'model_dictionary_cache_complete' => false, 'model_dictionary_resolution_strategy' => 'staged_all_brand_model_cache_by_model_id_then_direct_context_if_available_no_category_as_brand', 'all_brand_model_cache_complete' => false, 'brand_model_endpoints_processed' => 0, 'brand_model_endpoints_total' => 0, 'model_cache_successful_endpoint_count' => 0, 'model_cache_failed_endpoint_count' => 0, 'failed_brand_model_endpoints' => [], 'target_model_ids_found' => [], 'target_model_ids_missing' => [], 'unresolved_only_because_cache_incomplete_count' => 0, 'model_resolution_errors' => [], 'sample_unresolved_rows' => [], 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
     }
 
     private function read_summary(): array
@@ -145,7 +147,9 @@ class OvokoDonorCarsCsvExportService
         if ($capacityL === '' && is_numeric($cc)) { $capacityL = rtrim(rtrim(number_format(((float) $cc) / 1000, 1, '.', ''), '0'), '.'); }
         $mileage = $get(['car_mileage','mileage','mileage_km']);
         $resolved = $this->client->resolve_donor_car_vehicle_fields_from_existing_model_cache($record);
-        $dictionaryDiagnostics = ['dictionary_probe_called' => false, 'reason' => 'export_uses_existing_model_cache_only'];
+        $simpleResolved = $this->client->resolve_donor_car_simple_dictionary_fields($record);
+        $resolved = array_merge($resolved, array_filter($simpleResolved, static fn($value): bool => $value !== '' && $value !== []));
+        $dictionaryDiagnostics = ['dictionary_probe_called' => false, 'reason' => 'export_uses_existing_model_cache_plus_small_simple_dictionaries'];
         $fieldSources = (array) ($resolved['vehicle_dictionary_field_sources'] ?? []);
         $modelLabel = (string) ($resolved['vehicle_model'] ?? $get(['vehicle_model','model_name']));
         $makeLabel = (string) ($resolved['vehicle_make'] ?? $get(['vehicle_make','make','manufacturer','brand_name']));
@@ -235,6 +239,7 @@ class OvokoDonorCarsCsvExportService
 
     private function count_unresolved(array &$summary, array $row): void
     {
+        $this->count_readable_fields($summary, $row);
         $this->count_resolution($summary, $row, 'model', 'car_model_raw_id', 'vehicle_model');
         $this->count_resolution($summary, $row, 'fuel', 'car_fuel_raw_id', 'vehicle_fuel');
         $this->count_resolution($summary, $row, 'gearbox', 'car_gearbox_type_raw_id', 'vehicle_gearbox_type');
@@ -257,7 +262,9 @@ class OvokoDonorCarsCsvExportService
             'model' => (int) $summary['unresolved_model_count'], 'fuel' => (int) $summary['unresolved_fuel_count'], 'gearbox' => (int) $summary['unresolved_gearbox_count'],
             'drive' => (int) $summary['unresolved_drive_count'], 'body_type' => (int) $summary['unresolved_body_type_count'], 'color' => (int) $summary['unresolved_color_count'],
         ];
+        $this->update_laravel_safety($summary);
         $summary['dictionary_cache_complete'] = ((int) array_sum($summary['unresolved_fields_counts'])) === 0;
+        $this->add_zero_simple_dictionary_warning($summary);
         if (!$summary['dictionary_cache_complete'] && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
             $summary['warnings'][] = 'Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
         }
@@ -272,6 +279,40 @@ class OvokoDonorCarsCsvExportService
         if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
             $summary['warnings'][] = 'Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
         }
+    }
+
+    private function count_readable_fields(array &$summary, array $row): void
+    {
+        foreach (['make' => 'make', 'model' => 'model', 'fuel' => 'fuel', 'gearbox' => 'gearbox', 'drive' => 'drive', 'steering_side' => 'steering_side', 'body_type' => 'body_type', 'color' => 'color'] as $name => $key) {
+            if ((string) ($row[$key] ?? '') !== '') { $summary['readable_' . $name . '_count']++; }
+        }
+    }
+
+    private function zero_simple_dictionary_fields(array $summary): array
+    {
+        if ((int) ($summary['cars_exported'] ?? 0) === 0) { return []; }
+        $zero = [];
+        foreach (['fuel','gearbox','drive','body_type','color'] as $field) {
+            if ((int) ($summary['readable_' . $field . '_count'] ?? 0) === 0) { $zero[] = $field; }
+        }
+        return $zero;
+    }
+
+    private function add_zero_simple_dictionary_warning(array &$summary): void
+    {
+        if ($this->zero_simple_dictionary_fields($summary) !== [] && !in_array('Eksport ma puste pola słownikowe pojazdów: paliwo/skrzynia/napęd/nadwozie/kolor. Nie używaj jako finalnego importu Laravel.', $summary['warnings'], true)) {
+            $summary['warnings'][] = 'Eksport ma puste pola słownikowe pojazdów: paliwo/skrzynia/napęd/nadwozie/kolor. Nie używaj jako finalnego importu Laravel.';
+        }
+    }
+
+    private function update_laravel_safety(array &$summary): void
+    {
+        $cars = max(1, (int) ($summary['cars_exported'] ?? 0));
+        $modelCoverage = ((int) ($summary['readable_model_count'] ?? $summary['resolved_model_count'] ?? 0)) / $cars;
+        $zeroSimpleFields = $this->zero_simple_dictionary_fields($summary);
+        $safe = !empty($summary['model_dictionary_cache_complete']) && $modelCoverage >= 0.90 && $zeroSimpleFields === [];
+        $summary['csv_safe_for_laravel_import'] = $safe;
+        $summary['csv_safe_for_laravel_import_reason'] = $safe ? 'model cache complete, make/model coverage high, and simple readable dictionaries populated' : 'requires complete model cache, high make/model coverage, and populated simple readable dictionaries';
     }
 
     private function merge_dictionary_resolution_diagnostics(array &$target, array $source): void
@@ -316,8 +357,7 @@ class OvokoDonorCarsCsvExportService
         $summary['target_model_ids_found'] = $summary['resolved_car_model_ids'];
         $summary['target_model_ids_missing'] = $summary['unresolved_car_model_ids'];
         $summary['unresolved_only_because_cache_incomplete_count'] = empty($cache['all_brand_model_cache_complete']) ? count((array) $summary['unresolved_car_model_ids']) : 0;
-        $summary['csv_safe_for_laravel_import'] = !empty($cache['all_brand_model_cache_complete']);
-        $summary['csv_safe_for_laravel_import_reason'] = $summary['csv_safe_for_laravel_import'] ? 'model dictionary cache complete' : 'model dictionary cache incomplete';
+        $this->update_laravel_safety($summary);
     }
 
 

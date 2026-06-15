@@ -55,6 +55,12 @@ function wp_remote_retrieve_body(array $response): string { return (string) ($re
 function gpswiss_dict_assert(bool $condition, string $message): void { if (!$condition) { throw new RuntimeException($message); } }
 
 $client = new RrrApiClient(['rrr_api_base_url' => 'https://api.rrr.test', 'rrr_api_username' => 'u', 'rrr_api_password' => 'p', 'rrr_api_user_token' => 't']);
+$GLOBALS['gpswiss_donor_dict_transients']['gpswiss_ovoko_staged_model_cache_v1'] = [
+    'all_brand_model_cache_complete' => true,
+    'model_id_to_record' => ['4950' => ['id' => '4950', 'name' => 'Levante', 'brand_id' => '10']],
+    'model_id_to_brand_id' => ['4950' => '10'],
+    'brand_id_to_name' => ['10' => 'Maserati'],
+];
 $exporter = new OvokoDonorCarsCsvExportService($client);
 $exporter->start();
 $result = $exporter->process_page(1);
@@ -72,6 +78,9 @@ gpswiss_dict_assert($row['vehicle_fuel'] === 'Benzyna' && $row['vehicle_gearbox_
 gpswiss_dict_assert($summary['resolved_model_count'] === 1 && $summary['unresolved_model_count'] === 0, 'Model summary counts mismatch.');
 gpswiss_dict_assert($summary['resolved_fuel_count'] === 1 && $summary['resolved_drive_count'] === 1 && $summary['resolved_body_type_count'] === 1 && $summary['resolved_color_count'] === 1, 'Resolved summary counts mismatch.');
 gpswiss_dict_assert(in_array('dictionary_api', $summary['dictionary_sources_used'], true), 'Dictionary source should include dictionary_api.');
+gpswiss_dict_assert($summary['readable_fuel_count'] === 1 && $summary['readable_gearbox_count'] === 1 && $summary['readable_steering_side_count'] === 1, 'Readable summary counts mismatch.');
+gpswiss_dict_assert($summary['csv_safe_for_laravel_import'] === true, 'Completed model cache and populated simple dictionaries should be Laravel safe.');
+gpswiss_dict_assert(!array_filter($GLOBALS['gpswiss_donor_dict_requests'], static fn($r) => str_contains($r['url'], '/get/car_models/')), 'Export must not call car model endpoints.');
 gpswiss_dict_assert(!array_filter($GLOBALS['gpswiss_donor_dict_requests'], static fn($r) => str_contains($r['url'], 'ebay') || str_contains($r['url'], 'allegro')), 'Export must not call marketplace APIs.');
 
 echo "PASS donor cars export preserves raw IDs, resolves readable dictionary labels, fills aliases, and remains read-only\n";
