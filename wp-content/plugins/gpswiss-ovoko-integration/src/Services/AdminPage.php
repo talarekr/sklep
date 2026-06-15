@@ -927,20 +927,63 @@ class AdminPage
 
     public function handle_donor_cars_csv_export_ajax(): void
     {
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error(['error' => 'unauthorized'], 403);
-        }
-        check_ajax_referer('gpswiss_ovoko_donor_cars_csv_export');
-
-        $settings = $this->service->get_settings();
-        $exporter = new OvokoDonorCarsCsvExportService(new RrrApiClient($settings));
-        $mode = sanitize_key((string) ($_POST['mode'] ?? 'page'));
-        if ($mode === 'start') {
-            wp_send_json($exporter->start() + ['downloads' => $exporter->download_urls()]);
-        }
-
+        $actionName = 'gpswiss_ovoko_donor_cars_csv_export';
+        $startedAt = microtime(true);
+        $phase = 'bootstrap';
         $page = max(1, (int) ($_POST['page'] ?? 1));
-        wp_send_json($exporter->process_page($page));
+        $limit = OvokoDonorCarsCsvExportService::LIMIT;
+        $exported = 0;
+        $client = null;
+        $jsonSent = false;
+
+        register_shutdown_function(function () use (&$jsonSent, &$phase, &$page, &$exported, $limit, $actionName, $startedAt, &$client): void {
+            $fatal = error_get_last();
+            if ($jsonSent || $fatal === null || !in_array((int) ($fatal['type'] ?? 0), [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+                return;
+            }
+            $diag = is_object($client) && method_exists($client, 'dictionary_tick_diagnostics') ? $client->dictionary_tick_diagnostics() : [];
+            error_log('GPSwiss Ovoko donor cars AJAX fatal expected JSON: ' . wp_json_encode([
+                'action' => $actionName, 'page' => $page, 'limit' => $limit, 'phase' => $phase, 'memory_usage' => memory_get_usage(true), 'elapsed' => round(microtime(true) - $startedAt, 3), 'last_dictionary_endpoint_attempted' => (string) ($diag['last_dictionary_endpoint_attempted'] ?? ''), 'message' => (string) ($fatal['message'] ?? ''), 'expected_json' => true,
+            ]));
+            if (!headers_sent()) {
+                wp_send_json_error(['message' => 'Fatal error during donor cars export tick', 'exception_class' => 'fatal_error', 'page' => $page, 'exported' => $exported, 'phase' => $phase], 500);
+            }
+        });
+
+        try {
+            if (!current_user_can('manage_options')) {
+                $jsonSent = true;
+                wp_send_json_error(['error' => 'unauthorized'], 403);
+            }
+            $phase = 'nonce';
+            check_ajax_referer('gpswiss_ovoko_donor_cars_csv_export');
+
+            $phase = 'create_exporter';
+            $settings = $this->service->get_settings();
+            $client = new RrrApiClient($settings);
+            $exporter = new OvokoDonorCarsCsvExportService($client);
+            $mode = sanitize_key((string) ($_POST['mode'] ?? 'page'));
+            if ($mode === 'start') {
+                $phase = 'Building dictionary cache';
+                $jsonSent = true;
+                wp_send_json($exporter->start() + ['status' => 'building_dictionary_cache', 'phase' => $phase, 'downloads' => $exporter->download_urls()]);
+            }
+
+            $phase = 'Exporting donor cars';
+            $response = $exporter->process_page($page);
+            $exported = (int) ($response['summary']['cars_exported'] ?? 0);
+            $jsonSent = true;
+            wp_send_json($response);
+        } catch (\Throwable $e) {
+            $diag = is_object($client) && method_exists($client, 'dictionary_tick_diagnostics') ? $client->dictionary_tick_diagnostics() : [];
+            error_log('GPSwiss Ovoko donor cars AJAX failed expected JSON: ' . wp_json_encode([
+                'action' => $actionName, 'page' => $page, 'limit' => $limit, 'phase' => $phase, 'memory_usage' => memory_get_usage(true), 'elapsed' => round(microtime(true) - $startedAt, 3), 'last_dictionary_endpoint_attempted' => (string) ($diag['last_dictionary_endpoint_attempted'] ?? ''), 'exception_class' => get_class($e), 'message' => $e->getMessage(), 'expected_json' => true,
+            ]));
+            $payload = ['message' => $e->getMessage(), 'exception_class' => get_class($e), 'page' => $page, 'exported' => $exported, 'phase' => $phase];
+            if (defined('WP_DEBUG') && WP_DEBUG) { $payload['file'] = $e->getFile(); $payload['line'] = $e->getLine(); }
+            $jsonSent = true;
+            wp_send_json_error($payload, 500);
+        }
     }
 
     public function handle_download_donor_cars_export(): void
