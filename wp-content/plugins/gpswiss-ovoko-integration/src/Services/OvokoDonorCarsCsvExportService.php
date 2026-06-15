@@ -87,9 +87,19 @@ class OvokoDonorCarsCsvExportService
     public function download_urls(): array
     {
         return [
-            'csv' => wp_nonce_url(admin_url('admin-post.php?action=gpswiss_ovoko_download_donor_cars_export&export_id=donor_cars&type=csv'), 'gpswiss_ovoko_download_donor_cars_export_csv'),
-            'summary' => wp_nonce_url(admin_url('admin-post.php?action=gpswiss_ovoko_download_donor_cars_export&export_id=donor_cars&type=summary'), 'gpswiss_ovoko_download_donor_cars_export_summary'),
+            'csv' => $this->download_url('csv'),
+            'summary' => $this->download_url('summary'),
         ];
+    }
+
+    private function download_url(string $type): string
+    {
+        return add_query_arg([
+            'action' => 'gpswiss_ovoko_download_donor_cars_export',
+            'export_id' => 'donor_cars',
+            'type' => $type,
+            '_wpnonce' => wp_create_nonce('gpswiss_ovoko_download_donor_cars_export_' . $type),
+        ], admin_url('admin-post.php'));
     }
 
     public function paths(): array
