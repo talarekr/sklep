@@ -2757,6 +2757,14 @@ class OvokoIntegrationService
         ];
     }
 
+    public function probe_ovoko_dictionaries_for_donor_cars(): array
+    {
+        $client = $this->rrr_client();
+        $page = $client->fetch_donor_cars_page(1, 1);
+        $sample = (array) (($page['raw_records'][0] ?? []));
+        return $client->probe_ovoko_dictionaries_for_donor_cars($sample);
+    }
+
     public function probe_ovoko_dictionary_value(string $dictionaryType, string $id): array
     {
         $client = new RrrApiClient($this->get_settings());
