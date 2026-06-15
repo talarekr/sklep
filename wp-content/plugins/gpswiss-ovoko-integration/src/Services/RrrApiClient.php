@@ -868,7 +868,22 @@ class RrrApiClient
     {
         $limit = max(1, min(100, $limit));
         $page = max(1, $page);
-        return $this->post_form('/v2/get/cars?limit=' . $limit . '&page=' . $page, [], true);
+        $path = '/v2/get/cars?limit=' . $limit . '&page=' . $page;
+        $result = $this->post_form($path, [], true);
+        $payload = (array) ($result['payload'] ?? []);
+        $result['request_diagnostics'] = [
+            'endpoint' => $path,
+            'method' => 'POST',
+            'content_type' => 'application/x-www-form-urlencoded',
+            'auth_fields_present' => array_values(array_keys($this->get_auth_form_fields())),
+            'http_code' => $result['http_code'] ?? null,
+            'status_code' => (string) ($result['status_code'] ?? ''),
+            'message' => (string) ($result['msg'] ?? $result['message'] ?? ''),
+            'response_shape' => $this->payload_shape_summary($payload),
+            'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'non_json_body_prefix' => (string) ($result['non_json_body_prefix'] ?? ''),
+        ];
+        return $result;
     }
 
     public function probe_donor_cars_api(int $limit = 5, int $page = 1, bool $hydrateFirstCar = true): array
@@ -1164,6 +1179,8 @@ class RrrApiClient
                 'fallback_ids_missing' => (array) ($fallback['ids_missing'] ?? []),
                 'fallback_last_page_scanned' => (int) ($fallback['last_page_scanned'] ?? 0),
                 'fallback_stopped_reason' => (string) ($fallback['stopped_reason'] ?? ''),
+                'fallback_request_uses_existing_donor_cars_fetcher' => !empty($fallback['request_uses_existing_donor_cars_fetcher']),
+                'fallback_last_page_diagnostics' => (array) ($fallback['last_page_diagnostics'] ?? []),
             ],
             'fallback_hydration' => [
                 'fallback_pages_scanned' => (int) ($fallback['pages_scanned'] ?? 0),
@@ -1175,6 +1192,9 @@ class RrrApiClient
                 'fallback_last_page_scanned' => (int) ($fallback['last_page_scanned'] ?? 0),
                 'fallback_stopped_reason' => (string) ($fallback['stopped_reason'] ?? ''),
                 'fallback_incomplete' => !empty($fallback['incomplete']),
+                'fallback_request_uses_existing_donor_cars_fetcher' => !empty($fallback['request_uses_existing_donor_cars_fetcher']),
+                'fallback_page_diagnostics' => (array) ($fallback['page_diagnostics'] ?? []),
+                'fallback_last_page_diagnostics' => (array) ($fallback['last_page_diagnostics'] ?? []),
             ],
             'samples' => $samples,
             'raw_model_ids_requested' => $rawModelIds,
@@ -1251,9 +1271,11 @@ class RrrApiClient
         $totalCount = 0;
         $totalPages = 0;
         $stoppedReason = $wanted === [] ? 'all_requested_ids_already_hydrated' : 'not_started';
+        $pageDiagnostics = [];
 
         for ($page = 1; $wanted !== [] && $page <= $maxPages; $page++) {
             $result = $this->fetch_donor_cars_page($limit, $page);
+            $pageDiagnostics[] = (array) ($result['request_diagnostics'] ?? []);
             $pagesScanned++;
             $lastPageScanned = $page;
             $pagination = (array) ($result['pagination'] ?? []);
@@ -1270,7 +1292,11 @@ class RrrApiClient
             }
 
             if (empty($result['ok'])) {
-                $stoppedReason = 'page_fetch_failed';
+                $statusCode = (string) ($result['status_code'] ?? '');
+                $message = sanitize_title((string) ($result['msg'] ?? $result['message'] ?? ''));
+                $stoppedReason = 'page_fetch_failed_http_' . (string) ((int) ($result['http_code'] ?? 0));
+                if ($statusCode !== '') { $stoppedReason .= '_status_' . sanitize_title($statusCode); }
+                if ($message !== '') { $stoppedReason .= '_' . substr($message, 0, 60); }
                 break;
             }
 
@@ -1314,6 +1340,9 @@ class RrrApiClient
             'last_page_scanned' => $lastPageScanned,
             'stopped_reason' => $stoppedReason,
             'incomplete' => $wanted !== [],
+            'request_uses_existing_donor_cars_fetcher' => true,
+            'page_diagnostics' => $pageDiagnostics,
+            'last_page_diagnostics' => $pageDiagnostics !== [] ? $pageDiagnostics[count($pageDiagnostics) - 1] : [],
         ];
     }
 
@@ -4297,7 +4326,8 @@ class RrrApiClient
         }
 
         $httpCode = (int) wp_remote_retrieve_response_code($response);
-        $decoded = json_decode((string) wp_remote_retrieve_body($response), true);
+        $rawBody = (string) wp_remote_retrieve_body($response);
+        $decoded = json_decode($rawBody, true);
         $statusCode = is_array($decoded) ? sanitize_text_field((string) ($decoded['status_code'] ?? '')) : '';
         $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
         $ok = $httpCode === 200 && $statusCode === 'R200';
@@ -4345,7 +4375,15 @@ class RrrApiClient
             'records_count' => count($records),
             'raw_records' => $includeRawPayload ? $rawRows : [],
             'payload' => $includeRawPayload && is_array($decoded) ? $decoded : [],
+            'non_json_body_prefix' => is_array($decoded) ? '' : $this->redact_diagnostic_body_prefix($rawBody),
         ];
+    }
+
+    private function redact_diagnostic_body_prefix(string $body): string
+    {
+        $prefix = substr($body, 0, 200);
+        $prefix = preg_replace('/(username|password|user_token|token)=([^&\s<]+)/i', '$1=[redacted]', $prefix) ?? $prefix;
+        return sanitize_textarea_field($prefix);
     }
 
     private function get_auth_form_fields(): array

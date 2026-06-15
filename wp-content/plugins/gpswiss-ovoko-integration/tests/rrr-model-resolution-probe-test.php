@@ -33,6 +33,13 @@ function wp_remote_post(string $url, array $args): array
 {
     $GLOBALS['gpswiss_model_probe_requests'][] = ['method' => 'POST', 'url' => $url, 'args' => $args];
     $path = (string) parse_url($url, PHP_URL_PATH);
+    if (!empty($GLOBALS['gpswiss_model_probe_fail_v2_cars_page_1']) && $path === '/v2/get/cars') {
+        $query = [];
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        if ((int) ($query['page'] ?? 1) === 1) {
+            return ['response' => ['code' => 500], 'body' => '<html>diagnostic failure username=user&password=pass&user_token=token</html>'];
+        }
+    }
     $carRows = [
         '/get/car/493' => ['id' => '493', 'car_model' => '22', 'car_model_category' => '7', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '5'],
         '/get/car/494' => ['id' => '494', 'car_model' => '22', 'car_model_category' => '3', 'car_fuel' => '1', 'car_gearbox_type' => '2', 'car_wheel_drive' => '3', 'car_body_type' => '4', 'car_color' => '6'],
@@ -93,7 +100,18 @@ foreach (['493', '494', '495'] as $carId) {
     gpswiss_model_probe_assert(array_filter($urls, static fn(string $url): bool => str_contains($url, '/get/car/' . $carId)) !== [], 'Requested car ' . $carId . ' must be hydrated directly.');
     gpswiss_model_probe_assert($result['samples'][$carId]['raw_car_record'] !== [], 'Hydrated raw car record ' . $carId . ' must be non-empty.');
 }
-gpswiss_model_probe_assert(array_filter($urls, static fn(string $url): bool => str_contains($url, '/v2/get/cars')) !== [], 'Model resolution probe must fall back to /v2/get/cars for requested IDs.');
+$fallbackRequests = array_values(array_filter($GLOBALS['gpswiss_model_probe_requests'], static fn(array $row): bool => str_contains($row['url'], '/v2/get/cars')));
+gpswiss_model_probe_assert($fallbackRequests !== [], 'Model resolution probe must fall back to /v2/get/cars for requested IDs.');
+gpswiss_model_probe_assert(str_contains($fallbackRequests[0]['url'], '/v2/get/cars?limit=100&page=1'), 'Fallback must use donor cars page fetcher endpoint shape.');
+gpswiss_model_probe_assert(($fallbackRequests[0]['args']['headers']['Content-Type'] ?? '') === 'application/x-www-form-urlencoded', 'Fallback donor request must use form content type.');
+gpswiss_model_probe_assert(array_keys($fallbackRequests[0]['args']['body'] ?? []) === ['username', 'password', 'user_token'], 'Fallback donor request must send the same auth form fields as donor export/probe.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['endpoint'] === '/v2/get/cars?limit=100&page=1', 'Fallback page diagnostics must expose endpoint.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['method'] === 'POST', 'Fallback page diagnostics must expose method.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['content_type'] === 'application/x-www-form-urlencoded', 'Fallback page diagnostics must expose content type.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['auth_fields_present'] === ['username', 'password', 'user_token'], 'Fallback page diagnostics must expose only auth field names.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['http_code'] === 200 && $result['fallback_hydration']['fallback_page_diagnostics'][0]['status_code'] === 'R200', 'Fallback page 1 success diagnostics must report HTTP/RRR status.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['response_shape'] === 'top_level_object;data:list;keys=status_code,pagination,data', 'Fallback page diagnostics must expose parsed response shape.');
+gpswiss_model_probe_assert($result['fallback_hydration']['fallback_request_uses_existing_donor_cars_fetcher'] === true && $result['summary_fields']['fallback_request_uses_existing_donor_cars_fetcher'] === true, 'Fallback must declare it uses existing donor cars fetcher.');
 gpswiss_model_probe_assert($result['candidate_endpoints_tried'] !== [], 'Candidate endpoints tried must be populated.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['22']), 'Requested model 22 must have endpoint diagnostics.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['545']), 'Requested model 545 must have endpoint diagnostics.');
@@ -112,4 +130,15 @@ gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545'][
 gpswiss_model_probe_assert($result['csv_safe_for_laravel_import'] === false, 'CSV must not be marked safe while model cache is incomplete.');
 gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Probe must not perform Woo/local/marketplace/Laravel writes.');
 
-echo "PASS model resolution probe hydrates requested cars, reports endpoint/model-cache diagnostics, and stays read-only\n";
+$GLOBALS['gpswiss_model_probe_fail_v2_cars_page_1'] = true;
+$GLOBALS['gpswiss_model_probe_requests'] = [];
+$failureResult = $client->probe_ovoko_model_resolution(['493'], ['22']);
+$failureDiag = $failureResult['fallback_hydration']['fallback_last_page_diagnostics'];
+gpswiss_model_probe_assert($failureResult['summary_fields']['fallback_pages_scanned'] === 1, 'Failing fallback must report that page 1 was scanned.');
+gpswiss_model_probe_assert(str_starts_with($failureResult['summary_fields']['fallback_stopped_reason'], 'page_fetch_failed_http_500'), 'Failing fallback must include HTTP detail in stopped reason.');
+gpswiss_model_probe_assert($failureDiag['http_code'] === 500 && $failureDiag['status_code'] === '' && $failureDiag['message'] === 'Non-JSON response', 'Failing fallback must report HTTP/status/message diagnostics.');
+gpswiss_model_probe_assert($failureDiag['response_shape'] === 'empty' && $failureDiag['top_level_keys'] === [], 'Failing fallback must report empty non-JSON shape and keys.');
+gpswiss_model_probe_assert(str_contains($failureDiag['non_json_body_prefix'], 'diagnostic failure') && !str_contains($failureDiag['non_json_body_prefix'], 'password=pass') && str_contains($failureDiag['non_json_body_prefix'], 'password=[redacted]'), 'Failing fallback must include redacted non-JSON body prefix.');
+gpswiss_model_probe_assert($GLOBALS['gpswiss_model_probe_writes'] === [], 'Failure diagnostics must remain read-only.');
+
+echo "PASS model resolution probe hydrates requested cars, reuses donor cars fetcher, reports fallback diagnostics, and stays read-only\n";
