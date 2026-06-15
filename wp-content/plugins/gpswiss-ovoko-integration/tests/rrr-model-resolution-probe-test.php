@@ -45,8 +45,15 @@ function wp_remote_post(string $url, array $args): array
         $query = [];
         parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
         $page = (int) ($query['page'] ?? 1);
-        $data = $page === 1 ? array_values($carRows) : [];
-        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'pagination' => ['total_count' => 3, 'page' => $page, 'limit' => 100], 'data' => $data])];
+        $pages = [
+            1 => [['id' => '101', 'car_model' => '1']],
+            2 => [['id' => '302', 'car_model' => '2']],
+            3 => [['id' => '210', 'car_model' => '3']],
+            4 => [['id' => '410', 'car_model' => '4']],
+            5 => [$carRows['/get/car/495'], $carRows['/get/car/493'], $carRows['/get/car/494']],
+        ];
+        $data = $pages[$page] ?? [];
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'pagination' => ['total_count' => 494, 'page' => $page, 'limit' => 100], 'data' => $data])];
     }
     if ($path === '/get/model/22' || $path === '/get/car_model/22' || $path === '/get/model/545' || $path === '/get/car_model/545') {
         return ['response' => ['code' => 500], 'body' => '<html>error</html>'];
@@ -95,6 +102,11 @@ gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545'][
 gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['matched_record']['name'] === 'A3 S3 8V', 'Model 22 must resolve from staged cache.');
 gpswiss_model_probe_assert($result['samples']['494']['resolved_make'] === 'Audi' && $result['samples']['494']['resolved_model'] === 'A3 S3 8V', 'Car 494 must resolve to Audi A3 S3 8V from staged cache.');
 gpswiss_model_probe_assert($result['samples']['494']['hydration_source'] === 'v2_get_cars_paginated', 'Car 494 must report v2 hydration source.');
+gpswiss_model_probe_assert($result['summary_fields']['fallback_pages_scanned'] === 5 && $result['summary_fields']['fallback_total_pages'] === 5 && $result['summary_fields']['fallback_total_count'] === 494, 'Fallback stats must report scanned pages and total pagination.');
+$foundFallbackIds = $result['summary_fields']['fallback_ids_found'];
+sort($foundFallbackIds);
+gpswiss_model_probe_assert($foundFallbackIds === ['493', '494', '495'] && $result['summary_fields']['fallback_ids_missing'] === [], 'Fallback stats must report found and missing IDs.');
+gpswiss_model_probe_assert($result['summary_fields']['fallback_stopped_reason'] === 'all_requested_ids_found', 'Fallback must stop after all requested IDs are found.');
 gpswiss_model_probe_assert($result['model_cache']['model_cache_incomplete'] === true, 'Incomplete staged all-brand model cache must be reported.');
 gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['unresolved_only_because_cache_incomplete'] === true && $result['samples']['495']['unresolved_reason'] === 'unresolved because model cache incomplete; continue staged cache ticks or build the model dictionary cache before judging CSV coverage', 'Incomplete cache should be named as unresolved reason.');
 gpswiss_model_probe_assert($result['csv_safe_for_laravel_import'] === false, 'CSV must not be marked safe while model cache is incomplete.');
