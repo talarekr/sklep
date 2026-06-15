@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GPS_Ebay_Fitment_Sync;
 
 use GPS_Ebay_Fitment_Sync\Admin\AdminPage;
+use GPS_Ebay_Fitment_Sync\Admin\WooLaravelProductExportPage;
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
 use GPS_Ebay_Fitment_Sync\Service\AuditCsvExporter;
@@ -18,6 +19,7 @@ use GPS_Ebay_Fitment_Sync\Service\KTypeMissAudit;
 use GPS_Ebay_Fitment_Sync\Service\OemKtypeEbayCoverageAudit;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
 use GPS_Ebay_Fitment_Sync\Service\VehicleContextKtypeInferenceAudit;
+use GPS_Ebay_Fitment_Sync\Service\WooLaravelProductExport;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
@@ -63,6 +65,7 @@ final class Plugin
         $vehicleContextKtypeInferenceAudit = new VehicleContextKtypeInferenceAudit();
 
         (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner, $ebayFitmentPreview, $ebayFitmentLiveTest, $ebayInventoryFitmentBatchRunner, $ebayInventoryRemapAudit, $oemKtypeEbayCoverageAudit, $ktypeMissAudit, $vehicleContextKtypeInferenceAudit))->hooks();
+        (new WooLaravelProductExportPage(new WooLaravelProductExport()))->hooks();
     }
 
     public static function deactivate(): void

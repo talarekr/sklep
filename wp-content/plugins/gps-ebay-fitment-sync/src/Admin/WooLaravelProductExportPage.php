@@ -1,0 +1,65 @@
+<?php
+
+declare(strict_types=1);
+
+namespace GPS_Ebay_Fitment_Sync\Admin;
+
+use GPS_Ebay_Fitment_Sync\Service\WooLaravelProductExport;
+
+final class WooLaravelProductExportPage
+{
+    private WooLaravelProductExport $exporter;
+
+    public function __construct(WooLaravelProductExport $exporter) { $this->exporter = $exporter; }
+
+    public function hooks(): void
+    {
+        add_action('admin_menu', [$this, 'adminMenu']);
+        add_action('wp_ajax_gps_laravel_product_export_start', [$this, 'ajaxStart']);
+        add_action('wp_ajax_gps_laravel_product_export_batch', [$this, 'ajaxBatch']);
+        add_action('admin_post_gps_laravel_product_export_download', [$this, 'download']);
+    }
+
+    public function adminMenu(): void
+    {
+        add_submenu_page('woocommerce', 'Eksport produktów WooCommerce do Laravel', 'Eksport do Laravel', 'manage_woocommerce', 'gps-laravel-product-export', [$this, 'render']);
+    }
+
+    public function render(): void
+    {
+        if (!current_user_can('manage_woocommerce')) wp_die(esc_html__('Brak uprawnień.', 'gps-ebay-fitment-sync'));
+        $nonce = wp_create_nonce(WooLaravelProductExport::NONCE);
+        echo '<div class="wrap"><h1>Eksport produktów WooCommerce do Laravel</h1>';
+        echo '<p>Bezpieczny eksport tylko do odczytu: produkty, obrazy, kategorie, atrybuty i wybrane metadane do CSV.</p>';
+        echo '<p><button class="button button-primary" id="gps-export-start">Start export</button> <button class="button" id="gps-export-products" disabled>Export products CSV</button> <button class="button" id="gps-export-images" disabled>Export images CSV if separated</button> <button class="button" id="gps-export-categories" disabled>Export categories CSV if separated</button></p>';
+        echo '<div id="gps-export-status" style="margin:1em 0;padding:1em;background:#fff;border:1px solid #ccd0d4;">Gotowe.</div><div id="gps-export-downloads"></div>';
+        echo '<h2>Kolumny products.csv</h2><textarea readonly style="width:100%;height:160px;">' . esc_textarea(implode(', ', $this->exporter->productColumns())) . '</textarea>';
+        echo '<script>jQuery(function($){let exportId="";function post(action,data){return $.post(ajaxurl,Object.assign({_ajax_nonce:"' . esc_js($nonce) . '",action:action},data||{}));}function downloads(s){if(!s.files)return;let html="<h2>Download generated files</h2><ul>";Object.keys(s.files).forEach(function(k){html+="<li><a class=button href=\"' . esc_url(admin_url('admin-post.php?action=gps_laravel_product_export_download')) . '&_wpnonce=' . esc_js($nonce) . '&export_id="+encodeURIComponent(s.export_id)+"&file="+encodeURIComponent(k)+"\">"+s.files[k]+"</a></li>";});html+="</ul>";$("#gps-export-downloads").html(html);}function tick(){post("gps_laravel_product_export_batch",{export_id:exportId,batch_size:200}).done(function(r){if(!r.success){$("#gps-export-status").text("Błąd eksportu");return;}let s=r.data;$("#gps-export-status").text("Status: "+s.status+", przetworzono: "+s.rows_processed+", last_product_id: "+s.last_product_id);downloads(s);if(s.status!=="completed") setTimeout(tick,250);});}$("#gps-export-start,#gps-export-products,#gps-export-images,#gps-export-categories").on("click",function(e){e.preventDefault();$("button[id^=gps-export]").prop("disabled",true);post("gps_laravel_product_export_start",{}).done(function(r){if(!r.success){$("#gps-export-status").text("Błąd startu");return;}exportId=r.data.export_id;$("#gps-export-status").text("Rozpoczęto: "+exportId);tick();});});});</script>';
+        echo '</div>';
+    }
+
+    public function ajaxStart(): void { $this->guardAjax(); wp_send_json_success($this->exporter->start()); }
+    public function ajaxBatch(): void { $this->guardAjax(); $id = isset($_POST['export_id']) ? sanitize_key(wp_unslash($_POST['export_id'])) : ''; $batch = isset($_POST['batch_size']) ? (int) $_POST['batch_size'] : 200; wp_send_json_success($this->exporter->runBatch($id, $batch)); }
+
+    public function download(): void
+    {
+        if (!current_user_can('manage_woocommerce')) wp_die('forbidden');
+        check_admin_referer(WooLaravelProductExport::NONCE);
+        $id = isset($_GET['export_id']) ? sanitize_key(wp_unslash($_GET['export_id'])) : '';
+        $file = isset($_GET['file']) ? sanitize_key(wp_unslash($_GET['file'])) : '';
+        $state = $this->exporter->state($id);
+        $path = (string)($state['files'][$file] ?? '');
+        if ($path === '' || !is_readable($path)) wp_die('file not found');
+        header('Content-Type: text/csv; charset=utf-8');
+        if ($file === 'summary') header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+        readfile($path);
+        exit;
+    }
+
+    private function guardAjax(): void
+    {
+        if (!current_user_can('manage_woocommerce')) wp_send_json_error(['error'=>'forbidden'], 403);
+        check_ajax_referer(WooLaravelProductExport::NONCE);
+    }
+}
