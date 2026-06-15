@@ -15,6 +15,7 @@ use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\KTypeMissAudit;
 use GPS_Ebay_Fitment_Sync\Service\OemKtypeEbayCoverageAudit;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
+use GPS_Ebay_Fitment_Sync\Service\VehicleContextKtypeInferenceAudit;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
 
 final class AdminPage
@@ -31,8 +32,9 @@ final class AdminPage
     private EbayInventoryRemapAudit $ebayInventoryRemapAudit;
     private OemKtypeEbayCoverageAudit $oemKtypeEbayCoverageAudit;
     private KTypeMissAudit $ktypeMissAudit;
+    private VehicleContextKtypeInferenceAudit $vehicleContextKtypeInferenceAudit;
 
-    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner, EbayInventoryRemapAudit $ebayInventoryRemapAudit, OemKtypeEbayCoverageAudit $oemKtypeEbayCoverageAudit, KTypeMissAudit $ktypeMissAudit)
+    public function __construct(Settings $settings, FitmentLookupService $lookup, ProductScanner $scanner, Database $database, AuditCsvExporter $auditCsvExporter, KTypeBackfillAutoRunner $autoRunner, EbayFitmentPreview $ebayFitmentPreview, EbayFitmentLiveTest $ebayFitmentLiveTest, EbayInventoryFitmentBatchRunner $ebayInventoryFitmentBatchRunner, EbayInventoryRemapAudit $ebayInventoryRemapAudit, OemKtypeEbayCoverageAudit $oemKtypeEbayCoverageAudit, KTypeMissAudit $ktypeMissAudit, VehicleContextKtypeInferenceAudit $vehicleContextKtypeInferenceAudit)
     {
         $this->settings = $settings;
         $this->lookup = $lookup;
@@ -46,6 +48,7 @@ final class AdminPage
         $this->ebayInventoryRemapAudit = $ebayInventoryRemapAudit;
         $this->oemKtypeEbayCoverageAudit = $oemKtypeEbayCoverageAudit;
         $this->ktypeMissAudit = $ktypeMissAudit;
+        $this->vehicleContextKtypeInferenceAudit = $vehicleContextKtypeInferenceAudit;
     }
 
     public function hooks(): void
@@ -75,6 +78,8 @@ final class AdminPage
         add_action('admin_post_gps_oem_ktype_ebay_coverage_csv', [$this, 'oem_ktype_ebay_coverage_csv']);
         add_action('admin_post_gps_ktype_miss_audit', [$this, 'ktype_miss_audit']);
         add_action('admin_post_gps_ktype_miss_audit_csv', [$this, 'ktype_miss_audit_csv']);
+        add_action('admin_post_gps_vehicle_context_ktype_inference_audit', [$this, 'vehicle_context_ktype_inference_audit']);
+        add_action('admin_post_gps_vehicle_context_ktype_inference_audit_csv', [$this, 'vehicle_context_ktype_inference_audit_csv']);
     }
 
     public function admin_menu(): void
@@ -340,6 +345,24 @@ final class AdminPage
         exit;
     }
 
+    public function vehicle_context_ktype_inference_audit(): void
+    {
+        $this->guard('gps_vehicle_context_ktype_inference_audit');
+        $limit = isset($_POST['limit']) ? (int) $_POST['limit'] : 50;
+        $onlyMapped = !isset($_POST['only_mapped_no_ktype']) || (string) $_POST['only_mapped_no_ktype'] === '1';
+        $threshold = isset($_POST['confidence_threshold']) ? sanitize_text_field(wp_unslash((string) $_POST['confidence_threshold'])) : 'LOW';
+        $this->store_result(['type' => 'vehicle_context_ktype_inference_audit', 'result' => $this->vehicleContextKtypeInferenceAudit->run($limit, $onlyMapped, $threshold)]);
+    }
+
+    public function vehicle_context_ktype_inference_audit_csv(): void
+    {
+        $this->guard('gps_vehicle_context_ktype_inference_audit_csv');
+        $onlyMapped = !isset($_POST['only_mapped_no_ktype']) || (string) $_POST['only_mapped_no_ktype'] === '1';
+        $threshold = isset($_POST['confidence_threshold']) ? sanitize_text_field(wp_unslash((string) $_POST['confidence_threshold'])) : 'LOW';
+        $this->vehicleContextKtypeInferenceAudit->stream_csv_download($onlyMapped, $threshold);
+        exit;
+    }
+
     public function ebay_fitment_live_test(): void
     {
         $this->guard('gps_ebay_fitment_live_test');
@@ -473,6 +496,7 @@ final class AdminPage
 
             <?php $this->render_oem_ktype_ebay_coverage_audit(); ?>
             <?php $this->render_ktype_miss_audit(); ?>
+            <?php $this->render_vehicle_context_ktype_inference_audit(); ?>
             <?php $this->render_inventory_fitment_preview(); ?>
             <?php $this->render_inventory_remap_audit(); ?>
             <?php $this->render_inventory_fitment_batch_runner(); ?>
@@ -680,6 +704,31 @@ final class AdminPage
                 <input type="hidden" name="action" value="gps_ktype_miss_audit_csv">
                 <?php wp_nonce_field('gps_ktype_miss_audit_csv'); ?>
                 <button class="button" type="submit"><?php echo esc_html__('Export KType miss CSV', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+        <?php
+    }
+
+
+    private function render_vehicle_context_ktype_inference_audit(): void
+    {
+        ?>
+            <hr>
+            <h2><?php echo esc_html__('Vehicle Context KType Inference Audit', 'gps-ebay-fitment-sync'); ?></h2>
+            <p><?php echo esc_html__('Read-only audit for products missing local KType cache. Parses product title vehicle context and matches against existing local KType vehicle cache only. No Apify, eBay API, Woo, cache, or mapping writes are performed.', 'gps-ebay-fitment-sync'); ?></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-right:8px;">
+                <input type="hidden" name="action" value="gps_vehicle_context_ktype_inference_audit">
+                <?php wp_nonce_field('gps_vehicle_context_ktype_inference_audit'); ?>
+                <label><?php echo esc_html__('Preview rows', 'gps-ebay-fitment-sync'); ?> <input name="limit" type="number" min="0" max="200" value="50"></label>
+                <label><input type="checkbox" name="only_mapped_no_ktype" value="1" checked> <?php echo esc_html__('Only products with eBay mapping but no KType', 'gps-ebay-fitment-sync'); ?></label>
+                <label><?php echo esc_html__('Confidence threshold display only', 'gps-ebay-fitment-sync'); ?> <select name="confidence_threshold"><option value="LOW">LOW+</option><option value="MEDIUM">MEDIUM+</option><option value="HIGH">HIGH only</option></select></label>
+                <button class="button button-primary" type="submit"><?php echo esc_html__('Run inference audit', 'gps-ebay-fitment-sync'); ?></button>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;">
+                <input type="hidden" name="action" value="gps_vehicle_context_ktype_inference_audit_csv">
+                <?php wp_nonce_field('gps_vehicle_context_ktype_inference_audit_csv'); ?>
+                <input type="hidden" name="only_mapped_no_ktype" value="1">
+                <input type="hidden" name="confidence_threshold" value="LOW">
+                <button class="button" type="submit"><?php echo esc_html__('Export inference CSV', 'gps-ebay-fitment-sync'); ?></button>
             </form>
         <?php
     }

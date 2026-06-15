@@ -28,6 +28,14 @@ if (!function_exists('get_option')) {
         return $default;
     }
 }
+if (!function_exists('add_option')) {
+    function add_option($option, $value = '', $deprecated = '', $autoload = null): bool {
+        if (array_key_exists((string) $option, $GLOBALS['gps_test_options'])) { return false; }
+        $GLOBALS['gps_test_options'][(string) $option] = $value;
+        return true;
+    }
+}
+
 if (!function_exists('update_option')) {
     function update_option($option, $value, $autoload = null): bool {
         $GLOBALS['gps_test_options'][(string) $option] = $value;
@@ -181,6 +189,19 @@ final class FakeWpdb
                 'errors_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'error'),
                 'blocked_de' => $count(static fn(array $row): bool => (string) ($row['marketplace'] ?? '') === 'EBAY_DE' && (string) ($row['status'] ?? '') === 'blocked'),
             ];
+        }
+
+        if (preg_match("/SELECT status, created_at, id FROM (\S+) WHERE run_id='([^']*)' AND product_id=(\d+) AND marketplace='([^']*)' AND api_mode='inventory' AND status IN \(([^)]*)\) ORDER BY id DESC LIMIT 1/", $query, $matches)) {
+            $terminalStatuses = array_map(static fn(string $status): string => trim($status, " '\t\n\r\0\x0B"), explode(',', $matches[5]));
+            $rows = array_values(array_filter($this->tables[$matches[1]] ?? [], static fn(array $row): bool =>
+                (string) ($row['run_id'] ?? '') === $matches[2]
+                && (int) ($row['product_id'] ?? 0) === (int) $matches[3]
+                && (string) ($row['marketplace'] ?? '') === $matches[4]
+                && (string) ($row['api_mode'] ?? '') === 'inventory'
+                && in_array((string) ($row['status'] ?? ''), $terminalStatuses, true)
+            ));
+            usort($rows, static fn(array $a, array $b): int => (int) ($b['id'] ?? 0) <=> (int) ($a['id'] ?? 0));
+            return $rows[0] ?? null;
         }
 
         if (preg_match("/FROM (\S+) WHERE marketplace='([^']*)' AND woo_product_id=(\d+)/", $query, $matches)) {
@@ -529,6 +550,7 @@ require_once __DIR__ . '/../src/Service/EbayFitmentPreview.php';
 require_once __DIR__ . '/../src/Service/EbayFitmentLiveTest.php';
 require_once __DIR__ . '/../src/Service/EbayInventoryRemapAudit.php';
 require_once __DIR__ . '/../src/Service/EbayInventoryFitmentBatchRunner.php';
+require_once __DIR__ . '/../src/Service/VehicleContextKtypeInferenceAudit.php';
 
 use GPS_Ebay_Fitment_Sync\Database\Database;
 use GPS_Ebay_Fitment_Sync\Service\ApifyClient;
@@ -1787,7 +1809,7 @@ assert_same(true, str_contains($liveTestSource, 'inventory_based_listing_not_sup
 assert_same(true, str_contains($liveTestSource, 'product_compatibility') && str_contains($liveTestSource, 'UPDATE EBAY INVENTORY FITMENT'), 'live test contains Inventory API product compatibility mode');
 assert_same(false, str_contains($batchRunnerSource, '->query('), 'batch runner does not call full preview query method');
 assert_same(true, str_contains($batchRunnerSource, 'inventory_batch_candidates'), 'batch runner uses lightweight candidate loader');
-assert_same(true, str_contains($batchRunnerSource, 'id > %d') && str_contains($batchRunnerSource, 'LIMIT %d'), 'batch CSV export streams log rows incrementally');
+assert_same(true, (str_contains($batchRunnerSource, 'id > %d') || str_contains($batchRunnerSource, 'id < %d')) && str_contains($batchRunnerSource, 'LIMIT %d'), 'batch CSV export streams log rows incrementally');
 assert_same(true, str_contains($batchRunnerSource, 'RUN EBAY INVENTORY FITMENT AUTO'), 'auto live requires exact RUN EBAY INVENTORY FITMENT AUTO confirmation');
 assert_same(true, str_contains($batchRunnerSource, "['EBAY_FR','EBAY_DE']") || str_contains($batchRunnerSource, "['EBAY_FR', 'EBAY_DE']"), 'DE + FR creates separate marketplace attempts');
 assert_same(true, str_contains($batchRunnerSource, "'fr-FR'") && str_contains($batchRunnerSource, "'de-DE'") && str_contains($batchRunnerSource, "X-EBAY-C-MARKETPLACE-ID"), 'FR and DE headers are explicit');
@@ -1828,5 +1850,28 @@ assert_same(false, str_contains($remapSource, 'update_post_meta') || str_contain
 assert_same(false, str_contains($remapSource, 'woo-ebay-integration'), 'remap audit makes no eBay plugin modifications');
 assert_same(true, str_contains($remapSource, 'suggested_current_item_id') && str_contains($remapSource, 'suggested_current_offer_id'), 'remap CSV contains suggested_current_item_id / suggested_current_offer_id');
 assert_same(true, str_contains($batchRunnerSource, 'stale_or_unconfirmed_listing_mapping'), 'fitment runner blocks stale/unconfirmed mappings before live writes');
+
+
+
+// Vehicle context KType inference audit source-level and parser guard checks.
+$vehicleAuditSource = file_get_contents(__DIR__ . '/../src/Service/VehicleContextKtypeInferenceAudit.php');
+$vehicleAudit = new GPS_Ebay_Fitment_Sync\Service\VehicleContextKtypeInferenceAudit();
+$audiQ5 = $vehicleAudit->parse_context('AUDI Q5 SQ5 8R LIFT OSŁONA POSZYCIE SŁUPKA C CZARNE LEWY TYŁ 8R0867287B');
+assert_same('AUDI', $audiQ5['make'], 'vehicle context parser extracts AUDI make');
+assert_same('Q5', $audiQ5['model'], 'vehicle context parser normalizes SQ5 to Q5 model');
+assert_same('8R', $audiQ5['platform'], 'vehicle context parser extracts 8R platform');
+assert_same('yes', $audiQ5['facelift_hint'], 'vehicle context parser records lift/facelift hints');
+$generic = $vehicleAudit->parse_context('UNIWERSAL ZESTAW NAPRAWCZY KLIPSY');
+assert_same(true, $generic['is_generic'], 'vehicle context parser marks universal/generic titles for rejection');
+$ambiguous = $vehicleAudit->parse_context('AUDI Q5 8R 8RB OSŁONA');
+assert_same('8R|8RB', $ambiguous['platform'], 'vehicle context parser records ambiguous multiple platforms');
+assert_same(true, str_contains($adminSource, 'Vehicle Context KType Inference Audit'), 'admin exposes Vehicle Context KType Inference Audit section');
+assert_same(true, str_contains($vehicleAuditSource, 'ebay-vehicle-context-ktype-inference-audit-') && str_contains($vehicleAuditSource, 'inference_confidence') && str_contains($vehicleAuditSource, 'matched_vehicle_context_source'), 'vehicle context inference CSV contains inference columns');
+assert_same(true, str_contains($vehicleAuditSource, 'make_model_platform_exact_local_vehicle_cache_match'), 'HIGH confidence requires make + model + platform match');
+assert_same(true, str_contains($vehicleAuditSource, 'generic_or_universal_title') && str_contains($vehicleAuditSource, 'ambiguous_multiple_platforms') && str_contains($vehicleAuditSource, 'no_clear_vehicle_context'), 'vehicle context inference rejects generic, ambiguous, and no-context rows');
+assert_same(true, str_contains($vehicleAuditSource, 'pm.product_id > %d') && str_contains($vehicleAuditSource, 'LIMIT %d') && str_contains($vehicleAuditSource, 'BATCH_SIZE'), 'vehicle context inference uses keyset pagination and bounded queries');
+assert_same(false, str_contains($vehicleAuditSource, 'ApifyClient') || str_contains($vehicleAuditSource, 'api.apify.com'), 'vehicle context inference makes no Apify calls');
+assert_same(false, str_contains($vehicleAuditSource, 'wp_remote_') || str_contains($vehicleAuditSource, 'product_compatibility') || str_contains($vehicleAuditSource, 'ReviseFixedPriceItem'), 'vehicle context inference makes no eBay API calls');
+assert_same(false, str_contains($vehicleAuditSource, 'update_post_meta') || str_contains($vehicleAuditSource, 'wp_update_post') || str_contains($vehicleAuditSource, '$wpdb->insert') || str_contains($vehicleAuditSource, '$wpdb->update'), 'vehicle context inference performs no Woo/cache/mapping writes');
 
 echo 'Remap audit tests passed.' . PHP_EOL;

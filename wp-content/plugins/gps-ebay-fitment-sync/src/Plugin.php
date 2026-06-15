@@ -17,6 +17,7 @@ use GPS_Ebay_Fitment_Sync\Service\KTypeBackfillAutoRunner;
 use GPS_Ebay_Fitment_Sync\Service\KTypeMissAudit;
 use GPS_Ebay_Fitment_Sync\Service\OemKtypeEbayCoverageAudit;
 use GPS_Ebay_Fitment_Sync\Service\ProductScanner;
+use GPS_Ebay_Fitment_Sync\Service\VehicleContextKtypeInferenceAudit;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberCandidateValidator;
 use GPS_Ebay_Fitment_Sync\Support\PartNumberNormalizer;
 use GPS_Ebay_Fitment_Sync\Support\Settings;
@@ -59,8 +60,9 @@ final class Plugin
         $ebayInventoryFitmentBatchRunner = new EbayInventoryFitmentBatchRunner($ebayFitmentPreview, $ebayInventoryRemapAudit);
         $oemKtypeEbayCoverageAudit = new OemKtypeEbayCoverageAudit($scanner, $ebayFitmentPreview);
         $ktypeMissAudit = new KTypeMissAudit($scanner);
+        $vehicleContextKtypeInferenceAudit = new VehicleContextKtypeInferenceAudit();
 
-        (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner, $ebayFitmentPreview, $ebayFitmentLiveTest, $ebayInventoryFitmentBatchRunner, $ebayInventoryRemapAudit, $oemKtypeEbayCoverageAudit, $ktypeMissAudit))->hooks();
+        (new AdminPage($settings, $lookup, $scanner, $database, $auditCsvExporter, $autoRunner, $ebayFitmentPreview, $ebayFitmentLiveTest, $ebayInventoryFitmentBatchRunner, $ebayInventoryRemapAudit, $oemKtypeEbayCoverageAudit, $ktypeMissAudit, $vehicleContextKtypeInferenceAudit))->hooks();
     }
 
     public static function deactivate(): void
