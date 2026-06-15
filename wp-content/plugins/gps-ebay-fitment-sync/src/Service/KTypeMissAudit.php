@@ -8,199 +8,109 @@ use GPS_Ebay_Fitment_Sync\Database\Database;
 
 final class KTypeMissAudit
 {
-    private ProductScanner $scanner;
-
-    /** @var string[] */
-    private const BRAND_KEYS = ['_brand','brand','_manufacturer','manufacturer','_pa_brand','pa_brand','_make','make'];
-    /** @var string[] */
-    private const MPN_KEYS = ['_mpn','mpn','_article_number','article_number','_manufacturer_part_number','manufacturer_part_number'];
-    /** @var string[] */
-    private const EAN_KEYS = ['_ean','ean','_gtin','gtin','_barcode','barcode'];
+    private const BATCH_SIZE = 500;
+    private const PREVIEW_LIMIT = 50;
     /** @var string[] */
     private const CSV_COLUMNS = ['product_id','sku','title','raw_oem_fields','normalized_oem_values','oem_count','brand_manufacturer','mpn_article_number','ean','has_ktype_cache','ktype_count','ktype_cache_source','last_ktype_lookup_status','last_ktype_lookup_error','dropoff_reason'];
 
-    public function __construct(ProductScanner $scanner)
-    {
-        $this->scanner = $scanner;
-    }
+    public function __construct(ProductScanner $scanner) {}
 
-    public function run(): array
+    public function run(int $previewLimit = self::PREVIEW_LIMIT): array
     {
-        $rows = $this->rows();
-        return ['summary' => $this->summary($rows), 'rows' => $rows, 'note' => 'Read-only local KType miss audit. No Apify, TecDoc, eBay API, or Woo writes are performed.'];
+        $before = memory_get_usage(true);
+        $previewLimit = max(0, min(200, $previewLimit));
+        $summary = $this->summary();
+        $rows = $this->fetch_rows(0, $previewLimit, true);
+        return [
+            'summary' => array_merge($summary, ['memory_usage_after' => memory_get_usage(true), 'peak_memory_usage' => memory_get_peak_usage(true)]),
+            'rows' => $rows,
+            'preview_limit' => $previewLimit,
+            'note' => 'Read-only local KType miss audit. Summary uses aggregate SQL; admin rows are a bounded preview only. No Apify, TecDoc, eBay API, or Woo writes are performed.',
+            'memory_diagnostics' => ['memory_limit' => ini_get('memory_limit'), 'memory_usage_before' => $before, 'memory_usage_after' => memory_get_usage(true), 'peak_memory_usage' => memory_get_peak_usage(true), 'batch_size' => self::BATCH_SIZE, 'rows_streamed' => 0],
+        ];
     }
 
     public function export_csv(): array
     {
-        $audit = $this->run();
+        $before = memory_get_usage(true);
         $upload = wp_upload_dir();
         $dir = trailingslashit($upload['basedir']) . 'gps-ebay-fitment-sync/audit';
         if (!is_dir($dir)) { wp_mkdir_p($dir); }
         $file = $dir . '/ebay-ktype-miss-audit-' . gmdate('Ymd-His') . '.csv';
         $url = trailingslashit($upload['baseurl']) . 'gps-ebay-fitment-sync/audit/' . basename($file);
         $out = fopen($file, 'w');
+        if (!$out) { return ['path' => '', 'url' => '', 'summary' => [], 'columns' => self::CSV_COLUMNS, 'error' => 'Unable to open CSV for writing.']; }
+        $summary = $this->summary();
         fputcsv($out, ['summary_key', 'summary_value']);
-        foreach ($audit['summary'] as $key => $value) {
-            if (is_array($value)) {
-                foreach ($value as $subKey => $subValue) { fputcsv($out, [$key . '.' . $subKey, (string) $subValue]); }
-                continue;
-            }
+        foreach ($summary as $key => $value) {
+            if (is_array($value)) { foreach ($value as $subKey => $subValue) { fputcsv($out, [$key . '.' . $subKey, (string) $subValue]); } continue; }
             fputcsv($out, [$key, (string) $value]);
         }
-        fputcsv($out, []);
-        fputcsv($out, self::CSV_COLUMNS);
-        foreach ($audit['rows'] as $row) { fputcsv($out, array_map(static fn(string $column): string => (string) ($row[$column] ?? ''), self::CSV_COLUMNS)); }
+        fputcsv($out, []); fputcsv($out, self::CSV_COLUMNS);
+        $rowsStreamed = 0; $last = 0;
+        do {
+            $rows = $this->fetch_rows($last, self::BATCH_SIZE, true);
+            $batchCount = count($rows);
+            foreach ($rows as $row) { $last = max($last, (int) $row['product_id']); fputcsv($out, array_map(static fn(string $column): string => (string) ($row[$column] ?? ''), self::CSV_COLUMNS)); $rowsStreamed++; }
+            if ($rowsStreamed % self::BATCH_SIZE === 0) { fflush($out); }
+            unset($rows);
+        } while ($batchCount === self::BATCH_SIZE);
         fclose($out);
-        return ['path' => $file, 'url' => $url, 'summary' => $audit['summary'], 'columns' => self::CSV_COLUMNS];
+        return ['path' => $file, 'url' => $url, 'summary' => $summary, 'columns' => self::CSV_COLUMNS, 'memory_diagnostics' => ['memory_limit' => ini_get('memory_limit'), 'memory_usage_before' => $before, 'memory_usage_after' => memory_get_usage(true), 'peak_memory_usage' => memory_get_peak_usage(true), 'batch_size' => self::BATCH_SIZE, 'rows_streamed' => $rowsStreamed]];
     }
 
-    private function rows(): array
+
+    public function stream_csv_download(): void
     {
-        global $wpdb;
-        $ids = $this->product_ids();
-        $rows = [];
-        foreach ($ids as $productId) {
-            $analysis = $this->scanner->analyze_product_part_numbers((int) $productId);
-            if (!$analysis['has_raw_oem'] && !$analysis['accepted_candidates']) { continue; }
-            $normalized = array_values(array_unique(array_map('strval', $analysis['normalized_values'])));
-            $cache = $this->cache_info($normalized, (int) $productId);
-            $brand = $this->first_meta((int) $productId, self::BRAND_KEYS);
-            $mpn = $this->first_meta((int) $productId, self::MPN_KEYS);
-            $ean = $this->first_meta((int) $productId, self::EAN_KEYS);
-            $hasMapping = $this->has_ebay_mapping((int) $productId);
-            $dropoff = $this->dropoff_reasons($analysis, $cache, $brand, $mpn, $hasMapping);
-            $rows[] = [
-                'product_id' => (string) $productId,
-                'sku' => (string) get_post_meta((int) $productId, '_sku', true),
-                'title' => (string) get_the_title((int) $productId),
-                'raw_oem_fields' => $this->format_assoc((array) $analysis['raw_fields']),
-                'normalized_oem_values' => implode('|', $normalized),
-                'oem_count' => (string) count($normalized),
-                'brand_manufacturer' => $brand,
-                'mpn_article_number' => $mpn,
-                'ean' => $ean,
-                'has_ktype_cache' => ((int) $cache['ktype_count']) > 0 ? 'yes' : 'no',
-                'ktype_count' => (string) $cache['ktype_count'],
-                'ktype_cache_source' => (string) $cache['source'],
-                'last_ktype_lookup_status' => (string) $cache['status'],
-                'last_ktype_lookup_error' => (string) $cache['error'],
-                'dropoff_reason' => implode('|', $dropoff),
-            ];
-        }
-        return $rows;
+        $before = memory_get_usage(true);
+        $filename = 'ebay-ktype-miss-audit-' . gmdate('Ymd-His') . '.csv';
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('X-GPS-Audit-Memory-Limit: ' . (string) ini_get('memory_limit'));
+        header('X-GPS-Audit-Memory-Usage-Before: ' . (string) $before);
+        $out = fopen('php://output', 'w');
+        if (!$out) { return; }
+        $summary = $this->summary();
+        fputcsv($out, ['summary_key', 'summary_value']);
+        foreach ($summary as $key => $value) { if (is_array($value)) { foreach ($value as $subKey => $subValue) { fputcsv($out, [$key . '.' . $subKey, (string) $subValue]); } } else { fputcsv($out, [$key, (string) $value]); } }
+        fputcsv($out, []); fputcsv($out, self::CSV_COLUMNS);
+        $last = 0;
+        do { $rows = $this->fetch_rows($last, self::BATCH_SIZE, true); $batchCount = count($rows); foreach ($rows as $row) { $last = max($last, (int) $row['product_id']); fputcsv($out, array_map(static fn(string $column): string => (string) ($row[$column] ?? ''), self::CSV_COLUMNS)); } fflush($out); unset($rows); } while ($batchCount === self::BATCH_SIZE);
+        fclose($out);
     }
 
-    private function summary(array $rows): array
+    private function summary(): array
     {
-        $without = array_values(array_filter($rows, static fn(array $row): bool => $row['has_ktype_cache'] !== 'yes'));
+        global $wpdb; $tables = Database::table_names(); $map = $tables['product_map']; $part = $tables['part_cache']; $mapping = $wpdb->prefix . 'marketplace_mappings';
+        $hasMappingSql = (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $mapping)) === $mapping ? "EXISTS (SELECT 1 FROM {$mapping} mm WHERE mm.woo_product_id=pm.product_id AND mm.marketplace IN ('ebay','ebay_fr','ebay_de','fr','de','EBAY_FR','EBAY_DE') AND mm.remote_listing_id<>'')" : '0';
+        $missingWhere = 'GREATEST(pm.vehicle_count, COALESCE(pc.vehicle_count,0)) <= 0';
+        $brands = $this->top_meta_counts('_brand', $missingWhere);
         return [
-            'total_products_with_oem' => count($rows),
-            'products_with_local_ktype' => count(array_filter($rows, static fn(array $row): bool => $row['has_ktype_cache'] === 'yes')),
-            'products_without_ktype' => count($without),
-            'products_with_multiple_oems' => count(array_filter($rows, static fn(array $row): bool => (int) $row['oem_count'] > 1)),
-            'products_with_ebay_mapping_but_no_ktype' => count(array_filter($rows, static fn(array $row): bool => str_contains((string) $row['dropoff_reason'], 'product_has_ebay_mapping_but_no_ktype'))),
-            'top_missing_brands' => $this->top_counts(array_map(static fn(array $row): string => (string) $row['brand_manufacturer'], $without)),
-            'top_oem_normalization_patterns' => $this->top_counts(array_map(static fn(array $row): string => self::normalization_pattern((string) $row['raw_oem_fields'], (string) $row['normalized_oem_values']), $rows)),
+            'total_products_with_oem' => (int) $wpdb->get_var("SELECT COUNT(DISTINCT product_id) FROM {$map}"),
+            'products_with_local_ktype' => (int) $wpdb->get_var("SELECT COUNT(DISTINCT pm.product_id) FROM {$map} pm LEFT JOIN {$part} pc ON pc.id=pm.part_cache_id WHERE GREATEST(pm.vehicle_count, COALESCE(pc.vehicle_count,0)) > 0"),
+            'products_without_ktype' => (int) $wpdb->get_var("SELECT COUNT(DISTINCT pm.product_id) FROM {$map} pm LEFT JOIN {$part} pc ON pc.id=pm.part_cache_id WHERE {$missingWhere}"),
+            'products_with_multiple_oems' => (int) $wpdb->get_var("SELECT COUNT(*) FROM (SELECT product_id FROM {$map} GROUP BY product_id HAVING COUNT(DISTINCT part_number_normalized) > 1) x"),
+            'products_with_ebay_mapping_but_no_ktype' => (int) $wpdb->get_var("SELECT COUNT(DISTINCT pm.product_id) FROM {$map} pm LEFT JOIN {$part} pc ON pc.id=pm.part_cache_id WHERE {$missingWhere} AND ({$hasMappingSql})"),
+            'top_missing_brands' => $brands,
+            'top_oem_normalization_patterns' => [ 'stored_product_map' => (int) $wpdb->get_var("SELECT COUNT(*) FROM {$map}") ],
+            'memory_limit' => ini_get('memory_limit'), 'batch_size' => self::BATCH_SIZE,
         ];
     }
 
-    private function cache_info(array $normalizedValues, int $productId): array
+    private function top_meta_counts(string $metaKey, string $missingWhere): array
     {
-        global $wpdb;
-        $tables = Database::table_names();
-        $best = ['ktype_count' => 0, 'source' => '', 'status' => '', 'error' => ''];
-        foreach ($normalizedValues as $normalized) {
-            if ($normalized === '') { continue; }
-            $mapped = $wpdb->get_row($wpdb->prepare("SELECT pm.part_cache_id, pm.vehicle_count, pc.vehicle_count AS cache_vehicle_count, pc.status, pc.error_message FROM {$tables['product_map']} pm LEFT JOIN {$tables['part_cache']} pc ON pc.id=pm.part_cache_id WHERE pm.product_id=%d AND pm.part_number_normalized=%s ORDER BY pm.updated_at DESC LIMIT 1", $productId, $normalized), ARRAY_A) ?: [];
-            if ($mapped) {
-                $count = max((int) ($mapped['vehicle_count'] ?? 0), (int) ($mapped['cache_vehicle_count'] ?? 0));
-                if ($count > (int) $best['ktype_count'] || $best['source'] === '') { $best = ['ktype_count' => $count, 'source' => 'product_map', 'status' => (string) ($mapped['status'] ?? ''), 'error' => (string) ($mapped['error_message'] ?? '')]; }
-            }
-            $part = $wpdb->get_row($wpdb->prepare("SELECT id, vehicle_count, status, error_message FROM {$tables['part_cache']} WHERE part_number_normalized=%s ORDER BY updated_at DESC LIMIT 1", $normalized), ARRAY_A) ?: [];
-            if ($part) {
-                $count = (int) ($part['vehicle_count'] ?? 0);
-                if ($count > (int) $best['ktype_count'] || $best['source'] === '') { $best = ['ktype_count' => $count, 'source' => 'part_cache', 'status' => (string) ($part['status'] ?? ''), 'error' => (string) ($part['error_message'] ?? '')]; }
-            }
-        }
-        return $best;
+        global $wpdb; $tables = Database::table_names(); $map = $tables['product_map']; $part = $tables['part_cache'];
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT COALESCE(NULLIF(pmmeta.meta_value,''),'(missing)') reason, COUNT(DISTINCT pm.product_id) c FROM {$map} pm LEFT JOIN {$part} pc ON pc.id=pm.part_cache_id LEFT JOIN {$wpdb->postmeta} pmmeta ON pmmeta.post_id=pm.product_id AND pmmeta.meta_key=%s WHERE {$missingWhere} GROUP BY reason ORDER BY c DESC LIMIT 10", $metaKey), ARRAY_A) ?: [];
+        $out = []; foreach ($rows as $row) { $out[(string) ($row['reason'] ?? '(missing)')] = (int) ($row['c'] ?? 0); } return $out;
     }
 
-    private function dropoff_reasons(array $analysis, array $cache, string $brand, string $mpn, bool $hasMapping): array
+    private function fetch_rows(int $lastProductId, int $limit, bool $missingOnly): array
     {
-        $reasons = [];
-        if (!$analysis['has_raw_oem']) { $reasons[] = 'no_oem_detected_by_pipeline'; }
-        if (!empty($analysis['normalization_changed'])) { $reasons[] = 'oem_normalization_changed_value'; }
-        if ((int) $analysis['accepted_count'] > 1) { $reasons[] = 'multiple_oems_only_first_used'; }
-        if ($brand === '' || $mpn === '') { $reasons[] = 'missing_brand_or_mpn'; }
-        if ((int) $cache['ktype_count'] <= 0) {
-            $reasons[] = 'no_local_ktype_cache';
-            $status = strtolower((string) $cache['status']);
-            if ($status === '' || $status === 'pending' || $status === 'error') { $reasons[] = 'lookup_failed_or_not_run'; }
-            if (in_array($status, ['not_found', 'no_match'], true)) { $reasons[] = 'tecdoc_no_match_cached'; }
-            if ($hasMapping) { $reasons[] = 'product_has_ebay_mapping_but_no_ktype'; }
+        global $wpdb; $tables = Database::table_names(); $map = $tables['product_map']; $part = $tables['part_cache']; $where = $missingOnly ? 'AND GREATEST(pm.vehicle_count, COALESCE(pc.vehicle_count,0)) <= 0' : '';
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT pm.product_id, MAX(pm.sku) sku, p.post_title title, GROUP_CONCAT(DISTINCT CONCAT(pm.source_field,'=',pm.part_number_raw) SEPARATOR '|') raw_oem_fields, GROUP_CONCAT(DISTINCT pm.part_number_normalized SEPARATOR '|') normalized_oem_values, COUNT(DISTINCT pm.part_number_normalized) oem_count, MAX(GREATEST(pm.vehicle_count, COALESCE(pc.vehicle_count,0))) ktype_count, MAX(COALESCE(pc.status, pm.status, '')) last_ktype_lookup_status, MAX(COALESCE(pc.error_message, '')) last_ktype_lookup_error FROM {$map} pm LEFT JOIN {$part} pc ON pc.id=pm.part_cache_id LEFT JOIN {$wpdb->posts} p ON p.ID=pm.product_id WHERE pm.product_id > %d {$where} GROUP BY pm.product_id, p.post_title ORDER BY pm.product_id ASC LIMIT %d", $lastProductId, $limit), ARRAY_A) ?: [];
+        foreach ($rows as &$row) {
+            $row['brand_manufacturer'] = ''; $row['mpn_article_number'] = ''; $row['ean'] = ''; $row['has_ktype_cache'] = ((int) ($row['ktype_count'] ?? 0)) > 0 ? 'yes' : 'no'; $row['ktype_cache_source'] = 'product_map'; $row['dropoff_reason'] = ((int) ($row['ktype_count'] ?? 0)) > 0 ? '' : 'no_local_ktype_cache';
         }
-        if (!empty($analysis['rejected_candidates']) && empty($analysis['accepted_candidates'])) { $reasons[] = 'candidate_rejected_by_brand_filter'; }
-        return array_values(array_unique($reasons));
-    }
-
-    private function has_ebay_mapping(int $productId): bool
-    {
-        global $wpdb;
-        $mappingTable = $wpdb->prefix . 'marketplace_mappings';
-        if ((string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $mappingTable)) === $mappingTable) {
-            $count = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$mappingTable} WHERE woo_product_id=%d AND marketplace IN ('ebay','ebay_fr') AND remote_listing_id<>''", $productId));
-            if ($count > 0) { return true; }
-        }
-        foreach (['_wei_ebay_listing_id','_wei_ebay_item_id','_wei_fr_ebay_listing_id','_wei_fr_ebay_item_id'] as $key) {
-            if (trim((string) get_post_meta($productId, $key, true)) !== '') { return true; }
-        }
-        return false;
-    }
-
-    private function product_ids(): array
-    {
-        global $wpdb;
-        $postTypes = apply_filters('gps_ebay_fitment_sync_product_post_types', ['product', 'product_variation']);
-        $placeholders = implode(',', array_fill(0, count($postTypes), '%s'));
-        return array_map('intval', $wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type IN ({$placeholders}) AND post_status NOT IN ('trash','auto-draft') ORDER BY ID ASC", $postTypes)) ?: []);
-    }
-
-    private function first_meta(int $productId, array $keys): string
-    {
-        foreach ($keys as $key) {
-            $value = get_post_meta($productId, $key, true);
-            if (is_scalar($value) && trim((string) $value) !== '') { return trim((string) $value); }
-        }
-        return '';
-    }
-
-    private function format_assoc(array $fields): string
-    {
-        $parts = [];
-        foreach ($fields as $key => $value) { $parts[] = (string) $key . '=' . str_replace(["\r", "\n"], ' ', (string) $value); }
-        return implode('|', $parts);
-    }
-
-    private function top_counts(array $values, int $limit = 10): array
-    {
-        $counts = [];
-        foreach ($values as $value) {
-            $key = trim($value) !== '' ? trim($value) : '(missing)';
-            $counts[$key] = ($counts[$key] ?? 0) + 1;
-        }
-        arsort($counts);
-        return array_slice($counts, 0, $limit, true);
-    }
-
-    private static function normalization_pattern(string $raw, string $normalized): string
-    {
-        $rawValues = [];
-        foreach (explode('|', $raw) as $part) {
-            $pieces = explode('=', $part, 2);
-            if (isset($pieces[1]) && trim($pieces[1]) !== '') { $rawValues[] = trim($pieces[1]); }
-        }
-        $rawJoined = implode(',', $rawValues);
-        if ($rawJoined === '' || $normalized === '') { return '(missing)'; }
-        return $rawJoined === $normalized ? 'unchanged' : 'changed';
+        unset($row); return $rows;
     }
 }
