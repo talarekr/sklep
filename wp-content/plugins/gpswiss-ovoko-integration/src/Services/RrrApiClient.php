@@ -969,49 +969,197 @@ class RrrApiClient
 
     public function probe_ovoko_model_resolution(array $carIds = ['493','494','495'], array $rawModelIds = ['22','545']): array
     {
-        $this->enable_export_safe_dictionary_mode(40);
-        $carsPage = $this->fetch_donor_cars_page(500, 1);
-        $records = array_values(array_filter((array) ($carsPage['raw_records'] ?? []), 'is_array'));
-        $byId = [];
-        foreach ($records as $record) {
-            $id = (string) ($record['id'] ?? $record['car_id'] ?? '');
-            if ($id !== '') { $byId[$id] = $record; }
-        }
-        foreach ($carIds as $carId) {
-            $modelId = (string) ($byId[(string) $carId]['car_model'] ?? '');
-            if ($modelId !== '') { $rawModelIds[] = $modelId; }
-        }
-        $cache = $this->prime_donor_car_model_dictionary_cache($records);
-        $tested = ['/get/car_model_categories','/get/car_model_category','/get/car_model_categories/4','/get/car_categories','/get/car_category','/get/car_modifications','/get/car_modification','/get/car_generations','/get/car_generation','/get/car_models','/get/model','/get/model/22','/get/car/494'];
-        $endpointReports = [];
-        foreach ($tested as $path) {
-            if ($this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick) { break; }
+        $this->enable_export_safe_dictionary_mode(80);
+
+        $hydratedCars = [];
+        $records = [];
+        foreach (array_values(array_unique(array_map('strval', $carIds))) as $carId) {
+            $path = '/get/car/' . rawurlencode($carId);
             $raw = $this->post_form($path, [], true);
             $payload = (array) ($raw['payload'] ?? []);
-            $parsed = $this->parse_simple_dictionary_payload($payload);
-            $endpointReports[$path] = ['http_code' => $raw['http_code'] ?? null, 'status_code' => (string) ($raw['status_code'] ?? ''), 'success' => !empty($raw['success']), 'message' => (string) ($raw['msg'] ?? $raw['message'] ?? ''), 'response_shape' => (string) ($parsed['shape'] ?? 'unknown'), 'top_level_keys' => array_values(array_map('strval', array_keys($payload))), 'sample_entries' => array_slice((array) ($parsed['sample_entries'] ?? []), 0, 3)];
+            $record = (array) $this->extract_candidate_record($payload, $carId);
+            $containsRequested = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']) === $carId;
+            $hydratedCars[$carId] = [
+                'endpoint' => $path,
+                'method' => 'POST',
+                'http_code' => $raw['http_code'] ?? null,
+                'status_code' => (string) ($raw['status_code'] ?? ''),
+                'success' => !empty($raw['success']),
+                'message' => (string) ($raw['msg'] ?? $raw['message'] ?? ''),
+                'response_shape' => $this->payload_shape_summary($payload),
+                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'record_keys' => array_values(array_map('strval', array_keys($record))),
+                'contains_requested_car_id' => $containsRequested,
+            ];
+            if ($record !== [] && ($containsRequested || (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']) === '')) {
+                $records[] = $record;
+            }
         }
+
+        foreach ($records as $record) {
+            $modelId = (string) $this->first_non_empty_value($record, ['car_model_id','model_id','car_model']);
+            if ($modelId !== '') { $rawModelIds[] = $modelId; }
+        }
+        $rawModelIds = array_values(array_unique(array_filter(array_map('strval', $rawModelIds), static fn(string $id): bool => $id !== '')));
+
+        $directModelReports = [];
+        foreach ($rawModelIds as $modelId) {
+            $directModelReports[$modelId] = $this->probe_direct_model_lookup_endpoints($modelId);
+        }
+
+        $cache = $this->prime_donor_car_model_dictionary_cache($records);
+        $cacheEndpointsTried = array_values(array_unique(array_map('strval', (array) ($cache['endpoints_tried'] ?? []))));
+        $candidateEndpointsTried = [];
+        foreach ($directModelReports as $reports) {
+            foreach ($reports as $report) {
+                $endpoint = (string) ($report['endpoint'] ?? '');
+                if ($endpoint !== '') { $candidateEndpointsTried[$endpoint] = $report; }
+            }
+        }
+        foreach ($cacheEndpointsTried as $endpoint) {
+            $status = (array) (($cache['endpoint_statuses'] ?? [])[$endpoint] ?? []);
+            $candidateEndpointsTried[$endpoint] = array_merge([
+                'endpoint' => $endpoint,
+                'method' => 'POST',
+                'source' => str_starts_with($endpoint, '/get/car_models/') ? 'staged_all_brand_model_cache' : 'staged_dictionary_cache',
+                'http_code' => null,
+                'status_code' => '',
+                'success' => false,
+                'response_shape' => 'not retained in transient cache; status only',
+            ], $status);
+        }
+
+        $allBrandCacheComplete = !empty($cache['all_brand_model_cache_complete']);
+        $remainingBrandModelEndpoints = [];
+        foreach ((array) ($cache['brand_ids'] ?? []) as $brandId) {
+            if (!in_array((string) $brandId, (array) ($cache['processed_brand_ids'] ?? []), true)) {
+                $remainingBrandModelEndpoints[] = '/get/car_models/' . rawurlencode((string) $brandId);
+            }
+        }
+
+        $requestedModelReports = [];
+        foreach ($rawModelIds as $modelId) {
+            $directMatch = [];
+            foreach ((array) ($directModelReports[$modelId] ?? []) as $report) {
+                if (!empty($report['matched_record'])) { $directMatch = (array) $report['matched_record']; break; }
+            }
+            $foundInCache = isset($cache['model_id_to_record'][$modelId]);
+            $requestedModelReports[$modelId] = [
+                'direct_lookup_endpoints_attempted' => array_values(array_map(static fn(array $row): string => (string) ($row['endpoint'] ?? ''), (array) ($directModelReports[$modelId] ?? []))),
+                'direct_lookup_results' => (array) ($directModelReports[$modelId] ?? []),
+                'matched_record' => $directMatch !== [] ? $directMatch : (array) ($cache['model_id_to_record'][$modelId] ?? []),
+                'found_in_staged_all_brand_cache' => $foundInCache,
+                'all_brand_cache_incomplete' => !$allBrandCacheComplete,
+                'unresolved_only_because_cache_incomplete' => $directMatch === [] && !$foundInCache && !$allBrandCacheComplete,
+            ];
+        }
+
         $samples = [];
-        foreach ($carIds as $carId) {
-            $record = (array) ($byId[(string) $carId] ?? []);
-            $modelId = (string) ($record['car_model'] ?? '');
-            $categoryId = (string) ($record['car_model_category'] ?? '');
+        foreach (array_values(array_unique(array_map('strval', $carIds))) as $carId) {
+            $record = [];
+            foreach ($records as $candidate) {
+                if ((string) $this->first_non_empty_value($candidate, ['car_id','id','vehicle_id']) === $carId) { $record = $candidate; break; }
+            }
+            $modelId = (string) $this->first_non_empty_value($record, ['car_model_id','model_id','car_model']);
+            $categoryId = (string) $this->first_non_empty_value($record, ['car_model_category_id','model_category_id','car_model_category']);
             $resolved = $record !== [] ? $this->resolve_donor_car_vehicle_fields($record) : [];
-            $samples[(string) $carId] = [
+            $matchedModelRecord = (array) ($cache['model_id_to_record'][$modelId] ?? ($requestedModelReports[$modelId]['matched_record'] ?? []));
+            $unresolvedReason = '';
+            if ($record === []) {
+                $unresolvedReason = 'requested car was not hydrated from /get/car/{id}; do not judge donor coverage from this sample';
+            } elseif ((string) ($resolved['vehicle_model'] ?? '') === '') {
+                $unresolvedReason = !$allBrandCacheComplete
+                    ? 'unresolved because model cache incomplete; continue staged cache ticks or build the model dictionary cache before judging CSV coverage'
+                    : 'car_model id not found in complete staged cache and direct model endpoints returned no usable record';
+            }
+            $samples[$carId] = [
+                'hydration' => (array) ($hydratedCars[$carId] ?? []),
                 'raw_car_record' => $this->safe_sample($record),
                 'car_model' => $modelId,
                 'car_model_category' => $categoryId,
+                'car_fuel' => (string) $this->first_non_empty_value($record, ['car_fuel','fuel_id','car_fuel_id']),
+                'car_gearbox_type' => (string) $this->first_non_empty_value($record, ['car_gearbox_type','gearbox_type_id','transmission_type']),
+                'car_wheel_drive' => (string) $this->first_non_empty_value($record, ['car_wheel_drive','wheel_drive_id','drive_wheels']),
+                'car_body_type' => (string) $this->first_non_empty_value($record, ['car_body_type','body_type_id','body_type']),
+                'car_color' => (string) $this->first_non_empty_value($record, ['car_color','color_id','color']),
                 'resolved_make' => (string) ($resolved['vehicle_make'] ?? ''),
                 'resolved_model' => (string) ($resolved['vehicle_model'] ?? ''),
                 'resolved_generation' => (string) ($resolved['vehicle_generation'] ?? ''),
-                'model_id_found_in_cached_model_dictionary' => isset($cache['model_id_to_record'][$modelId]),
-                'category_id_found_in_dictionary' => isset($cache['category_id_to_record'][$categoryId]),
-                'car_model_category_treatment' => 'treated as category/generation raw id only; not treated as brand_id unless a model/category endpoint explicitly proves it',
-                'matched_model_record' => (array) ($cache['model_id_to_record'][$modelId] ?? []),
-                'reason_if_unresolved' => (string) ($resolved['vehicle_model'] ?? '') === '' ? 'car_model id not found in staged all-brand /get/car_models/{brand_id} cache and no direct model endpoint returned a usable record' : '',
+                'matched_model_record' => $matchedModelRecord,
+                'unresolved_reason' => $unresolvedReason,
             ];
         }
-        return ['ok' => true, 'action_name' => 'Probe Ovoko model resolution', 'cars_page_status' => ['http_code' => $carsPage['http_code'] ?? null, 'status_code' => (string) ($carsPage['status_code'] ?? ''), 'success' => !empty($carsPage['success'])], 'candidate_endpoints_tried' => $endpointReports, 'model_cache' => ['unique_car_model_ids' => (array) ($cache['unique_car_model_ids'] ?? []), 'resolved_car_model_ids' => array_keys((array) ($cache['model_id_to_record'] ?? [])), 'brand_model_endpoints_processed' => (int) ($cache['brand_model_endpoints_processed'] ?? 0), 'brand_model_endpoints_total' => (int) ($cache['brand_model_endpoints_total'] ?? 0), 'all_brand_model_cache_complete' => !empty($cache['all_brand_model_cache_complete'])], 'samples' => $samples, 'raw_model_ids_requested' => array_values(array_unique(array_map('strval', $rawModelIds))), 'safety' => 'Read-only Ovoko/RRR POSTs plus transient cache only; no Woo/local/marketplace/Laravel writes.'];
+
+        return [
+            'ok' => true,
+            'action_name' => 'Probe Ovoko model resolution',
+            'hydrated_car_endpoints' => $hydratedCars,
+            'candidate_endpoints_tried' => array_values($candidateEndpointsTried),
+            'model_cache' => [
+                'status' => $allBrandCacheComplete ? 'complete' : 'incomplete',
+                'model_cache_incomplete' => !$allBrandCacheComplete,
+                'unique_car_model_ids' => (array) ($cache['unique_car_model_ids'] ?? []),
+                'resolved_car_model_ids' => array_keys((array) ($cache['model_id_to_record'] ?? [])),
+                'brand_model_endpoints_processed' => (int) ($cache['brand_model_endpoints_processed'] ?? 0),
+                'brand_model_endpoints_total' => (int) ($cache['brand_model_endpoints_total'] ?? 0),
+                'all_brand_model_cache_complete' => $allBrandCacheComplete,
+                'remaining_brand_model_endpoints' => $remainingBrandModelEndpoints,
+                'requested_model_ids' => $requestedModelReports,
+            ],
+            'samples' => $samples,
+            'raw_model_ids_requested' => $rawModelIds,
+            'safety' => 'Read-only Ovoko/RRR POSTs plus transient cache/export files only; no Woo/local car/mapping/marketplace/Laravel writes.',
+            'csv_safe_for_laravel_import' => $allBrandCacheComplete,
+            'csv_safe_for_laravel_import_reason' => $allBrandCacheComplete ? 'Model dictionary cache is complete enough for coverage judgment.' : 'Not safe to judge/import donor CSV coverage until the staged all-brand model cache completes.',
+        ];
+    }
+
+    private function probe_direct_model_lookup_endpoints(string $modelId): array
+    {
+        $reports = [];
+        foreach (['/get/model/{id}', '/get/car_model/{id}'] as $template) {
+            if ($this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick) { break; }
+            $path = str_replace('{id}', rawurlencode($modelId), $template);
+            $raw = $this->post_form($path, [], true);
+            $payload = (array) ($raw['payload'] ?? []);
+            $parsed = $this->parse_simple_dictionary_payload($payload);
+            $matched = [];
+            foreach ((array) ($parsed['entries'] ?? []) as $entry) {
+                if ((string) ($entry['id'] ?? '') === $modelId) { $matched = (array) ($entry['record'] ?? []); break; }
+            }
+            if ($matched === []) {
+                $candidate = $this->extract_candidate_record($payload, $modelId);
+                if ((string) $this->first_non_empty_value($candidate, ['id','model_id','car_model_id']) === $modelId) { $matched = $this->safe_sample($candidate); }
+            }
+            $reports[] = [
+                'endpoint' => $path,
+                'endpoint_template' => $template,
+                'method' => 'POST',
+                'source' => 'direct_model_lookup',
+                'http_code' => $raw['http_code'] ?? null,
+                'status_code' => (string) ($raw['status_code'] ?? ''),
+                'success' => !empty($raw['success']),
+                'message' => (string) ($raw['msg'] ?? $raw['message'] ?? ''),
+                'response_shape' => (string) ($parsed['shape'] ?? $this->payload_shape_summary($payload)),
+                'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+                'matched_record' => $matched,
+                'returned_no_usable_record' => $matched === [],
+            ];
+        }
+        return $reports;
+    }
+
+    private function payload_shape_summary(array $payload): string
+    {
+        if ($payload === []) { return 'empty'; }
+        $keys = array_values(array_map('strval', array_keys($payload)));
+        $parts = [$this->is_list_array($payload) ? 'top_level_list' : 'top_level_object'];
+        foreach (['list','data','car','vehicle','result','record'] as $key) {
+            if (isset($payload[$key]) && is_array($payload[$key])) {
+                $parts[] = $key . ':' . ($this->is_list_array($payload[$key]) ? 'list' : 'object');
+            }
+        }
+        return implode(';', array_unique($parts)) . ';keys=' . implode(',', array_slice($keys, 0, 8));
     }
 
     public function probe_ovoko_vehicle_data_for_car_id(int $carId): array
