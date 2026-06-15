@@ -768,6 +768,102 @@ class RrrApiClient
         return ['ok'=>false,'endpoint_confirmed'=>false,'car_id'=>$carId,'probe'=>$probe,'message'=>'No confirmed read-only endpoint returned vehicle details for requested car_id.'];
     }
 
+    public function probe_donor_cars_api(int $limit = 5, int $page = 1, bool $hydrateFirstCar = true): array
+    {
+        $limit = max(1, min(5, $limit));
+        $page = max(1, $page);
+        $path = '/v2/get/cars?limit=' . $limit . '&page=' . $page;
+        $result = $this->post_form($path, [], true);
+        $payload = (array) ($result['payload'] ?? []);
+        $rawRecords = array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array'));
+        $carIds = [];
+        $normalizedSamples = [];
+        $availableFields = [];
+
+        foreach ($rawRecords as $record) {
+            $record = (array) $record;
+            $carId = $this->first_non_empty_value($record, ['id', 'car_id', 'vehicle_id']);
+            if ($carId !== '') {
+                $carIds[] = sanitize_text_field($carId);
+            }
+
+            $normalized = $this->normalize_vehicle_record($record, $carId, false);
+            foreach ($normalized as $key => $value) {
+                if (!is_array($value) && $value !== '' && $value !== null) {
+                    $availableFields[$key] = true;
+                }
+            }
+
+            if (count($normalizedSamples) < 3) {
+                $normalizedSamples[] = [
+                    'car_id' => sanitize_text_field($carId),
+                    'record_keys' => array_values(array_map('strval', array_keys($record))),
+                    'safe_sample' => $this->redacted_vehicle_preview($record),
+                    'normalized_vehicle_fields' => $normalized,
+                    'raw_diagnostics' => $this->build_vehicle_raw_diagnostics($record, $normalized),
+                    'full_payload_omitted' => true,
+                ];
+            }
+        }
+
+        $firstCarHydration = ['executed' => false, 'reason' => 'No car_id returned from /v2/get/cars page 1 limit 5.'];
+        $firstCarId = (string) ($carIds[0] ?? '');
+        if ($hydrateFirstCar && $firstCarId !== '') {
+            $single = $this->post_form('/get/car/' . rawurlencode($firstCarId), [], true);
+            $singlePayload = (array) ($single['payload'] ?? []);
+            $singleRecord = $this->extract_candidate_record($singlePayload, $firstCarId);
+            $singleNormalized = $this->normalize_vehicle_record((array) $singleRecord, $firstCarId, false);
+            $firstCarHydration = [
+                'executed' => true,
+                'method' => 'POST',
+                'path' => '/get/car/' . $firstCarId,
+                'http_status' => $single['http_code'] ?? null,
+                'api_status_code' => (string) ($single['status_code'] ?? ''),
+                'ok' => !empty($single['ok']),
+                'response_top_level_keys' => array_values(array_map('strval', array_keys($singlePayload))),
+                'record_keys' => array_values(array_map('strval', array_keys((array) $singleRecord))),
+                'contains_requested_car_id' => (string) $this->first_non_empty_value((array) $singleRecord, ['id', 'car_id', 'vehicle_id']) === $firstCarId,
+                'safe_sample' => $this->redacted_vehicle_preview((array) $singleRecord),
+                'normalized_vehicle_fields' => $singleNormalized,
+                'available_vehicle_fields' => array_values(array_keys(array_filter($singleNormalized, static fn($value) => !is_array($value) && $value !== '' && $value !== null))),
+                'full_payload_omitted' => true,
+            ];
+        }
+
+        return [
+            'ok' => !empty($result['ok']),
+            'mode' => 'read_only',
+            'action_name' => 'Read-only Ovoko/RRR donor cars API probe',
+            'request' => [
+                'method' => 'POST',
+                'path' => $path,
+                'content_type' => 'application/x-www-form-urlencoded',
+                'form_data_fields' => ['username', 'password', 'user_token'],
+                'auth_values_omitted' => true,
+            ],
+            'http_status' => $result['http_code'] ?? null,
+            'api_status_code' => (string) ($result['status_code'] ?? ''),
+            'msg' => (string) ($result['msg'] ?? ''),
+            'pagination' => (array) ($result['pagination'] ?? []),
+            'cars_returned' => count($rawRecords),
+            'first_car_ids' => array_values(array_unique(array_slice($carIds, 0, 5))),
+            'first_record_keys' => isset($rawRecords[0]) ? array_values(array_map('strval', array_keys((array) $rawRecords[0]))) : [],
+            'response_top_level_keys' => array_values(array_map('strval', array_keys($payload))),
+            'available_vehicle_fields' => array_values(array_keys($availableFields)),
+            'sample_records' => $normalizedSamples,
+            'first_car_hydration' => $firstCarHydration,
+            'csv_export_feasible' => !empty($result['ok']) && count($rawRecords) > 0,
+            'csv_export_feasible_reason' => !empty($result['ok']) && count($rawRecords) > 0
+                ? 'POST /v2/get/cars returned paginated donor car records with car IDs and vehicle fields.'
+                : 'Donor car CSV export needs a successful /v2/get/cars response with records.',
+            'no_woo_write' => true,
+            'no_ovoko_write' => true,
+            'no_marketplace_calls' => true,
+            'checked_at' => gmdate('c'),
+            'full_payload_omitted' => true,
+        ];
+    }
+
     public function probe_ovoko_vehicle_data_for_car_id(int $carId): array
     {
         $carId = max(1, $carId);

@@ -82,6 +82,16 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
         <p><strong>Build marker:</strong> <code><?php echo esc_html($buildMarker); ?></code> | Legacy/maintenance tools are now collapsed under <strong>Advanced Settings</strong>.</p>
     </div>
 
+    <div class="postbox" style="padding:16px; margin-bottom:14px; border-left:4px solid #2271b1;">
+        <h3>Read-only Ovoko/RRR donor car API probe</h3>
+        <p><strong>Read-only diagnostic.</strong> Calls only <code>POST /v2/get/cars?limit=5&amp;page=1</code> and, when a car ID is returned, one <code>POST /get/car/{id}</code> hydration probe. It does not write Woo products, local car records, mappings, or marketplace data.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_donor_cars_api'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_donor_cars_api" />
+            <?php submit_button('Probe donor cars API', 'secondary', 'submit', false); ?>
+        </form>
+    </div>
+
     <?php include __DIR__ . '/partials/gmail-draft-update.php'; ?>
 
     <?php if (!empty($notice)): ?>
