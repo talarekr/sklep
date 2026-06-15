@@ -5165,6 +5165,16 @@ class OvokoIntegrationService
         ];
     }
 
+    private function rrr_client(): RrrApiClient
+    {
+        $client = $this->build_rrr_api_client();
+        if ($client === null) {
+            throw new \RuntimeException('RRR API client could not be initialized from plugin settings.');
+        }
+
+        return $client;
+    }
+
     private function build_rrr_api_client(): ?RrrApiClient
     {
         try {
