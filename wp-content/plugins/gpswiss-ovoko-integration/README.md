@@ -980,3 +980,26 @@ Remaining unknowns:
 
 The Woo → Ovoko create-part preview contract report now includes documentation-backed findings with `confirmed_by_documentation`, `not_found_in_documentation`, and `unknown` statuses plus the latest saved part status probe summary and a `listing_visibility_audit` section. Future live create remains blocked until publication behavior and business acceptance are explicitly decided.
 
+
+## Woo CSV donor vehicle import support
+
+WooCommerce product CSV imports preserve Ovoko donor vehicle identifiers when any supported car ID column is present: `ovoko_car_id`, `car_id`, `donor_car_id`, `vehicle_id`, or `ovoko_vehicle_id`.
+
+Import behavior:
+- the raw donor vehicle ID is saved to private product meta (`_ovoko_car_id`) for internal traceability;
+- all donor vehicle CSV fields are stored in `_gps_ovoko_import_legacy_payload` for internal traceability;
+- the importer attempts to link the product to an existing local car row by matching the CSV Ovoko ID against safe car-table columns such as `ovoko_car_id`, `external_id`, `source_id`, `legacy_id`, `car_id`, or `vehicle_id`;
+- if no existing local car row matches, the product is marked with `_gps_ovoko_import_warnings = ["ovoko_car_not_found"]` and no placeholder/fake car row is created.
+
+Supported optional donor vehicle CSV fields are: `car_make`, `car_model`, `car_generation`, `car_year`, `car_engine`, `car_engine_code`, `car_vin`, `car_fuel`, `car_body_type`, `car_gearbox`, and `car_mileage`.
+
+## Ovoko/RRR donor car API investigation status
+
+Current code and public documentation do not confirm a single supported bulk endpoint that exports every donor car with full details. Public Supply Connector documentation still exposes integration/action/webhook resources rather than a documented `GET all donor cars` inventory API.
+
+The existing authenticated RRR client has read-only probes for likely vehicle endpoints, including `/get/car/{id}`, `/v2/get/car/{id}`, `/get/vehicle/{id}`, `/v2/get/vehicle/{id}`, `/get/cars`, `/v2/get/cars?limit=1&page=1`, `/get/vehicles?limit=1&page=1`, and `/v2/get/vehicles?limit=1&page=1`. It can normalize fields when returned, including car ID, make, model, generation, year/period, engine capacity/code, fuel, gearbox, body type, drive wheels, color, mileage, and masked VIN context where available.
+
+Confirmed for now:
+- single-part endpoint `/get/part/{id}` can expose `car_id` and may embed vehicle data;
+- endpoint probes exist to verify whether a specific account can list or fetch cars;
+- bulk donor-car export is not implemented because it is not yet confirmed as a stable API capability for the account.

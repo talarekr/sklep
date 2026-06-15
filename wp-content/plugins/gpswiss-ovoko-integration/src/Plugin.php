@@ -6,6 +6,7 @@ use GPSwiss\Ovoko\Services\AdminPage;
 use GPSwiss\Ovoko\Services\OvokoIntegrationService;
 use GPSwiss\Ovoko\Services\OvokoBidirectionalSyncOrchestrator;
 use GPSwiss\Ovoko\Services\OvokoWooSaleSyncQueue;
+use GPSwiss\Ovoko\Services\WooCsvOvokoCarImportSupport;
 
 class Plugin
 {
@@ -22,10 +23,12 @@ class Plugin
         $saleQueue = new OvokoWooSaleSyncQueue($service);
         $orchestrator = new OvokoBidirectionalSyncOrchestrator($service, $saleQueue);
         $adminPage = new AdminPage($service);
+        $wooCsvImport = new WooCsvOvokoCarImportSupport();
 
         $service->hooks();
         $saleQueue->hooks();
         $orchestrator->hooks();
         $adminPage->hooks();
+        $wooCsvImport->hooks();
     }
 }
