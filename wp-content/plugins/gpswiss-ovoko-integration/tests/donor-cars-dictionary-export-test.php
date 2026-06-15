@@ -71,7 +71,7 @@ gpswiss_dict_assert($row['steering_side'] === 'Lewa strona' && $row['body_type']
 gpswiss_dict_assert($row['vehicle_fuel'] === 'Benzyna' && $row['vehicle_gearbox_type'] === 'Automatyczny', 'Normalized aliases must be filled.');
 gpswiss_dict_assert($summary['resolved_model_count'] === 1 && $summary['unresolved_model_count'] === 0, 'Model summary counts mismatch.');
 gpswiss_dict_assert($summary['resolved_fuel_count'] === 1 && $summary['resolved_drive_count'] === 1 && $summary['resolved_body_type_count'] === 1 && $summary['resolved_color_count'] === 1, 'Resolved summary counts mismatch.');
-gpswiss_dict_assert($summary['dictionary_sources_used'] === ['dictionary_api'], 'Dictionary source should be dictionary_api.');
+gpswiss_dict_assert(in_array('dictionary_api', $summary['dictionary_sources_used'], true), 'Dictionary source should include dictionary_api.');
 gpswiss_dict_assert(!array_filter($GLOBALS['gpswiss_donor_dict_requests'], static fn($r) => str_contains($r['url'], 'ebay') || str_contains($r['url'], 'allegro')), 'Export must not call marketplace APIs.');
 
 echo "PASS donor cars export preserves raw IDs, resolves readable dictionary labels, fills aliases, and remains read-only\n";

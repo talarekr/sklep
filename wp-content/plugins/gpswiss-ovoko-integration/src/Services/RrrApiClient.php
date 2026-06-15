@@ -8,6 +8,7 @@ class RrrApiClient
     private int $maxDictionaryApiCallsPerTick = 20;
     private string $lastDictionaryEndpointAttempted = '';
     private bool $exportSafeDictionaryMode = false;
+    private int $dictionaryHttp500SeriesCount = 0;
 
     public function __construct(private array $settings)
     {
@@ -19,6 +20,7 @@ class RrrApiClient
         $this->maxDictionaryApiCallsPerTick = max(1, $maxCallsPerTick);
         $this->dictionaryApiCallsThisTick = 0;
         $this->lastDictionaryEndpointAttempted = '';
+        $this->dictionaryHttp500SeriesCount = 0;
     }
 
     public function dictionary_tick_diagnostics(): array
@@ -28,6 +30,8 @@ class RrrApiClient
             'max_dictionary_api_calls_per_tick' => $this->maxDictionaryApiCallsPerTick,
             'last_dictionary_endpoint_attempted' => $this->lastDictionaryEndpointAttempted,
             'dictionary_call_limit_reached' => $this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick,
+            'dictionary_http_500_series_count' => $this->dictionaryHttp500SeriesCount,
+            'dictionary_http_500_backoff_active' => $this->exportSafeDictionaryMode && $this->dictionaryHttp500SeriesCount >= 2,
             'staged_model_cache' => (array) (get_transient('gpswiss_ovoko_staged_model_cache_v1') ?: []),
         ];
     }
@@ -64,13 +68,14 @@ class RrrApiClient
             }
         }
         foreach ((array) $state['brand_ids'] as $brandId) {
-            if ($this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick) { break; }
+            if ($this->exportSafeDictionaryMode && ($this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick || $this->dictionaryHttp500SeriesCount >= 2)) { break; }
             if (in_array((string) $brandId, (array) $state['processed_brand_ids'], true)) { continue; }
             $path = '/get/car_models/' . rawurlencode((string) $brandId);
             $state['endpoints_tried'][] = $path;
             $raw = $this->post_form($path, [], true);
             $state['endpoint_statuses'][$path] = ['http_code' => $raw['http_code'] ?? null, 'status_code' => (string) ($raw['status_code'] ?? ''), 'success' => !empty($raw['success'])];
             if (!empty($raw['success'])) {
+                $state['successful_brand_model_endpoints'] = array_values(array_unique(array_merge((array) ($state['successful_brand_model_endpoints'] ?? []), [(string) $brandId])));
                 foreach ($this->parse_simple_dictionary_payload((array) ($raw['payload'] ?? []))['entries'] ?? [] as $entry) {
                     $id = (string) ($entry['id'] ?? '');
                     if ($id === '') { continue; }
@@ -79,11 +84,19 @@ class RrrApiClient
                     $state['model_id_to_record'][$id] = $record;
                     $state['model_id_to_brand_id'][$id] = (string) $brandId;
                 }
+                $state['processed_brand_ids'][] = (string) $brandId;
+            } elseif ((int) ($raw['http_code'] ?? 0) >= 500) {
+                $state['failed_brand_model_endpoints'][$path] = ['http_code' => $raw['http_code'] ?? null, 'message' => (string) ($raw['msg'] ?? $raw['message'] ?? 'HTTP 500/non-JSON response')];
+                break;
+            } else {
+                $state['failed_brand_model_endpoints'][$path] = ['http_code' => $raw['http_code'] ?? null, 'message' => (string) ($raw['msg'] ?? $raw['message'] ?? 'Endpoint failed')];
+                $state['processed_brand_ids'][] = (string) $brandId;
             }
-            $state['processed_brand_ids'][] = (string) $brandId;
         }
         $state['brand_model_endpoints_processed'] = count((array) $state['processed_brand_ids']);
         $state['brand_model_endpoints_total'] = count((array) $state['brand_ids']);
+        $state['model_cache_successful_endpoint_count'] = count((array) ($state['successful_brand_model_endpoints'] ?? []));
+        $state['model_cache_failed_endpoint_count'] = count((array) ($state['failed_brand_model_endpoints'] ?? []));
         $state['all_brand_model_cache_complete'] = $state['brand_model_endpoints_total'] > 0 && $state['brand_model_endpoints_processed'] >= $state['brand_model_endpoints_total'];
         $state['model_dictionary_cache_complete'] = count(array_diff((array) $state['unique_car_model_ids'], array_keys((array) $state['model_id_to_record']))) === 0;
         set_transient('gpswiss_ovoko_staged_model_cache_v1', $state, DAY_IN_SECONDS);
@@ -969,7 +982,7 @@ class RrrApiClient
 
     public function probe_ovoko_model_resolution(array $carIds = ['493','494','495'], array $rawModelIds = ['22','545']): array
     {
-        $this->enable_export_safe_dictionary_mode(80);
+        $this->enable_export_safe_dictionary_mode(12);
 
         $hydratedCars = [];
         $records = [];
@@ -979,6 +992,7 @@ class RrrApiClient
             $payload = (array) ($raw['payload'] ?? []);
             $record = (array) $this->extract_candidate_record($payload, $carId);
             $containsRequested = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']) === $carId;
+            $failureReason = $this->get_car_endpoint_failure_reason($raw, $payload, $containsRequested);
             $hydratedCars[$carId] = [
                 'endpoint' => $path,
                 'method' => 'POST',
@@ -990,10 +1004,21 @@ class RrrApiClient
                 'top_level_keys' => array_values(array_map('strval', array_keys($payload))),
                 'record_keys' => array_values(array_map('strval', array_keys($record))),
                 'contains_requested_car_id' => $containsRequested,
+                'hydration_source' => $failureReason === '' ? 'get_car_endpoint' : '',
+                'failure_reason' => $failureReason,
             ];
             if ($record !== [] && ($containsRequested || (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']) === '')) {
                 $records[] = $record;
             }
+        }
+        $fallback = $this->hydrate_requested_cars_from_v2_pages($carIds, $records);
+        foreach ((array) ($fallback['records'] ?? []) as $fallbackRecord) {
+            $id = (string) $this->first_non_empty_value($fallbackRecord, ['car_id','id','vehicle_id']);
+            if ($id === '') { continue; }
+            $records = array_values(array_filter($records, fn(array $row): bool => (string) $this->first_non_empty_value($row, ['car_id','id','vehicle_id']) !== $id));
+            $records[] = $fallbackRecord;
+            $hydratedCars[$id]['hydration_source'] = 'v2_get_cars_paginated';
+            $hydratedCars[$id]['v2_get_cars_fallback_success'] = true;
         }
 
         foreach ($records as $record) {
@@ -1039,18 +1064,15 @@ class RrrApiClient
 
         $requestedModelReports = [];
         foreach ($rawModelIds as $modelId) {
-            $directMatch = [];
-            foreach ((array) ($directModelReports[$modelId] ?? []) as $report) {
-                if (!empty($report['matched_record'])) { $directMatch = (array) $report['matched_record']; break; }
-            }
             $foundInCache = isset($cache['model_id_to_record'][$modelId]);
             $requestedModelReports[$modelId] = [
                 'direct_lookup_endpoints_attempted' => array_values(array_map(static fn(array $row): string => (string) ($row['endpoint'] ?? ''), (array) ($directModelReports[$modelId] ?? []))),
                 'direct_lookup_results' => (array) ($directModelReports[$modelId] ?? []),
-                'matched_record' => $directMatch !== [] ? $directMatch : (array) ($cache['model_id_to_record'][$modelId] ?? []),
+                'direct_model_endpoints_dependency' => 'diagnostic_only_unavailable_unless_future_probe_proves_otherwise',
+                'matched_record' => (array) ($cache['model_id_to_record'][$modelId] ?? []),
                 'found_in_staged_all_brand_cache' => $foundInCache,
                 'all_brand_cache_incomplete' => !$allBrandCacheComplete,
-                'unresolved_only_because_cache_incomplete' => $directMatch === [] && !$foundInCache && !$allBrandCacheComplete,
+                'unresolved_only_because_cache_incomplete' => !$foundInCache && !$allBrandCacheComplete,
             ];
         }
 
@@ -1086,9 +1108,13 @@ class RrrApiClient
                 'resolved_model' => (string) ($resolved['vehicle_model'] ?? ''),
                 'resolved_generation' => (string) ($resolved['vehicle_generation'] ?? ''),
                 'matched_model_record' => $matchedModelRecord,
+                'hydration_source' => (string) ($hydratedCars[$carId]['hydration_source'] ?? ''),
                 'unresolved_reason' => $unresolvedReason,
             ];
         }
+        $hydrationSourceCounts = array_count_values(array_filter(array_map(static fn(array $row): string => (string) ($row['hydration_source'] ?? ''), $hydratedCars)));
+        $getCarFailures = array_filter($hydratedCars, static fn(array $row): bool => (string) ($row['failure_reason'] ?? '') !== '');
+        $targetFound = array_values(array_filter($rawModelIds, static fn(string $id): bool => isset($cache['model_id_to_record'][$id])));
 
         return [
             'ok' => true,
@@ -1103,8 +1129,27 @@ class RrrApiClient
                 'brand_model_endpoints_processed' => (int) ($cache['brand_model_endpoints_processed'] ?? 0),
                 'brand_model_endpoints_total' => (int) ($cache['brand_model_endpoints_total'] ?? 0),
                 'all_brand_model_cache_complete' => $allBrandCacheComplete,
+                'model_cache_successful_endpoint_count' => (int) ($cache['model_cache_successful_endpoint_count'] ?? 0),
+                'model_cache_failed_endpoint_count' => (int) ($cache['model_cache_failed_endpoint_count'] ?? 0),
+                'failed_brand_model_endpoints' => (array) ($cache['failed_brand_model_endpoints'] ?? []),
+                'target_model_ids_found' => $targetFound,
+                'target_model_ids_missing' => array_values(array_diff($rawModelIds, $targetFound)),
                 'remaining_brand_model_endpoints' => $remainingBrandModelEndpoints,
                 'requested_model_ids' => $requestedModelReports,
+            ],
+            'summary_fields' => [
+                'model_dictionary_cache_complete' => $allBrandCacheComplete,
+                'brand_model_endpoints_processed' => (int) ($cache['brand_model_endpoints_processed'] ?? 0),
+                'brand_model_endpoints_total' => (int) ($cache['brand_model_endpoints_total'] ?? 0),
+                'model_cache_successful_endpoint_count' => (int) ($cache['model_cache_successful_endpoint_count'] ?? 0),
+                'model_cache_failed_endpoint_count' => (int) ($cache['model_cache_failed_endpoint_count'] ?? 0),
+                'failed_brand_model_endpoints' => (array) ($cache['failed_brand_model_endpoints'] ?? []),
+                'unresolved_only_because_cache_incomplete_count' => count(array_filter($requestedModelReports, static fn(array $row): bool => !empty($row['unresolved_only_because_cache_incomplete']))),
+                'target_model_ids_found' => $targetFound,
+                'target_model_ids_missing' => array_values(array_diff($rawModelIds, $targetFound)),
+                'hydration_source_counts' => $hydrationSourceCounts,
+                'get_car_endpoint_failures' => $getCarFailures,
+                'v2_get_cars_fallback_success_count' => (int) ($fallback['success_count'] ?? 0),
             ],
             'samples' => $samples,
             'raw_model_ids_requested' => $rawModelIds,
@@ -1147,6 +1192,52 @@ class RrrApiClient
             ];
         }
         return $reports;
+    }
+
+    private function get_car_endpoint_failure_reason(array $raw, array $payload, bool $containsRequested): string
+    {
+        $httpCode = (int) ($raw['http_code'] ?? 0);
+        if ($httpCode >= 500 && $payload === []) {
+            return 'get_car_endpoint_failed_http_500_non_json';
+        }
+        if (empty($raw['success'])) {
+            return $httpCode >= 500 ? 'get_car_endpoint_failed_http_500_non_json' : 'get_car_endpoint_failed';
+        }
+        if ($payload === []) {
+            return 'get_car_endpoint_failed_empty';
+        }
+        return $containsRequested ? '' : 'get_car_endpoint_failed_no_matching_car_id';
+    }
+
+    private function hydrate_requested_cars_from_v2_pages(array $carIds, array $existingRecords): array
+    {
+        $wanted = array_fill_keys(array_values(array_unique(array_map('strval', $carIds))), true);
+        foreach ($existingRecords as $record) {
+            $id = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']);
+            if ($id !== '') { unset($wanted[$id]); }
+        }
+        if ($wanted === []) {
+            return ['records' => [], 'success_count' => 0, 'pages_scanned' => 0];
+        }
+
+        $found = [];
+        $limit = 100;
+        $maxPages = 25;
+        for ($page = 1; $page <= $maxPages && $wanted !== []; $page++) {
+            $result = $this->fetch_donor_cars_page($limit, $page);
+            if (empty($result['ok'])) { break; }
+            foreach (array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array')) as $record) {
+                $id = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']);
+                if ($id !== '' && isset($wanted[$id])) {
+                    $found[$id] = $record;
+                    unset($wanted[$id]);
+                }
+            }
+            $total = (int) ($result['pagination']['total_count'] ?? 0);
+            if ($total > 0 && $page * $limit >= $total) { break; }
+        }
+
+        return ['records' => array_values($found), 'success_count' => count($found), 'pages_scanned' => $page - 1];
     }
 
     private function payload_shape_summary(array $payload): string
@@ -3079,19 +3170,6 @@ class RrrApiClient
         $endpointsChecked = [];
         $rawKeys = [];
         if ($type === 'model') {
-            foreach (['/get/model/' . rawurlencode($id), '/get/car_model/' . rawurlencode($id)] as $directPath) {
-                $endpointsChecked[] = $directPath;
-                $direct = $this->post_form($directPath, [], true);
-                if (empty($direct['success'])) { continue; }
-                $inspection = $this->inspect_dictionary_payload_for_id((array) ($direct['payload'] ?? []), $id);
-                $label = (string) ($inspection['resolved_label'] ?? '');
-                if ($label === '') { continue; }
-                $record = (array) ($inspection['matched_record'] ?? []);
-                $brandId = (string) $this->first_non_empty_value($record, ['brand','brand_id','manufacturer_id','make_id']);
-                $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $directPath, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => [], 'model_record' => $record, 'dictionary_record' => $record, 'model_lookup_strategy' => 'direct_model_endpoint_by_model_id', 'model_lookup_matched_brand_id' => $brandId, 'cache_status' => $cacheStatus];
-                set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
-                return $resolved;
-            }
             $staged = (array) (get_transient('gpswiss_ovoko_staged_model_cache_v1') ?: []);
             $modelMap = (array) ($staged['model_id_to_record'] ?? []);
             if (isset($modelMap[$id]) && is_array($modelMap[$id])) {
@@ -3100,6 +3178,21 @@ class RrrApiClient
                 if ($label !== '') {
                     $brandId = (string) (($staged['model_id_to_brand_id'][$id] ?? '') ?: $this->first_non_empty_value($record, ['brand','brand_id','manufacturer_id','make_id']));
                     $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => '/get/car_models/{brand_id}', 'endpoints_checked' => ['/get/car_brands','/get/car_models/{brand_id}'], 'raw_keys' => [], 'model_record' => $record, 'dictionary_record' => $record, 'model_lookup_strategy' => 'staged_all_brand_model_cache_by_model_id', 'model_lookup_matched_brand_id' => $brandId, 'cache_status' => 'hit'];
+                    set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
+                    return $resolved;
+                }
+            }
+            if (!$this->exportSafeDictionaryMode) {
+                foreach (['/get/model/' . rawurlencode($id), '/get/car_model/' . rawurlencode($id)] as $directPath) {
+                    $endpointsChecked[] = $directPath;
+                    $direct = $this->post_form($directPath, [], true);
+                    if (empty($direct['success'])) { continue; }
+                    $inspection = $this->inspect_dictionary_payload_for_id((array) ($direct['payload'] ?? []), $id);
+                    $label = (string) ($inspection['resolved_label'] ?? '');
+                    if ($label === '') { continue; }
+                    $record = (array) ($inspection['matched_record'] ?? []);
+                    $brandId = (string) $this->first_non_empty_value($record, ['brand','brand_id','manufacturer_id','make_id']);
+                    $resolved = ['label' => $label, 'source' => 'dictionary_api', 'endpoint_used' => $directPath, 'endpoints_checked' => $endpointsChecked, 'raw_keys' => [], 'model_record' => $record, 'dictionary_record' => $record, 'model_lookup_strategy' => 'direct_model_endpoint_by_model_id_diagnostic_only', 'model_lookup_matched_brand_id' => $brandId, 'cache_status' => $cacheStatus];
                     set_transient($cacheKey, $resolved, DAY_IN_SECONDS);
                     return $resolved;
                 }
@@ -3387,6 +3480,20 @@ class RrrApiClient
                     ];
                     if ($short !== '') {
                         $sources['vehicle_make_short'] = $sources['vehicle_make'] + ['derived_from' => 'brand_record'];
+                    }
+                } else {
+                    $staged = (array) (get_transient('gpswiss_ovoko_staged_model_cache_v1') ?: []);
+                    $brandLabel = $this->readable_vehicle_text((string) (($staged['brand_id_to_name'][$matchedBrandId] ?? '')));
+                    if ($brandLabel !== '') {
+                        $resolved['vehicle_make'] = $brandLabel;
+                        $brandResolvedFromModelRecord = true;
+                        $sources['vehicle_make'] = [
+                            'source' => 'dictionary_api',
+                            'id' => $matchedBrandId,
+                            'endpoint_used' => '/get/car_brands',
+                            'derived_from' => 'model_record.brand',
+                            'cache_status' => 'staged_all_brand_model_cache',
+                        ];
                     }
                 }
             }
@@ -4088,8 +4195,8 @@ class RrrApiClient
     {
         if (str_starts_with($path, '/get/')) {
             $this->lastDictionaryEndpointAttempted = $path;
-            if ($this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick) {
-                return ['ok' => false, 'executed' => false, 'success' => false, 'http_code' => null, 'status_code' => null, 'message' => 'Dictionary API call limit reached for this export tick', 'payload' => []];
+            if ($this->exportSafeDictionaryMode && ($this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick || (str_starts_with($path, '/get/car_models/') && $this->dictionaryHttp500SeriesCount >= 2))) {
+                return ['ok' => false, 'executed' => false, 'success' => false, 'http_code' => null, 'status_code' => null, 'message' => $this->dictionaryHttp500SeriesCount >= 2 ? 'Dictionary API HTTP 500 backoff active for this tick' : 'Dictionary API call limit reached for this export tick', 'payload' => []];
             }
             $this->dictionaryApiCallsThisTick++;
         }
@@ -4117,6 +4224,9 @@ class RrrApiClient
         $statusCode = is_array($decoded) ? sanitize_text_field((string) ($decoded['status_code'] ?? '')) : '';
         $message = is_array($decoded) ? sanitize_text_field((string) ($decoded['msg'] ?? $decoded['message'] ?? '')) : 'Non-JSON response';
         $ok = $httpCode === 200 && $statusCode === 'R200';
+        if (str_starts_with($path, '/get/car_models/')) {
+            $this->dictionaryHttp500SeriesCount = $httpCode >= 500 ? $this->dictionaryHttp500SeriesCount + 1 : 0;
+        }
         $pagination = is_array($decoded['pagination'] ?? null) ? $decoded['pagination'] : [];
         $sourceRows = [];
         if (is_array($decoded['data'] ?? null)) {
