@@ -1547,16 +1547,51 @@ class RrrApiClient
 
     private function dictionary_payload_records(array $payload): array
     {
-        $records = [];
-        $collect = function ($node) use (&$collect, &$records): void {
-            if (!is_array($node)) { return; }
-            if (!$this->is_list_array($node)) { $records[] = $node; }
-            foreach ($node as $child) { if (is_array($child)) { $collect($child); } }
+        return array_values(array_map(static fn(array $entry): array => (array) ($entry['record'] ?? []), $this->parse_simple_dictionary_payload($payload)['entries']));
+    }
+
+    private function parse_simple_dictionary_payload(array $payload): array
+    {
+        $entries = [];
+        $shapes = [];
+        $add = function (string $id, string $label, array $record, string $shape, string $path) use (&$entries, &$shapes): void {
+            $id = trim($id);
+            $label = $this->readable_vehicle_text($label);
+            if ($id === '' || $label === '') { return; }
+            $record = $record !== [] ? $record : ['id' => $id, 'name' => $label];
+            $record['_dictionary_payload_path'] = $path;
+            $entries[$id] = ['id' => $id, 'label' => $label, 'record' => $this->safe_sample($record), 'shape' => $shape, 'path' => $path];
+            $shapes[$shape] = true;
         };
-        foreach ($payload as $child) {
-            if (is_array($child)) { $collect($child); }
-        }
-        return $records;
+        $walk = function ($node, string $path = '', bool $parentIsList = false) use (&$walk, $add): void {
+            if (!is_array($node)) { return; }
+            if ($node !== [] && !$this->is_list_array($node)) {
+                $directId = (string) $this->first_non_empty_value($node, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','fuel_id','car_fuel_id','car_model_id','car_model_category','car_body_type_id']);
+                $directLabel = (string) $this->first_non_empty_value($node, ['name','title','label','value_text','text','manufacturer','brand','model','type','color','pl','en','lt']);
+                if ($directId !== '' && $directLabel !== '') {
+                    $add($directId, $directLabel, $node, $parentIsList ? 'list_rows' : 'keyed_object_map', $path);
+                }
+                $scalar = []; $allScalar = true; $allNumericKeys = true; $allObjectValues = true;
+                foreach ($node as $key => $value) {
+                    if (!is_numeric((string) $key)) { $allNumericKeys = false; }
+                    if (is_array($value)) {
+                        $id = (string) ($this->first_non_empty_value($value, ['id','value','key','model_id','manufacturer_id','brand_id','category_id','fuel_id','car_fuel_id','car_model_id','car_model_category','car_body_type_id']) ?: $key);
+                        $label = (string) $this->first_non_empty_value($value, ['name','title','label','value_text','text','manufacturer','brand','model','type','color','pl','en','lt']);
+                        $add($id, $label, $value, $parentIsList ? 'list_rows' : (is_numeric((string) $key) ? 'keyed_object_map' : 'list_rows'), trim($path . '.' . (string) $key, '.'));
+                    } else {
+                        $allObjectValues = false;
+                        $scalar[(string) $key] = $value;
+                    }
+                }
+                if ($allNumericKeys && !$allObjectValues) {
+                    foreach ($scalar as $key => $value) { if (is_scalar($value)) { $add($key, (string) $value, ['id' => $key, 'name' => (string) $value], 'keyed_map', trim($path . '.' . $key, '.')); } }
+                }
+            }
+            foreach ($node as $key => $child) { if (is_array($child)) { $walk($child, trim($path . '.' . (string) $key, '.'), $this->is_list_array($node)); } }
+        };
+        $walk($payload, '', false);
+        $shape = count($shapes) === 1 ? (string) array_key_first($shapes) : ($shapes === [] ? 'unknown' : implode('+', array_keys($shapes)));
+        return ['shape' => $shape, 'entries' => array_values($entries), 'entry_count' => count($entries), 'sample_entries' => array_slice(array_values($entries), 0, 5)];
     }
 
     private function dictionary_records_sample(array $records, int $limit = 5): array
@@ -1578,6 +1613,20 @@ class RrrApiClient
 
     private function inspect_dictionary_payload_for_id(array $payload, string $id): array
     {
+        $parsed = $this->parse_simple_dictionary_payload($payload);
+        foreach ((array) $parsed['entries'] as $entry) {
+            if ((string) ($entry['id'] ?? '') !== $id) { continue; }
+            return [
+                'found_record_with_id' => true,
+                'matched_record' => (array) ($entry['record'] ?? []),
+                'label_extraction_path' => (string) ($entry['path'] ?? ''),
+                'resolved_label' => (string) ($entry['label'] ?? ''),
+                'dictionary_response_shape' => (string) ($parsed['shape'] ?? 'unknown'),
+                'parsed_entries_count' => (int) ($parsed['entry_count'] ?? 0),
+                'sample_parsed_entries' => (array) ($parsed['sample_entries'] ?? []),
+                'requested_id_lookup_result' => (string) ($entry['label'] ?? ''),
+            ];
+        }
         $records = $this->dictionary_payload_records($payload);
         foreach ($this->flatten_payload_paths($payload) as $path => $value) {
             if (!is_scalar($value)) { continue; }
@@ -1591,6 +1640,10 @@ class RrrApiClient
                     'matched_record' => ['payload_path' => (string) $path, 'value' => sanitize_text_field((string) $value)],
                     'label_extraction_path' => (string) $path,
                     'resolved_label' => $label,
+                    'dictionary_response_shape' => (string) ($parsed['shape'] ?? 'unknown'),
+                    'parsed_entries_count' => (int) ($parsed['entry_count'] ?? 0),
+                    'sample_parsed_entries' => (array) ($parsed['sample_entries'] ?? []),
+                    'requested_id_lookup_result' => $label,
                 ];
             }
         }
@@ -1607,6 +1660,10 @@ class RrrApiClient
                     'matched_record' => $this->safe_sample($record),
                     'label_extraction_path' => $labelKey,
                     'resolved_label' => $label,
+                    'dictionary_response_shape' => (string) ($parsed['shape'] ?? 'unknown'),
+                    'parsed_entries_count' => (int) ($parsed['entry_count'] ?? 0),
+                    'sample_parsed_entries' => (array) ($parsed['sample_entries'] ?? []),
+                    'requested_id_lookup_result' => $label,
                 ];
             }
             return [
@@ -1614,6 +1671,10 @@ class RrrApiClient
                 'matched_record' => $this->safe_sample($record),
                 'label_extraction_path' => '',
                 'resolved_label' => '',
+                'dictionary_response_shape' => (string) ($parsed['shape'] ?? 'unknown'),
+                'parsed_entries_count' => (int) ($parsed['entry_count'] ?? 0),
+                'sample_parsed_entries' => (array) ($parsed['sample_entries'] ?? []),
+                'requested_id_lookup_result' => '',
             ];
         }
         return [
@@ -1621,6 +1682,10 @@ class RrrApiClient
             'matched_record' => [],
             'label_extraction_path' => '',
             'resolved_label' => '',
+            'dictionary_response_shape' => (string) ($parsed['shape'] ?? 'unknown'),
+            'parsed_entries_count' => (int) ($parsed['entry_count'] ?? 0),
+            'sample_parsed_entries' => (array) ($parsed['sample_entries'] ?? []),
+            'requested_id_lookup_result' => '',
         ];
     }
 
@@ -1639,6 +1704,10 @@ class RrrApiClient
             'records_count' => count($records),
             'first_records_sample' => $this->dictionary_records_sample($records),
             'raw_keys_sample' => $this->raw_keys_sample($payload, $records),
+            'dictionary_response_shape' => (string) ($inspection['dictionary_response_shape'] ?? 'unknown'),
+            'sample_parsed_entries' => (array) ($inspection['sample_parsed_entries'] ?? []),
+            'parsed_entries_count' => (int) ($inspection['parsed_entries_count'] ?? 0),
+            'requested_id_lookup_result' => (string) ($inspection['requested_id_lookup_result'] ?? ''),
         ], $inspection);
     }
 
@@ -1702,6 +1771,10 @@ class RrrApiClient
                     'message' => (string) ($report['msg'] ?? ''),
                     'top_level_keys' => (array) ($report['raw_keys_sample']['top_level_keys'] ?? []),
                     'first_record_keys' => (array) ($report['raw_keys_sample']['first_record_keys'] ?? []),
+                    'dictionary_response_shape' => (string) ($report['dictionary_response_shape'] ?? 'unknown'),
+                    'sample_parsed_entries' => (array) ($report['sample_parsed_entries'] ?? []),
+                    'parsed_entries_count' => (int) ($report['parsed_entries_count'] ?? 0),
+                    'requested_id_lookup_result' => (string) ($report['requested_id_lookup_result'] ?? ''),
                 ];
                 $diag['record_counts'][$endpoint] = (int) ($report['records_count'] ?? 0);
             }
@@ -1717,6 +1790,9 @@ class RrrApiClient
                 'source' => $source,
                 'endpoint_used' => (string) ($resolution['endpoint_used'] ?? ''),
                 'cache_status' => $cacheStatus,
+                'lookup_strategy_attempted' => $type === 'model' ? 'brand_context_then_staged_cache_or_all_brand_scan_when_not_export_safe' : 'simple_dictionary_endpoint',
+                'export_safe_all_brand_scan_skipped' => $type === 'model' && $this->exportSafeDictionaryMode,
+                'dictionary_call_limit_reached' => $this->exportSafeDictionaryMode && $this->dictionaryApiCallsThisTick >= $this->maxDictionaryApiCallsPerTick,
             ];
         }
         if (!$diag['dictionary_resolution_available']) {
@@ -2714,6 +2790,7 @@ class RrrApiClient
     {
         $type = $this->normalize_vehicle_dictionary_type($type);
         $maps = [
+            'fuel' => ['2' => 'Benzyna'],
             'gearbox' => ['0' => 'Mechaniczna', '1' => 'Automatyczny'],
             'wheel_drive' => ['1' => 'Przód', '2' => 'Tył', '3' => 'AWD'],
             'body_type' => ['1' => 'Sedan', '2' => 'Kombi', '3' => 'Hatchback', '4' => 'Minivan', '5' => 'SUV', '6' => 'Coupe'],

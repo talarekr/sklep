@@ -255,13 +255,13 @@ class OvokoDonorCarsCsvExportService
             'drive' => (int) $summary['unresolved_drive_count'], 'body_type' => (int) $summary['unresolved_body_type_count'], 'color' => (int) $summary['unresolved_color_count'],
         ];
         $summary['dictionary_cache_complete'] = ((int) array_sum($summary['unresolved_fields_counts'])) === 0;
-        if (!$summary['dictionary_cache_complete'] && !in_array('Dictionary cache is incomplete; unresolved fields are exported as raw IDs where labels are unavailable.', $summary['warnings'], true)) {
-            $summary['warnings'][] = 'Dictionary cache is incomplete; unresolved fields are exported as raw IDs where labels are unavailable.';
+        if (!$summary['dictionary_cache_complete'] && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
+            $summary['warnings'][] = 'Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
         }
         $resolvedTotal = (int) $summary['resolved_model_count'] + (int) $summary['resolved_fuel_count'] + (int) $summary['resolved_gearbox_count'] + (int) $summary['resolved_drive_count'] + (int) $summary['resolved_body_type_count'] + (int) $summary['resolved_color_count'];
         $unresolvedTotal = (int) $summary['unresolved_model_count'] + (int) $summary['unresolved_fuel_count'] + (int) $summary['unresolved_gearbox_count'] + (int) $summary['unresolved_drive_count'] + (int) $summary['unresolved_body_type_count'] + (int) $summary['unresolved_color_count'];
-        if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.', $summary['warnings'], true)) {
-            $summary['warnings'][] = 'Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.';
+        if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
+            $summary['warnings'][] = 'Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
         }
     }
 
