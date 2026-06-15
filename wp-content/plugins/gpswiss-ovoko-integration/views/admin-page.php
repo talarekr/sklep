@@ -97,6 +97,26 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <label>Raw model IDs <input type="text" name="model_ids" value="22,545" /></label>
             <?php submit_button('Probe Ovoko model resolution', 'secondary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_requested_donor_cars_only'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_requested_donor_cars_only" />
+            <label>Car IDs <input type="text" name="car_ids" value="493,494,495" /></label>
+            <?php submit_button('Probe requested donor cars only', 'secondary', 'submit', false); ?>
+            <p class="description">Hydration-only: tries <code>/get/car/{id}</code>, then paginated <code>/v2/get/cars</code>. It does not build the all-brand model cache or call <code>/get/car_models/{brand_id}</code>; model names are resolved from the already staged cache only.</p>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_build_model_dictionary_cache'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_build_model_dictionary_cache" />
+            <label>Max brand endpoints this tick <input type="number" name="max_brand_endpoints" value="5" min="1" max="5" /></label>
+            <?php submit_button('Build/continue Ovoko model dictionary cache', 'secondary', 'submit', false); ?>
+            <p class="description">Separate resumable cache tick. Processes at most 1–5 <code>/get/car_models/{brand_id}</code> endpoints and stops immediately on HTTP 500.</p>
+        </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_clear_model_dictionary_cache'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_clear_model_dictionary_cache" />
+            <?php submit_button('Clear Ovoko model dictionary cache', 'delete', 'submit', false); ?>
+            <p class="description">Clears only the plugin staged model dictionary transient. No Woo/local/marketplace/Laravel data is changed.</p>
+        </form>
     </div>
 
 
