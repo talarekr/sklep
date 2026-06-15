@@ -7,7 +7,7 @@ class OvokoDonorCarsCsvExportService
     public const LIMIT = 100;
     public const CSV_FILENAME = 'ovoko_donor_cars.csv';
     public const SUMMARY_FILENAME = 'ovoko_donor_cars_summary.json';
-    public const MAX_DICTIONARY_API_CALLS_PER_TICK = 8;
+    public const MAX_DICTIONARY_API_CALLS_PER_TICK = 5;
 
     public const COLUMNS = [
         'ovoko_car_id','external_id','make','model','generation','platform','production_year','fuel','gearbox','drive','steering_side','body_type','color','car_model_raw_id','car_model_category_raw_id','car_model_years','car_years','car_color_raw_id','car_color_code','car_body_number','car_engine_number','car_engine_cubic_capacity','car_engine_capacity_l','car_engine_power','car_engine_type','car_engine_code','car_gearbox_type_raw_id','car_gearbox_code','car_interior','car_fuel_raw_id','car_mileage','defectation_notes','car_wheel_type_raw_id','car_wheel_drive_raw_id','car_body_type_raw_id','photo','car_photo_gallery','dismantling_at','vehicle_make','vehicle_model','vehicle_generation','vehicle_year','vehicle_period','vehicle_engine_marketing','vehicle_engine_capacity_cc','vehicle_engine_capacity_l','vehicle_engine_power_kw','vehicle_engine_code','vehicle_fuel','vehicle_gearbox_type','vehicle_body_type','vehicle_drive_wheels','vehicle_steering_position','vehicle_color','vehicle_color_code','mileage_km'
@@ -45,7 +45,7 @@ class OvokoDonorCarsCsvExportService
         }
         $this->client->enable_export_safe_dictionary_mode(self::MAX_DICTIONARY_API_CALLS_PER_TICK);
         $summary = $this->read_summary();
-        $summary['dictionary_cache_phase'] = 'export_cache_only_or_lazy_bounded';
+        $summary['dictionary_cache_phase'] = 'export_uses_existing_model_cache_only';
         $result = $this->client->fetch_donor_cars_page(self::LIMIT, $page);
         if (empty($result['ok'])) {
             $summary['errors'][] = [
@@ -62,7 +62,8 @@ class OvokoDonorCarsCsvExportService
         }
 
         $records = array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array'));
-        $modelCache = $this->client->prime_donor_car_model_dictionary_cache($records);
+        $modelCache = (array) ($this->client->dictionary_tick_diagnostics()['staged_model_cache'] ?? []);
+        $summary['warnings'][] = 'Donor export does not build the Ovoko model dictionary cache during export ticks. Run Build/continue Ovoko model dictionary cache separately before final Laravel import, or treat unresolved model rows as unsafe.';
         $this->merge_model_cache_summary($summary, $modelCache);
         $handle = fopen($paths['csv'], 'ab');
         if ($handle === false) {
@@ -143,8 +144,8 @@ class OvokoDonorCarsCsvExportService
         $capacityL = $get(['car_engine_capacity_l','engine_capacity_l']);
         if ($capacityL === '' && is_numeric($cc)) { $capacityL = rtrim(rtrim(number_format(((float) $cc) / 1000, 1, '.', ''), '0'), '.'); }
         $mileage = $get(['car_mileage','mileage','mileage_km']);
-        $resolved = $this->client->resolve_donor_car_vehicle_fields($record);
-        $dictionaryDiagnostics = $this->client->donor_car_dictionary_resolution_diagnostics($record);
+        $resolved = $this->client->resolve_donor_car_vehicle_fields_from_existing_model_cache($record);
+        $dictionaryDiagnostics = ['dictionary_probe_called' => false, 'reason' => 'export_uses_existing_model_cache_only'];
         $fieldSources = (array) ($resolved['vehicle_dictionary_field_sources'] ?? []);
         $modelLabel = (string) ($resolved['vehicle_model'] ?? $get(['vehicle_model','model_name']));
         $makeLabel = (string) ($resolved['vehicle_make'] ?? $get(['vehicle_make','make','manufacturer','brand_name']));

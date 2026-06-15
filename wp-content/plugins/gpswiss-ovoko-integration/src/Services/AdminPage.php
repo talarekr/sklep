@@ -60,6 +60,9 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_test_updatepart_place_for_product_43302', [$this, 'handle_test_updatepart_place_for_product_43302']);
         add_action('admin_post_gpswiss_ovoko_probe_donor_cars_api', [$this, 'handle_probe_donor_cars_api']);
         add_action('admin_post_gpswiss_ovoko_probe_model_resolution', [$this, 'handle_probe_model_resolution']);
+        add_action('admin_post_gpswiss_ovoko_probe_requested_donor_cars_only', [$this, 'handle_probe_requested_donor_cars_only']);
+        add_action('admin_post_gpswiss_ovoko_build_model_dictionary_cache', [$this, 'handle_build_model_dictionary_cache']);
+        add_action('admin_post_gpswiss_ovoko_clear_model_dictionary_cache', [$this, 'handle_clear_model_dictionary_cache']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_parts_sample', [$this, 'handle_preview_rrr_parts_sample']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_single_part', [$this, 'handle_preview_rrr_single_part']);
         add_action('admin_post_gpswiss_ovoko_probe_ovoko_image_url_variants', [$this, 'handle_probe_ovoko_image_url_variants']);
@@ -1131,6 +1134,44 @@ class AdminPage
         $carIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['car_ids'] ?? '493,494,495')))));
         $modelIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['model_ids'] ?? '22,545')))));
         $result = $this->service->probe_ovoko_model_resolution($carIds, $modelIds);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_probe_requested_donor_cars_only(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_probe_requested_donor_cars_only');
+        $carIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['car_ids'] ?? '493,494,495')))));
+        $result = $this->service->probe_requested_donor_cars_only($carIds);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_build_model_dictionary_cache(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_build_model_dictionary_cache');
+        $max = max(1, min(5, (int) ($_POST['max_brand_endpoints'] ?? 5)));
+        $result = $this->service->build_ovoko_model_dictionary_cache_tick($max);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['stopped_on_first_http_500']) ? 'warning' : 'success', 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_clear_model_dictionary_cache(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_clear_model_dictionary_cache');
+        $result = $this->service->clear_ovoko_model_dictionary_cache();
         set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;

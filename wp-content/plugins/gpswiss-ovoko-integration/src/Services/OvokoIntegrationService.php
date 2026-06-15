@@ -2771,6 +2771,24 @@ class OvokoIntegrationService
         return $client->probe_ovoko_dictionaries_for_donor_cars($sample);
     }
 
+    public function probe_requested_donor_cars_only(array $carIds = ['493','494','495']): array
+    {
+        $client = $this->rrr_client();
+        return $client->probe_requested_donor_cars_only($carIds);
+    }
+
+    public function build_ovoko_model_dictionary_cache_tick(int $maxBrandEndpoints = 5): array
+    {
+        $client = $this->rrr_client();
+        return $client->build_ovoko_model_dictionary_cache_tick($maxBrandEndpoints);
+    }
+
+    public function clear_ovoko_model_dictionary_cache(): array
+    {
+        $client = $this->rrr_client();
+        return $client->clear_ovoko_model_dictionary_cache();
+    }
+
     public function probe_ovoko_dictionary_value(string $dictionaryType, string $id): array
     {
         $client = new RrrApiClient($this->get_settings());

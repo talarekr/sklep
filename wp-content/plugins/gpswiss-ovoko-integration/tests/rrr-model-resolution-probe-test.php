@@ -23,6 +23,7 @@ function esc_url_raw(string $value): string { return trim($value); }
 function wp_json_encode($value, int $flags = 0): string { return json_encode($value, $flags); }
 function get_transient(string $key) { return $GLOBALS['gpswiss_model_probe_transients'][$key] ?? false; }
 function set_transient(string $key, $value, int $expiration = 0): bool { $GLOBALS['gpswiss_model_probe_transients'][$key] = $value; return true; }
+function delete_transient(string $key): bool { unset($GLOBALS['gpswiss_model_probe_transients'][$key]); return true; }
 if (!defined('DAY_IN_SECONDS')) { define('DAY_IN_SECONDS', 86400); }
 if (!defined('HOUR_IN_SECONDS')) { define('HOUR_IN_SECONDS', 3600); }
 function is_wp_error($value): bool { return $value instanceof GPSwissModelProbeWpError; }
@@ -93,6 +94,7 @@ $client = new RrrApiClient([
     'rrr_api_user_token' => 'token',
 ]);
 
+$GLOBALS['gpswiss_model_probe_transients']['gpswiss_ovoko_staged_model_cache_v1'] = ['model_id_to_record' => ['22' => ['id' => '22', 'brand' => '3', 'name' => 'A3 S3 8V', 'year_start' => '2013', 'year_end' => '2019']], 'model_id_to_brand_id' => ['22' => '3'], 'brand_id_to_name' => ['3' => 'Audi'], 'brand_ids' => ['3','11'], 'processed_brand_ids' => ['3'], 'all_brand_model_cache_complete' => false, 'endpoints_tried' => ['/get/car_brands','/get/car_models/3']];
 $result = $client->probe_ovoko_model_resolution(['493', '494', '495'], ['22', '545']);
 $urls = array_map(static fn(array $row): string => $row['url'], $GLOBALS['gpswiss_model_probe_requests']);
 
@@ -112,11 +114,11 @@ gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnost
 gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['http_code'] === 200 && $result['fallback_hydration']['fallback_page_diagnostics'][0]['status_code'] === 'R200', 'Fallback page 1 success diagnostics must report HTTP/RRR status.');
 gpswiss_model_probe_assert($result['fallback_hydration']['fallback_page_diagnostics'][0]['response_shape'] === 'top_level_object;data:list;keys=status_code,pagination,data', 'Fallback page diagnostics must expose parsed response shape.');
 gpswiss_model_probe_assert($result['fallback_hydration']['fallback_request_uses_existing_donor_cars_fetcher'] === true && $result['summary_fields']['fallback_request_uses_existing_donor_cars_fetcher'] === true, 'Fallback must declare it uses existing donor cars fetcher.');
-gpswiss_model_probe_assert($result['candidate_endpoints_tried'] !== [], 'Candidate endpoints tried must be populated.');
+gpswiss_model_probe_assert(array_filter($GLOBALS['gpswiss_model_probe_requests'], static fn(array $r): bool => str_contains($r['url'], '/get/car_models/')) === [], 'Hydration-only probe must not call /get/car_models/{brand_id}.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['22']), 'Requested model 22 must have endpoint diagnostics.');
 gpswiss_model_probe_assert(isset($result['model_cache']['requested_model_ids']['545']), 'Requested model 545 must have endpoint diagnostics.');
-gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['direct_lookup_results'][0]['http_code'] === 500, 'Model 22 direct endpoint HTTP 500 must be reported.');
-gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['direct_lookup_results'][1]['http_code'] === 500, 'Model 545 direct endpoint HTTP 500 must be reported.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['direct_lookup_results'] === [], 'Hydration-only probe must not call direct model endpoints for model 22.');
+gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['545']['direct_lookup_results'] === [], 'Hydration-only probe must not call direct model endpoints for model 545.');
 gpswiss_model_probe_assert($result['model_cache']['requested_model_ids']['22']['matched_record']['name'] === 'A3 S3 8V', 'Model 22 must resolve from staged cache.');
 gpswiss_model_probe_assert($result['samples']['494']['resolved_make'] === 'Audi' && $result['samples']['494']['resolved_model'] === 'A3 S3 8V', 'Car 494 must resolve to Audi A3 S3 8V from staged cache.');
 gpswiss_model_probe_assert($result['samples']['494']['hydration_source'] === 'v2_get_cars_paginated', 'Car 494 must report v2 hydration source.');
