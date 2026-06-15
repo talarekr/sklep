@@ -111,7 +111,7 @@ class OvokoDonorCarsCsvExportService
 
     private function initial_summary(): array
     {
-        return ['total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
+        return ['total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
     }
 
     private function read_summary(): array
@@ -135,6 +135,7 @@ class OvokoDonorCarsCsvExportService
         if ($capacityL === '' && is_numeric($cc)) { $capacityL = rtrim(rtrim(number_format(((float) $cc) / 1000, 1, '.', ''), '0'), '.'); }
         $mileage = $get(['car_mileage','mileage','mileage_km']);
         $resolved = $this->client->resolve_donor_car_vehicle_fields($record);
+        $dictionaryDiagnostics = $this->client->donor_car_dictionary_resolution_diagnostics($record);
         $fieldSources = (array) ($resolved['vehicle_dictionary_field_sources'] ?? []);
         $modelLabel = (string) ($resolved['vehicle_model'] ?? $get(['vehicle_model','model_name']));
         $makeLabel = (string) ($resolved['vehicle_make'] ?? $get(['vehicle_make','make','manufacturer','brand_name']));
@@ -204,6 +205,7 @@ class OvokoDonorCarsCsvExportService
             'vehicle_color_code' => $get(['vehicle_color_code','color_code','car_color_code']),
             'mileage_km' => $mileage,
             '_dictionary_sources' => $fieldSources,
+            '_dictionary_resolution_diagnostics' => $dictionaryDiagnostics,
         ];
     }
 
@@ -235,12 +237,30 @@ class OvokoDonorCarsCsvExportService
                 $summary['dictionary_sources_used'][] = $name;
             }
         }
+        if (isset($row['_dictionary_resolution_diagnostics']) && is_array($row['_dictionary_resolution_diagnostics'])) {
+            $this->merge_dictionary_resolution_diagnostics($summary['dictionary_resolution_diagnostics'], $row['_dictionary_resolution_diagnostics']);
+        }
         $summary['dictionary_probe_status'] = $summary['dictionary_sources_used'] !== [] ? 'resolved_or_partially_resolved' : 'unresolved';
         $resolvedTotal = (int) $summary['resolved_model_count'] + (int) $summary['resolved_fuel_count'] + (int) $summary['resolved_gearbox_count'] + (int) $summary['resolved_drive_count'] + (int) $summary['resolved_body_type_count'] + (int) $summary['resolved_color_count'];
         $unresolvedTotal = (int) $summary['unresolved_model_count'] + (int) $summary['unresolved_fuel_count'] + (int) $summary['unresolved_gearbox_count'] + (int) $summary['unresolved_drive_count'] + (int) $summary['unresolved_body_type_count'] + (int) $summary['unresolved_color_count'];
         if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.', $summary['warnings'], true)) {
             $summary['warnings'][] = 'Ten eksport zawiera głównie surowe ID Ovoko/RRR bez czytelnych nazw pojazdów. Nie należy używać go jako finalnego importu samochodów do Laravel.';
         }
+    }
+
+    private function merge_dictionary_resolution_diagnostics(array &$target, array $source): void
+    {
+        $target['dictionary_probe_called'] = !empty($target['dictionary_probe_called']) || !empty($source['dictionary_probe_called']);
+        $target['cache']['hits'] = (int) ($target['cache']['hits'] ?? 0) + (int) ($source['cache']['hits'] ?? 0);
+        $target['cache']['misses'] = (int) ($target['cache']['misses'] ?? 0) + (int) ($source['cache']['misses'] ?? 0);
+        foreach ((array) ($source['endpoints_called'] ?? []) as $endpoint) {
+            if (!in_array($endpoint, (array) ($target['endpoints_called'] ?? []), true)) { $target['endpoints_called'][] = $endpoint; }
+        }
+        $target['endpoint_statuses'] = array_merge((array) ($target['endpoint_statuses'] ?? []), (array) ($source['endpoint_statuses'] ?? []));
+        $target['record_counts'] = array_merge((array) ($target['record_counts'] ?? []), (array) ($source['record_counts'] ?? []));
+        $target['sample_id_resolution'] = array_merge((array) ($target['sample_id_resolution'] ?? []), (array) ($source['sample_id_resolution'] ?? []));
+        $target['dictionary_resolution_available'] = !empty($target['dictionary_resolution_available']) || !empty($source['dictionary_resolution_available']);
+        $target['reason'] = !empty($target['dictionary_resolution_available']) ? '' : (string) ($source['reason'] ?? $target['reason'] ?? '');
     }
 
     private function count_resolution(array &$summary, array $row, string $name, string $rawKey, string $labelKey): void

@@ -19,10 +19,21 @@ function sanitize_text_field(string $value): string { return trim(strip_tags($va
 function sanitize_textarea_field(string $value): string { return trim(strip_tags($value)); }
 function sanitize_title(string $value): string { return strtolower((string) preg_replace('/[^a-z0-9]+/i', '-', trim($value))); }
 function esc_url_raw(string $value): string { return trim($value); }
+function wp_json_encode($value, int $flags = 0): string { return json_encode($value, $flags); }
+function get_transient(string $key) { return false; }
+function set_transient(string $key, $value, int $expiration = 0): bool { return true; }
+if (!defined('DAY_IN_SECONDS')) { define('DAY_IN_SECONDS', 86400); }
+if (!defined('HOUR_IN_SECONDS')) { define('HOUR_IN_SECONDS', 3600); }
 function is_wp_error($value): bool { return $value instanceof GPSwissRrrDonorTestWpError; }
 function wp_remote_post(string $url, array $args): array
 {
     $GLOBALS['gpswiss_rrr_donor_test_requests'][] = ['method' => 'POST', 'url' => $url, 'args' => $args];
+    if (str_contains($url, '/get/car_brands')) {
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => [['id' => '88', 'name' => 'Test Brand']]])];
+    }
+    if (str_contains($url, '/get/car_models/88')) {
+        return ['response' => ['code' => 200], 'body' => json_encode(['status_code' => 'R200', 'data' => [['id' => '77', 'name' => 'Test Model', 'brand_id' => '88']]])];
+    }
     $body = str_contains($url, '/get/car/321')
         ? [
             'status_code' => 'R200',
@@ -89,9 +100,11 @@ gpswiss_donor_assert($result['first_car_hydration']['executed'] === true, 'Singl
 gpswiss_donor_assert($result['first_car_hydration']['path'] === '/get/car/321', 'Single-car hydration endpoint mismatch.');
 gpswiss_donor_assert($result['csv_export_feasible'] === true, 'Successful donor records should mark CSV feasible.');
 gpswiss_donor_assert($result['no_woo_write'] === true && $result['no_ovoko_write'] === true && $result['no_marketplace_calls'] === true, 'No-write flags missing.');
-gpswiss_donor_assert(count($GLOBALS['gpswiss_rrr_donor_test_requests']) === 2, 'Expected donor list and one hydration request only.');
+gpswiss_donor_assert($result['dictionary_resolution_diagnostics']['dictionary_probe_called'] === true, 'Live donor probe must call dictionary diagnostics.');
+gpswiss_donor_assert(in_array('/get/car_brands', $result['dictionary_resolution_diagnostics']['endpoints_called'], true), 'Dictionary diagnostics must show endpoints called.');
+gpswiss_donor_assert(count($GLOBALS['gpswiss_rrr_donor_test_requests']) >= 2, 'Expected donor list, dictionary requests, and one hydration request.');
 gpswiss_donor_assert(str_contains($GLOBALS['gpswiss_rrr_donor_test_requests'][0]['url'], '/v2/get/cars?limit=5&page=1'), 'First request must be donor list.');
-gpswiss_donor_assert(str_contains($GLOBALS['gpswiss_rrr_donor_test_requests'][1]['url'], '/get/car/321'), 'Second request must hydrate first car only.');
+gpswiss_donor_assert(array_filter($GLOBALS['gpswiss_rrr_donor_test_requests'], static fn($r) => str_contains($r['url'], '/get/car/321')) !== [], 'Probe must hydrate first car.');
 gpswiss_donor_assert($GLOBALS['gpswiss_rrr_donor_test_writes'] === [], 'Probe must not perform writes.');
 
 echo "PASS donor cars probe is bounded, sanitized, hydrated once, and read-only\n";
