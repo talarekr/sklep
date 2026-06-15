@@ -90,6 +90,13 @@ $showProductSummary = is_array($noticePayload) && !$isApiTestResult && ($isKnown
             <input type="hidden" name="action" value="gpswiss_ovoko_probe_donor_cars_api" />
             <?php submit_button('Probe donor cars API', 'secondary', 'submit', false); ?>
         </form>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('gpswiss_ovoko_probe_model_resolution'); ?>
+            <input type="hidden" name="action" value="gpswiss_ovoko_probe_model_resolution" />
+            <label>Car IDs <input type="text" name="car_ids" value="493,494,495" /></label>
+            <label>Raw model IDs <input type="text" name="model_ids" value="22,545" /></label>
+            <?php submit_button('Probe Ovoko model resolution', 'secondary', 'submit', false); ?>
+        </form>
     </div>
 
 

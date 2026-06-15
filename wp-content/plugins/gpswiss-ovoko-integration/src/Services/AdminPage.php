@@ -59,6 +59,7 @@ class AdminPage
         add_action('admin_post_gpswiss_ovoko_test_api_connection', [$this, 'handle_test_api_connection']);
         add_action('admin_post_gpswiss_ovoko_test_updatepart_place_for_product_43302', [$this, 'handle_test_updatepart_place_for_product_43302']);
         add_action('admin_post_gpswiss_ovoko_probe_donor_cars_api', [$this, 'handle_probe_donor_cars_api']);
+        add_action('admin_post_gpswiss_ovoko_probe_model_resolution', [$this, 'handle_probe_model_resolution']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_parts_sample', [$this, 'handle_preview_rrr_parts_sample']);
         add_action('admin_post_gpswiss_ovoko_preview_rrr_single_part', [$this, 'handle_preview_rrr_single_part']);
         add_action('admin_post_gpswiss_ovoko_probe_ovoko_image_url_variants', [$this, 'handle_probe_ovoko_image_url_variants']);
@@ -1117,6 +1118,20 @@ class AdminPage
         $result = $this->service->probe_donor_cars_api();
         $type = !empty($result['ok']) ? 'success' : 'warning';
         set_transient('gpswiss_ovoko_notice', ['type' => $type, 'text' => wp_json_encode($result)], 30);
+        wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
+        exit;
+    }
+
+    public function handle_probe_model_resolution(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+        check_admin_referer('gpswiss_ovoko_probe_model_resolution');
+        $carIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['car_ids'] ?? '493,494,495')))));
+        $modelIds = array_filter(array_map('trim', explode(',', sanitize_text_field((string) ($_POST['model_ids'] ?? '22,545')))));
+        $result = $this->service->probe_ovoko_model_resolution($carIds, $modelIds);
+        set_transient('gpswiss_ovoko_notice', ['type' => !empty($result['ok']) ? 'success' : 'warning', 'text' => wp_json_encode($result)], 30);
         wp_safe_redirect(admin_url('tools.php?page=gpswiss-ovoko-integration'));
         exit;
     }

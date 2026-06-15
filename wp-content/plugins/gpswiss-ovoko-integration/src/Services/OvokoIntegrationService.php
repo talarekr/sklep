@@ -694,6 +694,12 @@ class OvokoIntegrationService
         return $client->probe_donor_cars_api(5, 1, true);
     }
 
+    public function probe_ovoko_model_resolution(array $carIds = ['493','494','495'], array $modelIds = ['22','545']): array
+    {
+        $client = new RrrApiClient($this->get_settings());
+        return $client->probe_ovoko_model_resolution($carIds, $modelIds);
+    }
+
 
     public function manual_probe_ovoko_single_part_stock(int $partId): array
     {

@@ -62,6 +62,8 @@ class OvokoDonorCarsCsvExportService
         }
 
         $records = array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array'));
+        $modelCache = $this->client->prime_donor_car_model_dictionary_cache($records);
+        $this->merge_model_cache_summary($summary, $modelCache);
         $handle = fopen($paths['csv'], 'ab');
         if ($handle === false) {
             return ['ok' => false, 'done' => true, 'error' => 'csv_append_failed', 'summary' => $summary];
@@ -118,7 +120,7 @@ class OvokoDonorCarsCsvExportService
 
     private function initial_summary(): array
     {
-        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
+        return ['dictionary_cache_complete' => false, 'dictionary_cache_phase' => 'not_started', 'dictionary_api_calls_total' => 0, 'dictionary_api_calls_this_tick' => 0, 'dictionary_cache_hits' => 0, 'dictionary_cache_misses' => 0, 'unresolved_fields_counts' => [], 'total_count_from_api' => 0, 'cars_exported' => 0, 'pages_processed' => 0, 'limit' => self::LIMIT, 'started_at' => gmdate('c'), 'completed_at' => '', 'resolved_model_count' => 0, 'unresolved_model_count' => 0, 'resolved_fuel_count' => 0, 'unresolved_fuel_count' => 0, 'resolved_gearbox_count' => 0, 'unresolved_gearbox_count' => 0, 'resolved_drive_count' => 0, 'unresolved_drive_count' => 0, 'resolved_body_type_count' => 0, 'unresolved_body_type_count' => 0, 'resolved_color_count' => 0, 'unresolved_color_count' => 0, 'unique_car_model_ids' => [], 'resolved_car_model_ids' => [], 'unresolved_car_model_ids' => [], 'unresolved_car_model_id_samples' => [], 'unique_car_model_category_ids' => [], 'resolved_car_model_category_ids' => [], 'unresolved_car_model_category_id_samples' => [], 'model_dictionary_cache_complete' => false, 'model_dictionary_resolution_strategy' => 'staged_all_brand_model_cache_by_model_id_then_direct_context_if_available_no_category_as_brand', 'all_brand_model_cache_complete' => false, 'brand_model_endpoints_processed' => 0, 'brand_model_endpoints_total' => 0, 'model_resolution_errors' => [], 'sample_unresolved_rows' => [], 'dictionary_sources_used' => [], 'dictionary_probe_status' => 'not_run', 'dictionary_resolution_diagnostics' => ['dictionary_probe_called' => false, 'cache' => ['hits' => 0, 'misses' => 0], 'endpoints_called' => [], 'endpoint_statuses' => [], 'record_counts' => [], 'sample_id_resolution' => [], 'dictionary_resolution_available' => false, 'reason' => 'not_run'], 'warnings' => [], 'errors' => [], 'memory_usage_diagnostics' => []];
     }
 
     private function read_summary(): array
@@ -258,6 +260,12 @@ class OvokoDonorCarsCsvExportService
         if (!$summary['dictionary_cache_complete'] && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
             $summary['warnings'][] = 'Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
         }
+        if (($row['car_model_raw_id'] ?? '') !== '' && ($row['vehicle_model'] ?? '') === '' && count($summary['sample_unresolved_rows']) < 20) {
+            $summary['sample_unresolved_rows'][] = ['ovoko_car_id' => (string) ($row['ovoko_car_id'] ?? ''), 'car_model_raw_id' => (string) ($row['car_model_raw_id'] ?? ''), 'car_model_category_raw_id' => (string) ($row['car_model_category_raw_id'] ?? ''), 'endpoints_tried' => ['/get/car_brands','/get/car_models/{brand_id}'], 'reason' => 'car_model id not found in staged all-brand model cache; car_model_category was not used as brand_id'];
+        }
+        if ((int) $summary['unresolved_model_count'] > 0 && !in_array('Eksport nadal ma niepełne modele Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
+            $summary['warnings'][] = 'Eksport nadal ma niepełne modele Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.';
+        }
         $resolvedTotal = (int) $summary['resolved_model_count'] + (int) $summary['resolved_fuel_count'] + (int) $summary['resolved_gearbox_count'] + (int) $summary['resolved_drive_count'] + (int) $summary['resolved_body_type_count'] + (int) $summary['resolved_color_count'];
         $unresolvedTotal = (int) $summary['unresolved_model_count'] + (int) $summary['unresolved_fuel_count'] + (int) $summary['unresolved_gearbox_count'] + (int) $summary['unresolved_drive_count'] + (int) $summary['unresolved_body_type_count'] + (int) $summary['unresolved_color_count'];
         if ($unresolvedTotal > 0 && $resolvedTotal < $unresolvedTotal && !in_array('Eksport nadal ma niepełne słowniki Ovoko/RRR. Nie używaj jako finalnego importu Laravel bez weryfikacji.', $summary['warnings'], true)) {
@@ -285,6 +293,22 @@ class OvokoDonorCarsCsvExportService
         if ((string) ($row[$rawKey] ?? '') === '') { return; }
         if ((string) ($row[$labelKey] ?? '') !== '') { $summary['resolved_' . $name . '_count']++; return; }
         $summary['unresolved_' . $name . '_count']++;
+    }
+
+    private function merge_model_cache_summary(array &$summary, array $cache): void
+    {
+        foreach (['unique_car_model_ids','unique_car_model_category_ids'] as $key) {
+            $summary[$key] = array_values(array_unique(array_merge((array) ($summary[$key] ?? []), (array) ($cache[$key] ?? []))));
+        }
+        $resolved = array_keys((array) ($cache['model_id_to_record'] ?? []));
+        $summary['resolved_car_model_ids'] = array_values(array_unique(array_merge((array) ($summary['resolved_car_model_ids'] ?? []), $resolved)));
+        $summary['unresolved_car_model_ids'] = array_values(array_diff((array) $summary['unique_car_model_ids'], (array) $summary['resolved_car_model_ids']));
+        $summary['unresolved_car_model_id_samples'] = array_slice($summary['unresolved_car_model_ids'], 0, 20);
+        $summary['unresolved_car_model_category_id_samples'] = array_slice((array) $summary['unique_car_model_category_ids'], 0, 20);
+        $summary['model_dictionary_cache_complete'] = !empty($cache['model_dictionary_cache_complete']);
+        $summary['all_brand_model_cache_complete'] = !empty($cache['all_brand_model_cache_complete']);
+        $summary['brand_model_endpoints_processed'] = (int) ($cache['brand_model_endpoints_processed'] ?? 0);
+        $summary['brand_model_endpoints_total'] = (int) ($cache['brand_model_endpoints_total'] ?? 0);
     }
 
 
