@@ -1020,6 +1020,12 @@ class RrrApiClient
             $hydratedCars[$id]['hydration_source'] = 'v2_get_cars_paginated';
             $hydratedCars[$id]['v2_get_cars_fallback_success'] = true;
         }
+        foreach ((array) ($fallback['ids_missing'] ?? []) as $missingId) {
+            $missingId = (string) $missingId;
+            if ($missingId === '' || !isset($hydratedCars[$missingId])) { continue; }
+            $hydratedCars[$missingId]['hydration_source'] = !empty($fallback['incomplete']) ? 'v2_get_cars_paginated_fallback_incomplete' : 'v2_get_cars_paginated_not_found';
+            $hydratedCars[$missingId]['v2_get_cars_fallback_success'] = false;
+        }
 
         foreach ($records as $record) {
             $modelId = (string) $this->first_non_empty_value($record, ['car_model_id','model_id','car_model']);
@@ -1150,6 +1156,25 @@ class RrrApiClient
                 'hydration_source_counts' => $hydrationSourceCounts,
                 'get_car_endpoint_failures' => $getCarFailures,
                 'v2_get_cars_fallback_success_count' => (int) ($fallback['success_count'] ?? 0),
+                'fallback_pages_scanned' => (int) ($fallback['pages_scanned'] ?? 0),
+                'fallback_total_pages' => (int) ($fallback['total_pages'] ?? 0),
+                'fallback_total_count' => (int) ($fallback['total_count'] ?? 0),
+                'fallback_ids_requested' => (array) ($fallback['ids_requested'] ?? []),
+                'fallback_ids_found' => (array) ($fallback['ids_found'] ?? []),
+                'fallback_ids_missing' => (array) ($fallback['ids_missing'] ?? []),
+                'fallback_last_page_scanned' => (int) ($fallback['last_page_scanned'] ?? 0),
+                'fallback_stopped_reason' => (string) ($fallback['stopped_reason'] ?? ''),
+            ],
+            'fallback_hydration' => [
+                'fallback_pages_scanned' => (int) ($fallback['pages_scanned'] ?? 0),
+                'fallback_total_pages' => (int) ($fallback['total_pages'] ?? 0),
+                'fallback_total_count' => (int) ($fallback['total_count'] ?? 0),
+                'fallback_ids_requested' => (array) ($fallback['ids_requested'] ?? []),
+                'fallback_ids_found' => (array) ($fallback['ids_found'] ?? []),
+                'fallback_ids_missing' => (array) ($fallback['ids_missing'] ?? []),
+                'fallback_last_page_scanned' => (int) ($fallback['last_page_scanned'] ?? 0),
+                'fallback_stopped_reason' => (string) ($fallback['stopped_reason'] ?? ''),
+                'fallback_incomplete' => !empty($fallback['incomplete']),
             ],
             'samples' => $samples,
             'raw_model_ids_requested' => $rawModelIds,
@@ -1211,33 +1236,85 @@ class RrrApiClient
 
     private function hydrate_requested_cars_from_v2_pages(array $carIds, array $existingRecords): array
     {
-        $wanted = array_fill_keys(array_values(array_unique(array_map('strval', $carIds))), true);
+        $requestedIds = array_values(array_unique(array_filter(array_map('strval', $carIds), static fn(string $id): bool => $id !== '')));
+        $wanted = array_fill_keys($requestedIds, true);
         foreach ($existingRecords as $record) {
             $id = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']);
             if ($id !== '') { unset($wanted[$id]); }
         }
-        if ($wanted === []) {
-            return ['records' => [], 'success_count' => 0, 'pages_scanned' => 0];
-        }
 
         $found = [];
         $limit = 100;
-        $maxPages = 25;
-        for ($page = 1; $page <= $maxPages && $wanted !== []; $page++) {
+        $maxPages = 50;
+        $pagesScanned = 0;
+        $lastPageScanned = 0;
+        $totalCount = 0;
+        $totalPages = 0;
+        $stoppedReason = $wanted === [] ? 'all_requested_ids_already_hydrated' : 'not_started';
+
+        for ($page = 1; $wanted !== [] && $page <= $maxPages; $page++) {
             $result = $this->fetch_donor_cars_page($limit, $page);
-            if (empty($result['ok'])) { break; }
-            foreach (array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array')) as $record) {
+            $pagesScanned++;
+            $lastPageScanned = $page;
+            $pagination = (array) ($result['pagination'] ?? []);
+            $pageLimit = max(1, (int) ($pagination['limit'] ?? $limit));
+            $pageTotalCount = (int) ($pagination['total_count'] ?? 0);
+            if ($pageTotalCount > 0) {
+                $totalCount = $pageTotalCount;
+                $totalPages = (int) ceil($pageTotalCount / $pageLimit);
+            }
+            if (isset($pagination['total_pages'])) {
+                $totalPages = max($totalPages, (int) $pagination['total_pages']);
+            } elseif (isset($pagination['pages'])) {
+                $totalPages = max($totalPages, (int) $pagination['pages']);
+            }
+
+            if (empty($result['ok'])) {
+                $stoppedReason = 'page_fetch_failed';
+                break;
+            }
+
+            $rawRecords = array_values(array_filter((array) ($result['raw_records'] ?? []), 'is_array'));
+            foreach ($rawRecords as $record) {
                 $id = (string) $this->first_non_empty_value($record, ['car_id','id','vehicle_id']);
                 if ($id !== '' && isset($wanted[$id])) {
                     $found[$id] = $record;
                     unset($wanted[$id]);
                 }
             }
-            $total = (int) ($result['pagination']['total_count'] ?? 0);
-            if ($total > 0 && $page * $limit >= $total) { break; }
+
+            if ($wanted === []) {
+                $stoppedReason = 'all_requested_ids_found';
+                break;
+            }
+            if ($totalPages > 0 && $page >= $totalPages) {
+                $stoppedReason = 'pagination_exhausted';
+                break;
+            }
+            if ($totalCount > 0 && $page * $pageLimit >= $totalCount) {
+                $stoppedReason = 'pagination_total_count_exhausted';
+                break;
+            }
+            if ($rawRecords === [] && $totalCount === 0 && $page > 1) {
+                $stoppedReason = 'empty_page_without_total_count';
+                break;
+            }
+            $stoppedReason = 'safe_page_limit_reached';
         }
 
-        return ['records' => array_values($found), 'success_count' => count($found), 'pages_scanned' => $page - 1];
+        return [
+            'records' => array_values($found),
+            'success_count' => count($found),
+            'pages_scanned' => $pagesScanned,
+            'total_pages' => $totalPages,
+            'total_count' => $totalCount,
+            'ids_requested' => $requestedIds,
+            'ids_found' => array_values(array_map('strval', array_keys($found))),
+            'ids_missing' => array_values(array_map('strval', array_keys($wanted))),
+            'last_page_scanned' => $lastPageScanned,
+            'stopped_reason' => $stoppedReason,
+            'incomplete' => $wanted !== [],
+        ];
     }
 
     private function payload_shape_summary(array $payload): string
