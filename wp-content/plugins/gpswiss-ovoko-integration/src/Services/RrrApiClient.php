@@ -3338,7 +3338,7 @@ class RrrApiClient
             'wheel_drive' => ['1' => 'Przód', '2' => 'Tył', '3' => 'AWD'],
             'body_type' => ['1' => 'Sedan', '2' => 'Kombi', '3' => 'Hatchback', '4' => 'Minivan', '5' => 'SUV', '6' => 'Coupe'],
             'color' => ['1' => 'Biały', '5' => 'Niebieski', '9' => 'Szary', '10' => 'Czarny'],
-            'wheel_type' => ['1' => 'Lewa strona', '2' => 'Prawa strona'],
+            'wheel_type' => ['0' => 'Lewa strona', '1' => 'Lewa strona', '2' => 'Prawa strona'],
         ];
         return (string) ($maps[$type][$id] ?? '');
     }
