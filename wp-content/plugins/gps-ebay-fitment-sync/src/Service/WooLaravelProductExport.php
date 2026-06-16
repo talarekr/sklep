@@ -131,12 +131,30 @@ final class WooLaravelProductExport
             $this->put($files['woo_category_tree_csv'], $this->ordered($row, $columns));
         }
 
+        $mappedRows = array_filter($flat, static fn($row) => (string) ($row['ebay_category_id'] ?? '') !== '');
+        $missingMappingTermIds = array_values(array_map('intval', array_keys(array_filter($flat, static fn($row) => (string) ($row['ebay_category_id'] ?? '') === ''))));
+        $marketplaces = [];
+        foreach ($mappedRows as $row) {
+            foreach (explode('|', (string) ($row['ebay_marketplace'] ?? '')) as $marketplace) {
+                $marketplace = trim($marketplace);
+                if ($marketplace !== '') $marketplaces[$marketplace] = true;
+            }
+        }
+        if ($missingMappingTermIds) {
+            $warnings[] = count($missingMappingTermIds) . ' product_cat categories do not have an eBay category mapping.';
+        }
         $summary = [
             'total_categories' => count($flat),
+            'categories_total' => count($flat),
             'root_categories' => count(array_filter($flat, static fn($row) => (string) ($row['parent_term_id'] ?? '') === '0')),
             'max_depth' => $flat ? max(array_map(static fn($row) => (int) $row['depth'], $flat)) : 0,
             'categories_with_products' => count(array_filter($flat, static fn($row) => (int) ($row['product_count'] ?? 0) > 0)),
             'empty_categories' => count(array_filter($flat, static fn($row) => (int) ($row['product_count'] ?? 0) === 0)),
+            'categories_with_ebay_category_id' => count($mappedRows),
+            'categories_without_ebay_category_id' => count($missingMappingTermIds),
+            'ebay_category_id_unique_count' => count(array_unique(array_values(array_filter(array_map(static fn($row) => (string) ($row['ebay_category_id'] ?? ''), $mappedRows))))),
+            'ebay_marketplaces_detected' => array_keys($marketplaces),
+            'missing_ebay_category_mapping_term_ids' => $missingMappingTermIds,
             'generated_at' => gmdate('c'),
             'files' => array_map('basename', $files),
             'warnings' => array_values(array_unique($warnings)),
@@ -152,7 +170,7 @@ final class WooLaravelProductExport
 
     public function categoryTreeColumns(): array
     {
-        return ['term_id','parent_term_id','depth','sort_order','name','slug','full_path','full_slug_path','product_count','description','display_type','thumbnail_id','thumbnail_url','language','source_taxonomy'];
+        return ['term_id','parent_term_id','depth','sort_order','name','slug','full_path','full_slug_path','product_count','description','display_type','thumbnail_id','thumbnail_url','language','source_taxonomy','ebay_category_id','ebay_category_name','ebay_category_path','ebay_marketplace','ebay_mapping_source','ebay_category_id_de','ebay_category_id_fr','ebay_category_name_de','ebay_category_name_fr','ebay_category_path_de','ebay_category_path_fr'];
     }
 
     private function categoryNode($term, array $byId, array $children, int $depth, array $path, array $slugPath, int &$sort, array &$flat, array &$warnings): array
@@ -160,6 +178,7 @@ final class WooLaravelProductExport
         $termId = (int) $term->term_id;
         $path[] = (string) $term->name;
         $slugPath[] = (string) $term->slug;
+        $mapping = $this->categoryEbayMapping($termId);
         $row = [
             'term_id' => $termId,
             'parent_term_id' => (int) $term->parent,
@@ -176,6 +195,17 @@ final class WooLaravelProductExport
             'thumbnail_url' => '',
             'language' => $this->categoryLanguage($termId),
             'source_taxonomy' => 'product_cat',
+            'ebay_category_id' => $mapping['ebay_category_id'],
+            'ebay_category_name' => $mapping['ebay_category_name'],
+            'ebay_category_path' => $mapping['ebay_category_path'],
+            'ebay_marketplace' => $mapping['ebay_marketplace'],
+            'ebay_mapping_source' => $mapping['ebay_mapping_source'],
+            'ebay_category_id_de' => $mapping['ebay_category_id_de'],
+            'ebay_category_id_fr' => $mapping['ebay_category_id_fr'],
+            'ebay_category_name_de' => $mapping['ebay_category_name_de'],
+            'ebay_category_name_fr' => $mapping['ebay_category_name_fr'],
+            'ebay_category_path_de' => $mapping['ebay_category_path_de'],
+            'ebay_category_path_fr' => $mapping['ebay_category_path_fr'],
         ];
         if ($row['thumbnail_id'] !== '') {
             $url = wp_get_attachment_url((int) $row['thumbnail_id']);
@@ -192,6 +222,116 @@ final class WooLaravelProductExport
             $node['children'][] = $this->categoryNode($child, $byId, $children, $depth + 1, $path, $slugPath, $sort, $flat, $warnings);
         }
         return $node;
+    }
+
+    private function categoryEbayMapping(int $termId): array
+    {
+        $empty = [
+            'ebay_category_id' => '',
+            'ebay_category_name' => '',
+            'ebay_category_path' => '',
+            'ebay_marketplace' => '',
+            'ebay_mapping_source' => 'empty',
+            'ebay_category_id_de' => '',
+            'ebay_category_id_fr' => '',
+            'ebay_category_name_de' => '',
+            'ebay_category_name_fr' => '',
+            'ebay_category_path_de' => '',
+            'ebay_category_path_fr' => '',
+        ];
+        $byMarketplace = [];
+        foreach ($this->categoryEbayTermMetaCandidates() as $marketplace => $keys) {
+            $matchedIdKey = '';
+            $id = $this->firstTermMeta($termId, $keys['id'], $matchedIdKey);
+            if ($id === '') continue;
+            $byMarketplace[$marketplace] = [
+                'ebay_category_id' => $id,
+                'ebay_category_name' => $this->firstTermMeta($termId, $keys['name']),
+                'ebay_category_path' => $this->firstTermMeta($termId, $keys['path']),
+                'ebay_marketplace' => $marketplace,
+                'ebay_mapping_source' => 'term_meta:' . $matchedIdKey,
+            ];
+        }
+        foreach ($this->categoryEbayPluginMapRows($termId) as $marketplace => $row) {
+            if (isset($byMarketplace[$marketplace])) continue;
+            $byMarketplace[$marketplace] = $row;
+        }
+        if (!$byMarketplace) return $empty;
+
+        foreach ($byMarketplace as $marketplace => $row) {
+            $suffix = $marketplace === 'EBAY_FR' ? 'fr' : ($marketplace === 'EBAY_DE' ? 'de' : strtolower(str_replace('EBAY_', '', $marketplace)));
+            foreach (['id' => 'ebay_category_id', 'name' => 'ebay_category_name', 'path' => 'ebay_category_path'] as $short => $key) {
+                $empty[$key . '_' . $suffix] = (string) ($row[$key] ?? '');
+            }
+        }
+        $selectedMarketplace = isset($byMarketplace['EBAY_DE']) ? 'EBAY_DE' : array_key_first($byMarketplace);
+        $selected = $byMarketplace[$selectedMarketplace];
+        return array_merge($empty, [
+            'ebay_category_id' => (string) ($selected['ebay_category_id'] ?? ''),
+            'ebay_category_name' => (string) ($selected['ebay_category_name'] ?? ''),
+            'ebay_category_path' => (string) ($selected['ebay_category_path'] ?? ''),
+            'ebay_marketplace' => count($byMarketplace) === 1 ? $selectedMarketplace : implode('|', array_keys($byMarketplace)),
+            'ebay_mapping_source' => (string) ($selected['ebay_mapping_source'] ?? 'plugin_map'),
+        ]);
+    }
+
+    private function categoryEbayTermMetaCandidates(): array
+    {
+        $sets = [
+            'EBAY_DE' => [
+                'id' => ['_wei_ebay_category_id','wei_ebay_category_id','ebay_category_id','_ebay_category_id'],
+                'name' => ['_wei_ebay_category_name','wei_ebay_category_name','ebay_category_name','_ebay_category_name'],
+                'path' => ['_wei_ebay_category_path','wei_ebay_category_path','ebay_category_path','_ebay_category_path'],
+            ],
+            'EBAY_FR' => [
+                'id' => ['_wei_fr_ebay_category_id','wei_fr_ebay_category_id','ebay_fr_category_id','_ebay_fr_category_id'],
+                'name' => ['_wei_fr_ebay_category_name','wei_fr_ebay_category_name','ebay_fr_category_name','_ebay_fr_category_name'],
+                'path' => ['_wei_fr_ebay_category_path','wei_fr_ebay_category_path','ebay_fr_category_path','_ebay_fr_category_path'],
+            ],
+        ];
+        return $sets;
+    }
+
+    private function firstTermMeta(int $termId, array $keys, ?string &$matchedKey = null): string
+    {
+        foreach ($keys as $key) {
+            $value = trim((string) get_term_meta($termId, $key, true));
+            if ($value !== '') {
+                $matchedKey = $key;
+                return $value;
+            }
+        }
+        $matchedKey = '';
+        return '';
+    }
+
+    private function categoryEbayPluginMapRows(int $termId): array
+    {
+        global $wpdb;
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'get_results')) return [];
+        $out = [];
+        foreach (['EBAY_DE' => 'wei_ebay_category_mappings', 'EBAY_FR' => 'wei_fr_ebay_category_mappings'] as $marketplace => $suffix) {
+            $table = $wpdb->prefix . $suffix;
+            if (method_exists($wpdb, 'get_var')) {
+                $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+                if ((string) $exists !== $table) continue;
+            }
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT ebay_category_id, ebay_category_name, ebay_category_path, marketplace_id, source FROM {$table} WHERE marketplace_id=%s AND woo_term_id=%d AND COALESCE(active,1)=1 AND status NOT LIKE 'disabled%%' AND TRIM(COALESCE(ebay_category_id,''))<>'' ORDER BY CASE WHEN source IN ('manual','manual_woo_category_mapping','manual_teaching_csv') THEN 10 WHEN source='manual_worklist' THEN 20 WHEN source IN ('ovoko_import','supplier_import') THEN 30 WHEN source IN ('import','csv_import','normal_import') THEN 40 WHEN source IN ('rule','auto_taxonomy') THEN 50 WHEN source IN ('legacy','legacy_import') THEN 60 ELSE 70 END ASC, id DESC LIMIT 1",
+                $marketplace,
+                $termId
+            ), ARRAY_A);
+            if (!is_array($rows) || !isset($rows[0])) continue;
+            $row = $rows[0];
+            $out[$marketplace] = [
+                'ebay_category_id' => (string) ($row['ebay_category_id'] ?? ''),
+                'ebay_category_name' => (string) ($row['ebay_category_name'] ?? ''),
+                'ebay_category_path' => (string) ($row['ebay_category_path'] ?? ''),
+                'ebay_marketplace' => (string) ($row['marketplace_id'] ?? $marketplace),
+                'ebay_mapping_source' => 'plugin_map:' . $table . ':' . (string) ($row['source'] ?? ''),
+            ];
+        }
+        return $out;
     }
 
     private function compareCategoryTerms($a, $b): int
