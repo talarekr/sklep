@@ -76,6 +76,149 @@ final class WooLaravelProductExport
     public function state(string $id): array { $s = get_option(self::OPTION_PREFIX . sanitize_key($id), []); return is_array($s) ? $s : []; }
     public function productColumns(): array { return $this->productColumns; }
 
+    public function exportCategoryTree(): array
+    {
+        $this->cleanup();
+        $id = 'woo-category-tree-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false);
+        $dir = $this->exportDir($id);
+        wp_mkdir_p($dir);
+        $files = [
+            'woo_category_tree_csv' => $dir . '/woo_category_tree.csv',
+            'woo_category_tree_json' => $dir . '/woo_category_tree.json',
+            'woo_category_tree_summary' => $dir . '/woo_category_tree_summary.json',
+        ];
+        $columns = $this->categoryTreeColumns();
+        $this->writeHeader($files['woo_category_tree_csv'], $columns);
+
+        $terms = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        $warnings = [];
+        if (is_wp_error($terms)) {
+            $warnings[] = 'get_terms(product_cat) failed: ' . $terms->get_error_message();
+            $terms = [];
+        }
+        if (!is_array($terms)) {
+            $warnings[] = 'get_terms(product_cat) returned no term array.';
+            $terms = [];
+        }
+
+        $byId = [];
+        $children = [];
+        foreach ($terms as $term) {
+            $termId = (int) $term->term_id;
+            $parentId = (int) $term->parent;
+            $byId[$termId] = $term;
+            $children[$parentId][] = $term;
+        }
+        foreach ($children as &$group) {
+            usort($group, [$this, 'compareCategoryTerms']);
+        }
+        unset($group);
+
+        $flat = [];
+        $tree = [];
+        $sort = 0;
+        foreach ($children[0] ?? [] as $root) {
+            $tree[] = $this->categoryNode($root, $byId, $children, 0, [], [], $sort, $flat, $warnings);
+        }
+        foreach ($byId as $termId => $term) {
+            if (!isset($flat[$termId])) {
+                $warnings[] = 'Orphaned category exported as root because parent_term_id=' . (int) $term->parent . ' was not found: term_id=' . $termId;
+                $tree[] = $this->categoryNode($term, $byId, $children, 0, [], [], $sort, $flat, $warnings);
+            }
+        }
+
+        foreach ($flat as $row) {
+            $this->put($files['woo_category_tree_csv'], $this->ordered($row, $columns));
+        }
+
+        $summary = [
+            'total_categories' => count($flat),
+            'root_categories' => count(array_filter($flat, static fn($row) => (string) ($row['parent_term_id'] ?? '') === '0')),
+            'max_depth' => $flat ? max(array_map(static fn($row) => (int) $row['depth'], $flat)) : 0,
+            'categories_with_products' => count(array_filter($flat, static fn($row) => (int) ($row['product_count'] ?? 0) > 0)),
+            'empty_categories' => count(array_filter($flat, static fn($row) => (int) ($row['product_count'] ?? 0) === 0)),
+            'generated_at' => gmdate('c'),
+            'files' => array_map('basename', $files),
+            'warnings' => array_values(array_unique($warnings)),
+        ];
+
+        file_put_contents($files['woo_category_tree_json'], wp_json_encode($tree, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        file_put_contents($files['woo_category_tree_summary'], wp_json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $state = ['export_id' => $id, 'files' => $files, 'status' => 'completed', 'started_at' => $summary['generated_at'], 'completed_at' => $summary['generated_at'], 'summary' => $summary];
+        update_option(self::OPTION_PREFIX . $id, $state, false);
+        return $this->publicState($state);
+    }
+
+
+    public function categoryTreeColumns(): array
+    {
+        return ['term_id','parent_term_id','depth','sort_order','name','slug','full_path','full_slug_path','product_count','description','display_type','thumbnail_id','thumbnail_url','language','source_taxonomy'];
+    }
+
+    private function categoryNode($term, array $byId, array $children, int $depth, array $path, array $slugPath, int &$sort, array &$flat, array &$warnings): array
+    {
+        $termId = (int) $term->term_id;
+        $path[] = (string) $term->name;
+        $slugPath[] = (string) $term->slug;
+        $row = [
+            'term_id' => $termId,
+            'parent_term_id' => (int) $term->parent,
+            'depth' => $depth,
+            'sort_order' => $sort++,
+            'name' => (string) $term->name,
+            'slug' => (string) $term->slug,
+            'full_path' => implode(' > ', $path),
+            'full_slug_path' => implode('/', $slugPath),
+            'product_count' => (int) $term->count,
+            'description' => (string) $term->description,
+            'display_type' => (string) get_term_meta($termId, 'display_type', true),
+            'thumbnail_id' => (string) get_term_meta($termId, 'thumbnail_id', true),
+            'thumbnail_url' => '',
+            'language' => $this->categoryLanguage($termId),
+            'source_taxonomy' => 'product_cat',
+        ];
+        if ($row['thumbnail_id'] !== '') {
+            $url = wp_get_attachment_url((int) $row['thumbnail_id']);
+            if ($url) {
+                $row['thumbnail_url'] = (string) $url;
+            } else {
+                $warnings[] = 'Thumbnail URL could not be resolved for term_id=' . $termId . ', thumbnail_id=' . $row['thumbnail_id'];
+            }
+        }
+        $node = $row;
+        $node['children'] = [];
+        $flat[$termId] = $row;
+        foreach ($children[$termId] ?? [] as $child) {
+            $node['children'][] = $this->categoryNode($child, $byId, $children, $depth + 1, $path, $slugPath, $sort, $flat, $warnings);
+        }
+        return $node;
+    }
+
+    private function compareCategoryTerms($a, $b): int
+    {
+        $ao = (int) get_term_meta((int) $a->term_id, 'order', true);
+        $bo = (int) get_term_meta((int) $b->term_id, 'order', true);
+        if ($ao !== $bo) return $ao <=> $bo;
+        $am = (int) get_term_meta((int) $a->term_id, 'menu_order', true);
+        $bm = (int) get_term_meta((int) $b->term_id, 'menu_order', true);
+        if ($am !== $bm) return $am <=> $bm;
+        $name = strnatcasecmp((string) $a->name, (string) $b->name);
+        return $name !== 0 ? $name : ((int) $a->term_id <=> (int) $b->term_id);
+    }
+
+    private function categoryLanguage(int $termId): string
+    {
+        if (function_exists('pll_get_term_language')) {
+            $language = pll_get_term_language($termId, 'slug');
+            return is_string($language) ? $language : '';
+        }
+        if (has_filter('wpml_element_language_code')) {
+            $language = apply_filters('wpml_element_language_code', null, ['element_id' => $termId, 'element_type' => 'tax_product_cat']);
+            return is_string($language) ? $language : '';
+        }
+        return '';
+    }
+
     private function exportProduct(int $pid, array &$state): void
     {
         $post = get_post($pid); if (!$post) return;
