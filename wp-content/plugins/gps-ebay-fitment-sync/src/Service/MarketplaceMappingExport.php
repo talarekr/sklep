@@ -21,18 +21,28 @@ final class MarketplaceMappingExport
     public function export(): array
     {
         $id = 'marketplace-mapping-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false);
+        $root = $this->exportRoot();
         $dir = $this->exportDir($id);
-        wp_mkdir_p($dir);
-        $this->files = [
-            'products_csv' => $dir . '/woo_marketplace_mapping_products.csv',
-            'products_json' => $dir . '/woo_marketplace_mapping_products.json',
-            'ebay_listings' => $dir . '/woo_ebay_listings.csv',
-            'ovoko_mapping' => $dir . '/woo_ovoko_mapping.csv',
-            'allegro_legacy_mapping' => $dir . '/woo_allegro_legacy_mapping.csv',
-            'ebay_fitment' => $dir . '/woo_ebay_fitment.csv',
-            'summary' => $dir . '/woo_marketplace_mapping_summary.json',
-            'manifest' => $dir . '/export_manifest.json',
-        ];
+        $debug = $this->filesystemDebug($id, $dir, false);
+        $expected = $this->expectedFiles($dir);
+        $debug['expected_files'] = array_values(array_map('basename', $expected));
+
+        if (!$this->ensureWritableExportRoot($root)) {
+            $state = ['export_id'=>$id, 'status'=>'error', 'files'=>$expected, 'summary'=>$this->emptySummary(), 'debug'=>$debug, 'error'=>'Marketplace mapping export root is not writable.'];
+            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
+            return $this->publicState($state);
+        }
+
+        $created = wp_mkdir_p($dir);
+        $debug = $this->filesystemDebug($id, $dir, (bool) $created);
+        $debug['expected_files'] = array_values(array_map('basename', $expected));
+        if (!$created || !is_dir($dir) || !is_writable($dir)) {
+            $state = ['export_id'=>$id, 'status'=>'error', 'files'=>$expected, 'summary'=>$this->emptySummary(), 'debug'=>$debug, 'error'=>'Marketplace mapping export directory could not be created or is not writable.'];
+            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
+            return $this->publicState($state);
+        }
+
+        $this->files = $expected;
         $this->rows = ['products'=>[], 'ebay'=>[], 'ovoko'=>[], 'allegro'=>[], 'fitment'=>[]];
         $this->summary = $this->emptySummary();
         $this->detectSources();
@@ -41,43 +51,76 @@ final class MarketplaceMappingExport
             $this->exportProduct((int) $pid);
         }
 
-        $this->writeCsv($this->files['products_csv'], $this->productColumns(), $this->rows['products']);
-        file_put_contents($this->files['products_json'], wp_json_encode($this->rows['products'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        $this->writeCsv($this->files['ebay_listings'], $this->ebayColumns(), $this->rows['ebay']);
-        $this->writeCsv($this->files['ovoko_mapping'], $this->ovokoColumns(), $this->rows['ovoko']);
-        $this->writeCsv($this->files['allegro_legacy_mapping'], $this->allegroColumns(), $this->rows['allegro']);
-        $this->writeCsv($this->files['ebay_fitment'], $this->fitmentColumns(), $this->rows['fitment']);
+        $writeErrors = [];
+        $this->writeCsv($this->files['products_csv'], $this->productColumns(), $this->rows['products'], $writeErrors);
+        $this->writeJson($this->files['products_json'], $this->rows['products'], $writeErrors);
+        $this->writeCsv($this->files['ebay_listings'], $this->ebayColumns(), $this->rows['ebay'], $writeErrors);
+        $this->writeCsv($this->files['ovoko_mapping'], $this->ovokoColumns(), $this->rows['ovoko'], $writeErrors);
+        $this->writeCsv($this->files['allegro_legacy_mapping'], $this->allegroColumns(), $this->rows['allegro'], $writeErrors);
+        $this->writeCsv($this->files['ebay_fitment'], $this->fitmentColumns(), $this->rows['fitment'], $writeErrors);
 
         $this->finalizeSummary();
-        file_put_contents($this->files['summary'], wp_json_encode($this->summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        $manifest = $this->manifest();
-        file_put_contents($this->files['manifest'], wp_json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c')];
-        $missing = $this->missingFiles($state);
-        if ($missing) {
+        $this->writeJson($this->files['summary'], $this->summary, $writeErrors);
+        $manifest = $this->manifest($writeErrors);
+        $this->writeJson($this->files['manifest'], $manifest, $writeErrors);
+
+        $fileDiagnostics = $this->verifyFiles($this->files, $writeErrors);
+        $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
+        $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'file_diagnostics'=>$fileDiagnostics, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c'), 'debug'=>$debug];
+        if ($missing || $writeErrors) {
             $state['status'] = 'error';
-            $state['error'] = 'Marketplace mapping export did not generate all expected files.';
+            $state['error'] = 'Marketplace mapping export did not create all expected files.';
             $state['missing_files'] = $missing;
-            $this->summary['warnings'][] = $state['error'] . ' Missing: ' . implode(', ', $missing);
+            $state['write_errors'] = $writeErrors;
+            $this->summary['warnings'][] = $state['error'] . ($missing ? ' Missing: ' . implode(', ', $missing) : '');
             $state['summary'] = $this->summary;
         }
         update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
-        update_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', $id, false);
+        if ($state['status'] === 'completed' && count(array_filter($fileDiagnostics, static fn($m)=>!empty($m['exists']))) === count($this->files)) {
+            update_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', ['export_id'=>$id, 'export_dir'=>$dir, 'created_at'=>gmdate('c'), 'files'=>$fileDiagnostics], false);
+        }
         return $this->publicState($state);
+    }
+
+    public function filesystemDiagnostic(): array
+    {
+        $root = $this->exportRoot();
+        $dirs = glob($root . '/marketplace-mapping-*', GLOB_ONLYDIR) ?: [];
+        rsort($dirs);
+        $newest = $dirs[0] ?? '';
+        $files = $newest !== '' ? $this->expectedFiles((string) $newest) : [];
+        $last = get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
+        return [
+            'status' => 'completed',
+            'upload_dir' => wp_upload_dir(),
+            'export_root' => $root,
+            'is_export_root_writable' => is_dir($root) && is_writable($root),
+            'can_create_export_root' => is_dir($root) || wp_mkdir_p($root),
+            'php_current_user' => function_exists('get_current_user') ? get_current_user() : '',
+            'directories_found' => count($dirs),
+            'marketplace_mapping_dirs' => array_values(array_map('basename', $dirs)),
+            'newest_directory' => $newest,
+            'expected_files_found' => $this->existingFileCount($files),
+            'last_marketplace_mapping_option' => $last,
+            'files' => $this->publicFiles($files, basename((string) $newest), []),
+            'debug' => $this->fallbackDebug($dirs, (string) $newest, $files),
+        ];
     }
 
     public function columnsPreview(): array { return ['products'=>$this->productColumns(), 'ebay'=>$this->ebayColumns(), 'ovoko'=>$this->ovokoColumns(), 'allegro'=>$this->allegroColumns(), 'fitment'=>$this->fitmentColumns()]; }
 
     public function lastExport(): array
     {
-        $id = (string) get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
+        $last = get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
+        $id = is_array($last) ? (string) ($last['export_id'] ?? '') : (string) $last;
         $state = $id !== '' ? get_option(WooLaravelProductExport::OPTION_PREFIX . sanitize_key($id), []) : [];
         if (is_array($state) && $state) {
             $publicState = $this->publicState($state);
             if ((int) ($publicState['debug']['files_found_count'] ?? 0) > 0) return $publicState;
         }
 
-        $dirs = glob($this->exportDir() . '/marketplace-mapping-*', GLOB_ONLYDIR) ?: [];
+        $root = $this->exportRoot();
+        $dirs = glob($root . '/marketplace-mapping-*', GLOB_ONLYDIR) ?: [];
         rsort($dirs);
         foreach ($dirs as $dir) {
             $id = basename((string) $dir);
@@ -85,9 +128,9 @@ final class MarketplaceMappingExport
             if (!$this->existingFileCount($files)) continue;
             $summaryPath = $files['summary'];
             $summary = is_readable($summaryPath) ? json_decode((string) file_get_contents($summaryPath), true) : [];
-            return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir))]);
+            return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir)), 'debug'=>$this->fallbackDebug($dirs, (string) $dir, $files)]);
         }
-        return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.']];
+        return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.'], 'debug'=>$this->fallbackDebug($dirs, '', [])];
     }
 
     public function filePathForDownload(string $exportId, string $fileIdentifier): string
@@ -184,11 +227,13 @@ final class MarketplaceMappingExport
     private function terms(int $pid, string $tax): array { $terms=get_the_terms($pid,$tax); return is_array($terms)?array_map(static fn($t)=>['term_id'=>(int)$t->term_id,'name'=>(string)$t->name],$terms):[]; }
     private function images(int $pid, array $m): array { $ids=[]; if(!empty($m['_thumbnail_id']))$ids[]=(int)$m['_thumbnail_id']; foreach(array_filter(array_map('intval', explode(',', (string)($m['_product_image_gallery']??'')))) as $id)$ids[]=$id; $out=[]; foreach(array_unique($ids) as $id)$out[]=['id'=>$id,'url'=>(string)(wp_get_attachment_url($id) ?: '')]; return $out; }
     private function json($v): string { return wp_json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]'; }
-    private function writeCsv(string $file, array $cols, array $rows): void { $fp=fopen($file,'wb'); fputcsv($fp,$cols); foreach($rows as $r) fputcsv($fp, array_map(static fn($c)=>(string)($r[$c] ?? ''), $cols)); fclose($fp); }
-    private function manifest(): array { $files=[]; foreach($this->files as $path) $files[]=['filename'=>basename($path),'row_count'=>$this->rowCountForFile(basename($path)),'sha256'=>hash_file('sha256',$path),'description'=>$this->description(basename($path))]; return ['generated_at'=>gmdate('c'),'export_version'=>self::EXPORT_VERSION,'site_url'=>function_exists('site_url') ? site_url() : '','plugin_version'=>defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '','files'=>$files,'safety'=>['read_only'=>true,'external_api_calls'=>false,'woo_writes'=>false,'marketplace_writes'=>false]]; }
-    private function rowCountForFile(string $f): int { return match($f){'woo_marketplace_mapping_products.csv','woo_marketplace_mapping_products.json'=>count($this->rows['products']),'woo_ebay_listings.csv'=>count($this->rows['ebay']),'woo_ovoko_mapping.csv'=>count($this->rows['ovoko']),'woo_allegro_legacy_mapping.csv'=>count($this->rows['allegro']),'woo_ebay_fitment.csv'=>count($this->rows['fitment']), default=>1}; }
+    private function writeCsv(string $file, array $cols, array $rows, array &$errors): void { $fp=@fopen($file,'wb'); if(!$fp){$errors[basename($file)]=$this->lastPhpError('Unable to open file for writing.'); return;} if(@fputcsv($fp,$cols)===false)$errors[basename($file)]='Unable to write CSV header.'; foreach($rows as $r) if(@fputcsv($fp, array_map(static fn($c)=>(string)($r[$c] ?? ''), $cols))===false){$errors[basename($file)]='Unable to write CSV row.'; break;} if(!@fclose($fp))$errors[basename($file)]='Unable to close CSV file.'; }
+    private function writeJson(string $file, $payload, array &$errors): void { $json=wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); if($json===false){$errors[basename($file)]='Unable to encode JSON.'; return;} if(@file_put_contents($file, $json)===false)$errors[basename($file)]=$this->lastPhpError('Unable to write JSON file.'); }
+    private function manifest(array $writeErrors = []): array { $files=[]; foreach($this->files as $path) $files[]=['filename'=>basename($path),'row_count'=>$this->rowCountForFile(basename($path)),'sha256'=>is_readable($path)?hash_file('sha256',$path):'','last_error'=>$writeErrors[basename($path)] ?? '','description'=>$this->description(basename($path))]; return ['generated_at'=>gmdate('c'),'export_version'=>self::EXPORT_VERSION,'site_url'=>function_exists('site_url') ? site_url() : '','plugin_version'=>defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '','files'=>$files,'safety'=>['read_only'=>true,'external_api_calls'=>false,'woo_writes'=>false,'marketplace_writes'=>false,'laravel_writes'=>false]]; }
+    private function rowCountForFile(string $f): int { return match($f){'woo_marketplace_mapping_products.csv','woo_marketplace_mapping_products.json'=>count($this->rows['products'] ?? []),'woo_ebay_listings.csv'=>count($this->rows['ebay'] ?? []),'woo_ovoko_mapping.csv'=>count($this->rows['ovoko'] ?? []),'woo_allegro_legacy_mapping.csv'=>count($this->rows['allegro'] ?? []),'woo_ebay_fitment.csv'=>count($this->rows['fitment'] ?? []), default=>1}; }
     private function description(string $f): string { return match($f){'woo_marketplace_mapping_products.csv'=>'All Woo products with marketplace identifiers and raw matching meta.','woo_marketplace_mapping_products.json'=>'JSON mirror of product marketplace mapping rows.','woo_ebay_listings.csv'=>'Detected eBay listing/offer/inventory rows.','woo_ovoko_mapping.csv'=>'Detected Ovoko/RRR/Gmail product mappings.','woo_allegro_legacy_mapping.csv'=>'Detected Allegro legacy or active identifiers.','woo_ebay_fitment.csv'=>'Detected part/OEM/KType fitment inputs for eBay.', default=>'Export metadata and summary.'}; }
-    private function exportDir(string $id=''): string { $u=wp_upload_dir(); return trailingslashit($u['basedir']).'gps-laravel-product-export'.($id?'/'.sanitize_key($id):''); }
+    private function exportRoot(): string { $u=wp_upload_dir(); return trailingslashit((string) $u['basedir']).'gps-laravel-product-export'; }
+    private function exportDir(string $id=''): string { return $this->exportRoot().($id?'/'.sanitize_key($id):''); }
     private function publicState(array $s): array
     {
         if (!$s) return [];
@@ -198,11 +243,13 @@ final class MarketplaceMappingExport
             $s['warnings'] = array_values(array_merge((array) ($s['warnings'] ?? []), ['Missing generated files: ' . implode(', ', $missing)]));
         }
         $exportId = (string) ($s['export_id'] ?? '');
-        $s['debug'] = [
+        $s['debug'] = array_merge((array) ($s['debug'] ?? []), [
             'last_export_id' => $exportId,
             'export_dir' => $exportId !== '' ? $this->exportDir($exportId) : '',
+            'writer_export_root' => $this->exportRoot(),
+            'fallback_scan_root' => $this->exportRoot(),
             'files_found_count' => count(array_filter($s['files'], static fn($f) => !empty($f['exists']))),
-        ];
+        ]);
         return $s;
     }
     private function publicFiles(array $files, string $exportId, array $manifestFileList = []): array
@@ -219,11 +266,13 @@ final class MarketplaceMappingExport
             $exists = $path !== '' && is_readable($path);
             $out[(string) $key] = [
                 'filename' => $filename,
+                'absolute_path' => $path,
                 'download_url' => $exists ? $this->downloadUrl($exportId, (string) $key) : '',
                 'row_count' => $meta['row_count'] ?? $this->rowCountForFile($filename),
                 'file_size' => $exists ? (int) filesize($path) : null,
                 'modified_time' => $exists ? gmdate('Y-m-d H:i:s', (int) filemtime($path)) . ' UTC' : '',
                 'exists' => $exists,
+                'last_error' => (string) ($meta['last_error'] ?? ($exists ? '' : 'Expected file is missing or not readable.')),
                 'download_error' => $exists && $this->downloadUrl($exportId, (string) $key) === '' ? 'File exists on disk but download URL could not be generated.' : '',
             ];
         }
@@ -247,6 +296,55 @@ final class MarketplaceMappingExport
         return array_values(array_map('basename', array_filter((array) ($state['files'] ?? []), static fn($path)=>!is_string($path) || !is_readable($path))));
     }
     private function existingFileCount(array $files): int { return count(array_filter($files, static fn($path)=>is_string($path) && is_readable($path))); }
+    private function filesystemDebug(string $id, string $dir, bool $created): array
+    {
+        $u = wp_upload_dir();
+        return [
+            'export_id' => $id,
+            'intended_export_dir' => $dir,
+            'wp_upload_dir_basedir' => (string) ($u['basedir'] ?? ''),
+            'export_root' => $this->exportRoot(),
+            'writer_export_root' => $this->exportRoot(),
+            'is_export_root_writable' => is_dir($this->exportRoot()) && is_writable($this->exportRoot()),
+            'is_export_dir_created' => $created || is_dir($dir),
+            'php_current_user' => function_exists('get_current_user') ? get_current_user() : '',
+        ];
+    }
+    private function fallbackDebug(array $dirs, string $newestDir, array $files): array
+    {
+        $root = $this->exportRoot();
+        return [
+            'writer_export_root' => $root,
+            'fallback_scan_root' => $root,
+            'directories_found' => count($dirs),
+            'newest_directory' => $newestDir,
+            'expected_files_found' => $this->existingFileCount($files),
+            'files_found_count' => $this->existingFileCount($files),
+            'last_export_id' => $newestDir !== '' ? basename($newestDir) : '',
+            'export_dir' => $newestDir,
+        ];
+    }
+    private function ensureWritableExportRoot(string $root): bool { return (is_dir($root) || wp_mkdir_p($root)) && is_writable($root); }
+    private function verifyFiles(array $files, array $writeErrors): array
+    {
+        $out = [];
+        foreach ($files as $key => $path) {
+            $filename = basename((string) $path);
+            $exists = is_string($path) && is_readable($path);
+            $out[$key] = [
+                'filename' => $filename,
+                'absolute_path' => (string) $path,
+                'exists' => $exists,
+                'file_size' => $exists ? (int) filesize((string) $path) : null,
+                'row_count' => $this->rowCountForFile($filename),
+                'last_error' => $writeErrors[$filename] ?? ($exists ? '' : 'Expected file is missing or not readable.'),
+                'download_url' => $exists ? $this->downloadUrl(basename(dirname((string) $path)), (string) $key) : '',
+            ];
+        }
+        return $out;
+    }
+    private function lastPhpError(string $fallback): string { $e=error_get_last(); return is_array($e) && !empty($e['message']) ? (string) $e['message'] : $fallback; }
+
     private function productColumns(): array { return ['woo_product_id','sku','product_name','product_status','product_type','regular_price','sale_price','stock_quantity','stock_status','permalink','category_ids','category_names','image_ids','image_urls','created_at','updated_at','source_system','external_id','ovoko_part_id','rrr_part_id','gmail_sku','allegro_offer_id','secondary_allegro_offer_id','allegro_external_id','allegro_signature','allegro_url','ebay_listing_id','ebay_item_id','ebay_offer_id','ebay_inventory_sku','ebay_marketplace','ebay_de_listing_id','ebay_fr_listing_id','ebay_de_offer_id','ebay_fr_offer_id','ebay_de_inventory_sku','ebay_fr_inventory_sku','ebay_url_de','ebay_url_fr','has_any_marketplace_identifier','detected_marketplaces','all_detected_marketplace_meta_keys','raw_marketplace_meta_json','raw_relevant_meta_json']; }
     private function ebayColumns(): array { return ['woo_product_id','sku','marketplace','ebay_inventory_sku','ebay_offer_id','ebay_listing_id','ebay_item_id','ebay_category_id','listing_status','price','quantity','url','mapping_source','raw_mapping_json']; }
     private function ovokoColumns(): array { return ['woo_product_id','sku','ovoko_part_id','rrr_part_id','donor_car_id','source_system','current_status','ready_for_sale','blocked_reasons','price','stock_quantity','category_ids','category_names','title','image_count','mapping_source','raw_ovoko_meta_json','raw_relevant_meta_json']; }
