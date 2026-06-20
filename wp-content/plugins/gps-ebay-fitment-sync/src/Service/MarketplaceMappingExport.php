@@ -7,7 +7,7 @@ namespace GPS_Ebay_Fitment_Sync\Service;
 final class MarketplaceMappingExport
 {
     public const EXPORT_VERSION = '1.0.0';
-    public const DIAGNOSTICS_VERSION = '2026-06-20-marketplace-download-v5';
+    public const DIAGNOSTICS_VERSION = '2026-06-20-marketplace-download-v6';
     private const STATE_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_state';
     private const LOCK_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_lock';
     private const DEFAULT_BATCH_SIZE = 100;
@@ -599,6 +599,7 @@ final class MarketplaceMappingExport
             'service_file_mtime' => is_readable($file) ? gmdate('Y-m-d H:i:s', (int) filemtime($file)) . ' UTC' : '',
             'plugin_version' => defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '',
             'plugin_file_mtime' => defined('GPS_EBAY_FITMENT_SYNC_FILE') && is_readable(GPS_EBAY_FITMENT_SYNC_FILE) ? gmdate('Y-m-d H:i:s', (int) filemtime(GPS_EBAY_FITMENT_SYNC_FILE)) . ' UTC' : '',
+            'diagnostics_safety' => ['read_only'=>true,'external_api_calls'=>false,'woo_writes'=>false,'marketplace_writes'=>false,'laravel_writes'=>false],
         ];
     }
     private function ensureWritableExportRoot(string $root): bool { return (is_dir($root) || wp_mkdir_p($root)) && is_writable($root); }
