@@ -72,7 +72,10 @@ final class MarketplaceMappingExport
     {
         $id = (string) get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
         $state = $id !== '' ? get_option(WooLaravelProductExport::OPTION_PREFIX . sanitize_key($id), []) : [];
-        if (is_array($state) && $state) return $this->publicState($state);
+        if (is_array($state) && $state) {
+            $publicState = $this->publicState($state);
+            if ((int) ($publicState['debug']['files_found_count'] ?? 0) > 0) return $publicState;
+        }
 
         $dirs = glob($this->exportDir() . '/marketplace-mapping-*', GLOB_ONLYDIR) ?: [];
         rsort($dirs);
@@ -85,6 +88,32 @@ final class MarketplaceMappingExport
             return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir))]);
         }
         return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.']];
+    }
+
+    public function filePathForDownload(string $exportId, string $fileIdentifier): string
+    {
+        $exportId = sanitize_key($exportId);
+        if ($exportId === '' || strpos($exportId, 'marketplace-mapping-') !== 0) return '';
+        $files = $this->expectedFiles($this->exportDir($exportId));
+        $state = get_option(WooLaravelProductExport::OPTION_PREFIX . $exportId, []);
+        if (is_array($state) && !empty($state['files']) && is_array($state['files'])) {
+            $files = array_merge($files, (array) $state['files']);
+        }
+        $identifier = sanitize_file_name($fileIdentifier);
+        $path = isset($files[$fileIdentifier]) ? (string) $files[$fileIdentifier] : '';
+        if ($path === '') {
+            foreach ($files as $candidate) {
+                if (basename((string) $candidate) === $identifier) {
+                    $path = (string) $candidate;
+                    break;
+                }
+            }
+        }
+        if ($path === '' || !in_array(basename($path), array_map('basename', $this->expectedFiles($this->exportDir($exportId))), true)) return '';
+        $real = realpath($path);
+        $base = realpath($this->exportDir($exportId));
+        if (!$real || !$base || strpos($real, $base . DIRECTORY_SEPARATOR) !== 0 || !is_readable($real)) return '';
+        return $real;
     }
 
     private function exportProduct(int $pid): void
@@ -168,6 +197,12 @@ final class MarketplaceMappingExport
         if ($missing) {
             $s['warnings'] = array_values(array_merge((array) ($s['warnings'] ?? []), ['Missing generated files: ' . implode(', ', $missing)]));
         }
+        $exportId = (string) ($s['export_id'] ?? '');
+        $s['debug'] = [
+            'last_export_id' => $exportId,
+            'export_dir' => $exportId !== '' ? $this->exportDir($exportId) : '',
+            'files_found_count' => count(array_filter($s['files'], static fn($f) => !empty($f['exists']))),
+        ];
         return $s;
     }
     private function publicFiles(array $files, string $exportId, array $manifestFileList = []): array
@@ -187,7 +222,9 @@ final class MarketplaceMappingExport
                 'download_url' => $exists ? $this->downloadUrl($exportId, (string) $key) : '',
                 'row_count' => $meta['row_count'] ?? $this->rowCountForFile($filename),
                 'file_size' => $exists ? (int) filesize($path) : null,
+                'modified_time' => $exists ? gmdate('Y-m-d H:i:s', (int) filemtime($path)) . ' UTC' : '',
                 'exists' => $exists,
+                'download_error' => $exists && $this->downloadUrl($exportId, (string) $key) === '' ? 'File exists on disk but download URL could not be generated.' : '',
             ];
         }
         return $out;
@@ -197,7 +234,7 @@ final class MarketplaceMappingExport
         return add_query_arg([
             'action' => 'gps_laravel_product_export_download',
             'export_id' => $exportId,
-            'file' => $fileKey,
+            'file_key' => $fileKey,
             '_wpnonce' => wp_create_nonce(WooLaravelProductExport::NONCE),
         ], admin_url('admin-post.php'));
     }
