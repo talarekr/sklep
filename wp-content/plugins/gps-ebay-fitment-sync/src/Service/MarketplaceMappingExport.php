@@ -47,7 +47,9 @@ final class MarketplaceMappingExport
         $this->summary = $this->emptySummary();
         $this->detectSources();
 
-        foreach ($this->productIds() as $pid) {
+        $productDiscovery = $this->discoverProductIds();
+        $debug = array_merge($debug, $productDiscovery['debug']);
+        foreach ($productDiscovery['ids'] as $pid) {
             $this->exportProduct((int) $pid);
         }
 
@@ -67,6 +69,12 @@ final class MarketplaceMappingExport
         $fileDiagnostics = $this->verifyFiles($this->files, $writeErrors);
         $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
         $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'file_diagnostics'=>$fileDiagnostics, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c'), 'debug'=>$debug];
+        if ((int) $this->summary['total_products'] === 0 && (int) ($debug['woo_products_existing_count'] ?? 0) > 0) {
+            $state['status'] = 'error';
+            $state['error'] = 'Marketplace mapping export found 0 products, but Woo products exist. Product discovery query is invalid.';
+            $this->summary['warnings'][] = $state['error'];
+            $state['summary'] = $this->summary;
+        }
         if ($missing || $writeErrors) {
             $state['status'] = 'error';
             $state['error'] = 'Marketplace mapping export did not create all expected files.';
@@ -217,7 +225,84 @@ final class MarketplaceMappingExport
     private function updateProductCounts(array $r): void { $s=&$this->summary; $s['total_products']++; $r['sku']!==''?$s['products_with_sku']++:$s['products_missing_sku']++; if($r['has_any_marketplace_identifier']==='1')$s['products_with_any_marketplace_identifier']++; foreach(['ovoko_part_id','rrr_part_id','gmail_sku'] as $k) if($r[$k]!=='') $s['products_with_'.$k]++; if($r['allegro_offer_id'].$r['allegro_external_id'].$r['allegro_signature'].$r['allegro_url']!=='') $s['products_with_allegro_identifier']++; if($r['ebay_listing_id'].$r['ebay_item_id'].$r['ebay_offer_id'].$r['ebay_inventory_sku'].$r['ebay_de_listing_id'].$r['ebay_fr_listing_id']!=='') $s['products_with_ebay_identifier']++; if($r['ebay_de_listing_id'].$r['ebay_de_offer_id'].$r['ebay_de_inventory_sku']!=='') $s['products_with_ebay_de']++; if($r['ebay_fr_listing_id'].$r['ebay_fr_offer_id'].$r['ebay_fr_inventory_sku']!=='') $s['products_with_ebay_fr']++; foreach(['sku'=>'sku_count','ovoko_part_id'=>'ovoko_part_id_count','allegro_offer_id'=>'allegro_offer_id_count','ebay_listing_id'=>'ebay_listing_id_count','ebay_offer_id'=>'ebay_offer_id_count','ebay_inventory_sku'=>'ebay_inventory_sku_count','external_id'=>'external_id_count','source_system'=>'source_system_count'] as $c=>$k) if($r[$c]!=='') $s['mapping_confidence_inputs'][$k]++; if($r['raw_relevant_meta_json']!=='[]') $s['mapping_confidence_inputs']['legacy_payload_count']++; }
     private function emptySummary(): array { return ['generated_at'=>gmdate('c'),'total_products'=>0,'products_with_sku'=>0,'products_missing_sku'=>0,'products_with_any_marketplace_identifier'=>0,'products_with_ovoko_part_id'=>0,'products_with_rrr_part_id'=>0,'products_with_gmail_sku'=>0,'products_with_allegro_identifier'=>0,'products_with_ebay_identifier'=>0,'products_with_ebay_de'=>0,'products_with_ebay_fr'=>0,'ebay_listing_rows'=>0,'ovoko_mapping_rows'=>0,'allegro_mapping_rows'=>0,'ebay_fitment_rows'=>0,'detected_meta_keys'=>[],'detected_custom_tables'=>[],'detected_plugin_options'=>[],'active_allegro_integration_detected'=>false,'active_ebay_integration_detected'=>false,'active_ovoko_integration_detected'=>false,'mapping_confidence_inputs'=>['sku_count'=>0,'ovoko_part_id_count'=>0,'allegro_offer_id_count'=>0,'ebay_listing_id_count'=>0,'ebay_offer_id_count'=>0,'ebay_inventory_sku_count'=>0,'external_id_count'=>0,'source_system_count'=>0,'legacy_payload_count'=>0],'warnings'=>[],'files'=>[]]; }
 
-    private function productIds(): array { global $wpdb; return (array)$wpdb->get_col("SELECT ID FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') ORDER BY ID ASC"); }
+    private function discoverProductIds(): array
+    {
+        global $wpdb;
+        $countsSql = "SELECT post_type, post_status, COUNT(*) AS count FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') GROUP BY post_type, post_status ORDER BY post_type ASC, post_status ASC";
+        $countRows = (array) $wpdb->get_results($countsSql, ARRAY_A);
+        $counts = [];
+        $existing = 0;
+        foreach ($countRows as $row) {
+            $postType = (string) ($row['post_type'] ?? '');
+            $postStatus = (string) ($row['post_status'] ?? '');
+            $count = (int) ($row['count'] ?? 0);
+            $counts[$postType][$postStatus] = $count;
+            if (!in_array($postStatus, ['auto-draft', 'trash'], true)) $existing += $count;
+        }
+
+        $queryArgs = [
+            'post_type' => ['product', 'product_variation'],
+            'post_status' => ['publish', 'draft', 'private', 'pending'],
+            'fields' => 'ids',
+            'posts_per_page' => -1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'no_found_rows' => false,
+            'suppress_filters' => true,
+        ];
+        $ids = [];
+        $wpQueryFound = null;
+        if (class_exists('WP_Query')) {
+            $query = new \WP_Query($queryArgs);
+            $ids = array_values(array_map('intval', (array) $query->posts));
+            $wpQueryFound = (int) $query->found_posts;
+        }
+
+        $wcCount = null;
+        if (function_exists('wc_get_products')) {
+            $wcIds = wc_get_products([
+                'type' => ['simple', 'variation'],
+                'status' => ['publish', 'draft', 'private', 'pending'],
+                'limit' => -1,
+                'return' => 'ids',
+                'orderby' => 'ID',
+                'order' => 'ASC',
+            ]);
+            $wcCount = is_array($wcIds) ? count($wcIds) : 0;
+        }
+
+        $fallbackUsed = false;
+        $method = $ids ? 'wp_query' : 'direct_db_fallback';
+        if (!$ids) {
+            $fallbackUsed = true;
+            $fallbackSql = "SELECT ID, post_type, post_status FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') AND post_status NOT IN ('auto-draft','trash') ORDER BY ID ASC";
+            $rows = (array) $wpdb->get_results($fallbackSql, ARRAY_A);
+            $ids = array_values(array_map('intval', array_column($rows, 'ID')));
+        }
+
+        if (!$ids && $existing > 0) {
+            $this->warnings[] = 'Marketplace mapping export found 0 products even though wp_posts contains Woo products. Product discovery query is invalid.';
+        } elseif (!$ids) {
+            $this->warnings[] = 'Marketplace mapping export found 0 products and no Woo products exist in wp_posts outside trash/auto-draft.';
+        }
+
+        return [
+            'ids' => $ids,
+            'debug' => [
+                'product_counts_by_status' => $counts,
+                'wp_posts_product_count_by_post_type_status' => $counts,
+                'woo_products_existing_count' => $existing,
+                'wc_get_products_count' => $wcCount,
+                'wp_query_found_posts' => $wpQueryFound,
+                'product_query_args' => $queryArgs,
+                'selected_product_ids_sample' => array_slice($ids, 0, 20),
+                'product_ids_sample' => array_slice($ids, 0, 20),
+                'product_discovery_method' => $method,
+                'fallback_used' => $fallbackUsed,
+                'zero_products_reason' => $ids ? '' : ($existing > 0 ? 'Marketplace mapping export found 0 products, but Woo products exist. Product discovery query is invalid.' : 'No Woo product/product_variation posts exist outside auto-draft/trash.'),
+            ],
+        ];
+    }
     private function flattenMeta(array $meta): array { $out=[]; foreach($meta as $k=>$vals){ if(preg_match(self::SENSITIVE,(string)$k)) continue; $v=maybe_unserialize((string)($vals[0]??'')); $out[$k]=is_scalar($v)?(string)$v:$v; } return $out; }
     private function matchingMeta(array $m): array { return array_filter($m, function($v,$k){ foreach(self::MATCH_TERMS as $t) if(stripos((string)$k,$t)!==false) return true; return false; }, ARRAY_FILTER_USE_BOTH); }
     private function relevantMeta(array $m): array { return array_filter($m, fn($v,$k)=>isset($this->matchingMeta($m)[$k]) || preg_match('/part|oem|ktype|vehicle|donor|car|ready|blocked|price|stock/i',(string)$k), ARRAY_FILTER_USE_BOTH); }
