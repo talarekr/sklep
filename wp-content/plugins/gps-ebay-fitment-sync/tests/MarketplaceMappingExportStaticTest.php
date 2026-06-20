@@ -20,6 +20,7 @@ $requiredFiles = [
 $checks = [
     'admin button exists' => str_contains($admin, 'Export marketplace mapping data for Laravel'),
     'ajax action wired' => str_contains($admin, 'gps_marketplace_mapping_export') && str_contains($admin, 'ajaxMarketplaceMapping'),
+    'last export ajax action wired' => str_contains($admin, 'gps_marketplace_mapping_last_export') && str_contains($admin, 'ajaxMarketplaceMappingLastExport'),
     'all requested files generated' => count(array_filter($requiredFiles, static fn($f) => str_contains($service, $f))) === count($requiredFiles),
     'all Woo products queried' => str_contains($service, "post_type IN ('product','product_variation') ORDER BY ID ASC"),
     'product export includes raw matching meta' => str_contains($service, 'raw_marketplace_meta_json') && str_contains($service, 'all_detected_marketplace_meta_keys'),
@@ -29,6 +30,9 @@ $checks = [
     'Allegro generated even with no rows' => str_contains($service, "'allegro'=>[]") && str_contains($service, 'woo_allegro_legacy_mapping.csv'),
     'fitment KType/OEM export supported' => str_contains($service, 'kt_type_count') && str_contains($service, 'oem_numbers'),
     'manifest has counts hashes and safety' => str_contains($service, 'sha256') && str_contains($service, "'read_only'=>true") && str_contains($service, "'external_api_calls'=>false"),
+    'ajax response exposes file metadata' => str_contains($service, "'filename' =>") && str_contains($service, "'download_url' =>") && str_contains($service, "'row_count' =>") && str_contains($service, "'file_size' =>"),
+    'ui renders marketplace download links' => str_contains($admin, 'gps-marketplace-downloads') && str_contains($admin, 'fileListHtml') && str_contains($admin, 'Missing file or download URL'),
+    'page load renders last marketplace export' => str_contains($admin, 'gps-marketplace-last-export') && str_contains($admin, 'Last marketplace mapping export'),
     'no external API calls' => !preg_match('/wp_remote_(post|request|put|get)|curl_exec/i', $service . $admin),
     'no Woo/product writes' => !preg_match('/wp_update_post|update_post_meta|wc_update_product_stock|save\(/i', $service . $admin),
     'no marketplace writes' => !preg_match('/ReviseInventoryStatus|publishOffer|createOffer|submit|allegro_remote_write|ovoko_remote_write/i', $service . $admin),
