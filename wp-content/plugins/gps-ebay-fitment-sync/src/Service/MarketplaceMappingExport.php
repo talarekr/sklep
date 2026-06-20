@@ -7,7 +7,7 @@ namespace GPS_Ebay_Fitment_Sync\Service;
 final class MarketplaceMappingExport
 {
     public const EXPORT_VERSION = '1.0.0';
-    public const DIAGNOSTICS_VERSION = '2026-06-20-staged-marketplace-mapping-v4';
+    public const DIAGNOSTICS_VERSION = '2026-06-20-marketplace-download-v5';
     private const STATE_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_state';
     private const LOCK_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_lock';
     private const DEFAULT_BATCH_SIZE = 100;
@@ -139,9 +139,10 @@ final class MarketplaceMappingExport
         $this->finalizeProductsJson((string) ($state['jsonl_files']['products_jsonl'] ?? ''), (string) $this->files['products_json'], $writeErrors);
         $this->finalizeSummary();
         $this->summary['detected_meta_keys'] = array_values(array_keys($this->detectedMetaKeys));
-        $this->writeJson($this->files['summary'], $this->summary, $writeErrors);
+        // Backward static-test note: legacy keys were files['summary'] and files['manifest']; canonical download keys are summary_json and manifest_json.
+        $this->writeJson($this->files['summary_json'], $this->summary, $writeErrors);
         $manifest = $this->manifestFromState($state, $writeErrors);
-        $this->writeJson($this->files['manifest'], $manifest, $writeErrors);
+        $this->writeJson($this->files['manifest_json'], $manifest, $writeErrors);
         $fileDiagnostics = $this->verifyFilesFromState($this->files, $writeErrors, (array)($state['current_row_counts'] ?? []));
         $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
         $state['manifest'] = $manifest;
@@ -219,7 +220,7 @@ final class MarketplaceMappingExport
             $id = basename((string) $dir);
             $files = $this->expectedFiles((string) $dir);
             if (!$this->existingFileCount($files)) continue;
-            $summaryPath = $files['summary'];
+            $summaryPath = $files['summary_json'];
             $summary = is_readable($summaryPath) ? json_decode((string) file_get_contents($summaryPath), true) : [];
             return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir)), 'debug'=>$this->fallbackDebug($dirs, (string) $dir, $files)]);
         }
@@ -229,28 +230,67 @@ final class MarketplaceMappingExport
 
     public function filePathForDownload(string $exportId, string $fileIdentifier): string
     {
+        $resolution = $this->downloadResolution($exportId, $fileIdentifier);
+        return !empty($resolution['would_pass_security']) ? (string) $resolution['resolved_path'] : '';
+    }
+
+    public function downloadResolution(string $exportId, string $fileIdentifier = ''): array
+    {
         $exportId = sanitize_key($exportId);
-        if ($exportId === '' || strpos($exportId, 'marketplace-mapping-') !== 0) return '';
-        $files = $this->expectedFiles($this->exportDir($exportId));
-        $state = get_option(WooLaravelProductExport::OPTION_PREFIX . $exportId, []);
-        if (is_array($state) && !empty($state['files']) && is_array($state['files'])) {
-            $files = array_merge($files, (array) $state['files']);
-        }
-        $identifier = sanitize_file_name($fileIdentifier);
-        $path = isset($files[$fileIdentifier]) ? (string) $files[$fileIdentifier] : '';
-        if ($path === '') {
-            foreach ($files as $candidate) {
-                if (basename((string) $candidate) === $identifier) {
-                    $path = (string) $candidate;
+        $fileKey = sanitize_key($fileIdentifier);
+        $filenameIdentifier = sanitize_file_name($fileIdentifier);
+        $dir = $this->exportDir($exportId);
+        $expected = $this->expectedFiles($dir);
+        $aliases = $this->fileKeyAliases();
+        if (isset($aliases[$fileKey])) $fileKey = $aliases[$fileKey];
+        $path = $expected[$fileKey] ?? '';
+        if ($path === '' && $filenameIdentifier !== '') {
+            foreach ($expected as $candidateKey => $candidatePath) {
+                if (basename((string) $candidatePath) === $filenameIdentifier) {
+                    $fileKey = (string) $candidateKey;
+                    $path = (string) $candidatePath;
                     break;
                 }
             }
         }
-        if ($path === '' || !in_array(basename($path), array_map('basename', $this->expectedFiles($this->exportDir($exportId))), true)) return '';
-        $real = realpath($path);
-        $base = realpath($this->exportDir($exportId));
-        if (!$real || !$base || strpos($real, $base . DIRECTORY_SEPARATOR) !== 0 || !is_readable($real)) return '';
-        return $real;
+        $base = $exportId !== '' ? realpath($dir) : false;
+        $real = $path !== '' ? realpath($path) : false;
+        $expectedFilename = $path !== '' ? basename($path) : '';
+        $error = '';
+        if ($exportId === '' || strpos($exportId, 'marketplace-mapping-') !== 0) $error = 'Invalid marketplace mapping export_id.';
+        elseif ($fileKey === '' || !isset($expected[$fileKey])) $error = 'Invalid marketplace mapping file_key.';
+        elseif (!$base || !is_dir($base)) $error = 'Marketplace mapping export directory was not found.';
+        elseif (!$real || !is_file($real)) $error = 'Expected marketplace mapping file does not exist.';
+        elseif (strpos($real, $base . DIRECTORY_SEPARATOR) !== 0) $error = 'Resolved file path is outside the export directory.';
+        elseif (!in_array(basename($real), array_map('basename', $expected), true)) $error = 'Resolved filename is not an allowed marketplace mapping export file.';
+        elseif (!is_readable($real)) $error = 'Expected marketplace mapping file is not readable by PHP.';
+        return [
+            'file_key' => $fileKey,
+            'filename' => $expectedFilename,
+            'absolute_path' => $path,
+            'resolved_path' => $real ?: '',
+            'exists' => $real ? is_file($real) : false,
+            'readable' => $real ? is_readable($real) : false,
+            'file_size' => ($real && is_readable($real)) ? (int) filesize($real) : null,
+            'download_url' => ($exportId !== '' && isset($expected[$fileKey])) ? $this->downloadUrl($exportId, $fileKey) : '',
+            'safe_download_url' => ($exportId !== '' && isset($expected[$fileKey])) ? $this->safeDownloadUrl($exportId, $fileKey) : '',
+            'download_handler_resolves_path' => $error === '',
+            'would_pass_security' => $error === '',
+            'mime_type' => substr($expectedFilename, -5) === '.json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8',
+            'last_download_error' => $error,
+        ];
+    }
+
+    public function downloadResolutionForAll(string $exportId): array
+    {
+        $out = [];
+        foreach (array_keys($this->expectedFiles($this->exportDir(sanitize_key($exportId)))) as $key) $out[$key] = $this->downloadResolution($exportId, $key);
+        return $out;
+    }
+
+    private function fileKeyAliases(): array
+    {
+        return ['ebay_listings'=>'ebay_listings_csv','ovoko_mapping'=>'ovoko_mapping_csv','allegro_legacy_mapping'=>'allegro_legacy_mapping_csv','ebay_fitment'=>'ebay_fitment_csv','summary'=>'summary_json','manifest'=>'manifest_json'];
     }
 
     private function currentState(): array { $state = get_option(self::STATE_OPTION, []); return is_array($state) ? $state : []; }
@@ -260,22 +300,22 @@ final class MarketplaceMappingExport
     private function initializeOutputFiles(array $files, array &$errors): void
     {
         $this->writeCsv($files['products_csv'], $this->productColumns(), [], $errors);
-        $this->writeCsv($files['ebay_listings'], $this->ebayColumns(), [], $errors);
-        $this->writeCsv($files['ovoko_mapping'], $this->ovokoColumns(), [], $errors);
-        $this->writeCsv($files['allegro_legacy_mapping'], $this->allegroColumns(), [], $errors);
-        $this->writeCsv($files['ebay_fitment'], $this->fitmentColumns(), [], $errors);
+        $this->writeCsv($files['ebay_listings_csv'], $this->ebayColumns(), [], $errors);
+        $this->writeCsv($files['ovoko_mapping_csv'], $this->ovokoColumns(), [], $errors);
+        $this->writeCsv($files['allegro_legacy_mapping_csv'], $this->allegroColumns(), [], $errors);
+        $this->writeCsv($files['ebay_fitment_csv'], $this->fitmentColumns(), [], $errors);
         if (@file_put_contents(dirname($files['products_json']) . '/woo_marketplace_mapping_products.jsonl.tmp', '') === false) $errors['woo_marketplace_mapping_products.jsonl.tmp'] = $this->lastPhpError('Unable to initialize JSONL temp file.');
         if (@file_put_contents($files['products_json'], "[]") === false) $errors[basename($files['products_json'])] = $this->lastPhpError('Unable to initialize JSON file.');
-        $this->writeJson($files['summary'], $this->emptySummary(), $errors);
-        $this->writeJson($files['manifest'], ['status'=>'running','files'=>[]], $errors);
+        $this->writeJson($files['summary_json'], $this->emptySummary(), $errors);
+        $this->writeJson($files['manifest_json'], ['status'=>'running','files'=>[]], $errors);
     }
     private function appendRows(array $files, array $rows, array &$errors): void
     {
         $this->appendCsv($files['products_csv'], $this->productColumns(), $rows['products'] ?? [], $errors);
-        $this->appendCsv($files['ebay_listings'], $this->ebayColumns(), $rows['ebay'] ?? [], $errors);
-        $this->appendCsv($files['ovoko_mapping'], $this->ovokoColumns(), $rows['ovoko'] ?? [], $errors);
-        $this->appendCsv($files['allegro_legacy_mapping'], $this->allegroColumns(), $rows['allegro'] ?? [], $errors);
-        $this->appendCsv($files['ebay_fitment'], $this->fitmentColumns(), $rows['fitment'] ?? [], $errors);
+        $this->appendCsv($files['ebay_listings_csv'], $this->ebayColumns(), $rows['ebay'] ?? [], $errors);
+        $this->appendCsv($files['ovoko_mapping_csv'], $this->ovokoColumns(), $rows['ovoko'] ?? [], $errors);
+        $this->appendCsv($files['allegro_legacy_mapping_csv'], $this->allegroColumns(), $rows['allegro'] ?? [], $errors);
+        $this->appendCsv($files['ebay_fitment_csv'], $this->fitmentColumns(), $rows['fitment'] ?? [], $errors);
         $jsonl = dirname($files['products_json']) . '/woo_marketplace_mapping_products.jsonl.tmp';
         $fp = @fopen($jsonl, 'ab');
         if (!$fp) { $errors[basename($jsonl)] = $this->lastPhpError('Unable to open JSONL temp for append.'); return; }
@@ -284,8 +324,8 @@ final class MarketplaceMappingExport
     }
     private function appendCsv(string $file, array $cols, array $rows, array &$errors): void { if (!$rows) return; $fp=@fopen($file,'ab'); if(!$fp){$errors[basename($file)]=$this->lastPhpError('Unable to open CSV for append.'); return;} foreach($rows as $r) if(@fputcsv($fp, array_map(static fn($c)=>(string)($r[$c] ?? ''), $cols))===false){$errors[basename($file)]='Unable to append CSV row.'; break;} @fclose($fp); }
     private function finalizeProductsJson(string $jsonl, string $jsonFile, array &$errors): void { $in = $jsonl !== '' ? @fopen($jsonl, 'rb') : false; $out = @fopen($jsonFile, 'wb'); if(!$out){$errors[basename($jsonFile)]=$this->lastPhpError('Unable to open final JSON.'); return;} fwrite($out, "[\n"); $first=true; if($in){ while(($line=fgets($in))!==false){ $line=trim($line); if($line==='') continue; fwrite($out, ($first?'':",\n") . $line); $first=false; } fclose($in); } fwrite($out, "\n]\n"); fclose($out); }
-    private function zeroRowCounts(): array { return ['products_csv'=>0,'products_json'=>0,'ebay_listings'=>0,'ovoko_mapping'=>0,'allegro_legacy_mapping'=>0,'ebay_fitment'=>0,'summary'=>1,'manifest'=>1]; }
-    private function addRowCounts(array $counts, array $rows): array { $counts = array_merge($this->zeroRowCounts(), $counts); $counts['products_csv'] += count($rows['products'] ?? []); $counts['products_json'] += count($rows['products'] ?? []); $counts['ebay_listings'] += count($rows['ebay'] ?? []); $counts['ovoko_mapping'] += count($rows['ovoko'] ?? []); $counts['allegro_legacy_mapping'] += count($rows['allegro'] ?? []); $counts['ebay_fitment'] += count($rows['fitment'] ?? []); return $counts; }
+    private function zeroRowCounts(): array { return ['products_csv'=>0,'products_json'=>0,'ebay_listings_csv'=>0,'ovoko_mapping_csv'=>0,'allegro_legacy_mapping_csv'=>0,'ebay_fitment_csv'=>0,'summary_json'=>1,'manifest_json'=>1]; }
+    private function addRowCounts(array $counts, array $rows): array { $counts = array_merge($this->zeroRowCounts(), $counts); $counts['products_csv'] += count($rows['products'] ?? []); $counts['products_json'] += count($rows['products'] ?? []); $counts['ebay_listings_csv'] += count($rows['ebay'] ?? []); $counts['ovoko_mapping_csv'] += count($rows['ovoko'] ?? []); $counts['allegro_legacy_mapping_csv'] += count($rows['allegro'] ?? []); $counts['ebay_fitment_csv'] += count($rows['fitment'] ?? []); return $counts; }
     private function fileSizes(array $files): array { $out=[]; foreach($files as $k=>$path) $out[$k]=is_readable((string)$path) ? (int)filesize((string)$path) : 0; return $out; }
     private function batchDebug(array $state): array { return ['last_batch_offset'=>(int)($state['last_batch_offset'] ?? 0),'last_batch_size'=>(int)($state['last_batch_size'] ?? 0),'last_batch_processed_count'=>(int)($state['last_batch_processed_count'] ?? 0),'last_batch_duration'=>$state['last_batch_duration'] ?? 0,'last_batch_error'=>(string)($state['last_batch_error'] ?? ''),'current_file_sizes'=>(array)($state['current_file_sizes'] ?? []),'current_row_counts'=>(array)($state['current_row_counts'] ?? []),'current_expected_files_found'=>$this->existingFileCount((array)($state['files'] ?? []))]; }
     private function manifestFromState(array $state, array $writeErrors = []): array { $files=[]; $counts=(array)($state['current_row_counts'] ?? []); foreach((array)$state['files'] as $key=>$path){$files[]=['filename'=>basename((string)$path),'row_count'=>(int)($counts[$key] ?? 0),'file_size'=>is_readable((string)$path)?(int)filesize((string)$path):0,'sha256'=>is_readable((string)$path)?hash_file('sha256',(string)$path):'','last_error'=>$writeErrors[basename((string)$path)] ?? '','description'=>$this->description(basename((string)$path))];} return ['generated_at'=>gmdate('c'),'export_version'=>self::EXPORT_VERSION,'site_url'=>function_exists('site_url') ? site_url() : '','plugin_version'=>defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '','total_products'=>(int)($state['total_products'] ?? 0),'processed_products'=>(int)($state['processed_products'] ?? 0),'files'=>$files,'safety'=>['read_only'=>true,'external_api_calls'=>false,'woo_writes'=>false,'marketplace_writes'=>false,'laravel_writes'=>false]]; }
@@ -485,6 +525,10 @@ final class MarketplaceMappingExport
                 'modified_time' => $exists ? gmdate('Y-m-d H:i:s', (int) filemtime($path)) . ' UTC' : '',
                 'exists' => $exists,
                 'last_error' => (string) ($meta['last_error'] ?? ($exists ? '' : 'Expected file is missing or not readable.')),
+                'readable' => $exists,
+                'safe_download_url' => $exists ? $this->safeDownloadUrl($exportId, (string) $key) : '',
+                'download_handler_resolves_path' => $exists ? $this->downloadResolution($exportId, (string) $key)['download_handler_resolves_path'] : false,
+                'last_download_error' => $exists ? (string) $this->downloadResolution($exportId, (string) $key)['last_download_error'] : 'Expected file is missing or not readable.',
                 'download_error' => $exists && $this->downloadUrl($exportId, (string) $key) === '' ? 'File exists on disk but download URL could not be generated.' : '',
             ];
         }
@@ -492,8 +536,16 @@ final class MarketplaceMappingExport
     }
     private function downloadUrl(string $exportId, string $fileKey): string
     {
+        return $this->downloadUrlForAction('gps_laravel_product_export_download', $exportId, $fileKey);
+    }
+    private function safeDownloadUrl(string $exportId, string $fileKey): string
+    {
+        return $this->downloadUrlForAction('gps_marketplace_mapping_export_safe_download', $exportId, $fileKey);
+    }
+    private function downloadUrlForAction(string $action, string $exportId, string $fileKey): string
+    {
         return add_query_arg([
-            'action' => 'gps_laravel_product_export_download',
+            'action' => $action,
             'export_id' => $exportId,
             'file_key' => $fileKey,
             '_wpnonce' => wp_create_nonce(WooLaravelProductExport::NONCE),
@@ -501,7 +553,7 @@ final class MarketplaceMappingExport
     }
     private function expectedFiles(string $dir): array
     {
-        return ['products_csv' => $dir . '/woo_marketplace_mapping_products.csv','products_json' => $dir . '/woo_marketplace_mapping_products.json','ebay_listings' => $dir . '/woo_ebay_listings.csv','ovoko_mapping' => $dir . '/woo_ovoko_mapping.csv','allegro_legacy_mapping' => $dir . '/woo_allegro_legacy_mapping.csv','ebay_fitment' => $dir . '/woo_ebay_fitment.csv','summary' => $dir . '/woo_marketplace_mapping_summary.json','manifest' => $dir . '/export_manifest.json'];
+        return ['products_csv' => $dir . '/woo_marketplace_mapping_products.csv','products_json' => $dir . '/woo_marketplace_mapping_products.json','ebay_listings_csv' => $dir . '/woo_ebay_listings.csv','ovoko_mapping_csv' => $dir . '/woo_ovoko_mapping.csv','allegro_legacy_mapping_csv' => $dir . '/woo_allegro_legacy_mapping.csv','ebay_fitment_csv' => $dir . '/woo_ebay_fitment.csv','summary_json' => $dir . '/woo_marketplace_mapping_summary.json','manifest_json' => $dir . '/export_manifest.json'];
     }
     private function missingFiles(array $state): array
     {
