@@ -53,11 +53,39 @@ final class MarketplaceMappingExport
         $manifest = $this->manifest();
         file_put_contents($this->files['manifest'], wp_json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c')];
+        $missing = $this->missingFiles($state);
+        if ($missing) {
+            $state['status'] = 'error';
+            $state['error'] = 'Marketplace mapping export did not generate all expected files.';
+            $state['missing_files'] = $missing;
+            $this->summary['warnings'][] = $state['error'] . ' Missing: ' . implode(', ', $missing);
+            $state['summary'] = $this->summary;
+        }
         update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
+        update_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', $id, false);
         return $this->publicState($state);
     }
 
     public function columnsPreview(): array { return ['products'=>$this->productColumns(), 'ebay'=>$this->ebayColumns(), 'ovoko'=>$this->ovokoColumns(), 'allegro'=>$this->allegroColumns(), 'fitment'=>$this->fitmentColumns()]; }
+
+    public function lastExport(): array
+    {
+        $id = (string) get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
+        $state = $id !== '' ? get_option(WooLaravelProductExport::OPTION_PREFIX . sanitize_key($id), []) : [];
+        if (is_array($state) && $state) return $this->publicState($state);
+
+        $dirs = glob($this->exportDir() . '/marketplace-mapping-*', GLOB_ONLYDIR) ?: [];
+        rsort($dirs);
+        foreach ($dirs as $dir) {
+            $id = basename((string) $dir);
+            $files = $this->expectedFiles((string) $dir);
+            if (!$this->existingFileCount($files)) continue;
+            $summaryPath = $files['summary'];
+            $summary = is_readable($summaryPath) ? json_decode((string) file_get_contents($summaryPath), true) : [];
+            return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir))]);
+        }
+        return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.']];
+    }
 
     private function exportProduct(int $pid): void
     {
@@ -132,7 +160,56 @@ final class MarketplaceMappingExport
     private function rowCountForFile(string $f): int { return match($f){'woo_marketplace_mapping_products.csv','woo_marketplace_mapping_products.json'=>count($this->rows['products']),'woo_ebay_listings.csv'=>count($this->rows['ebay']),'woo_ovoko_mapping.csv'=>count($this->rows['ovoko']),'woo_allegro_legacy_mapping.csv'=>count($this->rows['allegro']),'woo_ebay_fitment.csv'=>count($this->rows['fitment']), default=>1}; }
     private function description(string $f): string { return match($f){'woo_marketplace_mapping_products.csv'=>'All Woo products with marketplace identifiers and raw matching meta.','woo_marketplace_mapping_products.json'=>'JSON mirror of product marketplace mapping rows.','woo_ebay_listings.csv'=>'Detected eBay listing/offer/inventory rows.','woo_ovoko_mapping.csv'=>'Detected Ovoko/RRR/Gmail product mappings.','woo_allegro_legacy_mapping.csv'=>'Detected Allegro legacy or active identifiers.','woo_ebay_fitment.csv'=>'Detected part/OEM/KType fitment inputs for eBay.', default=>'Export metadata and summary.'}; }
     private function exportDir(string $id=''): string { $u=wp_upload_dir(); return trailingslashit($u['basedir']).'gps-laravel-product-export'.($id?'/'.sanitize_key($id):''); }
-    private function publicState(array $s): array { $s['files']=array_map('basename',(array)$s['files']); return $s; }
+    private function publicState(array $s): array
+    {
+        if (!$s) return [];
+        $s['files'] = $this->publicFiles((array) ($s['files'] ?? []), (string) ($s['export_id'] ?? ''), (array) ($s['manifest']['files'] ?? []));
+        $missing = array_values(array_map(static fn($f)=>(string)($f['filename'] ?? ''), array_filter($s['files'], static fn($f)=>empty($f['exists']))));
+        if ($missing) {
+            $s['warnings'] = array_values(array_merge((array) ($s['warnings'] ?? []), ['Missing generated files: ' . implode(', ', $missing)]));
+        }
+        return $s;
+    }
+    private function publicFiles(array $files, string $exportId, array $manifestFileList = []): array
+    {
+        $out = [];
+        $manifestFiles = [];
+        foreach ($manifestFileList as $meta) {
+            if (isset($meta['filename'])) $manifestFiles[(string) $meta['filename']] = $meta;
+        }
+        foreach ($files as $key => $path) {
+            $path = (string) $path;
+            $filename = basename($path);
+            $meta = $manifestFiles[$filename] ?? [];
+            $exists = $path !== '' && is_readable($path);
+            $out[(string) $key] = [
+                'filename' => $filename,
+                'download_url' => $exists ? $this->downloadUrl($exportId, (string) $key) : '',
+                'row_count' => $meta['row_count'] ?? $this->rowCountForFile($filename),
+                'file_size' => $exists ? (int) filesize($path) : null,
+                'exists' => $exists,
+            ];
+        }
+        return $out;
+    }
+    private function downloadUrl(string $exportId, string $fileKey): string
+    {
+        return add_query_arg([
+            'action' => 'gps_laravel_product_export_download',
+            'export_id' => $exportId,
+            'file' => $fileKey,
+            '_wpnonce' => wp_create_nonce(WooLaravelProductExport::NONCE),
+        ], admin_url('admin-post.php'));
+    }
+    private function expectedFiles(string $dir): array
+    {
+        return ['products_csv' => $dir . '/woo_marketplace_mapping_products.csv','products_json' => $dir . '/woo_marketplace_mapping_products.json','ebay_listings' => $dir . '/woo_ebay_listings.csv','ovoko_mapping' => $dir . '/woo_ovoko_mapping.csv','allegro_legacy_mapping' => $dir . '/woo_allegro_legacy_mapping.csv','ebay_fitment' => $dir . '/woo_ebay_fitment.csv','summary' => $dir . '/woo_marketplace_mapping_summary.json','manifest' => $dir . '/export_manifest.json'];
+    }
+    private function missingFiles(array $state): array
+    {
+        return array_values(array_map('basename', array_filter((array) ($state['files'] ?? []), static fn($path)=>!is_string($path) || !is_readable($path))));
+    }
+    private function existingFileCount(array $files): int { return count(array_filter($files, static fn($path)=>is_string($path) && is_readable($path))); }
     private function productColumns(): array { return ['woo_product_id','sku','product_name','product_status','product_type','regular_price','sale_price','stock_quantity','stock_status','permalink','category_ids','category_names','image_ids','image_urls','created_at','updated_at','source_system','external_id','ovoko_part_id','rrr_part_id','gmail_sku','allegro_offer_id','secondary_allegro_offer_id','allegro_external_id','allegro_signature','allegro_url','ebay_listing_id','ebay_item_id','ebay_offer_id','ebay_inventory_sku','ebay_marketplace','ebay_de_listing_id','ebay_fr_listing_id','ebay_de_offer_id','ebay_fr_offer_id','ebay_de_inventory_sku','ebay_fr_inventory_sku','ebay_url_de','ebay_url_fr','has_any_marketplace_identifier','detected_marketplaces','all_detected_marketplace_meta_keys','raw_marketplace_meta_json','raw_relevant_meta_json']; }
     private function ebayColumns(): array { return ['woo_product_id','sku','marketplace','ebay_inventory_sku','ebay_offer_id','ebay_listing_id','ebay_item_id','ebay_category_id','listing_status','price','quantity','url','mapping_source','raw_mapping_json']; }
     private function ovokoColumns(): array { return ['woo_product_id','sku','ovoko_part_id','rrr_part_id','donor_car_id','source_system','current_status','ready_for_sale','blocked_reasons','price','stock_quantity','category_ids','category_names','title','image_count','mapping_source','raw_ovoko_meta_json','raw_relevant_meta_json']; }
