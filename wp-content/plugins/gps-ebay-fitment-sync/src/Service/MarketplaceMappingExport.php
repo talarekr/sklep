@@ -7,6 +7,7 @@ namespace GPS_Ebay_Fitment_Sync\Service;
 final class MarketplaceMappingExport
 {
     public const EXPORT_VERSION = '1.0.0';
+    public const DIAGNOSTICS_VERSION = '2026-06-20-product-discovery-v3';
     private const MATCH_TERMS = ['allegro','ovoko','rrr','ebay','listing','offer','auction','item','inventory','external','marketplace','source','gmail','wei'];
     private const SENSITIVE = '/(token|secret|password|pass|auth|consumer|client_secret|access_key|refresh)/i';
 
@@ -26,6 +27,21 @@ final class MarketplaceMappingExport
         $debug = $this->filesystemDebug($id, $dir, false);
         $expected = $this->expectedFiles($dir);
         $debug['expected_files'] = array_values(array_map('basename', $expected));
+
+        $productDiscovery = $this->discoverProductIds();
+        $debug = array_merge($debug, $productDiscovery['debug']);
+        if (!$productDiscovery['ids'] && (int) ($debug['direct_sql_product_count'] ?? 0) > 0) {
+            $state = [
+                'export_id'=>$id,
+                'status'=>'error',
+                'files'=>[],
+                'summary'=>$this->emptySummary(),
+                'debug'=>$debug,
+                'error'=>'Product discovery failed: DB contains Woo products but exporter selected 0 products.',
+            ];
+            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
+            return $this->publicState($state);
+        }
 
         if (!$this->ensureWritableExportRoot($root)) {
             $state = ['export_id'=>$id, 'status'=>'error', 'files'=>$expected, 'summary'=>$this->emptySummary(), 'debug'=>$debug, 'error'=>'Marketplace mapping export root is not writable.'];
@@ -47,8 +63,6 @@ final class MarketplaceMappingExport
         $this->summary = $this->emptySummary();
         $this->detectSources();
 
-        $productDiscovery = $this->discoverProductIds();
-        $debug = array_merge($debug, $productDiscovery['debug']);
         foreach ($productDiscovery['ids'] as $pid) {
             $this->exportProduct((int) $pid);
         }
@@ -69,9 +83,9 @@ final class MarketplaceMappingExport
         $fileDiagnostics = $this->verifyFiles($this->files, $writeErrors);
         $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
         $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'file_diagnostics'=>$fileDiagnostics, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c'), 'debug'=>$debug];
-        if ((int) $this->summary['total_products'] === 0 && (int) ($debug['woo_products_existing_count'] ?? 0) > 0) {
+        if ((int) $this->summary['total_products'] === 0 && (int) ($debug['direct_sql_product_count'] ?? 0) > 0) {
             $state['status'] = 'error';
-            $state['error'] = 'Marketplace mapping export found 0 products, but Woo products exist. Product discovery query is invalid.';
+            $state['error'] = 'Product discovery failed: DB contains Woo products but exporter selected 0 products.';
             $this->summary['warnings'][] = $state['error'];
             $state['summary'] = $this->summary;
         }
@@ -98,6 +112,7 @@ final class MarketplaceMappingExport
         $newest = $dirs[0] ?? '';
         $files = $newest !== '' ? $this->expectedFiles((string) $newest) : [];
         $last = get_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', '');
+        $productDiscovery = $this->discoverProductIds();
         return [
             'status' => 'completed',
             'upload_dir' => wp_upload_dir(),
@@ -111,7 +126,17 @@ final class MarketplaceMappingExport
             'expected_files_found' => $this->existingFileCount($files),
             'last_marketplace_mapping_option' => $last,
             'files' => $this->publicFiles($files, basename((string) $newest), []),
-            'debug' => $this->fallbackDebug($dirs, (string) $newest, $files),
+            'debug' => array_merge($this->fallbackDebug($dirs, (string) $newest, $files), $productDiscovery['debug']),
+        ];
+    }
+
+    public function productDiscoveryDiagnostic(): array
+    {
+        $discovery = $this->discoverProductIds();
+        return [
+            'status' => 'completed',
+            'summary' => $this->emptySummary(),
+            'debug' => array_merge($this->diagnosticsVersionMarker(), $discovery['debug']),
         ];
     }
 
@@ -138,7 +163,8 @@ final class MarketplaceMappingExport
             $summary = is_readable($summaryPath) ? json_decode((string) file_get_contents($summaryPath), true) : [];
             return $this->publicState(['export_id'=>$id, 'status'=>'completed', 'files'=>$files, 'summary'=>is_array($summary) ? $summary : [], 'completed_at'=>gmdate('c', (int) filemtime((string) $dir)), 'debug'=>$this->fallbackDebug($dirs, (string) $dir, $files)]);
         }
-        return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.'], 'debug'=>$this->fallbackDebug($dirs, '', [])];
+        $productDiscovery = $this->discoverProductIds();
+        return ['export_id'=>'', 'status'=>'missing', 'files'=>[], 'summary'=>[], 'warnings'=>['No previous marketplace mapping export files were found.'], 'debug'=>array_merge($this->fallbackDebug($dirs, '', []), $productDiscovery['debug'])];
     }
 
     public function filePathForDownload(string $exportId, string $fileIdentifier): string
@@ -292,6 +318,8 @@ final class MarketplaceMappingExport
                 'product_counts_by_status' => $counts,
                 'wp_posts_product_count_by_post_type_status' => $counts,
                 'woo_products_existing_count' => $existing,
+                'direct_sql_product_count' => $existing,
+                'direct_sql_product_count_by_post_type_status' => $counts,
                 'wc_get_products_count' => $wcCount,
                 'wp_query_found_posts' => $wpQueryFound,
                 'product_query_args' => $queryArgs,
@@ -335,6 +363,7 @@ final class MarketplaceMappingExport
             'fallback_scan_root' => $this->exportRoot(),
             'files_found_count' => count(array_filter($s['files'], static fn($f) => !empty($f['exists']))),
         ]);
+        $s['debug'] = array_merge($this->diagnosticsVersionMarker(), (array) $s['debug']);
         return $s;
     }
     private function publicFiles(array $files, string $exportId, array $manifestFileList = []): array
@@ -384,7 +413,7 @@ final class MarketplaceMappingExport
     private function filesystemDebug(string $id, string $dir, bool $created): array
     {
         $u = wp_upload_dir();
-        return [
+        return $this->diagnosticsVersionMarker() + [
             'export_id' => $id,
             'intended_export_dir' => $dir,
             'wp_upload_dir_basedir' => (string) ($u['basedir'] ?? ''),
@@ -398,7 +427,7 @@ final class MarketplaceMappingExport
     private function fallbackDebug(array $dirs, string $newestDir, array $files): array
     {
         $root = $this->exportRoot();
-        return [
+        return $this->diagnosticsVersionMarker() + [
             'writer_export_root' => $root,
             'fallback_scan_root' => $root,
             'directories_found' => count($dirs),
@@ -407,6 +436,19 @@ final class MarketplaceMappingExport
             'files_found_count' => $this->existingFileCount($files),
             'last_export_id' => $newestDir !== '' ? basename($newestDir) : '',
             'export_dir' => $newestDir,
+        ];
+    }
+    private function diagnosticsVersionMarker(): array
+    {
+        $file = __FILE__;
+        return [
+            'marketplace_mapping_export_code_version' => self::DIAGNOSTICS_VERSION,
+            'diagnostics_version' => self::DIAGNOSTICS_VERSION,
+            'service_class' => self::class,
+            'service_file' => $file,
+            'service_file_mtime' => is_readable($file) ? gmdate('Y-m-d H:i:s', (int) filemtime($file)) . ' UTC' : '',
+            'plugin_version' => defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '',
+            'plugin_file_mtime' => defined('GPS_EBAY_FITMENT_SYNC_FILE') && is_readable(GPS_EBAY_FITMENT_SYNC_FILE) ? gmdate('Y-m-d H:i:s', (int) filemtime(GPS_EBAY_FITMENT_SYNC_FILE)) . ' UTC' : '',
         ];
     }
     private function ensureWritableExportRoot(string $root): bool { return (is_dir($root) || wp_mkdir_p($root)) && is_writable($root); }
