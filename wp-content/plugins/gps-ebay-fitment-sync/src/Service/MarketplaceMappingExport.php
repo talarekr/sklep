@@ -7,7 +7,10 @@ namespace GPS_Ebay_Fitment_Sync\Service;
 final class MarketplaceMappingExport
 {
     public const EXPORT_VERSION = '1.0.0';
-    public const DIAGNOSTICS_VERSION = '2026-06-20-product-discovery-v3';
+    public const DIAGNOSTICS_VERSION = '2026-06-20-staged-marketplace-mapping-v4';
+    private const STATE_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_state';
+    private const LOCK_OPTION = WooLaravelProductExport::OPTION_PREFIX . 'marketplace_mapping_lock';
+    private const DEFAULT_BATCH_SIZE = 100;
     private const MATCH_TERMS = ['allegro','ovoko','rrr','ebay','listing','offer','auction','item','inventory','external','marketplace','source','gmail','wei'];
     private const SENSITIVE = '/(token|secret|password|pass|auth|consumer|client_secret|access_key|refresh)/i';
 
@@ -21,9 +24,21 @@ final class MarketplaceMappingExport
 
     public function export(): array
     {
+        return $this->start();
+    }
+
+    public function start(int $batchSize = self::DEFAULT_BATCH_SIZE): array
+    {
+        $existing = $this->currentState();
+        if (in_array((string) ($existing['status'] ?? ''), ['running', 'finalizing'], true) && !$this->lockExpired($existing)) {
+            $existing['last_batch_error'] = 'Marketplace mapping export is already running. Continue or reset the current export.';
+            return $this->publicState($existing);
+        }
+
         $id = 'marketplace-mapping-' . gmdate('Ymd-His') . '-' . wp_generate_password(6, false, false);
         $root = $this->exportRoot();
         $dir = $this->exportDir($id);
+        $batchSize = $this->normalizeBatchSize($batchSize);
         $debug = $this->filesystemDebug($id, $dir, false);
         $expected = $this->expectedFiles($dir);
         $debug['expected_files'] = array_values(array_map('basename', $expected));
@@ -31,77 +46,122 @@ final class MarketplaceMappingExport
         $productDiscovery = $this->discoverProductIds();
         $debug = array_merge($debug, $productDiscovery['debug']);
         if (!$productDiscovery['ids'] && (int) ($debug['direct_sql_product_count'] ?? 0) > 0) {
-            $state = [
-                'export_id'=>$id,
-                'status'=>'error',
-                'files'=>[],
-                'summary'=>$this->emptySummary(),
-                'debug'=>$debug,
-                'error'=>'Product discovery failed: DB contains Woo products but exporter selected 0 products.',
-            ];
-            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
-            return $this->publicState($state);
+            return $this->saveState(['export_id'=>$id,'status'=>'error','files'=>[],'summary'=>$this->emptySummary(),'debug'=>$debug,'error'=>'Product discovery failed: DB contains Woo products but exporter selected 0 products.']);
         }
-
-        if (!$this->ensureWritableExportRoot($root)) {
-            $state = ['export_id'=>$id, 'status'=>'error', 'files'=>$expected, 'summary'=>$this->emptySummary(), 'debug'=>$debug, 'error'=>'Marketplace mapping export root is not writable.'];
-            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
-            return $this->publicState($state);
+        if (!$productDiscovery['ids']) {
+            return $this->saveState(['export_id'=>$id,'status'=>'error','files'=>[],'summary'=>$this->emptySummary(),'debug'=>$debug,'error'=>'No Woo products found for marketplace mapping export.']);
         }
-
-        $created = wp_mkdir_p($dir);
-        $debug = $this->filesystemDebug($id, $dir, (bool) $created);
-        $debug['expected_files'] = array_values(array_map('basename', $expected));
-        if (!$created || !is_dir($dir) || !is_writable($dir)) {
-            $state = ['export_id'=>$id, 'status'=>'error', 'files'=>$expected, 'summary'=>$this->emptySummary(), 'debug'=>$debug, 'error'=>'Marketplace mapping export directory could not be created or is not writable.'];
-            update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
-            return $this->publicState($state);
+        if (!$this->ensureWritableExportRoot($root) || !wp_mkdir_p($dir) || !is_dir($dir) || !is_writable($dir)) {
+            return $this->saveState(['export_id'=>$id,'status'=>'error','files'=>$expected,'summary'=>$this->emptySummary(),'debug'=>$debug,'error'=>'Marketplace mapping export directory could not be created or is not writable.']);
         }
 
         $this->files = $expected;
         $this->rows = ['products'=>[], 'ebay'=>[], 'ovoko'=>[], 'allegro'=>[], 'fitment'=>[]];
         $this->summary = $this->emptySummary();
         $this->detectSources();
-
-        foreach ($productDiscovery['ids'] as $pid) {
-            $this->exportProduct((int) $pid);
-        }
-
         $writeErrors = [];
-        $this->writeCsv($this->files['products_csv'], $this->productColumns(), $this->rows['products'], $writeErrors);
-        $this->writeJson($this->files['products_json'], $this->rows['products'], $writeErrors);
-        $this->writeCsv($this->files['ebay_listings'], $this->ebayColumns(), $this->rows['ebay'], $writeErrors);
-        $this->writeCsv($this->files['ovoko_mapping'], $this->ovokoColumns(), $this->rows['ovoko'], $writeErrors);
-        $this->writeCsv($this->files['allegro_legacy_mapping'], $this->allegroColumns(), $this->rows['allegro'], $writeErrors);
-        $this->writeCsv($this->files['ebay_fitment'], $this->fitmentColumns(), $this->rows['fitment'], $writeErrors);
+        $this->initializeOutputFiles($expected, $writeErrors);
+        $state = [
+            'export_id'=>$id,'export_dir'=>$dir,'status'=>'running','product_ids'=>array_values(array_map('intval', $productDiscovery['ids'])),'total_products'=>count($productDiscovery['ids']),'processed_products'=>0,'current_offset'=>0,'batch_size'=>$batchSize,'files'=>$expected,
+            'jsonl_files'=>['products_jsonl'=>$dir . '/woo_marketplace_mapping_products.jsonl.tmp'],'detected_meta_keys'=>[],'detected_tables'=>$this->detectedTables,'detected_options'=>$this->detectedOptions,'summary'=>$this->summary,'manifest'=>[],
+            'started_at'=>gmdate('c'),'updated_at'=>gmdate('c'),'last_batch_offset'=>0,'last_batch_size'=>0,'last_batch_processed_count'=>0,'last_batch_duration'=>0,'last_batch_error'=>'','current_file_sizes'=>$this->fileSizes($expected),'current_row_counts'=>$this->zeroRowCounts(),'write_errors'=>$writeErrors,'debug'=>$debug,
+        ];
+        update_option(self::LOCK_OPTION, ['export_id'=>$id,'updated_at'=>time()], false);
+        return $this->saveState($state);
+    }
 
-        $this->finalizeSummary();
-        $this->writeJson($this->files['summary'], $this->summary, $writeErrors);
-        $manifest = $this->manifest($writeErrors);
-        $this->writeJson($this->files['manifest'], $manifest, $writeErrors);
+    public function continue(int $batchSize = 0): array
+    {
+        $state = $this->currentState();
+        if (!$state) return $this->publicState(['status'=>'missing','error'=>'No marketplace mapping export state found. Start a new export.']);
+        if ((string) ($state['status'] ?? '') === 'completed') return $this->publicState($state);
+        if ((string) ($state['status'] ?? '') === 'error' && !empty($state['last_batch_error'])) return $this->publicState($state);
+        $started = microtime(true);
+        $offset = (int) ($state['current_offset'] ?? 0);
+        $batchSize = $this->normalizeBatchSize($batchSize ?: (int) ($state['batch_size'] ?? self::DEFAULT_BATCH_SIZE));
+        $ids = array_values(array_map('intval', (array) ($state['product_ids'] ?? [])));
+        $batchIds = array_slice($ids, $offset, $batchSize);
+        $state['last_batch_offset'] = $offset;
+        $state['last_batch_size'] = count($batchIds);
+        $state['batch_size'] = $batchSize;
+        if (!$batchIds) return $this->finalize($state);
 
-        $fileDiagnostics = $this->verifyFiles($this->files, $writeErrors);
-        $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
-        $state = ['export_id'=>$id, 'status'=>'completed', 'files'=>$this->files, 'file_diagnostics'=>$fileDiagnostics, 'summary'=>$this->summary, 'manifest'=>$manifest, 'completed_at'=>gmdate('c'), 'debug'=>$debug];
-        if ((int) $this->summary['total_products'] === 0 && (int) ($debug['direct_sql_product_count'] ?? 0) > 0) {
-            $state['status'] = 'error';
-            $state['error'] = 'Product discovery failed: DB contains Woo products but exporter selected 0 products.';
-            $this->summary['warnings'][] = $state['error'];
+        update_option(self::LOCK_OPTION, ['export_id'=>(string)$state['export_id'],'updated_at'=>time()], false);
+        $this->files = (array) $state['files'];
+        $this->rows = ['products'=>[], 'ebay'=>[], 'ovoko'=>[], 'allegro'=>[], 'fitment'=>[]];
+        $this->summary = (array) ($state['summary'] ?? $this->emptySummary());
+        $this->detectedMetaKeys = array_fill_keys((array) ($state['detected_meta_keys'] ?? []), true);
+        try {
+            foreach ($batchIds as $pid) $this->exportProduct((int) $pid);
+            $writeErrors = (array) ($state['write_errors'] ?? []);
+            $this->appendRows($this->files, $this->rows, $writeErrors);
+            $processed = count($batchIds);
+            $state['processed_products'] = (int) ($state['processed_products'] ?? 0) + $processed;
+            $state['current_offset'] = $offset + $processed;
             $state['summary'] = $this->summary;
-        }
-        if ($missing || $writeErrors) {
+            $state['detected_meta_keys'] = array_values(array_unique(array_merge((array)($state['detected_meta_keys'] ?? []), array_keys($this->detectedMetaKeys))));
+            $state['current_row_counts'] = $this->addRowCounts((array) ($state['current_row_counts'] ?? $this->zeroRowCounts()), $this->rows);
+            $state['current_file_sizes'] = $this->fileSizes($this->files);
+            $state['write_errors'] = $writeErrors;
+            $state['last_batch_processed_count'] = $processed;
+            $state['last_batch_duration'] = round(microtime(true) - $started, 4);
+            $state['last_batch_error'] = '';
+            $state['updated_at'] = gmdate('c');
+            $state['debug'] = array_merge((array)($state['debug'] ?? []), $this->batchDebug($state));
+            if ($state['processed_products'] >= (int) $state['total_products']) return $this->finalize($state);
+            return $this->saveState($state);
+        } catch (\Throwable $e) {
             $state['status'] = 'error';
-            $state['error'] = 'Marketplace mapping export did not create all expected files.';
+            $state['last_batch_error'] = $e->getMessage();
+            $state['last_batch_product_ids'] = $batchIds;
+            $state['last_batch_duration'] = round(microtime(true) - $started, 4);
+            $state['current_file_sizes'] = $this->fileSizes((array) $state['files']);
+            $state['debug'] = array_merge((array)($state['debug'] ?? []), $this->batchDebug($state));
+            delete_option(self::LOCK_OPTION);
+            return $this->saveState($state);
+        }
+    }
+
+    public function reset(): array
+    {
+        delete_option(self::STATE_OPTION);
+        delete_option(self::LOCK_OPTION);
+        return ['status'=>'reset','message'=>'Marketplace mapping export state and lock cleared. Generated files were not deleted.'];
+    }
+
+    private function finalize(array $state): array
+    {
+        $state['status'] = 'finalizing';
+        $this->files = (array) $state['files'];
+        $this->summary = (array) ($state['summary'] ?? $this->emptySummary());
+        $this->detectedMetaKeys = array_fill_keys((array) ($state['detected_meta_keys'] ?? []), true);
+        $writeErrors = (array) ($state['write_errors'] ?? []);
+        $this->finalizeProductsJson((string) ($state['jsonl_files']['products_jsonl'] ?? ''), (string) $this->files['products_json'], $writeErrors);
+        $this->finalizeSummary();
+        $this->summary['detected_meta_keys'] = array_values(array_keys($this->detectedMetaKeys));
+        $this->writeJson($this->files['summary'], $this->summary, $writeErrors);
+        $manifest = $this->manifestFromState($state, $writeErrors);
+        $this->writeJson($this->files['manifest'], $manifest, $writeErrors);
+        $fileDiagnostics = $this->verifyFilesFromState($this->files, $writeErrors, (array)($state['current_row_counts'] ?? []));
+        $missing = array_values(array_map(static fn($m)=>(string)$m['filename'], array_filter($fileDiagnostics, static fn($m)=>empty($m['exists']))));
+        $state['manifest'] = $manifest;
+        $state['file_diagnostics'] = $fileDiagnostics;
+        $state['current_file_sizes'] = $this->fileSizes($this->files);
+        $state['debug'] = array_merge((array)($state['debug'] ?? []), $this->batchDebug($state));
+        if ($missing || $writeErrors || count($fileDiagnostics) !== 8) {
+            $state['status'] = 'error';
+            $state['error'] = 'Marketplace mapping export did not pass final verification for all 8 expected files.';
             $state['missing_files'] = $missing;
             $state['write_errors'] = $writeErrors;
-            $this->summary['warnings'][] = $state['error'] . ($missing ? ' Missing: ' . implode(', ', $missing) : '');
-            $state['summary'] = $this->summary;
+            delete_option(self::LOCK_OPTION);
+            return $this->saveState($state);
         }
-        update_option(WooLaravelProductExport::OPTION_PREFIX . $id, $state, false);
-        if ($state['status'] === 'completed' && count(array_filter($fileDiagnostics, static fn($m)=>!empty($m['exists']))) === count($this->files)) {
-            update_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', ['export_id'=>$id, 'export_dir'=>$dir, 'created_at'=>gmdate('c'), 'files'=>$fileDiagnostics], false);
-        }
-        return $this->publicState($state);
+        $state['status'] = 'completed';
+        $state['completed_at'] = gmdate('c');
+        $state['updated_at'] = gmdate('c');
+        update_option(WooLaravelProductExport::OPTION_PREFIX . 'last_marketplace_mapping', ['export_id'=>$state['export_id'],'export_dir'=>$state['export_dir'],'created_at'=>gmdate('c'),'files'=>$fileDiagnostics], false);
+        delete_option(self::LOCK_OPTION);
+        return $this->saveState($state);
     }
 
     public function filesystemDiagnostic(): array
@@ -192,6 +252,44 @@ final class MarketplaceMappingExport
         if (!$real || !$base || strpos($real, $base . DIRECTORY_SEPARATOR) !== 0 || !is_readable($real)) return '';
         return $real;
     }
+
+    private function currentState(): array { $state = get_option(self::STATE_OPTION, []); return is_array($state) ? $state : []; }
+    private function saveState(array $state): array { update_option(self::STATE_OPTION, $state, false); if (!empty($state['export_id'])) update_option(WooLaravelProductExport::OPTION_PREFIX . sanitize_key((string)$state['export_id']), $state, false); return $this->publicState($state); }
+    private function lockExpired(array $state): bool { $updated = strtotime((string)($state['updated_at'] ?? '')) ?: 0; return $updated > 0 && (time() - $updated) > HOUR_IN_SECONDS; }
+    private function normalizeBatchSize(int $batchSize): int { if ($batchSize <= 0) return self::DEFAULT_BATCH_SIZE; return max(25, min(100, $batchSize)); }
+    private function initializeOutputFiles(array $files, array &$errors): void
+    {
+        $this->writeCsv($files['products_csv'], $this->productColumns(), [], $errors);
+        $this->writeCsv($files['ebay_listings'], $this->ebayColumns(), [], $errors);
+        $this->writeCsv($files['ovoko_mapping'], $this->ovokoColumns(), [], $errors);
+        $this->writeCsv($files['allegro_legacy_mapping'], $this->allegroColumns(), [], $errors);
+        $this->writeCsv($files['ebay_fitment'], $this->fitmentColumns(), [], $errors);
+        if (@file_put_contents(dirname($files['products_json']) . '/woo_marketplace_mapping_products.jsonl.tmp', '') === false) $errors['woo_marketplace_mapping_products.jsonl.tmp'] = $this->lastPhpError('Unable to initialize JSONL temp file.');
+        if (@file_put_contents($files['products_json'], "[]") === false) $errors[basename($files['products_json'])] = $this->lastPhpError('Unable to initialize JSON file.');
+        $this->writeJson($files['summary'], $this->emptySummary(), $errors);
+        $this->writeJson($files['manifest'], ['status'=>'running','files'=>[]], $errors);
+    }
+    private function appendRows(array $files, array $rows, array &$errors): void
+    {
+        $this->appendCsv($files['products_csv'], $this->productColumns(), $rows['products'] ?? [], $errors);
+        $this->appendCsv($files['ebay_listings'], $this->ebayColumns(), $rows['ebay'] ?? [], $errors);
+        $this->appendCsv($files['ovoko_mapping'], $this->ovokoColumns(), $rows['ovoko'] ?? [], $errors);
+        $this->appendCsv($files['allegro_legacy_mapping'], $this->allegroColumns(), $rows['allegro'] ?? [], $errors);
+        $this->appendCsv($files['ebay_fitment'], $this->fitmentColumns(), $rows['fitment'] ?? [], $errors);
+        $jsonl = dirname($files['products_json']) . '/woo_marketplace_mapping_products.jsonl.tmp';
+        $fp = @fopen($jsonl, 'ab');
+        if (!$fp) { $errors[basename($jsonl)] = $this->lastPhpError('Unable to open JSONL temp for append.'); return; }
+        foreach (($rows['products'] ?? []) as $row) @fwrite($fp, $this->json($row) . "\n");
+        @fclose($fp);
+    }
+    private function appendCsv(string $file, array $cols, array $rows, array &$errors): void { if (!$rows) return; $fp=@fopen($file,'ab'); if(!$fp){$errors[basename($file)]=$this->lastPhpError('Unable to open CSV for append.'); return;} foreach($rows as $r) if(@fputcsv($fp, array_map(static fn($c)=>(string)($r[$c] ?? ''), $cols))===false){$errors[basename($file)]='Unable to append CSV row.'; break;} @fclose($fp); }
+    private function finalizeProductsJson(string $jsonl, string $jsonFile, array &$errors): void { $in = $jsonl !== '' ? @fopen($jsonl, 'rb') : false; $out = @fopen($jsonFile, 'wb'); if(!$out){$errors[basename($jsonFile)]=$this->lastPhpError('Unable to open final JSON.'); return;} fwrite($out, "[\n"); $first=true; if($in){ while(($line=fgets($in))!==false){ $line=trim($line); if($line==='') continue; fwrite($out, ($first?'':",\n") . $line); $first=false; } fclose($in); } fwrite($out, "\n]\n"); fclose($out); }
+    private function zeroRowCounts(): array { return ['products_csv'=>0,'products_json'=>0,'ebay_listings'=>0,'ovoko_mapping'=>0,'allegro_legacy_mapping'=>0,'ebay_fitment'=>0,'summary'=>1,'manifest'=>1]; }
+    private function addRowCounts(array $counts, array $rows): array { $counts = array_merge($this->zeroRowCounts(), $counts); $counts['products_csv'] += count($rows['products'] ?? []); $counts['products_json'] += count($rows['products'] ?? []); $counts['ebay_listings'] += count($rows['ebay'] ?? []); $counts['ovoko_mapping'] += count($rows['ovoko'] ?? []); $counts['allegro_legacy_mapping'] += count($rows['allegro'] ?? []); $counts['ebay_fitment'] += count($rows['fitment'] ?? []); return $counts; }
+    private function fileSizes(array $files): array { $out=[]; foreach($files as $k=>$path) $out[$k]=is_readable((string)$path) ? (int)filesize((string)$path) : 0; return $out; }
+    private function batchDebug(array $state): array { return ['last_batch_offset'=>(int)($state['last_batch_offset'] ?? 0),'last_batch_size'=>(int)($state['last_batch_size'] ?? 0),'last_batch_processed_count'=>(int)($state['last_batch_processed_count'] ?? 0),'last_batch_duration'=>$state['last_batch_duration'] ?? 0,'last_batch_error'=>(string)($state['last_batch_error'] ?? ''),'current_file_sizes'=>(array)($state['current_file_sizes'] ?? []),'current_row_counts'=>(array)($state['current_row_counts'] ?? []),'current_expected_files_found'=>$this->existingFileCount((array)($state['files'] ?? []))]; }
+    private function manifestFromState(array $state, array $writeErrors = []): array { $files=[]; $counts=(array)($state['current_row_counts'] ?? []); foreach((array)$state['files'] as $key=>$path){$files[]=['filename'=>basename((string)$path),'row_count'=>(int)($counts[$key] ?? 0),'file_size'=>is_readable((string)$path)?(int)filesize((string)$path):0,'sha256'=>is_readable((string)$path)?hash_file('sha256',(string)$path):'','last_error'=>$writeErrors[basename((string)$path)] ?? '','description'=>$this->description(basename((string)$path))];} return ['generated_at'=>gmdate('c'),'export_version'=>self::EXPORT_VERSION,'site_url'=>function_exists('site_url') ? site_url() : '','plugin_version'=>defined('GPS_EBAY_FITMENT_SYNC_VERSION') ? GPS_EBAY_FITMENT_SYNC_VERSION : '','total_products'=>(int)($state['total_products'] ?? 0),'processed_products'=>(int)($state['processed_products'] ?? 0),'files'=>$files,'safety'=>['read_only'=>true,'external_api_calls'=>false,'woo_writes'=>false,'marketplace_writes'=>false,'laravel_writes'=>false]]; }
+    private function verifyFilesFromState(array $files, array $writeErrors, array $counts): array { $out=[]; foreach($files as $key=>$path){$filename=basename((string)$path); $exists=is_readable((string)$path); $out[$key]=['filename'=>$filename,'absolute_path'=>(string)$path,'exists'=>$exists,'file_size'=>$exists?(int)filesize((string)$path):null,'row_count'=>(int)($counts[$key] ?? 0),'sha256'=>$exists?hash_file('sha256',(string)$path):'','last_error'=>$writeErrors[$filename] ?? ($exists ? '' : 'Expected file is missing or not readable.'),'download_url'=>$exists?$this->downloadUrl(basename(dirname((string)$path)), (string)$key):'']; } return $out; }
 
     private function exportProduct(int $pid): void
     {
