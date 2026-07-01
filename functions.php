@@ -1872,6 +1872,31 @@ add_filter('woocommerce_product_tabs', function (array $tabs): array {
     return $tabs;
 });
 
+
+function gp_get_allegro_offer_url_for_product(int $product_id): string
+{
+    if ($product_id <= 0) {
+        return '';
+    }
+
+    $main_channel_enabled = strtolower(trim((string) get_post_meta($product_id, '_channel_allegro_main_enabled', true)));
+    if ($main_channel_enabled === 'no') {
+        return '';
+    }
+
+    $url = esc_url_raw((string) get_post_meta($product_id, '_allegro_offer_url', true));
+    if ($url !== '') {
+        return $url;
+    }
+
+    $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_offer_id', true));
+    if ($offer_id === '') {
+        $offer_id = sanitize_text_field((string) get_post_meta($product_id, '_allegro_external_id', true));
+    }
+
+    return $offer_id !== '' ? 'https://allegro.pl/oferta/' . rawurlencode($offer_id) : '';
+}
+
 function gp_get_product_details_style_status(int $productId): array
 {
     $source = strtolower(trim((string) get_post_meta($productId, 'source', true)));

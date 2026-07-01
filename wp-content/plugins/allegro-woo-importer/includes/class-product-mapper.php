@@ -1961,8 +1961,12 @@ class ProductMapper
             'saved_meta_value' => $part_number_to_save,
         ]);
 
+        $allegro_offer_url = esc_url_raw($this->extract_offer_url($offer));
+        $allegro_external_id = sanitize_text_field((string) ($offer['external']['id'] ?? ''));
+
         update_post_meta($product_id, '_allegro_offer_id', $offer_id);
-        update_post_meta($product_id, '_allegro_offer_url', esc_url_raw($this->extract_offer_url($offer)));
+        update_post_meta($product_id, '_allegro_external_id', $allegro_external_id !== '' ? $allegro_external_id : $offer_id);
+        update_post_meta($product_id, '_allegro_offer_url', $allegro_offer_url);
         update_post_meta($product_id, '_allegro_category_id', sanitize_text_field((string) ($offer['category']['id'] ?? '')));
         update_post_meta($product_id, '_allegro_status', $publication_status);
         update_post_meta($product_id, '_allegro_currency', $currency);
@@ -1972,6 +1976,14 @@ class ProductMapper
         $this->logger->info('Product import upsert completed.', [
             'offer_id' => $offer_id,
             'product_id' => $product_id,
+            'part_id' => sanitize_text_field((string) get_post_meta($product_id, '_ovoko_part_id', true)),
+            'listing_id' => $product_id,
+            'channel' => 'allegro_main',
+            'allegro_offer_id' => $offer_id,
+            'saved_url' => $allegro_offer_url,
+            'local_listing_status' => $publication_status,
+            'operation_location' => sanitize_text_field((string) ($offer['operation']['location'] ?? $offer['operationLocation'] ?? '')),
+            'async' => !empty($offer['operation']['location']) || !empty($offer['operationLocation']) || $publication_status !== 'ACTIVE',
             'operation' => $existing_id ? 'updated' : 'created',
         ]);
 

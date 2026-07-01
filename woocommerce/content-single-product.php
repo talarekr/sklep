@@ -22,6 +22,7 @@ $returns_info = __('Zwrot do 14 dni zgodnie z regulaminem.', 'gp-clone');
 $is_ovoko_product = function_exists('gp_is_ovoko_product') ? gp_is_ovoko_product($product) : false;
 $ovoko_car_id = function_exists('gp_get_ovoko_car_id_for_product') ? gp_get_ovoko_car_id_for_product($product->get_id()) : trim((string) get_post_meta($product->get_id(), '_ovoko_car_id', true));
 $same_vehicle_url = function_exists('gp_get_vehicle_parts_url_for_product') ? gp_get_vehicle_parts_url_for_product($product->get_id()) : '';
+$allegro_offer_url = function_exists('gp_get_allegro_offer_url_for_product') ? gp_get_allegro_offer_url_for_product($product->get_id()) : '';
 if ($same_vehicle_url === '' && $ovoko_car_id !== '') {
     $same_vehicle_url = add_query_arg('ovoko_car_id', rawurlencode($ovoko_car_id), get_post_type_archive_link('product'));
 }
@@ -44,6 +45,12 @@ if ($same_vehicle_url === '' && $ovoko_car_id !== '') {
                         <span><?php esc_html_e('Stan:', 'gp-clone'); ?></span>
                         <strong><?php esc_html_e('Używany / sprawdzony', 'gp-clone'); ?></strong>
                     </li>
+                    <?php if ($allegro_offer_url !== '') : ?>
+                        <li>
+                            <span><?php esc_html_e('Allegro:', 'gp-clone'); ?></span>
+                            <strong><a href="<?php echo esc_url($allegro_offer_url); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Zobacz ofertę', 'gp-clone'); ?></a></strong>
+                        </li>
+                    <?php endif; ?>
                 </ul>
                 <?php if ($is_ovoko_product && $same_vehicle_url !== '') : ?>
                     <div class="gpswiss-same-vehicle-button-wrap">
